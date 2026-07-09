@@ -11,11 +11,16 @@ export function getPowerSyncDb(): PowerSyncDatabase {
     throw new Error('PowerSync can only be used in the browser');
   }
   if (!db) {
+    // eslint-disable-next-line no-console
+    console.log('[PowerSync] NEXT_PUBLIC_POWERSYNC_URL =', process.env.NEXT_PUBLIC_POWERSYNC_URL);
     db = new PowerSyncDatabase({
       database: { dbFilename: 'als-inventory.db' },
       schema: AppSchema,
     });
-    db.connect(new ApiConnector());
+    db.connect(new ApiConnector()).catch((err) => {
+      // eslint-disable-next-line no-console
+      console.error('[PowerSync] connect() failed:', err);
+    });
   }
   return db;
 }
