@@ -1,0 +1,148 @@
+import Link from 'next/link';
+import { apiFetch, getSessionUser } from '@/lib/api-server';
+import type { Asset } from '@/lib/actions/assets';
+import { Nav } from '@/app/components/nav';
+import { AUDIT_STATUSES, CONDITION_GRADES, STOCK_STATUSES, formatLabel } from '@/lib/asset-options';
+
+export default async function AssetsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{
+    search?: string;
+    stockStatus?: string;
+    conditionGrade?: string;
+    auditStatus?: string;
+    category?: string;
+  }>;
+}) {
+  const params = await searchParams;
+  const user = await getSessionUser();
+
+  const query = new URLSearchParams();
+  if (params.search) query.set('search', params.search);
+  if (params.stockStatus) query.set('stockStatus', params.stockStatus);
+  if (params.conditionGrade) query.set('conditionGrade', params.conditionGrade);
+  if (params.auditStatus) query.set('auditStatus', params.auditStatus);
+  if (params.category) query.set('category', params.category);
+
+  const assets = await apiFetch<Asset[]>(`/assets?${query.toString()}`);
+  const canCreate = user?.role === 'admin' || user?.role === 'manager';
+
+  return (
+    <main className="min-h-screen bg-neutral-950 text-neutral-100">
+      <Nav />
+      <div className="p-8">
+        <div className="flex items-center justify-between">
+          <h1 className="text-2xl font-semibold">Assets</h1>
+          {canCreate && (
+            <Link
+              href="/assets/new"
+              className="rounded-md bg-neutral-100 px-4 py-2 text-sm font-medium text-neutral-900"
+            >
+              New Asset
+            </Link>
+          )}
+        </div>
+
+        <form className="mt-6 flex flex-wrap gap-3" action="/assets">
+          <input
+            name="search"
+            defaultValue={params.search}
+            placeholder="Search tag or name…"
+            className="rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm outline-none focus:border-neutral-500"
+          />
+          <select
+            name="stockStatus"
+            defaultValue={params.stockStatus ?? ''}
+            className="rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm"
+          >
+            <option value="">All stock statuses</option>
+            {STOCK_STATUSES.map((s) => (
+              <option key={s} value={s}>
+                {formatLabel(s)}
+              </option>
+            ))}
+          </select>
+          <select
+            name="conditionGrade"
+            defaultValue={params.conditionGrade ?? ''}
+            className="rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm"
+          >
+            <option value="">All condition grades</option>
+            {CONDITION_GRADES.map((g) => (
+              <option key={g} value={g}>
+                {formatLabel(g)}
+              </option>
+            ))}
+          </select>
+          <select
+            name="auditStatus"
+            defaultValue={params.auditStatus ?? ''}
+            className="rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm"
+          >
+            <option value="">All audit statuses</option>
+            {AUDIT_STATUSES.map((s) => (
+              <option key={s} value={s}>
+                {formatLabel(s)}
+              </option>
+            ))}
+          </select>
+          <button
+            type="submit"
+            className="rounded-md border border-neutral-700 px-4 py-2 text-sm text-neutral-300"
+          >
+            Filter
+          </button>
+        </form>
+
+        <div className="mt-6 overflow-x-auto rounded-lg border border-neutral-800">
+          <table className="w-full text-left text-sm">
+            <thead className="bg-neutral-900 text-neutral-400">
+              <tr>
+                <th className="px-4 py-3">Tag</th>
+                <th className="px-4 py-3">Name</th>
+                <th className="px-4 py-3">Category</th>
+                <th className="px-4 py-3">Stock Status</th>
+                <th className="px-4 py-3">Grade</th>
+                <th className="px-4 py-3">Audit Status</th>
+                <th className="px-4 py-3">Location</th>
+              </tr>
+            </thead>
+            <tbody>
+              {assets.map((asset) => (
+                <tr key={asset.id} className="border-t border-neutral-800 hover:bg-neutral-900">
+                  <td className="px-4 py-3">
+                    <Link href={`/assets/${asset.id}`} className="text-neutral-100 underline">
+                      {asset.tag}
+                    </Link>
+                  </td>
+                  <td className="px-4 py-3">{asset.name}</td>
+                  <td className="px-4 py-3 text-neutral-400">{asset.category}</td>
+                  <td className="px-4 py-3">
+                    <span className="rounded-full border border-neutral-700 px-2 py-0.5 text-xs">
+                      {formatLabel(asset.stockStatus)}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3 text-neutral-400">
+                    {asset.conditionGrade ? formatLabel(asset.conditionGrade) : '—'}
+                  </td>
+                  <td className="px-4 py-3 text-neutral-400">
+                    {asset.auditStatus ? formatLabel(asset.auditStatus) : '—'}
+                  </td>
+                  <td className="px-4 py-3 text-neutral-400">{asset.location?.name ?? '—'}</td>
+                </tr>
+              ))}
+              {assets.length === 0 && (
+                <tr>
+                  <td colSpan={7} className="px-4 py-8 text-center text-neutral-500">
+                    No assets match this filter.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </main>
+  );
+}

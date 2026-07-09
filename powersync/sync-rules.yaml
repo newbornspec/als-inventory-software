@@ -1,0 +1,22 @@
+# Simplified to one unconditional global bucket: PowerSync's sync-rules
+# engine doesn't support JOINs in data queries (needed to scope asset_history
+# by asset.location_id), and a parameterized bucket must reference its bucket
+# parameter in every data query (the "admins get everything" bucket didn't).
+# Working around both by denormalizing location_id onto asset_history, or by
+# splitting into more buckets that satisfy the parameter-coverage rule, is a
+# legitimate follow-up — not attempted here since it doesn't change actual
+# security: NestJS's RolesGuard already allows any authenticated role to read
+# all assets/history/locations via the REST API, so syncing all of it to
+# every device's local SQLite doesn't expose anything the API wasn't already
+# exposing. It just means every device caches the whole inventory rather than
+# a location-scoped slice, which will matter more once the dataset is large.
+bucket_definitions:
+  global:
+    data:
+      - SELECT * FROM assets
+      - SELECT * FROM asset_history
+      - SELECT * FROM asset_audits
+      - SELECT * FROM batches
+      - SELECT * FROM lots
+      - SELECT id, name, address, assigned_user_id FROM locations
+      - SELECT id, name, role FROM users

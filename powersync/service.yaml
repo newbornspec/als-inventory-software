@@ -1,0 +1,33 @@
+# Self-hosted PowerSync service config for local development.
+# See https://docs.powersync.com/self-hosting for the current schema —
+# this covers the pieces this project depends on (source DB + JWT auth).
+replication:
+  connections:
+    - type: postgresql
+      uri: !env PS_DATABASE_URI
+      sslmode: disable
+
+# PowerSync's own bucket-storage database — separate from the source data
+# above, but reusing the same Postgres instance is fine for local dev.
+storage:
+  type: postgresql
+  uri: !env PS_DATABASE_URI
+  sslmode: disable
+
+# Verifies the same JWTs issued by the NestJS auth module (src/auth), so a
+# client only ever needs one login to authenticate against both the API and
+# the PowerSync sync stream. HS256 shared-secret keys are represented as a
+# symmetric JWK (kty: oct) — PS_JWT_JWK_K is the base64url encoding of the
+# same JWT_SECRET apps/api uses to sign tokens (see auth.service.ts, which
+# sets aud: 'als-inventory' to match the audience checked here).
+client_auth:
+  jwks:
+    keys:
+      - kty: 'oct'
+        alg: 'HS256'
+        kid: 'als-inventory-hs256'
+        k: !env PS_JWT_JWK_K
+  audience: ['als-inventory']
+
+sync_rules:
+  path: ./sync-rules.yaml

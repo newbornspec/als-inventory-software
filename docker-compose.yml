@@ -1,0 +1,35 @@
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: als_inventory
+      POSTGRES_PASSWORD: als_inventory_dev
+      POSTGRES_DB: als_inventory
+    ports:
+      - "5432:5432"
+    # wal_level=logical is required so PowerSync can stream changes via logical replication
+    command: ["postgres", "-c", "wal_level=logical", "-c", "max_replication_slots=10", "-c", "max_wal_senders=10"]
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  # Self-hosted PowerSync service — streams changes from Postgres (via logical
+  # replication) to every connected device's local SQLite, filtered by sync-rules.yaml.
+  # NOTE: verify the current image name/tag against https://docs.powersync.com/self-hosting
+  # before running — it moves fast enough that a pinned tag here would likely be stale.
+  powersync:
+    image: journeyapps/powersync-service:latest
+    restart: unless-stopped
+    depends_on:
+      - postgres
+    ports:
+      - "8080:8080"
+    environment:
+      PS_DATABASE_URI: postgresql://als_inventory:als_inventory_dev@postgres:5432/als_inventory
+      PS_JWT_JWK_K: ${PS_JWT_JWK_K}
+    volumes:
+      - ./powersync/service.yaml:/app/powersync.yaml
+      - ./powersync/sync-rules.yaml:/app/sync-rules.yaml
+
+volumes:
+  postgres_data:
