@@ -79,7 +79,11 @@ export default function ScanPage() {
     if (!scannedTag) return;
     setShowAudit(false);
 
-    const asset = await db.get<ScannedAsset>(
+    // getOptional(), not get() — a tag that doesn't match any asset is a
+    // real, expected outcome here (handled below via the 'not_found' status),
+    // not an exceptional one. db.get() throws "Result set is empty" on zero
+    // rows; getOptional() returns null instead.
+    const asset = await db.getOptional<ScannedAsset>(
       'SELECT id, name, tag, stock_status FROM assets WHERE tag = ?',
       [scannedTag],
     );
