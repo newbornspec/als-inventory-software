@@ -1,4 +1,4 @@
-import { PowerSyncDatabase } from '@powersync/web';
+import { PowerSyncDatabase, WASQLiteOpenFactory } from '@powersync/web';
 import { AppSchema } from './schema';
 import { ApiConnector } from './connector';
 
@@ -14,8 +14,16 @@ export function getPowerSyncDb(): PowerSyncDatabase {
     // eslint-disable-next-line no-console
     console.log('[PowerSync] NEXT_PUBLIC_POWERSYNC_URL =', process.env.NEXT_PUBLIC_POWERSYNC_URL);
     db = new PowerSyncDatabase({
-      database: { dbFilename: 'als-inventory.db' },
+      // Worker paths point at files copied into public/@powersync by the
+      // `postinstall: powersync-web copy-assets -o public` script — without
+      // that script actually running, these paths 404 and the database
+      // hangs silently waiting on a worker that was never there.
+      database: new WASQLiteOpenFactory({
+        dbFilename: 'als-inventory.db',
+        worker: '/@powersync/worker/WASQLiteDB.umd.js',
+      }),
       schema: AppSchema,
+      sync: { worker: '/@powersync/worker/SharedSyncImplementation.umd.js' },
     });
     db.connect(new ApiConnector()).catch((err) => {
       // eslint-disable-next-line no-console

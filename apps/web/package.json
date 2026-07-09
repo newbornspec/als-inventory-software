@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start"
+    "start": "next start",
+    "postinstall": "powersync-web copy-assets -o public"
   },
   "dependencies": {
     "@powersync/web": "^1.10.0",

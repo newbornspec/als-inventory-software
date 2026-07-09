@@ -1,12 +1,24 @@
 import type { NextConfig } from 'next';
 
 const nextConfig: NextConfig = {
-  // @powersync/web loads a WASM SQLite build (wa-sqlite) in a worker.
-  // asyncWebAssembly is the commonly-needed piece for that to bundle correctly;
-  // verify against @powersync/web's current Next.js integration guide when
-  // actually installing — this has shifted across SDK versions before.
-  webpack: (config) => {
-    config.experiments = { ...config.experiments, asyncWebAssembly: true };
+  // @powersync/web loads a WASM SQLite build (wa-sqlite) via a Web Worker.
+  // Per PowerSync's official Next.js docs: asyncWebAssembly + topLevelAwait
+  // experiments, plus a loader rule for .wasm files, are all required —
+  // asyncWebAssembly alone (what this used to say) is not sufficient.
+  webpack: (config, { isServer }) => {
+    config.experiments = {
+      ...config.experiments,
+      asyncWebAssembly: true,
+      topLevelAwait: true,
+    };
+
+    if (!isServer) {
+      config.module.rules.push({
+        test: /\.wasm$/,
+        type: 'asset/resource',
+      });
+    }
+
     return config;
   },
 };

@@ -36,6 +36,9 @@ yarn-error.log*
 # vercel
 .vercel
 
+# PowerSync worker files copied in by postinstall (powersync-web copy-assets)
+/public/@powersync
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts
