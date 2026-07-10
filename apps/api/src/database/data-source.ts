@@ -7,6 +7,7 @@ import { AssetHistory } from '../assets/asset-history.entity';
 import { AssetAudit } from '../assets/asset-audit.entity';
 import { Batch } from '../batches/batch.entity';
 import { Lot } from '../batches/lot.entity';
+import { ExpectedLineItem } from '../batches/expected-line-item.entity';
 import { Product } from '../products/product.entity';
 
 // Used by the TypeORM CLI for generating/running migrations.
@@ -18,7 +19,7 @@ export default new DataSource({
   username: process.env.DB_USERNAME ?? 'als_inventory',
   password: process.env.DB_PASSWORD ?? 'als_inventory_dev',
   database: process.env.DB_NAME ?? 'als_inventory',
-  entities: [User, Location, Asset, AssetHistory, AssetAudit, Batch, Lot, Product],
+  entities: [User, Location, Asset, AssetHistory, AssetAudit, Batch, Lot, ExpectedLineItem, Product],
   migrations: ['src/database/migrations/*.ts'],
   synchronize: false,
 });

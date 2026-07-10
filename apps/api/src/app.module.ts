@@ -11,6 +11,7 @@ import { AssetHistory } from './assets/asset-history.entity';
 import { AssetAudit } from './assets/asset-audit.entity';
 import { Batch } from './batches/batch.entity';
 import { Lot } from './batches/lot.entity';
+import { ExpectedLineItem } from './batches/expected-line-item.entity';
 import { Product } from './products/product.entity';
 import { AuthModule } from './auth/auth.module';
 import { PowerSyncModule } from './powersync/powersync.module';
@@ -33,7 +34,7 @@ import { ProductsModule } from './products/products.module';
         username: config.get('database.username'),
         password: config.get('database.password'),
         database: config.get('database.name'),
-        entities: [User, Location, Asset, AssetHistory, AssetAudit, Batch, Lot, Product],
+        entities: [User, Location, Asset, AssetHistory, AssetAudit, Batch, Lot, ExpectedLineItem, Product],
         // Migrations only — never let the app auto-mutate the schema.
         synchronize: false,
       }),
