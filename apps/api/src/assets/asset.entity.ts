@@ -11,6 +11,7 @@ import { Location } from '../locations/location.entity';
 import { User } from '../users/user.entity';
 import { Batch } from '../batches/batch.entity';
 import { Lot } from '../batches/lot.entity';
+import { Product } from '../products/product.entity';
 
 // Warehouse/lifecycle pipeline — "where is this asset right now".
 export enum AssetStockStatus {
@@ -130,6 +131,16 @@ export class Asset {
   @ManyToOne(() => Lot, { nullable: true, onDelete: 'SET NULL' })
   @JoinColumn({ name: 'lot_id' })
   lot: Lot | null;
+
+  // The catalogue entry this unit is an instance of (e.g. "Dell OptiPlex 5050
+  // · i5 · 8GB"). Nullable — legacy assets and one-off items may have none.
+  // Kept as an additive relation; existing batch/lot fields are untouched.
+  @Column({ name: 'product_id', type: 'uuid', nullable: true })
+  productId: string | null;
+
+  @ManyToOne(() => Product, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'product_id' })
+  product: Product | null;
 
   @Column({ name: 'warranty_expires_at', type: 'date', nullable: true })
   warrantyExpiresAt: string | null;
