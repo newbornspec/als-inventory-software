@@ -17,6 +17,12 @@ export class ExpectedLineItemsController {
     return this.expected.findForBatch(batchId);
   }
 
+  // The receiving diff: expected supplier list vs. what was actually scanned in.
+  @Get('reconciliation')
+  reconcile(@Param('batchId') batchId: string) {
+    return this.expected.reconcile(batchId);
+  }
+
   // Bulk import of parsed supplier rows — replaces any existing expected list
   // for this lot. Import is a manager/admin action (same as creating the lot).
   @Roles(UserRole.ADMIN, UserRole.MANAGER)

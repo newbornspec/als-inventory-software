@@ -3,7 +3,31 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Batch } from './batch.entity';
 import { ExpectedLineItem } from './expected-line-item.entity';
+import { Asset } from '../assets/asset.entity';
 import { ImportExpectedDto } from './dto/import-expected.dto';
+
+// One expected serialized line matched (or not) against the physically
+// scanned assets in the lot.
+export interface ReconciledLine {
+  expected: ExpectedLineItem;
+  status: 'found' | 'missing';
+  matchedAssetId: string | null;
+  matchedTag: string | null;
+}
+
+export interface ReconciliationResult {
+  summary: {
+    expectedSerialized: number; // expected lines that carry a serial/tag to match on
+    found: number;
+    missing: number;
+    extra: number; // scanned but not on the supplier list
+    scanned: number; // total assets scanned into the lot
+    quantityOnlyLines: number; // expected lines with no serial (bulk/qty), not serial-matched
+  };
+  lines: ReconciledLine[];
+  extras: { id: string; tag: string; name: string }[];
+  quantityOnly: ExpectedLineItem[];
+}
 
 @Injectable()
 export class ExpectedLineItemsService {
@@ -11,6 +35,7 @@ export class ExpectedLineItemsService {
     @InjectRepository(ExpectedLineItem)
     private expected: Repository<ExpectedLineItem>,
     @InjectRepository(Batch) private batches: Repository<Batch>,
+    @InjectRepository(Asset) private assets: Repository<Asset>,
   ) {}
 
   async findForBatch(batchId: string): Promise<ExpectedLineItem[]> {
@@ -55,6 +80,62 @@ export class ExpectedLineItemsService {
   async clearForBatch(batchId: string): Promise<void> {
     await this.assertBatch(batchId);
     await this.expected.delete({ batchId });
+  }
+
+  // Computed live (like the batch unit counts) so it can never go stale: diff
+  // the supplier's expected list against the assets actually scanned into the
+  // lot. Serialized lines are matched by their serial/asset-tag against the
+  // value scanned off each device (Asset.tag). Bulk/quantity lines (no serial)
+  // are reported separately rather than force-matched.
+  async reconcile(batchId: string): Promise<ReconciliationResult> {
+    await this.assertBatch(batchId);
+    const [expected, assets] = await Promise.all([
+      this.expected.find({ where: { batchId }, order: { createdAt: 'ASC' } }),
+      this.assets.find({ where: { batchId } }),
+    ]);
+
+    const assetByTag = new Map<string, Asset>();
+    for (const a of assets) assetByTag.set(a.tag.trim().toLowerCase(), a);
+
+    const matchedAssetIds = new Set<string>();
+    const lines: ReconciledLine[] = [];
+    const quantityOnly: ExpectedLineItem[] = [];
+
+    for (const e of expected) {
+      const identifier = (e.serialNumber ?? e.assetTag ?? '').trim().toLowerCase();
+      if (!identifier) {
+        quantityOnly.push(e);
+        continue;
+      }
+      const match = assetByTag.get(identifier);
+      if (match) matchedAssetIds.add(match.id);
+      lines.push({
+        expected: e,
+        status: match ? 'found' : 'missing',
+        matchedAssetId: match?.id ?? null,
+        matchedTag: match?.tag ?? null,
+      });
+    }
+
+    const extras = assets
+      .filter((a) => !matchedAssetIds.has(a.id))
+      .map((a) => ({ id: a.id, tag: a.tag, name: a.name }));
+
+    const found = lines.filter((l) => l.status === 'found').length;
+
+    return {
+      summary: {
+        expectedSerialized: lines.length,
+        found,
+        missing: lines.length - found,
+        extra: extras.length,
+        scanned: assets.length,
+        quantityOnlyLines: quantityOnly.length,
+      },
+      lines,
+      extras,
+      quantityOnly,
+    };
   }
 
   private async assertBatch(batchId: string): Promise<void> {
