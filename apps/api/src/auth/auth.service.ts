@@ -44,11 +44,16 @@ export class AuthService {
     // otherwise-valid, correctly-signed token from this same auth module.
     const payload = { sub: user.id, email: user.email, role: user.role, aud: 'als-inventory' };
 
+    // keyid must match the `kid` on the JWK in powersync/service.yaml's
+    // client_auth — PowerSync looks up the verification key by kid and
+    // rejects the token (PSYNC_S2101) if the JWT header doesn't carry one.
     const accessToken = this.jwt.sign(payload, {
       expiresIn: this.config.get<string>('jwt.expiresIn') as never,
+      keyid: 'als-inventory-hs256',
     });
     const refreshToken = this.jwt.sign(payload, {
       expiresIn: this.config.get<string>('jwt.refreshExpiresIn') as never,
+      keyid: 'als-inventory-hs256',
     });
 
     return {
