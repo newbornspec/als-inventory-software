@@ -33,6 +33,29 @@ export interface Lot {
   actualUnitCount: number;
 }
 
+export interface ExpectedLineItem {
+  id: string;
+  batchId: string;
+  assetTag: string | null;
+  serialNumber: string | null;
+  manufacturer: string | null;
+  model: string | null;
+  cpu: string | null;
+  ramGb: number | null;
+  storage: string | null;
+  screenSize: string | null;
+  condition: string | null;
+  grade: string | null;
+  quantity: number;
+  verificationStatus: string;
+  createdAt: string;
+}
+
+// The parsed-and-mapped rows the client sends up from a supplier file.
+export type ExpectedLineItemInput = Partial<
+  Omit<ExpectedLineItem, 'id' | 'batchId' | 'verificationStatus' | 'createdAt'>
+>;
+
 export async function createBatch(_prev: ActionState, formData: FormData): Promise<ActionState> {
   const dto = {
     source: emptyToUndefined(formData.get('source')),
@@ -86,6 +109,23 @@ export async function createLot(
   if (batchId) revalidatePath(`/batches/${batchId}`);
   revalidatePath('/batches');
   return { error: null };
+}
+
+// Bulk import of a parsed supplier list — replaces the lot's expected inventory.
+export async function importExpectedLineItems(
+  batchId: string,
+  items: ExpectedLineItemInput[],
+): Promise<{ count?: number; error?: string }> {
+  try {
+    const created = await apiFetch<ExpectedLineItem[]>(`/batches/${batchId}/expected/import`, {
+      method: 'POST',
+      body: JSON.stringify({ items }),
+    });
+    revalidatePath(`/batches/${batchId}`);
+    return { count: created.length };
+  } catch (err) {
+    return { error: err instanceof ApiError ? err.message : 'Import failed.' };
+  }
 }
 
 function emptyToUndefined(value: FormDataEntryValue | null): string | undefined {

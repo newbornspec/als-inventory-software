@@ -1,20 +1,22 @@
 import Link from 'next/link';
 import { apiFetch, getSessionUser } from '@/lib/api-server';
-import type { Batch, Lot } from '@/lib/actions/batches';
+import type { Batch, Lot, ExpectedLineItem } from '@/lib/actions/batches';
 import type { Asset } from '@/lib/actions/assets';
 import { Nav } from '@/app/components/nav';
 import { formatLabel } from '@/lib/asset-options';
 import { NewLotForm } from './new-lot-form';
 import { BatchStatusSelect } from './status-select';
+import { ImportExpected } from './import-expected';
 
 export default async function BatchDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const user = await getSessionUser();
 
-  const [batch, assets, lots] = await Promise.all([
+  const [batch, assets, lots, expectedItems] = await Promise.all([
     apiFetch<Batch>(`/batches/${id}`),
     apiFetch<Asset[]>(`/assets?batchId=${id}`),
     apiFetch<Lot[]>(`/lots?batchId=${id}`),
+    apiFetch<ExpectedLineItem[]>(`/batches/${id}/expected`),
   ]);
 
   const canManage = user?.role === 'admin' || user?.role === 'manager';
@@ -88,6 +90,57 @@ export default async function BatchDetailPage({ params }: { params: Promise<{ id
             <div className="mt-1 text-sm text-neutral-400">Status</div>
           </div>
         </div>
+
+        <section className="mt-8">
+          <h2 className="text-sm font-medium text-neutral-400">
+            Expected inventory ({expectedItems.length})
+          </h2>
+          {expectedItems.length > 0 ? (
+            <div className="mt-3 overflow-x-auto rounded-lg border border-neutral-800">
+              <table className="w-full text-left text-sm">
+                <thead className="bg-neutral-900 text-neutral-400">
+                  <tr>
+                    <th className="px-3 py-2">Serial</th>
+                    <th className="px-3 py-2">Manufacturer</th>
+                    <th className="px-3 py-2">Model</th>
+                    <th className="px-3 py-2">CPU</th>
+                    <th className="px-3 py-2">RAM</th>
+                    <th className="px-3 py-2">Storage</th>
+                    <th className="px-3 py-2">Grade</th>
+                    <th className="px-3 py-2">Qty</th>
+                    <th className="px-3 py-2">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {expectedItems.map((it) => (
+                    <tr key={it.id} className="border-t border-neutral-800">
+                      <td className="px-3 py-2 text-neutral-300">{it.serialNumber ?? '—'}</td>
+                      <td className="px-3 py-2 text-neutral-400">{it.manufacturer ?? '—'}</td>
+                      <td className="px-3 py-2 text-neutral-400">{it.model ?? '—'}</td>
+                      <td className="px-3 py-2 text-neutral-400">{it.cpu ?? '—'}</td>
+                      <td className="px-3 py-2 text-neutral-400">{it.ramGb ?? '—'}</td>
+                      <td className="px-3 py-2 text-neutral-400">{it.storage ?? '—'}</td>
+                      <td className="px-3 py-2 text-neutral-400">{it.grade ?? '—'}</td>
+                      <td className="px-3 py-2 text-neutral-300">{it.quantity}</td>
+                      <td className="px-3 py-2">
+                        <span className="rounded-full border border-neutral-700 px-2 py-0.5 text-xs">
+                          {formatLabel(it.verificationStatus)}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <p className="mt-3 text-sm text-neutral-500">No supplier list imported yet.</p>
+          )}
+          {canManage && (
+            <div className="mt-3 max-w-2xl">
+              <ImportExpected batchId={batch.id} hasExisting={expectedItems.length > 0} />
+            </div>
+          )}
+        </section>
 
         <div className="mt-8 grid gap-8 md:grid-cols-2">
           <section>
