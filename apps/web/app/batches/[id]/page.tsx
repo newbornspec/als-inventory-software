@@ -26,7 +26,26 @@ export default async function BatchDetailPage({ params }: { params: Promise<{ id
       <Nav />
       <div className="p-8">
         <h1 className="text-2xl font-semibold">{batch.batchNumber}</h1>
-        <p className="mt-1 text-sm text-neutral-400">{batch.source ?? 'No source recorded'}</p>
+        <p className="mt-1 text-sm text-neutral-400">{batch.source ?? 'No supplier recorded'}</p>
+
+        <dl className="mt-4 flex flex-wrap gap-x-8 gap-y-2 text-sm">
+          <div>
+            <dt className="text-xs uppercase tracking-wide text-neutral-500">Purchase order</dt>
+            <dd className="text-neutral-200">{batch.purchaseOrder ?? '—'}</dd>
+          </div>
+          <div>
+            <dt className="text-xs uppercase tracking-wide text-neutral-500">Delivery note</dt>
+            <dd className="text-neutral-200">{batch.deliveryNote ?? '—'}</dd>
+          </div>
+          <div>
+            <dt className="text-xs uppercase tracking-wide text-neutral-500">Purchase date</dt>
+            <dd className="text-neutral-200">{batch.purchaseDate ?? '—'}</dd>
+          </div>
+          <div>
+            <dt className="text-xs uppercase tracking-wide text-neutral-500">Received date</dt>
+            <dd className="text-neutral-200">{batch.receivedDate ?? '—'}</dd>
+          </div>
+        </dl>
 
         <div className="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-4">
           <div className="rounded-lg border border-neutral-800 bg-neutral-900 p-4">
@@ -73,7 +92,7 @@ export default async function BatchDetailPage({ params }: { params: Promise<{ id
         <div className="mt-8 grid gap-8 md:grid-cols-2">
           <section>
             <h2 className="text-sm font-medium text-neutral-400">
-              Assets in this batch ({assets.length})
+              Assets in this lot ({assets.length})
             </h2>
             <ul className="mt-3 space-y-1">
               {assets.map((a) => (
@@ -86,14 +105,14 @@ export default async function BatchDetailPage({ params }: { params: Promise<{ id
               ))}
               {assets.length === 0 && (
                 <li className="text-sm text-neutral-500">
-                  No assets scanned into this batch yet — use Receiving mode on the Scan page.
+                  No assets scanned into this lot yet — use Receiving mode on the Scan page.
                 </li>
               )}
             </ul>
           </section>
 
           <section>
-            <h2 className="text-sm font-medium text-neutral-400">Lots ({lots.length})</h2>
+            <h2 className="text-sm font-medium text-neutral-400">Sub-lots ({lots.length})</h2>
             <ul className="mt-3 space-y-2">
               {lots.map((lot) => (
                 <li key={lot.id} className="rounded-md border border-neutral-800 p-2 text-sm">

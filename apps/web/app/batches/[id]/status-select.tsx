@@ -3,7 +3,7 @@
 import { updateBatchStatus } from '@/lib/actions/batches';
 import { formatLabel } from '@/lib/asset-options';
 
-const BATCH_STATUSES = ['open', 'receiving', 'closed', 'reconciled'];
+const BATCH_STATUSES = ['draft', 'awaiting_arrival', 'open', 'receiving', 'closed', 'reconciled'];
 
 export function BatchStatusSelect({ batchId, status }: { batchId: string; status: string }) {
   const boundUpdate = updateBatchStatus.bind(null, batchId);

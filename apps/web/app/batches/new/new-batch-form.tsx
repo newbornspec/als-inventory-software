@@ -13,30 +13,50 @@ export function NewBatchForm({ locations }: { locations: Location[] }) {
   return (
     <form action={formAction} className="mt-6 max-w-sm space-y-3">
       <div className="space-y-1">
-        <label className="text-sm text-neutral-300">Source (client/vendor)</label>
+        <label className="text-sm text-neutral-300">Supplier</label>
         <input
           name="source"
           placeholder="Acme Corp decommission"
           className="w-full rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm outline-none focus:border-neutral-500"
         />
       </div>
-      <div className="space-y-1">
-        <label className="text-sm text-neutral-300">Expected unit count</label>
-        <input
-          type="number"
-          min={0}
-          name="expectedUnitCount"
-          placeholder="50"
-          className="w-full rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm outline-none focus:border-neutral-500"
-        />
+      <div className="grid grid-cols-2 gap-3">
+        <div className="space-y-1">
+          <label className="text-sm text-neutral-300">Purchase order</label>
+          <input
+            name="purchaseOrder"
+            placeholder="PO-10025"
+            className="w-full rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm outline-none focus:border-neutral-500"
+          />
+        </div>
+        <div className="space-y-1">
+          <label className="text-sm text-neutral-300">Delivery note</label>
+          <input
+            name="deliveryNote"
+            placeholder="DN-4471"
+            className="w-full rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm outline-none focus:border-neutral-500"
+          />
+        </div>
       </div>
-      <div className="space-y-1">
-        <label className="text-sm text-neutral-300">Received date</label>
-        <input
-          type="date"
-          name="receivedDate"
-          className="w-full rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm outline-none focus:border-neutral-500"
-        />
+      <div className="grid grid-cols-2 gap-3">
+        <div className="space-y-1">
+          <label className="text-sm text-neutral-300">Purchase date</label>
+          <input
+            type="date"
+            name="purchaseDate"
+            className="w-full rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm outline-none focus:border-neutral-500"
+          />
+        </div>
+        <div className="space-y-1">
+          <label className="text-sm text-neutral-300">Expected unit count</label>
+          <input
+            type="number"
+            min={0}
+            name="expectedUnitCount"
+            placeholder="50"
+            className="w-full rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm outline-none focus:border-neutral-500"
+          />
+        </div>
       </div>
       <div className="space-y-1">
         <label className="text-sm text-neutral-300">Location</label>
@@ -69,7 +89,7 @@ export function NewBatchForm({ locations }: { locations: Location[] }) {
         disabled={pending}
         className="rounded-md bg-neutral-100 px-4 py-2 text-sm font-medium text-neutral-900 disabled:opacity-50"
       >
-        {pending ? 'Creating…' : 'Create batch'}
+        {pending ? 'Creating…' : 'Create purchase lot'}
       </button>
     </form>
   );

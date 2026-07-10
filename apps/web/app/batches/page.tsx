@@ -16,13 +16,13 @@ export default async function BatchesPage() {
       <Nav />
       <div className="p-8">
         <div className="flex items-center justify-between">
-          <h1 className="text-2xl font-semibold">Batches</h1>
+          <h1 className="text-2xl font-semibold">Purchase Lots</h1>
           {canCreate && (
             <Link
               href="/batches/new"
               className="rounded-md bg-neutral-100 px-4 py-2 text-sm font-medium text-neutral-900"
             >
-              New Batch
+              New Purchase Lot
             </Link>
           )}
         </div>
@@ -31,8 +31,8 @@ export default async function BatchesPage() {
           <table className="w-full text-left text-sm">
             <thead className="bg-neutral-900 text-neutral-400">
               <tr>
-                <th className="px-4 py-3">Batch #</th>
-                <th className="px-4 py-3">Source</th>
+                <th className="px-4 py-3">Lot #</th>
+                <th className="px-4 py-3">Supplier</th>
                 <th className="px-4 py-3">Status</th>
                 <th className="px-4 py-3">Units (actual / expected)</th>
                 <th className="px-4 py-3">Location</th>
@@ -69,7 +69,7 @@ export default async function BatchesPage() {
               {batches.length === 0 && (
                 <tr>
                   <td colSpan={5} className="px-4 py-8 text-center text-neutral-500">
-                    No batches yet.
+                    No purchase lots yet.
                   </td>
                 </tr>
               )}

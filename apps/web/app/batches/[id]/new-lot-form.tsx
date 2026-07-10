@@ -14,7 +14,7 @@ export function NewLotForm({ batchId }: { batchId: string }) {
     <form action={formAction} className="mt-3 space-y-2 rounded-md border border-neutral-800 p-3">
       <input
         name="description"
-        placeholder="Lot description, e.g. Grade A laptops for resale"
+        placeholder="Sub-lot spec, e.g. Dell 5050 · i5 · 8GB"
         className="w-full rounded-md border border-neutral-700 bg-neutral-900 px-2 py-1.5 text-sm"
       />
       <input
@@ -30,7 +30,7 @@ export function NewLotForm({ batchId }: { batchId: string }) {
         disabled={pending}
         className="rounded-md bg-neutral-100 px-3 py-1.5 text-xs font-medium text-neutral-900 disabled:opacity-50"
       >
-        {pending ? 'Creating…' : 'Create lot'}
+        {pending ? 'Creating…' : 'Create sub-lot'}
       </button>
     </form>
   );

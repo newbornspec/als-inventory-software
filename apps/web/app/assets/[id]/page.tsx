@@ -45,7 +45,7 @@ export default async function AssetDetailPage({
                 <>
                   {' · '}
                   <Link href={`/batches/${asset.batchId}`} className="underline">
-                    View batch →
+                    View purchase lot →
                   </Link>
                 </>
               )}

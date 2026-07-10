@@ -9,7 +9,7 @@ export default async function NewBatchPage() {
     <main className="min-h-screen bg-neutral-950 text-neutral-100">
       <Nav />
       <div className="p-8">
-        <h1 className="text-2xl font-semibold">New Batch</h1>
+        <h1 className="text-2xl font-semibold">New Purchase Lot</h1>
         <NewBatchForm locations={locations} />
       </div>
     </main>

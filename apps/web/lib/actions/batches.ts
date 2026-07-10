@@ -8,9 +8,12 @@ import type { ActionState } from './assets';
 export interface Batch {
   id: string;
   batchNumber: string;
-  source: string | null;
+  source: string | null; // supplier the lot was purchased from
   locationId: string | null;
   receivedDate: string | null;
+  purchaseOrder: string | null;
+  deliveryNote: string | null;
+  purchaseDate: string | null;
   expectedUnitCount: number | null;
   status: string;
   notes: string | null;
@@ -35,7 +38,12 @@ export async function createBatch(_prev: ActionState, formData: FormData): Promi
     source: emptyToUndefined(formData.get('source')),
     locationId: emptyToUndefined(formData.get('locationId')),
     receivedDate: emptyToUndefined(formData.get('receivedDate')),
+    purchaseOrder: emptyToUndefined(formData.get('purchaseOrder')),
+    deliveryNote: emptyToUndefined(formData.get('deliveryNote')),
+    purchaseDate: emptyToUndefined(formData.get('purchaseDate')),
     expectedUnitCount: toIntOrUndefined(formData.get('expectedUnitCount')),
+    // A newly created purchase lot is expected but not yet physically received.
+    status: emptyToUndefined(formData.get('status')) ?? 'awaiting_arrival',
     notes: emptyToUndefined(formData.get('notes')),
   };
 
@@ -43,7 +51,7 @@ export async function createBatch(_prev: ActionState, formData: FormData): Promi
   try {
     created = await apiFetch<Batch>('/batches', { method: 'POST', body: JSON.stringify(dto) });
   } catch (err) {
-    return { error: err instanceof ApiError ? err.message : 'Failed to create batch.' };
+    return { error: err instanceof ApiError ? err.message : 'Failed to create purchase lot.' };
   }
 
   revalidatePath('/batches');
@@ -72,7 +80,7 @@ export async function createLot(
   try {
     await apiFetch('/lots', { method: 'POST', body: JSON.stringify(dto) });
   } catch (err) {
-    return { error: err instanceof ApiError ? err.message : 'Failed to create lot.' };
+    return { error: err instanceof ApiError ? err.message : 'Failed to create sub-lot.' };
   }
 
   if (batchId) revalidatePath(`/batches/${batchId}`);

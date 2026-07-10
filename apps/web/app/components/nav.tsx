@@ -8,7 +8,7 @@ import { logout } from '@/lib/auth';
 const BASE_LINKS = [
   { href: '/dashboard', label: 'Dashboard' },
   { href: '/assets', label: 'Assets' },
-  { href: '/batches', label: 'Batches' },
+  { href: '/batches', label: 'Purchase Lots' },
   { href: '/scan', label: 'Scan' },
 ];
 

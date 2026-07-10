@@ -156,7 +156,7 @@ export default function ScanPage() {
         </div>
 
         <div className="mt-6 max-w-sm rounded-md border border-neutral-800 bg-neutral-900/50 p-3">
-          <label className="text-xs text-neutral-400">Receiving into batch (optional)</label>
+          <label className="text-xs text-neutral-400">Receiving into lot (optional)</label>
           <select
             value={selectedBatchId}
             onChange={(e) => setSelectedBatchId(e.target.value)}
@@ -172,7 +172,7 @@ export default function ScanPage() {
           {selectedBatch && (
             <p className="mt-2 text-sm text-neutral-300">
               {receivedCount} / {selectedBatch.expected_unit_count ?? '—'} units received —
-              every scan below is added to this batch.
+              every scan below is added to this lot.
             </p>
           )}
         </div>
