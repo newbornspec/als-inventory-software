@@ -11,6 +11,8 @@ import { Location } from '../locations/location.entity';
 import { User } from '../users/user.entity';
 
 export enum BatchStatus {
+  DRAFT = 'draft', // purchase lot created before goods arrive; details still being filled in
+  AWAITING_ARRIVAL = 'awaiting_arrival', // purchased, expected, not yet physically received
   OPEN = 'open', // created, not yet receiving
   RECEIVING = 'receiving', // actively being scanned in
   CLOSED = 'closed', // receiving finished
@@ -49,6 +51,16 @@ export class Batch {
 
   @Column({ name: 'received_date', type: 'date', nullable: true })
   receivedDate: string | null;
+
+  // --- Pre-arrival purchasing details (a lot can exist before goods land) ---
+  @Column({ name: 'purchase_order', type: 'varchar', nullable: true })
+  purchaseOrder: string | null;
+
+  @Column({ name: 'delivery_note', type: 'varchar', nullable: true })
+  deliveryNote: string | null;
+
+  @Column({ name: 'purchase_date', type: 'date', nullable: true })
+  purchaseDate: string | null;
 
   @Column({ name: 'expected_unit_count', type: 'int', nullable: true })
   expectedUnitCount: number | null;
