@@ -35,13 +35,43 @@ interface BarcodeDetectorCtor {
   getSupportedFormats(): Promise<string[]>;
 }
 
-// Pull the most serial-number-like token out of a blob of OCR text: an
-// alphanumeric run of 5+ chars, preferring ones that mix letters and digits
-// (as serials/service tags usually do), longest first.
+// Extract the asset identifier from OCR'd label text. Vendor labels (e.g. Dell)
+// print the serial next to a "SERVICE TAG" / "S/N" caption amid a lot of
+// regulatory noise (model, reg model, agency codes) — a plain "longest token"
+// pick reliably grabs the wrong thing (P62G001, ZU10190, MSIP-...). So: anchor
+// on the caption first, then the Express Service Code, then the Dell
+// service-tag shape (7 alphanumerics, excluding the regulatory codes), and only
+// then fall back to a generic longest-mixed-token.
 function pickSerial(text: string): string {
-  const tokens = (text.toUpperCase().match(/[A-Z0-9][A-Z0-9-]{4,}/g) ?? []).map((s) =>
-    s.replace(/^-+|-+$/g, ''),
+  const up = text.toUpperCase().replace(/\|/g, 'I');
+
+  // 1) Value following a Service Tag / Serial caption — most reliable.
+  const captioned = [
+    /SERVICE\s*TAG\s*\(?\s*S\s*\/?\s*N\s*\)?\s*[:#.\-]*\s*([A-Z0-9]{5,14})/,
+    /SERVICE\s*TAG\s*[:#.\-]*\s*([A-Z0-9]{5,14})/,
+    /\bS\s*\/\s*N\b\s*[:#.\-]*\s*([A-Z0-9]{5,14})/,
+    /SERIAL(?:\s*(?:NO|NUMBER))?\s*[:#.\-]*\s*([A-Z0-9]{5,14})/,
+  ];
+  for (const re of captioned) {
+    const m = up.match(re);
+    if (m) return m[1];
+  }
+
+  // 2) Express Service Code caption (numeric).
+  const esc = up.match(/EXPRESS\s*SERVICE\s*CODE\s*[:#.\-]*\s*([0-9]{8,14})/);
+  if (esc) return esc[1];
+
+  const tokens = up.match(/[A-Z0-9]{5,}/g) ?? [];
+
+  // 3) Dell service-tag shape: exactly 7 alphanumerics (letters + digits), not
+  //    one of the regulatory/model codes also printed on the label.
+  const REG = /^(P62G|MSIP|CMM|IEC|ISO|EN\d|NMB|ICES|CAN|ZU\d|DPN|DPC|M0|R4|R-)/;
+  const dell = tokens.find(
+    (t) => t.length === 7 && /[A-Z]/.test(t) && /[0-9]/.test(t) && !REG.test(t),
   );
+  if (dell) return dell;
+
+  // 4) Fallback: longest mixed-alphanumeric token.
   const mixed = tokens.filter((t) => /[A-Z]/.test(t) && /[0-9]/.test(t));
   const byLen = (a: string, b: string) => b.length - a.length;
   return mixed.sort(byLen)[0] ?? tokens.sort(byLen)[0] ?? '';
@@ -242,8 +272,8 @@ export function CameraScanner({ onDecode, onReadText, cooldownMs = 1500 }: Camer
       <div className="flex items-center justify-between gap-2">
         <p className="text-xs text-neutral-500">
           {engine === 'zxing'
-            ? 'Point at a barcode or QR (compatibility mode).'
-            : 'Point at a barcode or QR code.'}
+            ? 'Point at the Service Tag barcode — it reads automatically (compatibility mode).'
+            : 'Point at the Service Tag barcode — it reads automatically.'}
         </p>
         {onReadText && (
           <button
