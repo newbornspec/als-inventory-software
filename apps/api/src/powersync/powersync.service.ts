@@ -28,18 +28,27 @@ export class PowerSyncService {
 
   private async applyOne(entry: CrudEntry, userId: string): Promise<void> {
     const repo = this.repoFor(entry.table);
+    let data = this.toEntityData(entry.data);
+
+    // An offline client can hold writes that reference a batch/lot/product the
+    // server deleted in the meantime. Uploading such a row fails a foreign-key
+    // constraint, and because PowerSync retries the whole batch, that one bad
+    // reference permanently wedges the client's upload queue — every later
+    // write is stuck behind it and never syncs. Null the dangling reference so
+    // the row still lands and the queue keeps draining.
+    if (entry.table === 'assets') data = await this.sanitizeAssetFks(data);
 
     switch (entry.op) {
       case 'PUT':
         // Upsert: covers both "new asset created offline" and first-sync of an update.
-        await repo.upsert({ ...this.toEntityData(entry.data), id: entry.id }, ['id']);
+        await repo.upsert({ ...data, id: entry.id }, ['id']);
         if (entry.table === 'asset_audits') {
           // Reads the original snake_case data — unchanged by the mapping above.
           await this.applyAuditSideEffects(entry, userId);
         }
         break;
       case 'PATCH':
-        await repo.update({ id: entry.id }, this.toEntityData(entry.data));
+        await repo.update({ id: entry.id }, data);
         break;
       case 'DELETE':
         await repo.delete({ id: entry.id });
@@ -47,6 +56,31 @@ export class PowerSyncService {
       default:
         throw new BadRequestException(`Unsupported op: ${entry.op}`);
     }
+  }
+
+  // Replace any asset foreign-key that points at a row which no longer exists
+  // with null, so a stale offline reference can't fail (and wedge) the upload.
+  private async sanitizeAssetFks(
+    data: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    const fkTables: Record<string, string> = {
+      batchId: 'batches',
+      lotId: 'lots',
+      productId: 'products',
+      locationId: 'locations',
+      ownerId: 'users',
+    };
+    for (const [key, table] of Object.entries(fkTables)) {
+      const value = data[key];
+      if (typeof value === 'string' && value.length > 0) {
+        const rows: unknown[] = await this.assets.manager.query(
+          `SELECT 1 FROM "${table}" WHERE id = $1 LIMIT 1`,
+          [value],
+        );
+        if (rows.length === 0) data[key] = null;
+      }
+    }
+    return data;
   }
 
   // PowerSync sends column values keyed by the local SQLite schema's snake_case
