@@ -7,15 +7,10 @@ import type { Worker as TesseractWorker } from 'tesseract.js';
 
 interface CameraScannerProps {
   onDecode: (text: string) => void;
-  // Called with text read via OCR — fallible, so the caller should let the
-  // user confirm it rather than acting on it directly.
   onReadText?: (text: string) => void;
-  // Minimum time between accepted decodes, so a code that's still in frame
-  // doesn't fire the same scan repeatedly while the phone is held steady.
   cooldownMs?: number;
 }
 
-// Minimal typing for the experimental BarcodeDetector API (not in TS DOM libs).
 interface DetectedBarcode {
   rawValue: string;
 }
@@ -27,19 +22,16 @@ interface BarcodeDetectorCtor {
   getSupportedFormats(): Promise<string[]>;
 }
 
-// Prefer a higher-res back camera — small barcodes and serial text need the
-// detail. `ideal` degrades gracefully on devices that can't hit it.
 const VIDEO_CONSTRAINTS: MediaTrackConstraints = {
   facingMode: 'environment',
   width: { ideal: 1920 },
   height: { ideal: 1080 },
 };
 
-// The active scan region as fractions of the frame — a wide, short central band
-// suited to barcodes. Barcode detection and OCR both operate ONLY on this box,
-// so on a label with several barcodes the user frames the one they want. The
-// on-screen overlay uses the same numbers.
-const BOX = { x: 0.08, y: 0.34 }; // 8% horizontal inset, 34% vertical inset
+// The OCR crop region (fractions of the frame) — a wide central band, matching
+// the on-screen guide box. Barcode detection runs on the full frame (more
+// forgiving); the box just helps the user aim.
+const BOX = { x: 0.08, y: 0.34 };
 
 function boxRect(v: HTMLVideoElement) {
   const sx = Math.round(v.videoWidth * BOX.x);
@@ -47,16 +39,19 @@ function boxRect(v: HTMLVideoElement) {
   return { sx, sy, sw: v.videoWidth - sx * 2, sh: v.videoHeight - sy * 2 };
 }
 
-// Extract the asset identifier from OCR'd label text. Vendor labels (e.g. Dell)
-// print the serial next to a "SERVICE TAG" / "S/N" caption amid a lot of
-// regulatory noise (model, reg model, agency codes) — a plain "longest token"
-// pick reliably grabs the wrong thing (P62G001, ZU10190, MSIP-...). So: anchor
-// on the caption first, then the Express Service Code, then the Dell
-// service-tag shape (7 alphanumerics, excluding the regulatory codes), and only
-// then fall back to a generic longest-mixed-token.
+// From the barcodes found in frame, prefer a Dell-service-tag-shaped value
+// (7 alphanumerics, letters+digits) over, say, the numeric Express Service Code
+// that sits right beside it on the label.
+function pickBarcode(codes: DetectedBarcode[]): string {
+  const vals = codes.map((c) => c.rawValue.trim()).filter(Boolean);
+  const tag = vals.find((v) => /^[A-Za-z0-9]{7}$/.test(v) && /[A-Za-z]/.test(v) && /[0-9]/.test(v));
+  return tag ?? vals[0] ?? '';
+}
+
+// Anchor on the "SERVICE TAG"/"S/N" caption, then Express Service Code, then the
+// Dell service-tag shape (excluding regulatory codes), then longest token.
 function pickSerial(text: string): string {
   const up = text.toUpperCase().replace(/\|/g, 'I');
-
   const captioned = [
     /SERVICE\s*TAG\s*\(?\s*S\s*\/?\s*N\s*\)?\s*[:#.\-]*\s*([A-Z0-9]{5,14})/,
     /SERVICE\s*TAG\s*[:#.\-]*\s*([A-Z0-9]{5,14})/,
@@ -67,17 +62,14 @@ function pickSerial(text: string): string {
     const m = up.match(re);
     if (m) return m[1];
   }
-
   const esc = up.match(/EXPRESS\s*SERVICE\s*CODE\s*[:#.\-]*\s*([0-9]{8,14})/);
   if (esc) return esc[1];
-
   const tokens = up.match(/[A-Z0-9]{5,}/g) ?? [];
   const REG = /^(P62G|MSIP|CMM|IEC|ISO|EN\d|NMB|ICES|CAN|ZU\d|DPN|DPC|M0|R4|R-)/;
   const dell = tokens.find(
     (t) => t.length === 7 && /[A-Z]/.test(t) && /[0-9]/.test(t) && !REG.test(t),
   );
   if (dell) return dell;
-
   const mixed = tokens.filter((t) => /[A-Z]/.test(t) && /[0-9]/.test(t));
   const byLen = (a: string, b: string) => b.length - a.length;
   return mixed.sort(byLen)[0] ?? tokens.sort(byLen)[0] ?? '';
@@ -89,8 +81,8 @@ export function CameraScanner({ onDecode, onReadText, cooldownMs = 1500 }: Camer
   const trackRef = useRef<MediaStreamTrack | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [engine, setEngine] = useState<'native' | 'zxing' | null>(null);
-  const [torchSupported, setTorchSupported] = useState(false);
   const [torchOn, setTorchOn] = useState(false);
+  const [torchFailed, setTorchFailed] = useState(false);
   const [ocrBusy, setOcrBusy] = useState(false);
   const [ocrStatus, setOcrStatus] = useState('');
   const [ocrError, setOcrError] = useState<string | null>(null);
@@ -102,8 +94,6 @@ export function CameraScanner({ onDecode, onReadText, cooldownMs = 1500 }: Camer
     let zxingControls: { stop: () => void } | undefined;
     const video = videoRef.current;
     if (!video) return;
-    const crop = document.createElement('canvas');
-    const cropCtx = crop.getContext('2d');
 
     function accept(text: string) {
       const clean = text.trim();
@@ -135,26 +125,14 @@ export function CameraScanner({ onDecode, onReadText, cooldownMs = 1500 }: Camer
         }
         video!.srcObject = stream;
         await video!.play();
+        trackRef.current = stream.getVideoTracks()[0] ?? null;
         setEngine('native');
-
-        const track = stream.getVideoTracks()[0];
-        trackRef.current = track;
-        const caps = (track.getCapabilities?.() ?? {}) as { torch?: boolean };
-        if (caps.torch) setTorchSupported(true);
 
         const loop = async () => {
           if (cancelled) return;
           try {
-            // Detect only within the scan box, so the framed barcode wins over
-            // any others on the label.
-            if (video!.videoWidth && cropCtx) {
-              const { sx, sy, sw, sh } = boxRect(video!);
-              crop.width = sw;
-              crop.height = sh;
-              cropCtx.drawImage(video!, sx, sy, sw, sh, 0, 0, sw, sh);
-              const codes = await detector.detect(crop);
-              if (codes.length > 0) accept(codes[0].rawValue);
-            }
+            const codes = await detector.detect(video!);
+            if (codes.length > 0) accept(pickBarcode(codes));
           } catch {
             /* transient per-frame detect errors are expected; keep going */
           }
@@ -179,9 +157,13 @@ export function CameraScanner({ onDecode, onReadText, cooldownMs = 1500 }: Camer
             if (result) accept(result.getText());
           },
         );
-        if (cancelled) controls.stop();
-        else {
+        if (cancelled) {
+          controls.stop();
+        } else {
           zxingControls = controls;
+          // zxing manages its own stream; grab the track for the torch toggle.
+          trackRef.current =
+            (video!.srcObject as MediaStream | null)?.getVideoTracks()[0] ?? null;
           setEngine('zxing');
         }
       } catch (err) {
@@ -214,7 +196,7 @@ export function CameraScanner({ onDecode, onReadText, cooldownMs = 1500 }: Camer
       await track.applyConstraints({ advanced: [{ torch: next }] } as unknown as MediaTrackConstraints);
       setTorchOn(next);
     } catch {
-      /* device refused the torch constraint — leave state as-is */
+      setTorchFailed(true); // this device won't do torch from the browser
     }
   }
 
@@ -230,8 +212,6 @@ export function CameraScanner({ onDecode, onReadText, cooldownMs = 1500 }: Camer
         setOcrError('Camera not ready yet — try again in a second.');
         return;
       }
-      // Read only the scan box, upscaled ~2x — OCR is markedly better on a
-      // tight, larger crop than on the whole cluttered label.
       const { sx, sy, sw, sh } = boxRect(video);
       const scale = 2;
       const canvas = document.createElement('canvas');
@@ -244,7 +224,6 @@ export function CameraScanner({ onDecode, onReadText, cooldownMs = 1500 }: Camer
       }
       ctx.drawImage(video, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
 
-      // Grayscale + contrast stretch so the serial stands out from the label.
       const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
       const d = img.data;
       for (let i = 0; i < d.length; i += 4) {
@@ -254,7 +233,6 @@ export function CameraScanner({ onDecode, onReadText, cooldownMs = 1500 }: Camer
       }
       ctx.putImageData(img, 0, 0);
 
-      // Loaded on demand so the OCR engine isn't in the main bundle.
       const Tesseract = await import('tesseract.js');
       worker = await Tesseract.createWorker('eng', 1, {
         logger: (m: { status?: string; progress?: number }) => {
@@ -295,14 +273,11 @@ export function CameraScanner({ onDecode, onReadText, cooldownMs = 1500 }: Camer
     <div className="max-w-sm space-y-2">
       <div className="relative overflow-hidden rounded-md border border-neutral-700 bg-black">
         <video ref={videoRef} className="w-full" muted playsInline autoPlay />
-        {/* Scan box — dim outside, bright frame inside; matches BOX / boxRect. */}
-        <div className="pointer-events-none absolute inset-0">
-          <div
-            className="absolute rounded-md border-2 border-emerald-400 shadow-[0_0_0_9999px_rgba(0,0,0,0.45)]"
-            style={{ left: '8%', right: '8%', top: '34%', bottom: '34%' }}
-          />
-        </div>
-        {torchSupported && (
+        <div
+          className="pointer-events-none absolute rounded-md border-2 border-emerald-400/70"
+          style={{ left: '8%', right: '8%', top: '34%', bottom: '34%' }}
+        />
+        {engine && !torchFailed && (
           <button
             type="button"
             onClick={toggleTorch}
@@ -318,8 +293,7 @@ export function CameraScanner({ onDecode, onReadText, cooldownMs = 1500 }: Camer
       </div>
       <div className="flex items-center justify-between gap-2">
         <p className="text-xs text-neutral-500">
-          Line the Service Tag barcode up inside the box — it reads automatically
-          {engine === 'zxing' ? ' (compatibility mode)' : ''}.
+          Fill the frame with the Service Tag barcode — it reads automatically.
         </p>
         {onReadText && (
           <button
@@ -332,6 +306,15 @@ export function CameraScanner({ onDecode, onReadText, cooldownMs = 1500 }: Camer
           </button>
         )}
       </div>
+      <p className="text-[11px] text-neutral-600">
+        Scanner:{' '}
+        {engine === 'native'
+          ? 'fast (native)'
+          : engine === 'zxing'
+            ? 'compatibility mode'
+            : 'starting…'}
+        {torchFailed ? ' · flash not supported here' : ''}
+      </p>
       {ocrBusy && ocrStatus && <p className="text-xs text-neutral-500">{ocrStatus}</p>}
       {ocrError && <p className="text-xs text-amber-400">{ocrError}</p>}
     </div>
