@@ -1,5 +1,6 @@
 import Link from 'next/link';
-import { apiFetch, getSessionUser } from '@/lib/api-server';
+import { notFound } from 'next/navigation';
+import { apiFetch, ApiError, getSessionUser } from '@/lib/api-server';
 import { getLocations } from '@/lib/data';
 import { deleteAsset, type Asset } from '@/lib/actions/assets';
 import { Nav } from '@/app/components/nav';
@@ -14,6 +15,24 @@ interface AssetHistoryEntry {
   createdAt: string;
 }
 
+// Fetch the asset + its history/audits, turning a 404 (deleted, or created
+// offline and not yet synced to the server) into Next's not-found page rather
+// than an unhandled server-side exception.
+async function loadAsset(
+  id: string,
+): Promise<[Asset, AssetHistoryEntry[], AssetAuditRecord[]]> {
+  try {
+    return await Promise.all([
+      apiFetch<Asset>(`/assets/${id}`),
+      apiFetch<AssetHistoryEntry[]>(`/assets/${id}/history`),
+      apiFetch<AssetAuditRecord[]>(`/assets/${id}/audits`),
+    ]);
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 404) notFound();
+    throw err;
+  }
+}
+
 export default async function AssetDetailPage({
   params,
 }: {
@@ -22,12 +41,8 @@ export default async function AssetDetailPage({
   const { id } = await params;
   const user = await getSessionUser();
 
-  const [asset, history, audits, locations] = await Promise.all([
-    apiFetch<Asset>(`/assets/${id}`),
-    apiFetch<AssetHistoryEntry[]>(`/assets/${id}/history`),
-    apiFetch<AssetAuditRecord[]>(`/assets/${id}/audits`),
-    getLocations(),
-  ]);
+  const [asset, history, audits] = await loadAsset(id);
+  const locations = await getLocations();
 
   const canEdit = user?.role === 'admin' || user?.role === 'manager';
   const canDelete = user?.role === 'admin';

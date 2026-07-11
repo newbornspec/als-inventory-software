@@ -1,5 +1,6 @@
 import Link from 'next/link';
-import { apiFetch, getSessionUser } from '@/lib/api-server';
+import { notFound } from 'next/navigation';
+import { apiFetch, ApiError, getSessionUser } from '@/lib/api-server';
 import type { Batch, Lot, ReconciliationResult } from '@/lib/actions/batches';
 import type { Asset } from '@/lib/actions/assets';
 import { Nav } from '@/app/components/nav';
@@ -8,16 +9,28 @@ import { NewLotForm } from './new-lot-form';
 import { BatchStatusSelect } from './status-select';
 import { ImportExpected } from './import-expected';
 
+// 404 (deleted lot) -> Next's not-found page instead of a server-side crash.
+async function loadBatch(
+  id: string,
+): Promise<[Batch, Asset[], Lot[], ReconciliationResult]> {
+  try {
+    return await Promise.all([
+      apiFetch<Batch>(`/batches/${id}`),
+      apiFetch<Asset[]>(`/assets?batchId=${id}`),
+      apiFetch<Lot[]>(`/lots?batchId=${id}`),
+      apiFetch<ReconciliationResult>(`/batches/${id}/expected/reconciliation`),
+    ]);
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 404) notFound();
+    throw err;
+  }
+}
+
 export default async function BatchDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const user = await getSessionUser();
 
-  const [batch, assets, lots, recon] = await Promise.all([
-    apiFetch<Batch>(`/batches/${id}`),
-    apiFetch<Asset[]>(`/assets?batchId=${id}`),
-    apiFetch<Lot[]>(`/lots?batchId=${id}`),
-    apiFetch<ReconciliationResult>(`/batches/${id}/expected/reconciliation`),
-  ]);
+  const [batch, assets, lots, recon] = await loadBatch(id);
 
   const canManage = user?.role === 'admin' || user?.role === 'manager';
   const expected = batch.expectedUnitCount;

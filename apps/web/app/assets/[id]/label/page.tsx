@@ -1,4 +1,5 @@
-import { apiFetch } from '@/lib/api-server';
+import { notFound } from 'next/navigation';
+import { apiFetch, ApiError } from '@/lib/api-server';
 import type { Asset } from '@/lib/actions/assets';
 import { PrintButton } from './print-button';
 
@@ -8,7 +9,13 @@ export default async function AssetLabelPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const asset = await apiFetch<Asset>(`/assets/${id}`);
+  let asset: Asset;
+  try {
+    asset = await apiFetch<Asset>(`/assets/${id}`);
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 404) notFound();
+    throw err;
+  }
 
   return (
     <main className="min-h-screen bg-white p-8 text-neutral-900">
