@@ -9,6 +9,7 @@ const BASE_LINKS = [
   { href: '/dashboard', label: 'Dashboard' },
   { href: '/assets', label: 'Assets' },
   { href: '/batches', label: 'Purchase Lots' },
+  { href: '/pallets', label: 'Pallets' },
   { href: '/scan', label: 'Scan' },
 ];
 
