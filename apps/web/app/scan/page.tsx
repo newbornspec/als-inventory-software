@@ -222,7 +222,15 @@ export default function ScanPage() {
           </form>
         ) : (
           <div className="mt-6">
-            <CameraScanner onDecode={processScan} />
+            <CameraScanner
+              onDecode={processScan}
+              onReadText={(t) => {
+                // OCR is fallible — drop the text into the field in keyboard
+                // mode so it can be checked/corrected before it's submitted.
+                setTag(t);
+                setMode('keyboard');
+              }}
+            />
           </div>
         )}
 
