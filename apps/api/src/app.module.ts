@@ -15,6 +15,8 @@ import { ExpectedLineItem } from './batches/expected-line-item.entity';
 import { Product } from './products/product.entity';
 import { Pallet } from './pallets/pallet.entity';
 import { PalletLine } from './pallets/pallet-line.entity';
+import { StockLine } from './stock/stock-line.entity';
+import { StockMovement } from './stock/stock-movement.entity';
 import { AuthModule } from './auth/auth.module';
 import { PowerSyncModule } from './powersync/powersync.module';
 import { AssetsModule } from './assets/assets.module';
@@ -24,6 +26,7 @@ import { UsersModule } from './users/users.module';
 import { BatchesModule } from './batches/batches.module';
 import { ProductsModule } from './products/products.module';
 import { PalletsModule } from './pallets/pallets.module';
+import { StockModule } from './stock/stock.module';
 
 @Module({
   imports: [
@@ -37,7 +40,7 @@ import { PalletsModule } from './pallets/pallets.module';
         username: config.get('database.username'),
         password: config.get('database.password'),
         database: config.get('database.name'),
-        entities: [User, Location, Asset, AssetHistory, AssetAudit, Batch, Lot, ExpectedLineItem, Product, Pallet, PalletLine],
+        entities: [User, Location, Asset, AssetHistory, AssetAudit, Batch, Lot, ExpectedLineItem, Product, Pallet, PalletLine, StockLine, StockMovement],
         // Migrations only — never let the app auto-mutate the schema.
         synchronize: false,
       }),
@@ -52,6 +55,7 @@ import { PalletsModule } from './pallets/pallets.module';
     BatchesModule,
     ProductsModule,
     PalletsModule,
+    StockModule,
   ],
   controllers: [AppController],
   providers: [AppService],
