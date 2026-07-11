@@ -28,20 +28,9 @@ const VIDEO_CONSTRAINTS: MediaTrackConstraints = {
   height: { ideal: 1080 },
 };
 
-// The OCR crop region (fractions of the frame) — a wide central band, matching
-// the on-screen guide box. Barcode detection runs on the full frame (more
-// forgiving); the box just helps the user aim.
-const BOX = { x: 0.08, y: 0.34 };
-
-function boxRect(v: HTMLVideoElement) {
-  const sx = Math.round(v.videoWidth * BOX.x);
-  const sy = Math.round(v.videoHeight * BOX.y);
-  return { sx, sy, sw: v.videoWidth - sx * 2, sh: v.videoHeight - sy * 2 };
-}
-
 // From the barcodes found in frame, prefer a Dell-service-tag-shaped value
-// (7 alphanumerics, letters+digits) over, say, the numeric Express Service Code
-// that sits right beside it on the label.
+// (7 alphanumerics, letters+digits) over the numeric Express Service Code
+// beside it on the label.
 function pickBarcode(codes: DetectedBarcode[]): string {
   const vals = codes.map((c) => c.rawValue.trim()).filter(Boolean);
   const tag = vals.find((v) => /^[A-Za-z0-9]{7}$/.test(v) && /[A-Za-z]/.test(v) && /[0-9]/.test(v));
@@ -161,7 +150,6 @@ export function CameraScanner({ onDecode, onReadText, cooldownMs = 1500 }: Camer
           controls.stop();
         } else {
           zxingControls = controls;
-          // zxing manages its own stream; grab the track for the torch toggle.
           trackRef.current =
             (video!.srcObject as MediaStream | null)?.getVideoTracks()[0] ?? null;
           setEngine('zxing');
@@ -205,34 +193,59 @@ export function CameraScanner({ onDecode, onReadText, cooldownMs = 1500 }: Camer
     if (!video || !onReadText || ocrBusy) return;
     setOcrBusy(true);
     setOcrError(null);
-    setOcrStatus('starting…');
+    setOcrStatus('capturing…');
     let worker: TesseractWorker | undefined;
+    let bitmap: ImageBitmap | null = null;
     try {
-      if (!video.videoWidth || !video.videoHeight) {
+      // A full-resolution still is far sharper than the live preview frames, so
+      // OCR can actually resolve small serial text. Fall back to the frame if
+      // the device doesn't support ImageCapture.takePhoto().
+      const track = trackRef.current;
+      const IC = (window as unknown as { ImageCapture?: new (t: MediaStreamTrack) => { takePhoto(): Promise<Blob> } }).ImageCapture;
+      if (track && IC) {
+        try {
+          const blob = await new IC(track).takePhoto();
+          bitmap = await createImageBitmap(blob);
+        } catch {
+          bitmap = null;
+        }
+      }
+
+      const srcW = bitmap ? bitmap.width : video.videoWidth;
+      const srcH = bitmap ? bitmap.height : video.videoHeight;
+      if (!srcW || !srcH) {
         setOcrError('Camera not ready yet — try again in a second.');
         return;
       }
-      const { sx, sy, sw, sh } = boxRect(video);
-      const scale = 2;
+
+      // Cap width so OCR stays fast, but keep plenty of detail for small text.
+      const maxW = 1600;
+      const scale = Math.min(1, maxW / srcW);
+      const cw = Math.round(srcW * scale);
+      const ch = Math.round(srcH * scale);
       const canvas = document.createElement('canvas');
-      canvas.width = Math.round(sw * scale);
-      canvas.height = Math.round(sh * scale);
+      canvas.width = cw;
+      canvas.height = ch;
       const ctx = canvas.getContext('2d');
       if (!ctx) {
         setOcrError('Could not capture the frame.');
         return;
       }
-      ctx.drawImage(video, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+      ctx.drawImage((bitmap ?? video) as CanvasImageSource, 0, 0, cw, ch);
+      bitmap?.close();
+      bitmap = null;
 
-      const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      // Grayscale + contrast stretch so the serial stands out from the label.
+      const img = ctx.getImageData(0, 0, cw, ch);
       const d = img.data;
       for (let i = 0; i < d.length; i += 4) {
         const g = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
-        const v = Math.max(0, Math.min(255, (g - 128) * 1.7 + 128));
+        const v = Math.max(0, Math.min(255, (g - 128) * 1.6 + 128));
         d[i] = d[i + 1] = d[i + 2] = v;
       }
       ctx.putImageData(img, 0, 0);
 
+      setOcrStatus('reading…');
       const Tesseract = await import('tesseract.js');
       worker = await Tesseract.createWorker('eng', 1, {
         logger: (m: { status?: string; progress?: number }) => {
@@ -243,18 +256,21 @@ export function CameraScanner({ onDecode, onReadText, cooldownMs = 1500 }: Camer
       });
       await worker.setParameters({
         tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-/():. ',
-        tessedit_pageseg_mode: Tesseract.PSM.SINGLE_BLOCK,
+        // Sparse text: find captions/serials wherever they sit on the label —
+        // works for both a small Dell tag and a big shipping label.
+        tessedit_pageseg_mode: Tesseract.PSM.SPARSE_TEXT,
       });
       const { data } = await worker.recognize(canvas);
       const serial = pickSerial(data.text ?? '');
       if (!serial) {
-        setOcrError('No readable text found — hold the Service Tag inside the box, closer and steady.');
+        setOcrError('No serial found — aim at the SERVICE TAG line, hold steady in good light.');
         return;
       }
       onReadText(serial);
     } catch {
       setOcrError('Text reading failed — try again.');
     } finally {
+      bitmap?.close();
       if (worker) await worker.terminate();
       setOcrBusy(false);
       setOcrStatus('');
@@ -273,10 +289,6 @@ export function CameraScanner({ onDecode, onReadText, cooldownMs = 1500 }: Camer
     <div className="max-w-sm space-y-2">
       <div className="relative overflow-hidden rounded-md border border-neutral-700 bg-black">
         <video ref={videoRef} className="w-full" muted playsInline autoPlay />
-        <div
-          className="pointer-events-none absolute rounded-md border-2 border-emerald-400/70"
-          style={{ left: '8%', right: '8%', top: '34%', bottom: '34%' }}
-        />
         {engine && !torchFailed && (
           <button
             type="button"
@@ -293,16 +305,17 @@ export function CameraScanner({ onDecode, onReadText, cooldownMs = 1500 }: Camer
       </div>
       <div className="flex items-center justify-between gap-2">
         <p className="text-xs text-neutral-500">
-          Fill the frame with the Service Tag barcode — it reads automatically.
+          A clear barcode scans automatically. For small or dim labels, tap{' '}
+          <span className="text-neutral-300">Read text</span> and aim at the Service Tag line.
         </p>
         {onReadText && (
           <button
             type="button"
             onClick={readText}
             disabled={ocrBusy}
-            className="shrink-0 rounded-md border border-neutral-600 px-3 py-1.5 text-xs font-medium text-neutral-100 disabled:opacity-50"
+            className="shrink-0 rounded-md bg-neutral-100 px-3 py-1.5 text-xs font-medium text-neutral-900 disabled:opacity-50"
           >
-            {ocrBusy ? 'Reading…' : 'Read text (no barcode)'}
+            {ocrBusy ? 'Reading…' : 'Read text'}
           </button>
         )}
       </div>
