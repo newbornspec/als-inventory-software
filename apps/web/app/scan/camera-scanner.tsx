@@ -10,55 +10,121 @@ interface CameraScannerProps {
   cooldownMs?: number;
 }
 
-// Wraps @zxing/browser's continuous decode loop around the phone's back
-// camera. This is what makes the installed PWA a real scanner, not just a
-// manual-entry form: point the camera, get an instant local-SQLite write via
-// the same handleScan path the keyboard-wedge/manual input uses.
+// Minimal typing for the experimental BarcodeDetector API (not in TS DOM libs).
+interface DetectedBarcode {
+  rawValue: string;
+}
+interface BarcodeDetectorLike {
+  detect(source: CanvasImageSource): Promise<DetectedBarcode[]>;
+}
+interface BarcodeDetectorCtor {
+  new (opts?: { formats?: string[] }): BarcodeDetectorLike;
+  getSupportedFormats(): Promise<string[]>;
+}
+
+// Points the phone's back camera at a label and reads barcodes/QR codes. Two
+// engines: the browser-native BarcodeDetector (fast + reliable on Android
+// Chrome — this is what Google Lens uses) when available, otherwise @zxing as
+// a fallback for browsers that don't ship it. Either way the decoded string
+// is handed to onDecode exactly as a keyboard/manual scan would be.
 export function CameraScanner({ onDecode, cooldownMs = 1500 }: CameraScannerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const lastDecodeRef = useRef<{ text: string; at: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [engine, setEngine] = useState<'native' | 'zxing' | null>(null);
 
   useEffect(() => {
-    const reader = new BrowserMultiFormatReader();
-    let controls: { stop: () => void } | undefined;
     let cancelled = false;
+    let stream: MediaStream | undefined;
+    let loopTimer: ReturnType<typeof setTimeout> | undefined;
+    let zxingControls: { stop: () => void } | undefined;
+    const video = videoRef.current;
+    if (!video) return;
 
-    // decodeFromConstraints(constraints, videoElement, callback) is the
-    // documented @zxing/browser pattern as of writing — verify against the
-    // current README if this errors after an SDK version bump.
-    reader
-      .decodeFromConstraints(
-        { video: { facingMode: 'environment' } },
-        videoRef.current!,
-        (result) => {
-          if (!result) return;
-          const text = result.getText();
-          const now = Date.now();
-          const last = lastDecodeRef.current;
-          if (last && last.text === text && now - last.at < cooldownMs) return;
-          lastDecodeRef.current = { text, at: now };
-          onDecode(text);
-        },
-      )
-      .then((c) => {
+    function accept(text: string) {
+      const clean = text.trim();
+      if (!clean) return;
+      const now = Date.now();
+      const last = lastDecodeRef.current;
+      if (last && last.text === clean && now - last.at < cooldownMs) return;
+      lastDecodeRef.current = { text: clean, at: now };
+      onDecode(clean);
+    }
+
+    function failed(err: unknown) {
+      const e = err as { name?: string; message?: string };
+      setError(
+        e.name === 'NotAllowedError'
+          ? 'Camera access was denied. Allow camera permission for this site and reload.'
+          : `Could not start camera: ${e.message ?? 'unknown error'}`,
+      );
+    }
+
+    async function startNative(Ctor: BarcodeDetectorCtor): Promise<boolean> {
+      try {
+        const formats = await Ctor.getSupportedFormats();
+        const detector = new Ctor({ formats });
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'environment' },
+        });
         if (cancelled) {
-          c.stop();
-        } else {
-          controls = c;
+          stream.getTracks().forEach((t) => t.stop());
+          return true;
         }
-      })
-      .catch((err: Error) => {
-        setError(
-          err.name === 'NotAllowedError'
-            ? 'Camera access was denied. Allow camera permission for this site and reload.'
-            : `Could not start camera: ${err.message}`,
+        video!.srcObject = stream;
+        await video!.play();
+        setEngine('native');
+        const loop = async () => {
+          if (cancelled) return;
+          try {
+            const codes = await detector.detect(video!);
+            if (codes.length > 0) accept(codes[0].rawValue);
+          } catch {
+            /* transient per-frame detect errors are expected; keep going */
+          }
+          if (!cancelled) loopTimer = setTimeout(loop, 200); // ~5 checks/sec
+        };
+        loop();
+        return true;
+      } catch (err) {
+        // Native path failed to start — fall back to zxing rather than error out.
+        stream?.getTracks().forEach((t) => t.stop());
+        stream = undefined;
+        return false;
+      }
+    }
+
+    async function startZxing() {
+      try {
+        const reader = new BrowserMultiFormatReader();
+        const controls = await reader.decodeFromConstraints(
+          { video: { facingMode: 'environment' } },
+          video!,
+          (result) => {
+            if (result) accept(result.getText());
+          },
         );
-      });
+        if (cancelled) controls.stop();
+        else {
+          zxingControls = controls;
+          setEngine('zxing');
+        }
+      } catch (err) {
+        failed(err);
+      }
+    }
+
+    (async () => {
+      const Ctor = (window as unknown as { BarcodeDetector?: BarcodeDetectorCtor }).BarcodeDetector;
+      if (Ctor && (await startNative(Ctor))) return;
+      await startZxing();
+    })();
 
     return () => {
       cancelled = true;
-      controls?.stop();
+      if (loopTimer) clearTimeout(loopTimer);
+      zxingControls?.stop();
+      stream?.getTracks().forEach((t) => t.stop());
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cooldownMs]);
@@ -72,9 +138,18 @@ export function CameraScanner({ onDecode, cooldownMs = 1500 }: CameraScannerProp
   }
 
   return (
-    <div className="relative max-w-sm overflow-hidden rounded-md border border-neutral-700 bg-black">
-      <video ref={videoRef} className="w-full" muted playsInline />
-      <div className="pointer-events-none absolute inset-8 rounded-md border-2 border-emerald-400/70" />
+    <div className="max-w-sm space-y-1">
+      <div className="relative overflow-hidden rounded-md border border-neutral-700 bg-black">
+        <video ref={videoRef} className="w-full" muted playsInline autoPlay />
+        <div className="pointer-events-none absolute inset-8 rounded-md border-2 border-emerald-400/70" />
+      </div>
+      <p className="text-xs text-neutral-500">
+        {engine === 'native'
+          ? 'Point at a barcode or QR code.'
+          : engine === 'zxing'
+            ? 'Point at a barcode or QR code (compatibility mode).'
+            : 'Starting camera…'}
+      </p>
     </div>
   );
 }
