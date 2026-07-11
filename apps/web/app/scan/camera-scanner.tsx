@@ -5,14 +5,6 @@ import { BrowserMultiFormatReader } from '@zxing/browser';
 // Type-only import — erased at build, so it doesn't pull tesseract into the bundle.
 import type { Worker as TesseractWorker } from 'tesseract.js';
 
-// Prefer a higher-res back camera — small barcodes and serial text need the
-// detail. `ideal` degrades gracefully on devices that can't hit it.
-const VIDEO_CONSTRAINTS: MediaTrackConstraints = {
-  facingMode: 'environment',
-  width: { ideal: 1920 },
-  height: { ideal: 1080 },
-};
-
 interface CameraScannerProps {
   onDecode: (text: string) => void;
   // Called with text read via OCR — fallible, so the caller should let the
@@ -35,6 +27,26 @@ interface BarcodeDetectorCtor {
   getSupportedFormats(): Promise<string[]>;
 }
 
+// Prefer a higher-res back camera — small barcodes and serial text need the
+// detail. `ideal` degrades gracefully on devices that can't hit it.
+const VIDEO_CONSTRAINTS: MediaTrackConstraints = {
+  facingMode: 'environment',
+  width: { ideal: 1920 },
+  height: { ideal: 1080 },
+};
+
+// The active scan region as fractions of the frame — a wide, short central band
+// suited to barcodes. Barcode detection and OCR both operate ONLY on this box,
+// so on a label with several barcodes the user frames the one they want. The
+// on-screen overlay uses the same numbers.
+const BOX = { x: 0.08, y: 0.34 }; // 8% horizontal inset, 34% vertical inset
+
+function boxRect(v: HTMLVideoElement) {
+  const sx = Math.round(v.videoWidth * BOX.x);
+  const sy = Math.round(v.videoHeight * BOX.y);
+  return { sx, sy, sw: v.videoWidth - sx * 2, sh: v.videoHeight - sy * 2 };
+}
+
 // Extract the asset identifier from OCR'd label text. Vendor labels (e.g. Dell)
 // print the serial next to a "SERVICE TAG" / "S/N" caption amid a lot of
 // regulatory noise (model, reg model, agency codes) — a plain "longest token"
@@ -45,7 +57,6 @@ interface BarcodeDetectorCtor {
 function pickSerial(text: string): string {
   const up = text.toUpperCase().replace(/\|/g, 'I');
 
-  // 1) Value following a Service Tag / Serial caption — most reliable.
   const captioned = [
     /SERVICE\s*TAG\s*\(?\s*S\s*\/?\s*N\s*\)?\s*[:#.\-]*\s*([A-Z0-9]{5,14})/,
     /SERVICE\s*TAG\s*[:#.\-]*\s*([A-Z0-9]{5,14})/,
@@ -57,35 +68,29 @@ function pickSerial(text: string): string {
     if (m) return m[1];
   }
 
-  // 2) Express Service Code caption (numeric).
   const esc = up.match(/EXPRESS\s*SERVICE\s*CODE\s*[:#.\-]*\s*([0-9]{8,14})/);
   if (esc) return esc[1];
 
   const tokens = up.match(/[A-Z0-9]{5,}/g) ?? [];
-
-  // 3) Dell service-tag shape: exactly 7 alphanumerics (letters + digits), not
-  //    one of the regulatory/model codes also printed on the label.
   const REG = /^(P62G|MSIP|CMM|IEC|ISO|EN\d|NMB|ICES|CAN|ZU\d|DPN|DPC|M0|R4|R-)/;
   const dell = tokens.find(
     (t) => t.length === 7 && /[A-Z]/.test(t) && /[0-9]/.test(t) && !REG.test(t),
   );
   if (dell) return dell;
 
-  // 4) Fallback: longest mixed-alphanumeric token.
   const mixed = tokens.filter((t) => /[A-Z]/.test(t) && /[0-9]/.test(t));
   const byLen = (a: string, b: string) => b.length - a.length;
   return mixed.sort(byLen)[0] ?? tokens.sort(byLen)[0] ?? '';
 }
 
-// Points the phone's back camera at a label. Two barcode engines — the
-// browser-native BarcodeDetector (fast + reliable on Android Chrome, what
-// Google Lens uses) when available, else @zxing as a fallback — plus a
-// "Read text" button that OCRs the frame for labels with no scannable code.
 export function CameraScanner({ onDecode, onReadText, cooldownMs = 1500 }: CameraScannerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const lastDecodeRef = useRef<{ text: string; at: number } | null>(null);
+  const trackRef = useRef<MediaStreamTrack | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [engine, setEngine] = useState<'native' | 'zxing' | null>(null);
+  const [torchSupported, setTorchSupported] = useState(false);
+  const [torchOn, setTorchOn] = useState(false);
   const [ocrBusy, setOcrBusy] = useState(false);
   const [ocrStatus, setOcrStatus] = useState('');
   const [ocrError, setOcrError] = useState<string | null>(null);
@@ -97,6 +102,8 @@ export function CameraScanner({ onDecode, onReadText, cooldownMs = 1500 }: Camer
     let zxingControls: { stop: () => void } | undefined;
     const video = videoRef.current;
     if (!video) return;
+    const crop = document.createElement('canvas');
+    const cropCtx = crop.getContext('2d');
 
     function accept(text: string) {
       const clean = text.trim();
@@ -129,11 +136,25 @@ export function CameraScanner({ onDecode, onReadText, cooldownMs = 1500 }: Camer
         video!.srcObject = stream;
         await video!.play();
         setEngine('native');
+
+        const track = stream.getVideoTracks()[0];
+        trackRef.current = track;
+        const caps = (track.getCapabilities?.() ?? {}) as { torch?: boolean };
+        if (caps.torch) setTorchSupported(true);
+
         const loop = async () => {
           if (cancelled) return;
           try {
-            const codes = await detector.detect(video!);
-            if (codes.length > 0) accept(codes[0].rawValue);
+            // Detect only within the scan box, so the framed barcode wins over
+            // any others on the label.
+            if (video!.videoWidth && cropCtx) {
+              const { sx, sy, sw, sh } = boxRect(video!);
+              crop.width = sw;
+              crop.height = sh;
+              cropCtx.drawImage(video!, sx, sy, sw, sh, 0, 0, sw, sh);
+              const codes = await detector.detect(crop);
+              if (codes.length > 0) accept(codes[0].rawValue);
+            }
           } catch {
             /* transient per-frame detect errors are expected; keep going */
           }
@@ -178,10 +199,24 @@ export function CameraScanner({ onDecode, onReadText, cooldownMs = 1500 }: Camer
       cancelled = true;
       if (loopTimer) clearTimeout(loopTimer);
       zxingControls?.stop();
+      trackRef.current = null;
       stream?.getTracks().forEach((t) => t.stop());
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cooldownMs]);
+
+  async function toggleTorch() {
+    const track = trackRef.current;
+    if (!track) return;
+    const next = !torchOn;
+    try {
+      // `torch` is a real Android/Chrome constraint but not in the TS DOM lib.
+      await track.applyConstraints({ advanced: [{ torch: next }] } as unknown as MediaTrackConstraints);
+      setTorchOn(next);
+    } catch {
+      /* device refused the torch constraint — leave state as-is */
+    }
+  }
 
   async function readText() {
     const video = videoRef.current;
@@ -191,28 +226,23 @@ export function CameraScanner({ onDecode, onReadText, cooldownMs = 1500 }: Camer
     setOcrStatus('starting…');
     let worker: TesseractWorker | undefined;
     try {
-      const vw = video.videoWidth;
-      const vh = video.videoHeight;
-      if (!vw || !vh) {
+      if (!video.videoWidth || !video.videoHeight) {
         setOcrError('Camera not ready yet — try again in a second.');
         return;
       }
-      // Crop to the central guide box, then upscale ~2x — OCR is markedly
-      // better on larger glyphs.
-      const mx = vw * 0.08;
-      const my = vh * 0.08;
-      const cw = vw - mx * 2;
-      const ch = vh - my * 2;
+      // Read only the scan box, upscaled ~2x — OCR is markedly better on a
+      // tight, larger crop than on the whole cluttered label.
+      const { sx, sy, sw, sh } = boxRect(video);
       const scale = 2;
       const canvas = document.createElement('canvas');
-      canvas.width = Math.round(cw * scale);
-      canvas.height = Math.round(ch * scale);
+      canvas.width = Math.round(sw * scale);
+      canvas.height = Math.round(sh * scale);
       const ctx = canvas.getContext('2d');
       if (!ctx) {
         setOcrError('Could not capture the frame.');
         return;
       }
-      ctx.drawImage(video, mx, my, cw, ch, 0, 0, canvas.width, canvas.height);
+      ctx.drawImage(video, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
 
       // Grayscale + contrast stretch so the serial stands out from the label.
       const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
@@ -224,9 +254,7 @@ export function CameraScanner({ onDecode, onReadText, cooldownMs = 1500 }: Camer
       }
       ctx.putImageData(img, 0, 0);
 
-      // Loaded on demand so the OCR engine isn't in the main bundle. The worker
-      // API lets us constrain recognition to serial characters and treat the
-      // crop as a single block — both big accuracy wins over free-form OCR.
+      // Loaded on demand so the OCR engine isn't in the main bundle.
       const Tesseract = await import('tesseract.js');
       worker = await Tesseract.createWorker('eng', 1, {
         logger: (m: { status?: string; progress?: number }) => {
@@ -236,13 +264,13 @@ export function CameraScanner({ onDecode, onReadText, cooldownMs = 1500 }: Camer
         },
       });
       await worker.setParameters({
-        tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-',
+        tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-/():. ',
         tessedit_pageseg_mode: Tesseract.PSM.SINGLE_BLOCK,
       });
       const { data } = await worker.recognize(canvas);
       const serial = pickSerial(data.text ?? '');
       if (!serial) {
-        setOcrError('No readable text found — hold closer and steadier over the serial.');
+        setOcrError('No readable text found — hold the Service Tag inside the box, closer and steady.');
         return;
       }
       onReadText(serial);
@@ -267,13 +295,31 @@ export function CameraScanner({ onDecode, onReadText, cooldownMs = 1500 }: Camer
     <div className="max-w-sm space-y-2">
       <div className="relative overflow-hidden rounded-md border border-neutral-700 bg-black">
         <video ref={videoRef} className="w-full" muted playsInline autoPlay />
-        <div className="pointer-events-none absolute inset-8 rounded-md border-2 border-emerald-400/70" />
+        {/* Scan box — dim outside, bright frame inside; matches BOX / boxRect. */}
+        <div className="pointer-events-none absolute inset-0">
+          <div
+            className="absolute rounded-md border-2 border-emerald-400 shadow-[0_0_0_9999px_rgba(0,0,0,0.45)]"
+            style={{ left: '8%', right: '8%', top: '34%', bottom: '34%' }}
+          />
+        </div>
+        {torchSupported && (
+          <button
+            type="button"
+            onClick={toggleTorch}
+            aria-pressed={torchOn}
+            className={
+              'absolute right-2 top-2 rounded-full px-3 py-1.5 text-xs font-medium ' +
+              (torchOn ? 'bg-amber-400 text-neutral-900' : 'bg-black/60 text-neutral-100')
+            }
+          >
+            {torchOn ? '⚡ Flash on' : '⚡ Flash'}
+          </button>
+        )}
       </div>
       <div className="flex items-center justify-between gap-2">
         <p className="text-xs text-neutral-500">
-          {engine === 'zxing'
-            ? 'Point at the Service Tag barcode — it reads automatically (compatibility mode).'
-            : 'Point at the Service Tag barcode — it reads automatically.'}
+          Line the Service Tag barcode up inside the box — it reads automatically
+          {engine === 'zxing' ? ' (compatibility mode)' : ''}.
         </p>
         {onReadText && (
           <button
