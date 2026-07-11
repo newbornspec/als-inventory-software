@@ -32,13 +32,14 @@ export class PowerSyncService {
     switch (entry.op) {
       case 'PUT':
         // Upsert: covers both "new asset created offline" and first-sync of an update.
-        await repo.upsert({ ...entry.data, id: entry.id }, ['id']);
+        await repo.upsert({ ...this.toEntityData(entry.data), id: entry.id }, ['id']);
         if (entry.table === 'asset_audits') {
+          // Reads the original snake_case data — unchanged by the mapping above.
           await this.applyAuditSideEffects(entry, userId);
         }
         break;
       case 'PATCH':
-        await repo.update({ id: entry.id }, entry.data ?? {});
+        await repo.update({ id: entry.id }, this.toEntityData(entry.data));
         break;
       case 'DELETE':
         await repo.delete({ id: entry.id });
@@ -46,6 +47,30 @@ export class PowerSyncService {
       default:
         throw new BadRequestException(`Unsupported op: ${entry.op}`);
     }
+  }
+
+  // PowerSync sends column values keyed by the local SQLite schema's snake_case
+  // names (batch_id, stock_status, serial_number …), but TypeORM's upsert/update
+  // map by the entity's camelCase property names. Without translating, every
+  // multi-word column is silently dropped server-side (an offline scan into a
+  // lot would never persist batch_id, an offline audit would lose serial_number,
+  // ram_gb, cosmetic_grade, and so on). Convert the keys so the write lands.
+  private toEntityData(data?: Record<string, unknown>): Record<string, unknown> {
+    if (!data) return {};
+    const out: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(data)) {
+      out[key.replace(/_([a-z0-9])/g, (_, c: string) => c.toUpperCase())] = value;
+    }
+    // functional_tests syncs as a JSON string (SQLite has no JSON type); the
+    // server column is jsonb, so parse it back to an object before saving.
+    if (typeof out.functionalTests === 'string') {
+      try {
+        out.functionalTests = JSON.parse(out.functionalTests);
+      } catch {
+        /* not valid JSON — leave as-is rather than fail the whole upload */
+      }
+    }
+    return out;
   }
 
   // PowerSync writes go straight to the table via upsert() above, bypassing
