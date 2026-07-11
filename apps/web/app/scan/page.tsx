@@ -11,6 +11,7 @@ type ScannedAsset = { id: string; name: string; tag: string; stock_status: strin
 
 type ScanResult =
   | { status: 'ok'; asset: ScannedAsset }
+  | { status: 'received_new'; asset: ScannedAsset }
   | { status: 'not_found'; tag: string }
   | null;
 
@@ -89,7 +90,38 @@ export default function ScanPage() {
     );
 
     if (!asset) {
-      setResult({ status: 'not_found', tag: scannedTag });
+      // Not in inventory. Outside receiving, that's just a failed lookup. But
+      // when receiving into a lot, an unknown tag is a NEW device arriving —
+      // create it into the lot right here. Offline-safe: it's a local insert
+      // that syncs via the same assets upload path as everything else.
+      // name/category are placeholders, refined later at audit/grading.
+      if (!selectedBatchId) {
+        setResult({ status: 'not_found', tag: scannedTag });
+        return;
+      }
+      const id = crypto.randomUUID();
+      await db.execute(
+        `INSERT INTO assets (id, tag, name, category, stock_status, batch_id, updated_at)
+         VALUES (?, ?, ?, 'Uncategorised', 'received', ?, datetime('now'))`,
+        [id, scannedTag, scannedTag, selectedBatchId],
+      );
+      await db.execute(
+        `INSERT INTO asset_history (id, asset_id, event_type, user_id, created_at)
+         VALUES (uuid(), ?, 'created', NULL, datetime('now'))`,
+        [id],
+      );
+      await refreshReceivedCount(selectedBatchId);
+      const createdAsset: ScannedAsset = {
+        id,
+        name: scannedTag,
+        tag: scannedTag,
+        stock_status: 'received',
+      };
+      setResult({ status: 'received_new', asset: createdAsset });
+      setRecent((prev) => [
+        { tag: scannedTag, name: scannedTag, when: new Date().toLocaleTimeString() },
+        ...prev.slice(0, 9),
+      ]);
       return;
     }
 
@@ -216,9 +248,34 @@ export default function ScanPage() {
             )}
           </div>
         )}
+        {result?.status === 'received_new' && (
+          <div className="mt-4 max-w-sm space-y-3">
+            <div className="rounded-md border border-sky-800 bg-sky-950/50 p-3 text-sm">
+              <div>
+                Received new device <strong>{result.asset.tag}</strong>
+                {selectedBatch ? ' into ' + selectedBatch.batch_number : ''}.{' '}
+                <span className="text-sky-300">Created in inventory.</span>
+              </div>
+              {!showAudit && (
+                <button
+                  onClick={() => setShowAudit(true)}
+                  className="mt-2 text-xs text-sky-300 underline"
+                >
+                  Record ITAD audit for this asset
+                </button>
+              )}
+            </div>
+            {showAudit && (
+              <AuditForm assetId={result.asset.id} onSaved={() => setShowAudit(false)} />
+            )}
+          </div>
+        )}
         {result?.status === 'not_found' && (
           <div className="mt-4 max-w-sm rounded-md border border-amber-800 bg-amber-950/50 p-3 text-sm">
-            No asset found for tag &quot;{result.tag}&quot;.
+            No asset found for tag &quot;{result.tag}&quot;.{' '}
+            <span className="text-amber-300">
+              Select a lot above to receive it as a new device.
+            </span>
           </div>
         )}
 
