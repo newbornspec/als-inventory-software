@@ -1,0 +1,68 @@
+import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { Roles } from '../auth/guards/roles.decorator';
+import { RolesGuard } from '../auth/guards/roles.guard';
+import { UserRole } from '../users/user.entity';
+import { PalletsService } from './pallets.service';
+import { CreatePalletDto } from './dto/create-pallet.dto';
+import { UpdatePalletDto } from './dto/update-pallet.dto';
+import { CreatePalletLineDto } from './dto/create-pallet-line.dto';
+import { UpdatePalletLineDto } from './dto/update-pallet-line.dto';
+
+@Controller('pallets')
+@UseGuards(JwtAuthGuard, RolesGuard)
+export class PalletsController {
+  constructor(private pallets: PalletsService) {}
+
+  @Get()
+  findAll() {
+    return this.pallets.findAll();
+  }
+
+  @Get(':id')
+  findOne(@Param('id') id: string) {
+    return this.pallets.findOne(id);
+  }
+
+  @Roles(UserRole.ADMIN, UserRole.MANAGER)
+  @Post()
+  create(@Body() dto: CreatePalletDto) {
+    return this.pallets.create(dto);
+  }
+
+  @Roles(UserRole.ADMIN, UserRole.MANAGER)
+  @Patch(':id')
+  update(@Param('id') id: string, @Body() dto: UpdatePalletDto) {
+    return this.pallets.update(id, dto);
+  }
+
+  @Roles(UserRole.ADMIN)
+  @Delete(':id')
+  remove(@Param('id') id: string) {
+    return this.pallets.remove(id);
+  }
+
+  // --- lines ---
+
+  @Roles(UserRole.ADMIN, UserRole.MANAGER)
+  @Post(':id/lines')
+  addLine(@Param('id') id: string, @Body() dto: CreatePalletLineDto) {
+    return this.pallets.addLine(id, dto);
+  }
+
+  @Roles(UserRole.ADMIN, UserRole.MANAGER)
+  @Patch(':id/lines/:lineId')
+  updateLine(
+    @Param('id') id: string,
+    @Param('lineId') lineId: string,
+    @Body() dto: UpdatePalletLineDto,
+  ) {
+    return this.pallets.updateLine(id, lineId, dto);
+  }
+
+  @Roles(UserRole.ADMIN, UserRole.MANAGER)
+  @Delete(':id/lines/:lineId')
+  removeLine(@Param('id') id: string, @Param('lineId') lineId: string) {
+    return this.pallets.removeLine(id, lineId);
+  }
+}
