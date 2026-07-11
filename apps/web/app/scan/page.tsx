@@ -75,17 +75,21 @@ export default function ScanPage() {
   // camera calls this directly from CameraScanner's onDecode. Either way it
   // resolves against local SQLite and writes the scan event the same way —
   // there is no "camera path" vs "keyboard path" beyond how the tag arrives.
-  async function processScan(scannedTag: string) {
+  async function processScan(rawTag: string) {
     const db = getPowerSyncDb();
+    // Normalise: trim + uppercase. Serials/tags are case-insensitive, so
+    // without this "4tc81g2" and "4TC81G2" would become two separate assets.
+    const scannedTag = rawTag.trim().toUpperCase();
     if (!scannedTag) return;
     setShowAudit(false);
 
     // getOptional(), not get() — a tag that doesn't match any asset is a
     // real, expected outcome here (handled below via the 'not_found' status),
     // not an exceptional one. db.get() throws "Result set is empty" on zero
-    // rows; getOptional() returns null instead.
+    // rows; getOptional() returns null instead. COLLATE NOCASE so a re-scan in
+    // any case finds the existing asset instead of creating a duplicate.
     const asset = await db.getOptional<ScannedAsset>(
-      'SELECT id, name, tag, stock_status FROM assets WHERE tag = ?',
+      'SELECT id, name, tag, stock_status FROM assets WHERE tag = ? COLLATE NOCASE',
       [scannedTag],
     );
 

@@ -2,6 +2,16 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { BrowserMultiFormatReader } from '@zxing/browser';
+// Type-only import — erased at build, so it doesn't pull tesseract into the bundle.
+import type { Worker as TesseractWorker } from 'tesseract.js';
+
+// Prefer a higher-res back camera — small barcodes and serial text need the
+// detail. `ideal` degrades gracefully on devices that can't hit it.
+const VIDEO_CONSTRAINTS: MediaTrackConstraints = {
+  facingMode: 'environment',
+  width: { ideal: 1920 },
+  height: { ideal: 1080 },
+};
 
 interface CameraScannerProps {
   onDecode: (text: string) => void;
@@ -81,9 +91,7 @@ export function CameraScanner({ onDecode, onReadText, cooldownMs = 1500 }: Camer
       try {
         const formats = await Ctor.getSupportedFormats();
         const detector = new Ctor({ formats });
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: 'environment' },
-        });
+        stream = await navigator.mediaDevices.getUserMedia({ video: VIDEO_CONSTRAINTS });
         if (cancelled) {
           stream.getTracks().forEach((t) => t.stop());
           return true;
@@ -99,7 +107,7 @@ export function CameraScanner({ onDecode, onReadText, cooldownMs = 1500 }: Camer
           } catch {
             /* transient per-frame detect errors are expected; keep going */
           }
-          if (!cancelled) loopTimer = setTimeout(loop, 200); // ~5 checks/sec
+          if (!cancelled) loopTimer = setTimeout(loop, 120); // ~8 checks/sec
         };
         loop();
         return true;
@@ -114,7 +122,7 @@ export function CameraScanner({ onDecode, onReadText, cooldownMs = 1500 }: Camer
       try {
         const reader = new BrowserMultiFormatReader();
         const controls = await reader.decodeFromConstraints(
-          { video: { facingMode: 'environment' } },
+          { video: VIDEO_CONSTRAINTS },
           video!,
           (result) => {
             if (result) accept(result.getText());
@@ -151,6 +159,7 @@ export function CameraScanner({ onDecode, onReadText, cooldownMs = 1500 }: Camer
     setOcrBusy(true);
     setOcrError(null);
     setOcrStatus('starting…');
+    let worker: TesseractWorker | undefined;
     try {
       const vw = video.videoWidth;
       const vh = video.videoHeight;
@@ -158,30 +167,49 @@ export function CameraScanner({ onDecode, onReadText, cooldownMs = 1500 }: Camer
         setOcrError('Camera not ready yet — try again in a second.');
         return;
       }
-      // Crop to the central guide box to cut background/label edges.
+      // Crop to the central guide box, then upscale ~2x — OCR is markedly
+      // better on larger glyphs.
       const mx = vw * 0.08;
       const my = vh * 0.08;
       const cw = vw - mx * 2;
       const ch = vh - my * 2;
+      const scale = 2;
       const canvas = document.createElement('canvas');
-      canvas.width = cw;
-      canvas.height = ch;
+      canvas.width = Math.round(cw * scale);
+      canvas.height = Math.round(ch * scale);
       const ctx = canvas.getContext('2d');
       if (!ctx) {
         setOcrError('Could not capture the frame.');
         return;
       }
-      ctx.drawImage(video, mx, my, cw, ch, 0, 0, cw, ch);
+      ctx.drawImage(video, mx, my, cw, ch, 0, 0, canvas.width, canvas.height);
 
-      // Loaded on demand so the OCR engine isn't in the main bundle.
+      // Grayscale + contrast stretch so the serial stands out from the label.
+      const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const d = img.data;
+      for (let i = 0; i < d.length; i += 4) {
+        const g = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+        const v = Math.max(0, Math.min(255, (g - 128) * 1.7 + 128));
+        d[i] = d[i + 1] = d[i + 2] = v;
+      }
+      ctx.putImageData(img, 0, 0);
+
+      // Loaded on demand so the OCR engine isn't in the main bundle. The worker
+      // API lets us constrain recognition to serial characters and treat the
+      // crop as a single block — both big accuracy wins over free-form OCR.
       const Tesseract = await import('tesseract.js');
-      const { data } = await Tesseract.recognize(canvas, 'eng', {
+      worker = await Tesseract.createWorker('eng', 1, {
         logger: (m: { status?: string; progress?: number }) => {
           if (m.status && typeof m.progress === 'number') {
             setOcrStatus(`${m.status} ${Math.round(m.progress * 100)}%`);
           }
         },
       });
+      await worker.setParameters({
+        tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-',
+        tessedit_pageseg_mode: Tesseract.PSM.SINGLE_BLOCK,
+      });
+      const { data } = await worker.recognize(canvas);
       const serial = pickSerial(data.text ?? '');
       if (!serial) {
         setOcrError('No readable text found — hold closer and steadier over the serial.');
@@ -191,6 +219,7 @@ export function CameraScanner({ onDecode, onReadText, cooldownMs = 1500 }: Camer
     } catch {
       setOcrError('Text reading failed — try again.');
     } finally {
+      if (worker) await worker.terminate();
       setOcrBusy(false);
       setOcrStatus('');
     }
