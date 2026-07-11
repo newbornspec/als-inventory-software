@@ -56,6 +56,25 @@ export type ExpectedLineItemInput = Partial<
   Omit<ExpectedLineItem, 'id' | 'batchId' | 'verificationStatus' | 'createdAt'>
 >;
 
+export interface ReconciliationResult {
+  summary: {
+    expectedSerialized: number;
+    found: number;
+    missing: number;
+    extra: number;
+    scanned: number;
+    quantityOnlyLines: number;
+  };
+  lines: {
+    expected: ExpectedLineItem;
+    status: 'found' | 'missing';
+    matchedAssetId: string | null;
+    matchedTag: string | null;
+  }[];
+  extras: { id: string; tag: string; name: string }[];
+  quantityOnly: ExpectedLineItem[];
+}
+
 export async function createBatch(_prev: ActionState, formData: FormData): Promise<ActionState> {
   const dto = {
     source: emptyToUndefined(formData.get('source')),
