@@ -94,10 +94,16 @@ export class ExpectedLineItemsService {
       this.assets.find({ where: { batchId } }),
     ]);
 
+    // Match on the tag scanned off each device, case-insensitively (a serial
+    // is the same whether typed "4tc81g2" or "4TC81G2"). First scan of a tag
+    // wins as the representative match.
     const assetByTag = new Map<string, Asset>();
-    for (const a of assets) assetByTag.set(a.tag.trim().toLowerCase(), a);
+    for (const a of assets) {
+      const key = a.tag.trim().toLowerCase();
+      if (!assetByTag.has(key)) assetByTag.set(key, a);
+    }
 
-    const matchedAssetIds = new Set<string>();
+    const expectedIds = new Set<string>();
     const lines: ReconciledLine[] = [];
     const quantityOnly: ExpectedLineItem[] = [];
 
@@ -107,8 +113,8 @@ export class ExpectedLineItemsService {
         quantityOnly.push(e);
         continue;
       }
+      expectedIds.add(identifier);
       const match = assetByTag.get(identifier);
-      if (match) matchedAssetIds.add(match.id);
       lines.push({
         expected: e,
         status: match ? 'found' : 'missing',
@@ -117,8 +123,11 @@ export class ExpectedLineItemsService {
       });
     }
 
+    // Extra = a scanned device whose tag is on NO expected line at all. A
+    // duplicate scan of an expected serial is NOT extra — the line it matches
+    // is already Found — so match against the expected set, not 1:1 pairing.
     const extras = assets
-      .filter((a) => !matchedAssetIds.has(a.id))
+      .filter((a) => !expectedIds.has(a.tag.trim().toLowerCase()))
       .map((a) => ({ id: a.id, tag: a.tag, name: a.name }));
 
     const found = lines.filter((l) => l.status === 'found').length;
