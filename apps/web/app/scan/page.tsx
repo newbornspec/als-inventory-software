@@ -7,11 +7,19 @@ import { AuditForm } from '@/app/components/audit-form';
 import { formatLabel } from '@/lib/asset-options';
 import { CameraScanner } from './camera-scanner';
 
-type ScannedAsset = { id: string; name: string; tag: string; stock_status: string };
+type ScannedAsset = {
+  id: string;
+  name: string;
+  tag: string;
+  stock_status: string;
+  batch_id: string | null;
+};
 
 type ScanResult =
   | { status: 'ok'; asset: ScannedAsset }
   | { status: 'received_new'; asset: ScannedAsset }
+  | { status: 'already'; asset: ScannedAsset }
+  | { status: 'not_on_list'; tag: string }
   | { status: 'not_found'; tag: string }
   | null;
 
@@ -38,6 +46,9 @@ export default function ScanPage() {
   const [openBatches, setOpenBatches] = useState<OpenBatch[]>([]);
   const [selectedBatchId, setSelectedBatchId] = useState('');
   const [receivedCount, setReceivedCount] = useState(0);
+  // Set of accepted identifiers (serial/tag, uppercased) from the lot's
+  // uploaded list; null when the lot has no list (then scanning is unverified).
+  const [expectedIndex, setExpectedIndex] = useState<Set<string> | null>(null);
 
   useEffect(() => {
     if (mode === 'keyboard') inputRef.current?.focus();
@@ -59,6 +70,40 @@ export default function ScanPage() {
       return;
     }
     refreshReceivedCount(selectedBatchId);
+  }, [selectedBatchId]);
+
+  // Load the lot's uploaded supplier list so scans can be verified against it.
+  // Fetched from the API (needs signal at lot-select); scanning afterwards runs
+  // against the in-memory set. No list -> null -> scanning falls back to
+  // adding new devices (blind receiving).
+  useEffect(() => {
+    if (!selectedBatchId) {
+      setExpectedIndex(null);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const { token } = await (await fetch('/api/powersync/token')).json();
+        const res = await fetch(
+          `${process.env.NEXT_PUBLIC_API_URL}/batches/${selectedBatchId}/expected`,
+          { headers: { Authorization: `Bearer ${token}` } },
+        );
+        if (!res.ok) throw new Error('failed to load expected list');
+        const items: { serialNumber: string | null; assetTag: string | null }[] = await res.json();
+        const idx = new Set<string>();
+        for (const it of items) {
+          if (it.serialNumber) idx.add(it.serialNumber.trim().toUpperCase());
+          if (it.assetTag) idx.add(it.assetTag.trim().toUpperCase());
+        }
+        if (!cancelled) setExpectedIndex(idx.size > 0 ? idx : null);
+      } catch {
+        if (!cancelled) setExpectedIndex(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [selectedBatchId]);
 
   async function refreshReceivedCount(batchId: string) {
@@ -83,13 +128,21 @@ export default function ScanPage() {
     if (!scannedTag) return;
     setShowAudit(false);
 
+    // The uploaded list is the source of truth: when receiving into a lot that
+    // has one, only identifiers on the list are accepted. Anything else is
+    // reported and ignored — never created, linked, or counted.
+    if (selectedBatchId && expectedIndex && !expectedIndex.has(scannedTag)) {
+      setResult({ status: 'not_on_list', tag: scannedTag });
+      return;
+    }
+
     // getOptional(), not get() — a tag that doesn't match any asset is a
     // real, expected outcome here (handled below via the 'not_found' status),
     // not an exceptional one. db.get() throws "Result set is empty" on zero
     // rows; getOptional() returns null instead. COLLATE NOCASE so a re-scan in
     // any case finds the existing asset instead of creating a duplicate.
     const asset = await db.getOptional<ScannedAsset>(
-      'SELECT id, name, tag, stock_status FROM assets WHERE tag = ? COLLATE NOCASE',
+      'SELECT id, name, tag, stock_status, batch_id FROM assets WHERE tag = ? COLLATE NOCASE',
       [scannedTag],
     );
 
@@ -120,12 +173,19 @@ export default function ScanPage() {
         name: scannedTag,
         tag: scannedTag,
         stock_status: 'received',
+        batch_id: selectedBatchId,
       };
       setResult({ status: 'received_new', asset: createdAsset });
       setRecent((prev) => [
         { tag: scannedTag, name: scannedTag, when: new Date().toLocaleTimeString() },
         ...prev.slice(0, 9),
       ]);
+      return;
+    }
+
+    if (selectedBatchId && asset.batch_id === selectedBatchId) {
+      // Already received into this lot — report it, don't count it again.
+      setResult({ status: 'already', asset });
       return;
     }
 
@@ -206,10 +266,16 @@ export default function ScanPage() {
             ))}
           </select>
           {selectedBatch && (
-            <p className="mt-2 text-sm text-neutral-300">
-              {receivedCount} / {selectedBatch.expected_unit_count ?? '—'} units received —
-              every scan below is added to this lot.
-            </p>
+            <div className="mt-2 text-sm">
+              <p className="text-neutral-300">
+                {receivedCount} / {selectedBatch.expected_unit_count ?? '—'} units received.
+              </p>
+              <p className="mt-0.5 text-xs text-neutral-500">
+                {expectedIndex
+                  ? `Verifying against the uploaded list (${expectedIndex.size} items) — only listed items are accepted.`
+                  : 'No uploaded list — anything scanned is added as a new device.'}
+              </p>
+            </div>
           )}
         </div>
 
@@ -288,6 +354,16 @@ export default function ScanPage() {
             <span className="text-amber-300">
               Select a lot above to receive it as a new device.
             </span>
+          </div>
+        )}
+        {result?.status === 'not_on_list' && (
+          <div className="mt-4 max-w-sm rounded-md border border-red-900 bg-red-950/50 p-3 text-sm text-red-300">
+            &quot;{result.tag}&quot; is not on the uploaded inventory list for this lot — ignored.
+          </div>
+        )}
+        {result?.status === 'already' && (
+          <div className="mt-4 max-w-sm rounded-md border border-neutral-700 bg-neutral-900 p-3 text-sm text-neutral-300">
+            <strong>{result.asset.tag}</strong> is already received in this lot — not counted again.
           </div>
         )}
 
