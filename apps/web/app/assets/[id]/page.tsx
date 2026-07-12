@@ -7,9 +7,11 @@ import { Nav } from '@/app/components/nav';
 import { formatLabel } from '@/lib/asset-options';
 import { money } from '@/lib/money';
 import type { RepairLog } from '@/lib/actions/repairs';
+import type { PhotoMeta } from '@/lib/actions/photos';
 import { AssetEditForm } from './edit-form';
 import { AuditSection, type AssetAuditRecord } from './audit-section';
 import { RepairsSection } from './repairs-section';
+import { PhotosSection } from './photos-section';
 
 interface AssetHistoryEntry {
   id: string;
@@ -37,13 +39,14 @@ interface AssetCosting {
 // than an unhandled server-side exception.
 async function loadAsset(
   id: string,
-): Promise<[Asset, AssetHistoryEntry[], AssetAuditRecord[], RepairLog[]]> {
+): Promise<[Asset, AssetHistoryEntry[], AssetAuditRecord[], RepairLog[], PhotoMeta[]]> {
   try {
     return await Promise.all([
       apiFetch<Asset>(`/assets/${id}`),
       apiFetch<AssetHistoryEntry[]>(`/assets/${id}/history`),
       apiFetch<AssetAuditRecord[]>(`/assets/${id}/audits`),
       apiFetch<RepairLog[]>(`/assets/${id}/repairs`),
+      apiFetch<PhotoMeta[]>(`/assets/${id}/photos`),
     ]);
   } catch (err) {
     if (err instanceof ApiError && err.status === 404) notFound();
@@ -59,7 +62,7 @@ export default async function AssetDetailPage({
   const { id } = await params;
   const user = await getSessionUser();
 
-  const [asset, history, audits, repairs] = await loadAsset(id);
+  const [asset, history, audits, repairs, photos] = await loadAsset(id);
   const locations = await getLocations();
 
   const canEdit = user?.role === 'admin' || user?.role === 'manager';
@@ -138,6 +141,10 @@ export default async function AssetDetailPage({
 
           <div className="md:col-span-2">
             <RepairsSection assetId={asset.id} repairs={repairs} canManage={canEdit} />
+          </div>
+
+          <div className="md:col-span-2">
+            <PhotosSection assetId={asset.id} photos={photos} canManage={canEdit} />
           </div>
 
           {canEdit && costing && (
