@@ -13,6 +13,7 @@ export interface PalletLine {
   variant: string;
   supplier: string | null;
   quantity: number;
+  grade: string | null;
   unitCost: number | null;
   productId: string | null;
   createdAt: string;
@@ -82,6 +83,7 @@ export async function addPalletLine(
   quantity: number,
   unitCost: number | null,
   supplier: string,
+  grade: string,
 ): Promise<{ error?: string }> {
   const v = variant.trim();
   if (!v) return { error: 'Variant is required.' };
@@ -92,6 +94,7 @@ export async function addPalletLine(
         variant: v,
         supplier: supplier.trim() || undefined,
         quantity: Math.max(0, Math.trunc(quantity) || 0),
+        grade: grade || undefined,
         unitCost: unitCost ?? undefined,
       }),
     });
@@ -110,6 +113,7 @@ export async function updatePalletLine(
   quantity: number,
   unitCost: number | null,
   supplier: string,
+  grade: string,
 ): Promise<void> {
   await apiFetch(`/pallets/${palletId}/lines/${lineId}`, {
     method: 'PATCH',
@@ -117,6 +121,7 @@ export async function updatePalletLine(
       variant: variant.trim(),
       supplier: supplier.trim(),
       quantity: Math.max(0, Math.trunc(quantity) || 0),
+      grade: grade || null,
       unitCost: unitCost ?? undefined,
     }),
   });

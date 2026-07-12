@@ -75,10 +75,17 @@ export class PalletsService {
     const wb = new ExcelJS.Workbook();
     wb.creator = 'ALS Trade Wholesales';
     const ws = wb.addWorksheet('Pallet Report');
-    ws.columns = [{ width: 36 }, { width: 22 }, { width: 12 }, { width: 14 }, { width: 16 }];
+    ws.columns = [
+      { width: 36 },
+      { width: 22 },
+      { width: 12 },
+      { width: 14 },
+      { width: 14 },
+      { width: 16 },
+    ];
 
     const title = (row: number, text: string, size: number) => {
-      ws.mergeCells(`A${row}:E${row}`);
+      ws.mergeCells(`A${row}:F${row}`);
       const cell = ws.getCell(`A${row}`);
       cell.value = text;
       cell.font = { size, bold: true };
@@ -105,7 +112,14 @@ export class PalletsService {
 
     const headerRowIndex = r + 1;
     const headerRow = ws.getRow(headerRowIndex);
-    headerRow.values = ['Variant / size', 'Supplier', 'Quantity', 'Unit cost (£)', 'Line total (£)'];
+    headerRow.values = [
+      'Variant / size',
+      'Supplier',
+      'Quantity',
+      'Grade',
+      'Unit cost (£)',
+      'Line total (£)',
+    ];
     headerRow.font = { bold: true };
     headerRow.eachCell((cell) => {
       cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEFEFEF' } };
@@ -123,6 +137,7 @@ export class PalletsService {
         line.variant,
         line.supplier || pallet.supplier || '',
         line.quantity,
+        gradeLabel(line.grade),
         cost != null ? cost : '',
         lineTotal != null ? lineTotal : '',
       ];
@@ -132,7 +147,7 @@ export class PalletsService {
     const totalRow = ws.getRow(dataRow + 1);
     totalRow.getCell(1).value = 'Total';
     totalRow.getCell(3).value = pallet.totalQuantity;
-    totalRow.getCell(5).value = costTotal > 0 ? costTotal : '';
+    totalRow.getCell(6).value = costTotal > 0 ? costTotal : '';
     totalRow.font = { bold: true };
 
     const buffer = Buffer.from(await wb.xlsx.writeBuffer());
@@ -194,4 +209,13 @@ export class PalletsService {
     const count = await this.pallets.countBy({ id });
     if (count === 0) throw new NotFoundException(`Pallet ${id} not found`);
   }
+}
+
+// e.g. "grade_a" -> "Grade A", "for_parts" -> "For Parts".
+function gradeLabel(grade: string | null): string {
+  if (!grade) return '';
+  return grade
+    .split('_')
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(' ');
 }

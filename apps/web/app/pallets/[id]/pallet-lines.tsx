@@ -9,6 +9,7 @@ import {
   type PalletLine,
 } from '@/lib/actions/pallets';
 import { money } from '@/lib/money';
+import { CONDITION_GRADES, formatLabel } from '@/lib/asset-options';
 
 export function PalletLines({
   palletId,
@@ -23,9 +24,20 @@ export function PalletLines({
   const [variant, setVariant] = useState('');
   const [supplier, setSupplier] = useState('');
   const [qty, setQty] = useState('');
+  const [grade, setGrade] = useState('');
   const [cost, setCost] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  async function run(fn: () => Promise<void>) {
+    setError(null);
+    try {
+      await fn();
+      router.refresh();
+    } catch {
+      setError('Couldn’t save that change. Please try again — refresh the page if it persists.');
+    }
+  }
 
   async function add() {
     if (!variant.trim()) {
@@ -40,6 +52,7 @@ export function PalletLines({
       parseInt(qty || '0', 10),
       cost ? parseFloat(cost) : null,
       supplier,
+      grade,
     );
     setBusy(false);
     if (res.error) {
@@ -49,53 +62,48 @@ export function PalletLines({
     setVariant('');
     setSupplier('');
     setQty('');
+    setGrade('');
     setCost('');
     router.refresh();
   }
 
-  // Run a line mutation and surface any failure instead of silently swallowing
-  // it — a stale session (expired token) is the usual cause and must be visible.
-  async function run(fn: () => Promise<void>) {
-    setError(null);
-    try {
-      await fn();
-      router.refresh();
-    } catch {
-      setError('Couldn’t save that change. Please try again — refresh the page if it persists.');
-    }
-  }
-
-  // Each field saves on blur, carrying the line's other current values so an
-  // edit to one field never wipes the others — this is the per-item "edit".
+  // Each field saves on blur/change, carrying the line's other current values so
+  // editing one field never wipes the others.
   function saveVariant(line: PalletLine, next: string) {
     if (!next.trim() || next.trim() === line.variant) return;
     void run(() =>
-      updatePalletLine(palletId, line.id, next, line.quantity, line.unitCost, line.supplier ?? ''),
+      updatePalletLine(palletId, line.id, next, line.quantity, line.unitCost, line.supplier ?? '', line.grade ?? ''),
     );
   }
   function saveSupplier(line: PalletLine, next: string) {
     if (next.trim() === (line.supplier ?? '')) return;
     void run(() =>
-      updatePalletLine(palletId, line.id, line.variant, line.quantity, line.unitCost, next),
+      updatePalletLine(palletId, line.id, line.variant, line.quantity, line.unitCost, next, line.grade ?? ''),
     );
   }
   function saveQty(line: PalletLine, next: number) {
     if (Number.isNaN(next) || next === line.quantity) return;
     void run(() =>
-      updatePalletLine(palletId, line.id, line.variant, next, line.unitCost, line.supplier ?? ''),
+      updatePalletLine(palletId, line.id, line.variant, next, line.unitCost, line.supplier ?? '', line.grade ?? ''),
+    );
+  }
+  function saveGrade(line: PalletLine, next: string) {
+    if (next === (line.grade ?? '')) return;
+    void run(() =>
+      updatePalletLine(palletId, line.id, line.variant, line.quantity, line.unitCost, line.supplier ?? '', next),
     );
   }
   function saveCost(line: PalletLine, next: number | null) {
     if (next === line.unitCost) return;
     void run(() =>
-      updatePalletLine(palletId, line.id, line.variant, line.quantity, next, line.supplier ?? ''),
+      updatePalletLine(palletId, line.id, line.variant, line.quantity, next, line.supplier ?? '', line.grade ?? ''),
     );
   }
   function remove(line: PalletLine) {
     void run(() => deletePalletLine(palletId, line.id));
   }
 
-  const cols = canManage ? 6 : 5;
+  const cols = canManage ? 7 : 6;
 
   return (
     <div className="mt-3 overflow-x-auto rounded-lg border border-neutral-800">
@@ -105,6 +113,7 @@ export function PalletLines({
             <th className="px-3 py-2">Variant / size</th>
             <th className="px-3 py-2">Supplier</th>
             <th className="w-24 px-3 py-2">Quantity</th>
+            <th className="w-32 px-3 py-2">Grade</th>
             <th className="w-28 px-3 py-2">Unit cost (£)</th>
             <th className="w-24 px-3 py-2">Line total</th>
             {canManage && <th className="w-16 px-3 py-2" />}
@@ -147,6 +156,24 @@ export function PalletLines({
                   />
                 ) : (
                   l.quantity
+                )}
+              </td>
+              <td className="px-3 py-2">
+                {canManage ? (
+                  <select
+                    defaultValue={l.grade ?? ''}
+                    onChange={(e) => saveGrade(l, e.target.value)}
+                    className="w-full rounded border border-neutral-700 bg-neutral-900 px-2 py-1"
+                  >
+                    <option value="">Ungraded</option>
+                    {CONDITION_GRADES.map((g) => (
+                      <option key={g} value={g} className="bg-neutral-900">
+                        {formatLabel(g)}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <span className="text-neutral-400">{l.grade ? formatLabel(l.grade) : '—'}</span>
                 )}
               </td>
               <td className="px-3 py-2">
@@ -214,6 +241,20 @@ export function PalletLines({
                   placeholder="20"
                   className="w-20 rounded border border-neutral-700 bg-neutral-900 px-2 py-1"
                 />
+              </td>
+              <td className="px-3 py-2">
+                <select
+                  value={grade}
+                  onChange={(e) => setGrade(e.target.value)}
+                  className="w-full rounded border border-neutral-700 bg-neutral-900 px-2 py-1"
+                >
+                  <option value="">Ungraded</option>
+                  {CONDITION_GRADES.map((g) => (
+                    <option key={g} value={g} className="bg-neutral-900">
+                      {formatLabel(g)}
+                    </option>
+                  ))}
+                </select>
               </td>
               <td className="px-3 py-2">
                 <input

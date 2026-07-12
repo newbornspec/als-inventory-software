@@ -8,6 +8,7 @@ import {
 } from 'typeorm';
 import { Pallet } from './pallet.entity';
 import { Product } from '../products/product.entity';
+import { AssetConditionGrade } from '../assets/asset.entity';
 import { numericTransformer } from '../common/numeric.transformer';
 
 // One counted line on a pallet: a variant and how many of it. `variant` is free
@@ -36,6 +37,10 @@ export class PalletLine {
 
   @Column({ type: 'int', default: 0 })
   quantity: number;
+
+  // Cosmetic grade for this variant — same scale as serialized assets.
+  @Column({ type: 'enum', enum: AssetConditionGrade, nullable: true })
+  grade: AssetConditionGrade | null;
 
   // Optional per-unit cost for this variant — feeds pallet valuation/reporting.
   // Never required, so a line always saves even with no cost entered.
