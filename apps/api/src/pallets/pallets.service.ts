@@ -1,7 +1,8 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { Pallet } from './pallet.entity';
+import * as ExcelJS from 'exceljs';
+import { Pallet, PalletStatus } from './pallet.entity';
 import { PalletLine } from './pallet-line.entity';
 import { CreatePalletDto } from './dto/create-pallet.dto';
 import { UpdatePalletDto } from './dto/update-pallet.dto';
@@ -45,9 +46,96 @@ export class PalletsService {
   }
 
   async update(id: string, dto: UpdatePalletDto): Promise<PalletWithTotals> {
-    await this.assertPallet(id);
-    await this.pallets.update(id, dto);
-    return (await this.withTotals([await this.pallets.findOneOrFail({ where: { id }, relations: ['location'] })]))[0];
+    const before = await this.pallets.findOne({ where: { id } });
+    if (!before) throw new NotFoundException(`Pallet ${id} not found`);
+
+    // Stamp the ship time on the transition into 'shipped'; clear it if the
+    // pallet is brought back to open/ready.
+    const patch: Partial<Pallet> = { ...dto };
+    if (dto.status === PalletStatus.SHIPPED && before.status !== PalletStatus.SHIPPED) {
+      patch.shippedAt = new Date();
+    } else if (dto.status && dto.status !== PalletStatus.SHIPPED) {
+      patch.shippedAt = null;
+    }
+
+    await this.pallets.update(id, patch);
+    return (
+      await this.withTotals([
+        await this.pallets.findOneOrFail({ where: { id }, relations: ['location'] }),
+      ])
+    )[0];
+  }
+
+  // Build a formatted .xlsx pallet report with a company header block and the
+  // full variant list (with costs). Returned as a buffer for the controller to
+  // stream as a download.
+  async generateReport(id: string): Promise<{ buffer: Buffer; filename: string }> {
+    const pallet = await this.findOne(id);
+
+    const wb = new ExcelJS.Workbook();
+    wb.creator = 'ALS Trade Wholesales';
+    const ws = wb.addWorksheet('Pallet Report');
+    ws.columns = [{ width: 42 }, { width: 16 }, { width: 16 }, { width: 18 }];
+
+    const title = (row: number, text: string, size: number) => {
+      ws.mergeCells(`A${row}:D${row}`);
+      const cell = ws.getCell(`A${row}`);
+      cell.value = text;
+      cell.font = { size, bold: true };
+    };
+    title(1, 'ALS Trade Wholesales', 16);
+    title(2, 'Pallet Report', 12);
+
+    const meta: [string, string | number][] = [
+      ['Date generated', new Date().toLocaleString('en-GB')],
+      ['Pallet number', pallet.palletNumber],
+      ['Supplier', pallet.supplier ?? '—'],
+      ['Description', pallet.description ?? '—'],
+      ['Location', pallet.location?.name ?? '—'],
+      ['Status', pallet.status],
+      ['Total items', pallet.totalQuantity],
+    ];
+    let r = 4;
+    for (const [label, value] of meta) {
+      ws.getCell(`A${r}`).value = label;
+      ws.getCell(`A${r}`).font = { bold: true };
+      ws.getCell(`B${r}`).value = value;
+      r += 1;
+    }
+
+    const headerRowIndex = r + 1;
+    const headerRow = ws.getRow(headerRowIndex);
+    headerRow.values = ['Variant / size', 'Quantity', 'Unit cost (£)', 'Line total (£)'];
+    headerRow.font = { bold: true };
+    headerRow.eachCell((cell) => {
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEFEFEF' } };
+      cell.border = { bottom: { style: 'thin' } };
+    });
+
+    let costTotal = 0;
+    let dataRow = headerRowIndex + 1;
+    for (const line of pallet.lines) {
+      const cost = line.unitCost;
+      const lineTotal = cost != null ? cost * line.quantity : null;
+      if (lineTotal != null) costTotal += lineTotal;
+      const row = ws.getRow(dataRow);
+      row.values = [
+        line.variant,
+        line.quantity,
+        cost != null ? cost : '',
+        lineTotal != null ? lineTotal : '',
+      ];
+      dataRow += 1;
+    }
+
+    const totalRow = ws.getRow(dataRow + 1);
+    totalRow.getCell(1).value = 'Total';
+    totalRow.getCell(2).value = pallet.totalQuantity;
+    totalRow.getCell(4).value = costTotal > 0 ? costTotal : '';
+    totalRow.font = { bold: true };
+
+    const buffer = Buffer.from(await wb.xlsx.writeBuffer());
+    return { buffer, filename: `${pallet.palletNumber}-report.xlsx` };
   }
 
   async remove(id: string): Promise<void> {

@@ -8,6 +8,7 @@ import {
 } from 'typeorm';
 import { Pallet } from './pallet.entity';
 import { Product } from '../products/product.entity';
+import { numericTransformer } from '../common/numeric.transformer';
 
 // One counted line on a pallet: a variant and how many of it. `variant` is free
 // text so it works for any grouping the operator uses ("22 inch", "Dell 24 FHD",
@@ -30,6 +31,18 @@ export class PalletLine {
 
   @Column({ type: 'int', default: 0 })
   quantity: number;
+
+  // Optional per-unit cost for this variant — feeds pallet valuation/reporting.
+  // Never required, so a line always saves even with no cost entered.
+  @Column({
+    name: 'unit_cost',
+    type: 'numeric',
+    precision: 12,
+    scale: 2,
+    nullable: true,
+    transformer: numericTransformer,
+  })
+  unitCost: number | null;
 
   @Column({ name: 'product_id', type: 'uuid', nullable: true })
   productId: string | null;

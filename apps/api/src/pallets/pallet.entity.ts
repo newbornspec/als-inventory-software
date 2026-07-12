@@ -32,6 +32,10 @@ export class Pallet {
   @Column({ type: 'varchar', nullable: true })
   description: string | null;
 
+  // Where the pallet's stock was bought from — optional, shown on the report.
+  @Column({ type: 'varchar', nullable: true })
+  supplier: string | null;
+
   @Column({ name: 'location_id', type: 'uuid', nullable: true })
   locationId: string | null;
 
@@ -44,6 +48,11 @@ export class Pallet {
 
   @Column({ type: 'varchar', nullable: true })
   notes: string | null;
+
+  // Set the moment the pallet is marked shipped; cleared if it's un-shipped.
+  // Drives the "Shipped" section and "Shipped on …" on the pallet.
+  @Column({ name: 'shipped_at', type: 'timestamp', nullable: true })
+  shippedAt: Date | null;
 
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;

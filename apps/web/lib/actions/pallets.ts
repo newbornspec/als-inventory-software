@@ -12,6 +12,7 @@ export interface PalletLine {
   palletId: string;
   variant: string;
   quantity: number;
+  unitCost: number | null;
   productId: string | null;
   createdAt: string;
 }
@@ -20,9 +21,11 @@ export interface Pallet {
   id: string;
   palletNumber: string;
   description: string | null;
+  supplier: string | null;
   locationId: string | null;
   status: PalletStatus;
   notes: string | null;
+  shippedAt: string | null;
   totalQuantity: number;
   lineCount: number;
   location?: { id: string; name: string } | null;
@@ -32,6 +35,7 @@ export interface Pallet {
 export async function createPallet(_prev: ActionState, formData: FormData): Promise<ActionState> {
   const dto = {
     description: str(formData.get('description')),
+    supplier: str(formData.get('supplier')),
     locationId: str(formData.get('locationId')),
     notes: str(formData.get('notes')),
   };
@@ -52,6 +56,13 @@ export async function updatePalletStatus(id: string, formData: FormData): Promis
   revalidatePath('/pallets');
 }
 
+export async function updatePalletSupplier(id: string, formData: FormData): Promise<void> {
+  const supplier = String(formData.get('supplier') ?? '').trim();
+  await apiFetch(`/pallets/${id}`, { method: 'PATCH', body: JSON.stringify({ supplier }) });
+  revalidatePath(`/pallets/${id}`);
+  revalidatePath('/pallets');
+}
+
 export async function deletePallet(id: string): Promise<void> {
   try {
     await apiFetch(`/pallets/${id}`, { method: 'DELETE' });
@@ -68,13 +79,18 @@ export async function addPalletLine(
   palletId: string,
   variant: string,
   quantity: number,
+  unitCost: number | null,
 ): Promise<{ error?: string }> {
   const v = variant.trim();
   if (!v) return { error: 'Variant is required.' };
   try {
     await apiFetch(`/pallets/${palletId}/lines`, {
       method: 'POST',
-      body: JSON.stringify({ variant: v, quantity: Math.max(0, Math.trunc(quantity) || 0) }),
+      body: JSON.stringify({
+        variant: v,
+        quantity: Math.max(0, Math.trunc(quantity) || 0),
+        unitCost: unitCost ?? undefined,
+      }),
     });
   } catch (err) {
     return { error: err instanceof ApiError ? err.message : 'Failed to add line.' };
@@ -89,10 +105,15 @@ export async function updatePalletLine(
   lineId: string,
   variant: string,
   quantity: number,
+  unitCost: number | null,
 ): Promise<void> {
   await apiFetch(`/pallets/${palletId}/lines/${lineId}`, {
     method: 'PATCH',
-    body: JSON.stringify({ variant: variant.trim(), quantity: Math.max(0, Math.trunc(quantity) || 0) }),
+    body: JSON.stringify({
+      variant: variant.trim(),
+      quantity: Math.max(0, Math.trunc(quantity) || 0),
+      unitCost: unitCost ?? undefined,
+    }),
   });
   revalidatePath(`/pallets/${palletId}`);
   revalidatePath('/pallets');
