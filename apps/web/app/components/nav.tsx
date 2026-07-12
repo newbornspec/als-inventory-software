@@ -15,6 +15,7 @@ const BASE_LINKS = [
 ];
 
 const MANAGER_LINKS = [
+  { href: '/orders', label: 'Sales' },
   { href: '/customers', label: 'Customers' },
   { href: '/reports', label: 'Reports' },
 ];
