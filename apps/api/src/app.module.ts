@@ -17,6 +17,7 @@ import { Pallet } from './pallets/pallet.entity';
 import { PalletLine } from './pallets/pallet-line.entity';
 import { StockLine } from './stock/stock-line.entity';
 import { StockMovement } from './stock/stock-movement.entity';
+import { Customer } from './customers/customer.entity';
 import { AuthModule } from './auth/auth.module';
 import { PowerSyncModule } from './powersync/powersync.module';
 import { AssetsModule } from './assets/assets.module';
@@ -27,6 +28,7 @@ import { BatchesModule } from './batches/batches.module';
 import { ProductsModule } from './products/products.module';
 import { PalletsModule } from './pallets/pallets.module';
 import { StockModule } from './stock/stock.module';
+import { CustomersModule } from './customers/customers.module';
 
 @Module({
   imports: [
@@ -40,7 +42,7 @@ import { StockModule } from './stock/stock.module';
         username: config.get('database.username'),
         password: config.get('database.password'),
         database: config.get('database.name'),
-        entities: [User, Location, Asset, AssetHistory, AssetAudit, Batch, Lot, ExpectedLineItem, Product, Pallet, PalletLine, StockLine, StockMovement],
+        entities: [User, Location, Asset, AssetHistory, AssetAudit, Batch, Lot, ExpectedLineItem, Product, Pallet, PalletLine, StockLine, StockMovement, Customer],
         // Migrations only — never let the app auto-mutate the schema.
         synchronize: false,
       }),
@@ -56,6 +58,7 @@ import { StockModule } from './stock/stock.module';
     ProductsModule,
     PalletsModule,
     StockModule,
+    CustomersModule,
   ],
   controllers: [AppController],
   providers: [AppService],

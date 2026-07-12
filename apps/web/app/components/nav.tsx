@@ -14,7 +14,10 @@ const BASE_LINKS = [
   { href: '/scan', label: 'Scan' },
 ];
 
-const MANAGER_LINKS = [{ href: '/reports', label: 'Reports' }];
+const MANAGER_LINKS = [
+  { href: '/customers', label: 'Customers' },
+  { href: '/reports', label: 'Reports' },
+];
 const ADMIN_LINKS = [{ href: '/users', label: 'Users' }];
 
 export function Nav() {
