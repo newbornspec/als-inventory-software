@@ -1,8 +1,10 @@
 import Link from 'next/link';
 import { apiFetch, getSessionUser } from '@/lib/api-server';
 import type { Asset } from '@/lib/actions/assets';
+import type { Batch } from '@/lib/actions/batches';
 import { Nav } from '@/app/components/nav';
 import { AUDIT_STATUSES, CONDITION_GRADES, STOCK_STATUSES, formatLabel } from '@/lib/asset-options';
+import { AssetsGrouped } from './assets-grouped';
 
 export default async function AssetsPage({
   searchParams,
@@ -17,16 +19,36 @@ export default async function AssetsPage({
 }) {
   const params = await searchParams;
   const user = await getSessionUser();
-
-  const query = new URLSearchParams();
-  if (params.search) query.set('search', params.search);
-  if (params.stockStatus) query.set('stockStatus', params.stockStatus);
-  if (params.conditionGrade) query.set('conditionGrade', params.conditionGrade);
-  if (params.auditStatus) query.set('auditStatus', params.auditStatus);
-  if (params.category) query.set('category', params.category);
-
-  const assets = await apiFetch<Asset[]>(`/assets?${query.toString()}`);
   const canCreate = user?.role === 'admin' || user?.role === 'manager';
+
+  // Any active search/filter flattens the view so you jump straight to devices;
+  // otherwise browse grouped by lot.
+  const isSearching = Boolean(
+    params.search ||
+      params.stockStatus ||
+      params.conditionGrade ||
+      params.auditStatus ||
+      params.category,
+  );
+
+  let flat: Asset[] = [];
+  let batches: Batch[] = [];
+  let unassigned: Asset[] = [];
+
+  if (isSearching) {
+    const query = new URLSearchParams();
+    if (params.search) query.set('search', params.search);
+    if (params.stockStatus) query.set('stockStatus', params.stockStatus);
+    if (params.conditionGrade) query.set('conditionGrade', params.conditionGrade);
+    if (params.auditStatus) query.set('auditStatus', params.auditStatus);
+    if (params.category) query.set('category', params.category);
+    flat = await apiFetch<Asset[]>(`/assets?${query.toString()}`);
+  } else {
+    [batches, unassigned] = await Promise.all([
+      apiFetch<Batch[]>('/batches'),
+      apiFetch<Asset[]>('/assets?noBatch=true'),
+    ]);
+  }
 
   return (
     <main className="min-h-screen bg-neutral-950 text-neutral-100">
@@ -36,8 +58,8 @@ export default async function AssetsPage({
           <div>
             <h1 className="text-2xl font-semibold">Assets</h1>
             <p className="mt-1 text-sm text-neutral-400">
-              Global register of every device — search by tag/serial to jump straight to one. To
-              work a shipment, use <Link href="/batches" className="underline">Lots</Link>.
+              Devices grouped by their lot — expand a lot to see its units, or search to jump
+              straight to one.
             </p>
           </div>
           {canCreate && (
@@ -99,55 +121,67 @@ export default async function AssetsPage({
           >
             Filter
           </button>
+          {isSearching && (
+            <Link
+              href="/assets"
+              className="rounded-md px-4 py-2 text-sm text-neutral-500 hover:text-neutral-300"
+            >
+              Clear
+            </Link>
+          )}
         </form>
 
-        <div className="mt-6 overflow-x-auto rounded-lg border border-neutral-800">
-          <table className="w-full text-left text-sm">
-            <thead className="bg-neutral-900 text-neutral-400">
-              <tr>
-                <th className="px-4 py-3">Tag</th>
-                <th className="px-4 py-3">Name</th>
-                <th className="px-4 py-3">Category</th>
-                <th className="px-4 py-3">Stock Status</th>
-                <th className="px-4 py-3">Grade</th>
-                <th className="px-4 py-3">Audit Status</th>
-                <th className="px-4 py-3">Location</th>
-              </tr>
-            </thead>
-            <tbody>
-              {assets.map((asset) => (
-                <tr key={asset.id} className="border-t border-neutral-800 hover:bg-neutral-900">
-                  <td className="px-4 py-3">
-                    <Link href={`/assets/${asset.id}`} className="text-neutral-100 underline">
-                      {asset.tag}
-                    </Link>
-                  </td>
-                  <td className="px-4 py-3">{asset.name}</td>
-                  <td className="px-4 py-3 text-neutral-400">{asset.category}</td>
-                  <td className="px-4 py-3">
-                    <span className="rounded-full border border-neutral-700 px-2 py-0.5 text-xs">
-                      {formatLabel(asset.stockStatus)}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3 text-neutral-400">
-                    {asset.conditionGrade ? formatLabel(asset.conditionGrade) : '—'}
-                  </td>
-                  <td className="px-4 py-3 text-neutral-400">
-                    {asset.auditStatus ? formatLabel(asset.auditStatus) : '—'}
-                  </td>
-                  <td className="px-4 py-3 text-neutral-400">{asset.location?.name ?? '—'}</td>
-                </tr>
-              ))}
-              {assets.length === 0 && (
+        {isSearching ? (
+          <div className="mt-6 overflow-x-auto rounded-lg border border-neutral-800">
+            <table className="w-full text-left text-sm">
+              <thead className="bg-neutral-900 text-neutral-400">
                 <tr>
-                  <td colSpan={7} className="px-4 py-8 text-center text-neutral-500">
-                    No assets match this filter.
-                  </td>
+                  <th className="px-4 py-3">Tag</th>
+                  <th className="px-4 py-3">Name</th>
+                  <th className="px-4 py-3">Category</th>
+                  <th className="px-4 py-3">Stock Status</th>
+                  <th className="px-4 py-3">Grade</th>
+                  <th className="px-4 py-3">Audit Status</th>
+                  <th className="px-4 py-3">Location</th>
                 </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {flat.map((asset) => (
+                  <tr key={asset.id} className="border-t border-neutral-800 hover:bg-neutral-900">
+                    <td className="px-4 py-3">
+                      <Link href={`/assets/${asset.id}`} className="text-neutral-100 underline">
+                        {asset.tag}
+                      </Link>
+                    </td>
+                    <td className="px-4 py-3">{asset.name}</td>
+                    <td className="px-4 py-3 text-neutral-400">{asset.category}</td>
+                    <td className="px-4 py-3">
+                      <span className="rounded-full border border-neutral-700 px-2 py-0.5 text-xs">
+                        {formatLabel(asset.stockStatus)}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-neutral-400">
+                      {asset.conditionGrade ? formatLabel(asset.conditionGrade) : '—'}
+                    </td>
+                    <td className="px-4 py-3 text-neutral-400">
+                      {asset.auditStatus ? formatLabel(asset.auditStatus) : '—'}
+                    </td>
+                    <td className="px-4 py-3 text-neutral-400">{asset.location?.name ?? '—'}</td>
+                  </tr>
+                ))}
+                {flat.length === 0 && (
+                  <tr>
+                    <td colSpan={7} className="px-4 py-8 text-center text-neutral-500">
+                      No assets match this search.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <AssetsGrouped batches={batches} unassigned={unassigned} />
+        )}
       </div>
     </main>
   );

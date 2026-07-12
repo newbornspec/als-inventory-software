@@ -49,6 +49,9 @@ export class AssetsService {
     if (query.batchId) {
       qb.andWhere('asset.batchId = :batchId', { batchId: query.batchId });
     }
+    if (query.noBatch === 'true') {
+      qb.andWhere('asset.batchId IS NULL');
+    }
     if (query.lotId) {
       qb.andWhere('asset.lotId = :lotId', { lotId: query.lotId });
     }

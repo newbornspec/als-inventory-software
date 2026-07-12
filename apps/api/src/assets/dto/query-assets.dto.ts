@@ -30,6 +30,12 @@ export class QueryAssetsDto {
   @IsUUID()
   batchId?: string;
 
+  // 'true' → only assets not assigned to any lot/batch (the "No lot" bucket on
+  // the grouped Assets page). Kept as a string flag since batchId must be a UUID.
+  @IsOptional()
+  @IsString()
+  noBatch?: string;
+
   @IsOptional()
   @IsUUID()
   lotId?: string;
