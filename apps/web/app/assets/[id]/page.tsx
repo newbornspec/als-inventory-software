@@ -83,7 +83,11 @@ export default async function AssetDetailPage({
     <main className="min-h-screen bg-neutral-950 text-neutral-100">
       <Nav />
       <div className="p-8">
-        <div className="flex items-start justify-between">
+        <Link href="/assets" className="text-sm text-neutral-400 hover:text-neutral-200">
+          ← Back to Assets
+        </Link>
+
+        <div className="mt-3 flex items-start justify-between">
           <div>
             <h1 className="text-2xl font-semibold">{asset.name}</h1>
             <p className="mt-1 text-sm text-neutral-400">
