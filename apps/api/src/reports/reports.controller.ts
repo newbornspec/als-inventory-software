@@ -1,4 +1,4 @@
-import { Controller, Get, Header, UseGuards } from '@nestjs/common';
+import { Controller, Get, Header, Param, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { Roles } from '../auth/guards/roles.decorator';
 import { RolesGuard } from '../auth/guards/roles.guard';
@@ -30,6 +30,12 @@ export class ReportsController {
   @Get('reports/profit')
   getLotProfitability() {
     return this.reports.getLotProfitability();
+  }
+
+  @Roles(UserRole.ADMIN, UserRole.MANAGER)
+  @Get('reports/assets/:id/costing')
+  getAssetCosting(@Param('id') id: string) {
+    return this.reports.getAssetCosting(id);
   }
 
   @Roles(UserRole.ADMIN, UserRole.MANAGER)

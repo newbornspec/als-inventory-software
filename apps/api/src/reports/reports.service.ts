@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Asset, AssetAuditStatus, AssetStockStatus } from '../assets/asset.entity';
@@ -29,6 +29,22 @@ export interface LotProfit {
   costOfSold: number;
   profit: number;
   margin: number | null;
+}
+
+// Per-asset cost/profit — the same even-split-with-override basis as the lot
+// report, resolved for a single unit and joined to the order it sold on.
+export interface AssetCosting {
+  assetId: string;
+  purchaseCost: number | null; // manual override, if set
+  lotTotalCost: number | null;
+  unitsInLot: number;
+  evenSplit: number | null;
+  allocatedCost: number | null; // override ?? even split
+  salePrice: number | null; // from the order line, if on one
+  sold: boolean;
+  profit: number | null; // salePrice - allocatedCost, when sold and both known
+  orderId: string | null;
+  orderNumber: string | null;
 }
 
 const WARRANTY_LOOKAHEAD_DAYS = 30;
@@ -86,6 +102,47 @@ export class ReportsService {
         margin: revenue > 0 ? round2(profit / revenue) : null,
       };
     });
+  }
+
+  async getAssetCosting(assetId: string): Promise<AssetCosting> {
+    const asset = await this.assets.findOne({ where: { id: assetId } });
+    if (!asset) throw new NotFoundException(`Asset ${assetId} not found`);
+
+    let lotTotalCost: number | null = null;
+    let unitsInLot = 0;
+    let evenSplit: number | null = null;
+    if (asset.batchId) {
+      const [batch, count] = await Promise.all([
+        this.batches.findOne({ where: { id: asset.batchId } }),
+        this.assets.countBy({ batchId: asset.batchId }),
+      ]);
+      lotTotalCost = batch?.totalCost ?? null;
+      unitsInLot = count;
+      evenSplit = lotTotalCost != null && count > 0 ? round2(lotTotalCost / count) : null;
+    }
+    const allocatedCost = asset.purchaseCost ?? evenSplit;
+
+    const line = await this.lines.findOne({ where: { assetId }, relations: ['order'] });
+    const salePrice = line ? (line.unitPrice ?? 0) * line.quantity : null;
+    const sold = asset.stockStatus === AssetStockStatus.SHIPPED;
+    const profit =
+      sold && salePrice != null && allocatedCost != null
+        ? round2(salePrice - allocatedCost)
+        : null;
+
+    return {
+      assetId,
+      purchaseCost: asset.purchaseCost ?? null,
+      lotTotalCost,
+      unitsInLot,
+      evenSplit,
+      allocatedCost,
+      salePrice,
+      sold,
+      profit,
+      orderId: line?.order?.id ?? null,
+      orderNumber: line?.order?.orderNumber ?? null,
+    };
   }
 
   async exportProfitCsv(): Promise<string> {

@@ -5,6 +5,7 @@ import { getLocations } from '@/lib/data';
 import { deleteAsset, type Asset } from '@/lib/actions/assets';
 import { Nav } from '@/app/components/nav';
 import { formatLabel } from '@/lib/asset-options';
+import { money } from '@/lib/money';
 import { AssetEditForm } from './edit-form';
 import { AuditSection, type AssetAuditRecord } from './audit-section';
 
@@ -13,6 +14,19 @@ interface AssetHistoryEntry {
   eventType: string;
   notes: string | null;
   createdAt: string;
+}
+
+interface AssetCosting {
+  purchaseCost: number | null;
+  lotTotalCost: number | null;
+  unitsInLot: number;
+  evenSplit: number | null;
+  allocatedCost: number | null;
+  salePrice: number | null;
+  sold: boolean;
+  profit: number | null;
+  orderId: string | null;
+  orderNumber: string | null;
 }
 
 // Fetch the asset + its history/audits, turning a 404 (deleted, or created
@@ -46,6 +60,17 @@ export default async function AssetDetailPage({
 
   const canEdit = user?.role === 'admin' || user?.role === 'manager';
   const canDelete = user?.role === 'admin';
+
+  // Costing/profit is manager+ only — fetch it lazily and never let a failure
+  // take down the asset page.
+  let costing: AssetCosting | null = null;
+  if (canEdit) {
+    try {
+      costing = await apiFetch<AssetCosting>(`/reports/assets/${id}/costing`);
+    } catch {
+      costing = null;
+    }
+  }
 
   return (
     <main className="min-h-screen bg-neutral-950 text-neutral-100">
@@ -106,6 +131,61 @@ export default async function AssetDetailPage({
           </section>
 
           <AuditSection assetId={asset.id} audits={audits} />
+
+          {canEdit && costing && (
+            <section>
+              <h2 className="text-sm font-medium text-neutral-400">Costing &amp; profit</h2>
+              <dl className="mt-4 max-w-sm space-y-2 text-sm">
+                <div className="flex items-baseline justify-between">
+                  <dt className="text-neutral-500">Allocated cost</dt>
+                  <dd className="text-right">
+                    {costing.allocatedCost != null ? money(costing.allocatedCost) : '—'}
+                    <span className="ml-2 text-xs text-neutral-600">
+                      {costing.purchaseCost != null
+                        ? 'override'
+                        : costing.evenSplit != null
+                          ? `split of lot ÷ ${costing.unitsInLot}`
+                          : 'no lot cost'}
+                    </span>
+                  </dd>
+                </div>
+                {costing.sold ? (
+                  <>
+                    <div className="flex justify-between">
+                      <dt className="text-neutral-500">Sale price</dt>
+                      <dd>{costing.salePrice != null ? money(costing.salePrice) : '—'}</dd>
+                    </div>
+                    <div className="flex justify-between">
+                      <dt className="text-neutral-500">Profit</dt>
+                      <dd
+                        className={
+                          costing.profit == null
+                            ? ''
+                            : costing.profit > 0
+                              ? 'text-emerald-400'
+                              : costing.profit < 0
+                                ? 'text-red-400'
+                                : ''
+                        }
+                      >
+                        {costing.profit != null ? money(costing.profit) : '—'}
+                      </dd>
+                    </div>
+                    {costing.orderNumber && (
+                      <div className="pt-1 text-xs text-neutral-500">
+                        Sold on{' '}
+                        <Link href={`/orders/${costing.orderId}`} className="underline">
+                          {costing.orderNumber}
+                        </Link>
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <div className="text-neutral-500">Not sold yet.</div>
+                )}
+              </dl>
+            </section>
+          )}
 
           <section>
             <h2 className="text-sm font-medium text-neutral-400">History</h2>
