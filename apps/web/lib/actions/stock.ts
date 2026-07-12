@@ -73,7 +73,11 @@ export async function adjustStock(
 }
 
 export async function deleteStockLine(id: string): Promise<void> {
-  await apiFetch(`/stock/${id}`, { method: 'DELETE' });
+  try {
+    await apiFetch(`/stock/${id}`, { method: 'DELETE' });
+  } catch (err) {
+    if (!(err instanceof ApiError && err.status === 404)) throw err;
+  }
   revalidatePath('/stock');
   redirect('/stock');
 }

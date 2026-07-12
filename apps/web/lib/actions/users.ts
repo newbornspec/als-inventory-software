@@ -44,6 +44,10 @@ export async function updateUserRole(id: string, formData: FormData): Promise<vo
 }
 
 export async function deleteUser(id: string): Promise<void> {
-  await apiFetch(`/users/${id}`, { method: 'DELETE' });
+  try {
+    await apiFetch(`/users/${id}`, { method: 'DELETE' });
+  } catch (err) {
+    if (!(err instanceof ApiError && err.status === 404)) throw err;
+  }
   revalidatePath('/users');
 }

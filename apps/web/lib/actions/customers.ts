@@ -33,7 +33,11 @@ export async function createCustomer(_prev: ActionState, formData: FormData): Pr
 }
 
 export async function deleteCustomer(id: string): Promise<void> {
-  await apiFetch(`/customers/${id}`, { method: 'DELETE' });
+  try {
+    await apiFetch(`/customers/${id}`, { method: 'DELETE' });
+  } catch (err) {
+    if (!(err instanceof ApiError && err.status === 404)) throw err;
+  }
   revalidatePath('/customers');
 }
 

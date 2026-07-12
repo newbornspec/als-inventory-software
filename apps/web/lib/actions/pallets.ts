@@ -53,7 +53,13 @@ export async function updatePalletStatus(id: string, formData: FormData): Promis
 }
 
 export async function deletePallet(id: string): Promise<void> {
-  await apiFetch(`/pallets/${id}`, { method: 'DELETE' });
+  try {
+    await apiFetch(`/pallets/${id}`, { method: 'DELETE' });
+  } catch (err) {
+    // Already deleted (e.g. double-click, or removed in another tab)? The goal
+    // is already met — go to the list rather than crashing. Re-throw anything else.
+    if (!(err instanceof ApiError && err.status === 404)) throw err;
+  }
   revalidatePath('/pallets');
   redirect('/pallets');
 }

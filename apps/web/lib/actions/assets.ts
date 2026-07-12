@@ -80,7 +80,11 @@ export async function updateAsset(
 }
 
 export async function deleteAsset(id: string): Promise<void> {
-  await apiFetch(`/assets/${id}`, { method: 'DELETE' });
+  try {
+    await apiFetch(`/assets/${id}`, { method: 'DELETE' });
+  } catch (err) {
+    if (!(err instanceof ApiError && err.status === 404)) throw err;
+  }
   revalidatePath('/assets');
   redirect('/assets');
 }

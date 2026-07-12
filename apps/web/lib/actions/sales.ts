@@ -63,7 +63,11 @@ export async function updateOrderStatus(id: string, formData: FormData): Promise
 }
 
 export async function deleteOrder(id: string): Promise<void> {
-  await apiFetch(`/orders/${id}`, { method: 'DELETE' });
+  try {
+    await apiFetch(`/orders/${id}`, { method: 'DELETE' });
+  } catch (err) {
+    if (!(err instanceof ApiError && err.status === 404)) throw err;
+  }
   revalidatePath('/orders');
   redirect('/orders');
 }
