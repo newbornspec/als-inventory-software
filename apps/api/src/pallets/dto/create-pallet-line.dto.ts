@@ -3,6 +3,8 @@ import { IsInt, IsNumber, IsOptional, IsString, IsUUID, Min } from 'class-valida
 export class CreatePalletLineDto {
   @IsString() variant: string;
 
+  @IsOptional() @IsString() supplier?: string;
+
   @IsInt()
   @Min(0)
   quantity: number;

@@ -11,6 +11,7 @@ export interface PalletLine {
   id: string;
   palletId: string;
   variant: string;
+  supplier: string | null;
   quantity: number;
   unitCost: number | null;
   productId: string | null;
@@ -80,6 +81,7 @@ export async function addPalletLine(
   variant: string,
   quantity: number,
   unitCost: number | null,
+  supplier: string,
 ): Promise<{ error?: string }> {
   const v = variant.trim();
   if (!v) return { error: 'Variant is required.' };
@@ -88,6 +90,7 @@ export async function addPalletLine(
       method: 'POST',
       body: JSON.stringify({
         variant: v,
+        supplier: supplier.trim() || undefined,
         quantity: Math.max(0, Math.trunc(quantity) || 0),
         unitCost: unitCost ?? undefined,
       }),
@@ -106,11 +109,13 @@ export async function updatePalletLine(
   variant: string,
   quantity: number,
   unitCost: number | null,
+  supplier: string,
 ): Promise<void> {
   await apiFetch(`/pallets/${palletId}/lines/${lineId}`, {
     method: 'PATCH',
     body: JSON.stringify({
       variant: variant.trim(),
+      supplier: supplier.trim(),
       quantity: Math.max(0, Math.trunc(quantity) || 0),
       unitCost: unitCost ?? undefined,
     }),

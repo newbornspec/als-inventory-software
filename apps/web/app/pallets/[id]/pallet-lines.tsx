@@ -21,6 +21,7 @@ export function PalletLines({
 }) {
   const router = useRouter();
   const [variant, setVariant] = useState('');
+  const [supplier, setSupplier] = useState('');
   const [qty, setQty] = useState('');
   const [cost, setCost] = useState('');
   const [busy, setBusy] = useState(false);
@@ -38,6 +39,7 @@ export function PalletLines({
       variant,
       parseInt(qty || '0', 10),
       cost ? parseFloat(cost) : null,
+      supplier,
     );
     setBusy(false);
     if (res.error) {
@@ -45,6 +47,7 @@ export function PalletLines({
       return;
     }
     setVariant('');
+    setSupplier('');
     setQty('');
     setCost('');
     router.refresh();
@@ -54,17 +57,22 @@ export function PalletLines({
   // edit to one field never wipes the others — this is the per-item "edit".
   async function saveVariant(line: PalletLine, next: string) {
     if (!next.trim() || next.trim() === line.variant) return;
-    await updatePalletLine(palletId, line.id, next, line.quantity, line.unitCost);
+    await updatePalletLine(palletId, line.id, next, line.quantity, line.unitCost, line.supplier ?? '');
+    router.refresh();
+  }
+  async function saveSupplier(line: PalletLine, next: string) {
+    if (next.trim() === (line.supplier ?? '')) return;
+    await updatePalletLine(palletId, line.id, line.variant, line.quantity, line.unitCost, next);
     router.refresh();
   }
   async function saveQty(line: PalletLine, next: number) {
     if (Number.isNaN(next) || next === line.quantity) return;
-    await updatePalletLine(palletId, line.id, line.variant, next, line.unitCost);
+    await updatePalletLine(palletId, line.id, line.variant, next, line.unitCost, line.supplier ?? '');
     router.refresh();
   }
   async function saveCost(line: PalletLine, next: number | null) {
     if (next === line.unitCost) return;
-    await updatePalletLine(palletId, line.id, line.variant, line.quantity, next);
+    await updatePalletLine(palletId, line.id, line.variant, line.quantity, next, line.supplier ?? '');
     router.refresh();
   }
   async function remove(line: PalletLine) {
@@ -72,12 +80,15 @@ export function PalletLines({
     router.refresh();
   }
 
+  const cols = canManage ? 6 : 5;
+
   return (
     <div className="mt-3 overflow-x-auto rounded-lg border border-neutral-800">
       <table className="w-full text-left text-sm">
         <thead className="bg-neutral-900 text-neutral-400">
           <tr>
             <th className="px-3 py-2">Variant / size</th>
+            <th className="px-3 py-2">Supplier</th>
             <th className="w-24 px-3 py-2">Quantity</th>
             <th className="w-28 px-3 py-2">Unit cost (£)</th>
             <th className="w-24 px-3 py-2">Line total</th>
@@ -96,6 +107,18 @@ export function PalletLines({
                   />
                 ) : (
                   <span className="text-neutral-200">{l.variant}</span>
+                )}
+              </td>
+              <td className="px-3 py-2">
+                {canManage ? (
+                  <input
+                    defaultValue={l.supplier ?? ''}
+                    placeholder="—"
+                    onBlur={(e) => saveSupplier(l, e.target.value)}
+                    className="w-full rounded border border-neutral-700 bg-neutral-900 px-2 py-1"
+                  />
+                ) : (
+                  <span className="text-neutral-400">{l.supplier || '—'}</span>
                 )}
               </td>
               <td className="px-3 py-2">
@@ -142,7 +165,7 @@ export function PalletLines({
           ))}
           {lines.length === 0 && (
             <tr>
-              <td colSpan={canManage ? 5 : 4} className="px-3 py-6 text-center text-neutral-500">
+              <td colSpan={cols} className="px-3 py-6 text-center text-neutral-500">
                 No variants added yet.
               </td>
             </tr>
@@ -156,6 +179,14 @@ export function PalletLines({
                   value={variant}
                   onChange={(e) => setVariant(e.target.value)}
                   placeholder="e.g. 22 inch"
+                  className="w-full rounded border border-neutral-700 bg-neutral-900 px-2 py-1"
+                />
+              </td>
+              <td className="px-3 py-2">
+                <input
+                  value={supplier}
+                  onChange={(e) => setSupplier(e.target.value)}
+                  placeholder="supplier (optional)"
                   className="w-full rounded border border-neutral-700 bg-neutral-900 px-2 py-1"
                 />
               </td>

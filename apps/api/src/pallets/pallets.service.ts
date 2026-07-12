@@ -75,10 +75,10 @@ export class PalletsService {
     const wb = new ExcelJS.Workbook();
     wb.creator = 'ALS Trade Wholesales';
     const ws = wb.addWorksheet('Pallet Report');
-    ws.columns = [{ width: 42 }, { width: 16 }, { width: 16 }, { width: 18 }];
+    ws.columns = [{ width: 36 }, { width: 22 }, { width: 12 }, { width: 14 }, { width: 16 }];
 
     const title = (row: number, text: string, size: number) => {
-      ws.mergeCells(`A${row}:D${row}`);
+      ws.mergeCells(`A${row}:E${row}`);
       const cell = ws.getCell(`A${row}`);
       cell.value = text;
       cell.font = { size, bold: true };
@@ -105,7 +105,7 @@ export class PalletsService {
 
     const headerRowIndex = r + 1;
     const headerRow = ws.getRow(headerRowIndex);
-    headerRow.values = ['Variant / size', 'Quantity', 'Unit cost (£)', 'Line total (£)'];
+    headerRow.values = ['Variant / size', 'Supplier', 'Quantity', 'Unit cost (£)', 'Line total (£)'];
     headerRow.font = { bold: true };
     headerRow.eachCell((cell) => {
       cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEFEFEF' } };
@@ -121,6 +121,7 @@ export class PalletsService {
       const row = ws.getRow(dataRow);
       row.values = [
         line.variant,
+        line.supplier || pallet.supplier || '',
         line.quantity,
         cost != null ? cost : '',
         lineTotal != null ? lineTotal : '',
@@ -130,8 +131,8 @@ export class PalletsService {
 
     const totalRow = ws.getRow(dataRow + 1);
     totalRow.getCell(1).value = 'Total';
-    totalRow.getCell(2).value = pallet.totalQuantity;
-    totalRow.getCell(4).value = costTotal > 0 ? costTotal : '';
+    totalRow.getCell(3).value = pallet.totalQuantity;
+    totalRow.getCell(5).value = costTotal > 0 ? costTotal : '';
     totalRow.font = { bold: true };
 
     const buffer = Buffer.from(await wb.xlsx.writeBuffer());

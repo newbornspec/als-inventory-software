@@ -29,6 +29,11 @@ export class PalletLine {
   @Column({ type: 'varchar' })
   variant: string;
 
+  // Which supplier this specific variant came from — a pallet can mix suppliers.
+  // Optional; falls back to the pallet-level supplier for display/reporting.
+  @Column({ type: 'varchar', nullable: true })
+  supplier: string | null;
+
   @Column({ type: 'int', default: 0 })
   quantity: number;
 
