@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { usePathname, useRouter } from 'next/navigation';
+import { usePathname } from 'next/navigation';
 import { logout } from '@/lib/auth';
 
 // Ordered along the warehouse workflow: receive a lot → scan devices into it →
@@ -25,7 +25,6 @@ const ADMIN_LINKS = [{ href: '/users', label: 'Users' }];
 
 export function Nav() {
   const pathname = usePathname();
-  const router = useRouter();
   const [role, setRole] = useState<'admin' | 'manager' | 'technician' | null>(null);
 
   useEffect(() => {
@@ -43,8 +42,9 @@ export function Nav() {
 
   async function handleLogout() {
     await logout();
-    router.push('/login');
-    router.refresh();
+    // Full-page navigation so the app fully reloads (fresh bundle + cleared
+    // session), rather than an in-app route change that keeps the old code.
+    window.location.href = '/login';
   }
 
   return (
