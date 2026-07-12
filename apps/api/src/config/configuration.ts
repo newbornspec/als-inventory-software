@@ -9,9 +9,11 @@ export default () => ({
   },
   jwt: {
     secret: process.env.JWT_SECRET ?? 'dev-secret-change-me',
-    // A work-shift-length access token. 15m meant sessions silently died mid-use
-    // and every write 401'd (the refresh token is issued but not yet wired up).
-    expiresIn: process.env.JWT_EXPIRES_IN ?? '12h',
+    // Access-token lifetime is fixed at a 12h work shift IN CODE. We deliberately
+    // do NOT read JWT_EXPIRES_IN: it was pinned to 15m in the Railway env, which
+    // silently expired sessions mid-use so every write 401'd. Change this constant
+    // (not the env var) to adjust session length.
+    expiresIn: '12h',
     refreshExpiresIn: process.env.JWT_REFRESH_EXPIRES_IN ?? '7d',
   },
 });
