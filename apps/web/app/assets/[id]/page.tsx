@@ -6,8 +6,10 @@ import { deleteAsset, type Asset } from '@/lib/actions/assets';
 import { Nav } from '@/app/components/nav';
 import { formatLabel } from '@/lib/asset-options';
 import { money } from '@/lib/money';
+import type { RepairLog } from '@/lib/actions/repairs';
 import { AssetEditForm } from './edit-form';
 import { AuditSection, type AssetAuditRecord } from './audit-section';
+import { RepairsSection } from './repairs-section';
 
 interface AssetHistoryEntry {
   id: string;
@@ -22,6 +24,7 @@ interface AssetCosting {
   unitsInLot: number;
   evenSplit: number | null;
   allocatedCost: number | null;
+  repairsCost: number;
   salePrice: number | null;
   sold: boolean;
   profit: number | null;
@@ -34,12 +37,13 @@ interface AssetCosting {
 // than an unhandled server-side exception.
 async function loadAsset(
   id: string,
-): Promise<[Asset, AssetHistoryEntry[], AssetAuditRecord[]]> {
+): Promise<[Asset, AssetHistoryEntry[], AssetAuditRecord[], RepairLog[]]> {
   try {
     return await Promise.all([
       apiFetch<Asset>(`/assets/${id}`),
       apiFetch<AssetHistoryEntry[]>(`/assets/${id}/history`),
       apiFetch<AssetAuditRecord[]>(`/assets/${id}/audits`),
+      apiFetch<RepairLog[]>(`/assets/${id}/repairs`),
     ]);
   } catch (err) {
     if (err instanceof ApiError && err.status === 404) notFound();
@@ -55,7 +59,7 @@ export default async function AssetDetailPage({
   const { id } = await params;
   const user = await getSessionUser();
 
-  const [asset, history, audits] = await loadAsset(id);
+  const [asset, history, audits, repairs] = await loadAsset(id);
   const locations = await getLocations();
 
   const canEdit = user?.role === 'admin' || user?.role === 'manager';
@@ -132,6 +136,10 @@ export default async function AssetDetailPage({
 
           <AuditSection assetId={asset.id} audits={audits} />
 
+          <div className="md:col-span-2">
+            <RepairsSection assetId={asset.id} repairs={repairs} canManage={canEdit} />
+          </div>
+
           {canEdit && costing && (
             <section>
               <h2 className="text-sm font-medium text-neutral-400">Costing &amp; profit</h2>
@@ -149,6 +157,12 @@ export default async function AssetDetailPage({
                     </span>
                   </dd>
                 </div>
+                {costing.repairsCost > 0 && (
+                  <div className="flex justify-between">
+                    <dt className="text-neutral-500">Repairs</dt>
+                    <dd>{money(costing.repairsCost)}</dd>
+                  </div>
+                )}
                 {costing.sold ? (
                   <>
                     <div className="flex justify-between">

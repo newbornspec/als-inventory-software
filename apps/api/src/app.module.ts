@@ -20,6 +20,7 @@ import { StockMovement } from './stock/stock-movement.entity';
 import { Customer } from './customers/customer.entity';
 import { SalesOrder } from './sales/sales-order.entity';
 import { OrderLine } from './sales/order-line.entity';
+import { RepairLog } from './repairs/repair-log.entity';
 import { AuthModule } from './auth/auth.module';
 import { PowerSyncModule } from './powersync/powersync.module';
 import { AssetsModule } from './assets/assets.module';
@@ -32,6 +33,7 @@ import { PalletsModule } from './pallets/pallets.module';
 import { StockModule } from './stock/stock.module';
 import { CustomersModule } from './customers/customers.module';
 import { SalesModule } from './sales/sales.module';
+import { RepairsModule } from './repairs/repairs.module';
 
 @Module({
   imports: [
@@ -45,7 +47,7 @@ import { SalesModule } from './sales/sales.module';
         username: config.get('database.username'),
         password: config.get('database.password'),
         database: config.get('database.name'),
-        entities: [User, Location, Asset, AssetHistory, AssetAudit, Batch, Lot, ExpectedLineItem, Product, Pallet, PalletLine, StockLine, StockMovement, Customer, SalesOrder, OrderLine],
+        entities: [User, Location, Asset, AssetHistory, AssetAudit, Batch, Lot, ExpectedLineItem, Product, Pallet, PalletLine, StockLine, StockMovement, Customer, SalesOrder, OrderLine, RepairLog],
         // Migrations only — never let the app auto-mutate the schema.
         synchronize: false,
       }),
@@ -63,6 +65,7 @@ import { SalesModule } from './sales/sales.module';
     StockModule,
     CustomersModule,
     SalesModule,
+    RepairsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

@@ -4,6 +4,7 @@ import { Repository } from 'typeorm';
 import { Asset, AssetAuditStatus, AssetStockStatus } from '../assets/asset.entity';
 import { Batch } from '../batches/batch.entity';
 import { OrderLine } from '../sales/order-line.entity';
+import { RepairLog, RepairStatus } from '../repairs/repair-log.entity';
 
 export interface Notification {
   id: string;
@@ -40,9 +41,10 @@ export interface AssetCosting {
   unitsInLot: number;
   evenSplit: number | null;
   allocatedCost: number | null; // override ?? even split
+  repairsCost: number; // total of this unit's COMPLETED repair jobs
   salePrice: number | null; // from the order line, if on one
   sold: boolean;
-  profit: number | null; // salePrice - allocatedCost, when sold and both known
+  profit: number | null; // salePrice - allocatedCost - repairsCost, when sold and known
   orderId: string | null;
   orderNumber: string | null;
 }
@@ -55,6 +57,7 @@ export class ReportsService {
     @InjectRepository(Asset) private assets: Repository<Asset>,
     @InjectRepository(Batch) private batches: Repository<Batch>,
     @InjectRepository(OrderLine) private lines: Repository<OrderLine>,
+    @InjectRepository(RepairLog) private repairLogs: Repository<RepairLog>,
   ) {}
 
   // Profit per purchase lot (D6). Per-unit cost = the asset's manual override if
@@ -122,12 +125,18 @@ export class ReportsService {
     }
     const allocatedCost = asset.purchaseCost ?? evenSplit;
 
+    // Completed repair jobs are a real cost of getting this unit to sale.
+    const repairRows = await this.repairLogs.find({
+      where: { assetId, status: RepairStatus.COMPLETED },
+    });
+    const repairsCost = round2(repairRows.reduce((s, r) => s + (r.cost ?? 0), 0));
+
     const line = await this.lines.findOne({ where: { assetId }, relations: ['order'] });
     const salePrice = line ? (line.unitPrice ?? 0) * line.quantity : null;
     const sold = asset.stockStatus === AssetStockStatus.SHIPPED;
     const profit =
       sold && salePrice != null && allocatedCost != null
-        ? round2(salePrice - allocatedCost)
+        ? round2(salePrice - allocatedCost - repairsCost)
         : null;
 
     return {
@@ -137,6 +146,7 @@ export class ReportsService {
       unitsInLot,
       evenSplit,
       allocatedCost,
+      repairsCost,
       salePrice,
       sold,
       profit,
