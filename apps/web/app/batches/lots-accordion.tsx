@@ -8,7 +8,7 @@ import { formatLabel } from '@/lib/asset-options';
 
 type LotAssets = { loading: boolean; error: string | null; assets: Asset[] };
 
-export function LotsAccordion({ lots }: { lots: Batch[] }) {
+export function LotsAccordion({ lots, canExport }: { lots: Batch[]; canExport: boolean }) {
   const [open, setOpen] = useState<Record<string, boolean>>({});
   const [cache, setCache] = useState<Record<string, LotAssets>>({});
 
@@ -111,12 +111,19 @@ export function LotsAccordion({ lots }: { lots: Batch[] }) {
                   value={lot.quarantine}
                   tone={lot.quarantine > 0 ? 'amber' : undefined}
                 />
-                <Link
-                  href={`/batches/${lot.id}`}
-                  className="ml-auto self-center text-neutral-400 underline"
-                >
-                  Open lot →
-                </Link>
+                <div className="ml-auto flex items-center gap-3 self-center">
+                  {canExport && (
+                    <a
+                      href={`/api/batches/${lot.id}/report`}
+                      className="text-neutral-400 underline"
+                    >
+                      Export to Excel
+                    </a>
+                  )}
+                  <Link href={`/batches/${lot.id}`} className="text-neutral-400 underline">
+                    Open lot →
+                  </Link>
+                </div>
               </div>
 
               {isOpen && (

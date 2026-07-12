@@ -1,4 +1,15 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Req, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Req,
+  StreamableFile,
+  UseGuards,
+} from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { Roles } from '../auth/guards/roles.decorator';
 import { RolesGuard } from '../auth/guards/roles.guard';
@@ -22,6 +33,16 @@ export class BatchesController {
   @Get(':id')
   findOne(@Param('id') id: string) {
     return this.batches.findOne(id);
+  }
+
+  @Roles(UserRole.ADMIN, UserRole.MANAGER)
+  @Get(':id/report.xlsx')
+  async report(@Param('id') id: string): Promise<StreamableFile> {
+    const { buffer, filename } = await this.batches.generateReport(id);
+    return new StreamableFile(buffer, {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      disposition: `attachment; filename="${filename}"`,
+    });
   }
 
   @Roles(UserRole.ADMIN, UserRole.MANAGER)

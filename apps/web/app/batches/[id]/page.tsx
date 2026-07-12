@@ -44,8 +44,22 @@ export default async function BatchDetailPage({ params }: { params: Promise<{ id
       <Nav />
       <div className="p-8">
         <BackLink href="/batches" label="Back to Lots" />
-        <h1 className="mt-3 text-2xl font-semibold">{batch.batchNumber}</h1>
-        <p className="mt-1 text-sm text-neutral-400">{batch.source ?? 'No supplier recorded'}</p>
+        <div className="mt-3 flex items-start justify-between">
+          <div>
+            <h1 className="text-2xl font-semibold">{batch.batchNumber}</h1>
+            <p className="mt-1 text-sm text-neutral-400">
+              {batch.source ?? 'No supplier recorded'}
+            </p>
+          </div>
+          {canManage && (
+            <a
+              href={`/api/batches/${batch.id}/report`}
+              className="shrink-0 rounded-md bg-neutral-100 px-3 py-1.5 text-sm font-medium text-neutral-900"
+            >
+              Export to Excel
+            </a>
+          )}
+        </div>
 
         <dl className="mt-4 flex flex-wrap gap-x-8 gap-y-2 text-sm">
           <div>

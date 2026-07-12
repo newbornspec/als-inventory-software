@@ -30,7 +30,7 @@ export default async function LotsPage() {
           )}
         </div>
 
-        <LotsAccordion lots={lots} />
+        <LotsAccordion lots={lots} canExport={canCreate} />
       </div>
     </main>
   );
