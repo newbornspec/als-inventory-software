@@ -19,6 +19,10 @@ export interface Batch {
   status: string;
   notes: string | null;
   actualUnitCount: number;
+  readyForSale: number;
+  scrap: number;
+  quarantine: number;
+  audited: number;
   location?: { id: string; name: string } | null;
   receivedBy?: { id: string; name: string } | null;
 }

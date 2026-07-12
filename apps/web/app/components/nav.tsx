@@ -5,13 +5,15 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { logout } from '@/lib/auth';
 
+// Ordered along the warehouse workflow: receive a lot → scan devices into it →
+// find any single device in the global Assets register.
 const BASE_LINKS = [
   { href: '/dashboard', label: 'Dashboard' },
+  { href: '/batches', label: 'Lots' },
+  { href: '/scan', label: 'Scan' },
   { href: '/assets', label: 'Assets' },
-  { href: '/batches', label: 'Purchase Lots' },
   { href: '/pallets', label: 'Pallets' },
   { href: '/stock', label: 'Consumables' },
-  { href: '/scan', label: 'Scan' },
 ];
 
 const MANAGER_LINKS = [

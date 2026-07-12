@@ -33,11 +33,17 @@ export default async function AssetsPage({
       <Nav />
       <div className="p-8">
         <div className="flex items-center justify-between">
-          <h1 className="text-2xl font-semibold">Assets</h1>
+          <div>
+            <h1 className="text-2xl font-semibold">Assets</h1>
+            <p className="mt-1 text-sm text-neutral-400">
+              Global register of every device — search by tag/serial to jump straight to one. To
+              work a shipment, use <Link href="/batches" className="underline">Lots</Link>.
+            </p>
+          </div>
           {canCreate && (
             <Link
               href="/assets/new"
-              className="rounded-md bg-neutral-100 px-4 py-2 text-sm font-medium text-neutral-900"
+              className="shrink-0 rounded-md bg-neutral-100 px-4 py-2 text-sm font-medium text-neutral-900"
             >
               New Asset
             </Link>
@@ -48,8 +54,8 @@ export default async function AssetsPage({
           <input
             name="search"
             defaultValue={params.search}
-            placeholder="Search tag or name…"
-            className="rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm outline-none focus:border-neutral-500"
+            placeholder="Search by tag, serial or name…"
+            className="min-w-[18rem] flex-1 rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm outline-none focus:border-neutral-500"
           />
           <select
             name="stockStatus"
