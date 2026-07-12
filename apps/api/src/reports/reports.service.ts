@@ -49,6 +49,22 @@ export interface AssetCosting {
   orderNumber: string | null;
 }
 
+// Management dashboard roll-up — a single aggregated snapshot.
+export interface DashboardSummary {
+  totalDevices: number;
+  inStock: number;
+  sold: number;
+  sellThroughPct: number | null;
+  revenue: number; // realized (shipped units)
+  realizedProfit: number; // revenue − cost of sold − repairs on sold
+  stockAtCost: number; // allocated cost of unsold, in-stock devices
+  byStatus: { key: string; count: number }[];
+  byGrade: { key: string; count: number }[];
+  ageing: { key: string; count: number }[]; // in-stock devices by age
+  repairs: { pending: number; inProgress: number; completed: number; spend: number };
+  lots: { total: number; reconciled: number };
+}
+
 const WARRANTY_LOOKAHEAD_DAYS = 30;
 
 @Injectable()
@@ -184,6 +200,119 @@ export class ReportsService {
         .join(','),
     );
     return [header.join(','), ...body].join('\n');
+  }
+
+  async getDashboard(): Promise<DashboardSummary> {
+    const [assets, batches, lines, repairs] = await Promise.all([
+      this.assets
+        .createQueryBuilder('a')
+        .select(['a.id', 'a.batchId', 'a.purchaseCost', 'a.stockStatus', 'a.conditionGrade', 'a.createdAt'])
+        .getMany(),
+      this.batches.find(),
+      this.lines.find(),
+      this.repairLogs.find(),
+    ]);
+
+    const unitsPerBatch = new Map<string, number>();
+    for (const a of assets) {
+      if (a.batchId) unitsPerBatch.set(a.batchId, (unitsPerBatch.get(a.batchId) ?? 0) + 1);
+    }
+    const batchTotalCost = new Map(batches.map((b) => [b.id, b.totalCost]));
+
+    const saleByAsset = new Map<string, number>();
+    for (const l of lines) {
+      if (!l.assetId) continue;
+      saleByAsset.set(l.assetId, (saleByAsset.get(l.assetId) ?? 0) + (l.unitPrice ?? 0) * l.quantity);
+    }
+
+    const repairCostByAsset = new Map<string, number>();
+    let rPending = 0;
+    let rInProgress = 0;
+    let rCompleted = 0;
+    let rSpend = 0;
+    for (const r of repairs) {
+      if (r.status === 'pending') rPending += 1;
+      else if (r.status === 'in_progress') rInProgress += 1;
+      else if (r.status === 'completed') {
+        rCompleted += 1;
+        rSpend += r.cost ?? 0;
+        repairCostByAsset.set(r.assetId, (repairCostByAsset.get(r.assetId) ?? 0) + (r.cost ?? 0));
+      }
+    }
+
+    const allocated = (a: Asset): number => {
+      if (a.purchaseCost != null) return a.purchaseCost;
+      if (a.batchId) {
+        const tc = batchTotalCost.get(a.batchId);
+        const u = unitsPerBatch.get(a.batchId) ?? 0;
+        if (tc != null && u > 0) return tc / u;
+      }
+      return 0;
+    };
+
+    const byStatus: Record<string, number> = {};
+    const byGrade: Record<string, number> = {};
+    const ageing: Record<string, number> = {
+      '0–30 days': 0,
+      '31–60 days': 0,
+      '61–90 days': 0,
+      '90+ days': 0,
+    };
+    let sold = 0;
+    let disposed = 0;
+    let stockAtCost = 0;
+    let revenue = 0;
+    let costOfSold = 0;
+    let repairsOfSold = 0;
+    const now = Date.now();
+
+    for (const a of assets) {
+      byStatus[a.stockStatus] = (byStatus[a.stockStatus] ?? 0) + 1;
+      const g = a.conditionGrade ?? 'ungraded';
+      byGrade[g] = (byGrade[g] ?? 0) + 1;
+
+      if (a.stockStatus === AssetStockStatus.SHIPPED) {
+        sold += 1;
+        revenue += saleByAsset.get(a.id) ?? 0;
+        costOfSold += allocated(a);
+        repairsOfSold += repairCostByAsset.get(a.id) ?? 0;
+      } else if (a.stockStatus === AssetStockStatus.DISPOSED) {
+        disposed += 1;
+      } else {
+        stockAtCost += allocated(a);
+        const days = (now - new Date(a.createdAt).getTime()) / 86_400_000;
+        if (days <= 30) ageing['0–30 days'] += 1;
+        else if (days <= 60) ageing['31–60 days'] += 1;
+        else if (days <= 90) ageing['61–90 days'] += 1;
+        else ageing['90+ days'] += 1;
+      }
+    }
+
+    const total = assets.length;
+    const inStock = total - sold - disposed;
+    const denom = sold + inStock;
+
+    return {
+      totalDevices: total,
+      inStock,
+      sold,
+      sellThroughPct: denom > 0 ? round2((sold / denom) * 100) : null,
+      revenue: round2(revenue),
+      realizedProfit: round2(revenue - costOfSold - repairsOfSold),
+      stockAtCost: round2(stockAtCost),
+      byStatus: Object.entries(byStatus)
+        .map(([key, count]) => ({ key, count }))
+        .sort((a, b) => b.count - a.count),
+      byGrade: Object.entries(byGrade)
+        .map(([key, count]) => ({ key, count }))
+        .sort((a, b) => b.count - a.count),
+      ageing: Object.entries(ageing).map(([key, count]) => ({ key, count })),
+      repairs: { pending: rPending, inProgress: rInProgress, completed: rCompleted, spend: round2(rSpend) },
+      lots: {
+        total: batches.length,
+        reconciled: batches.filter((b) => b.status === 'reconciled').length,
+      },
+    };
   }
 
   async getNotifications(): Promise<Notification[]> {

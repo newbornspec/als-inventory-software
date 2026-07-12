@@ -27,6 +27,12 @@ export class ReportsController {
   }
 
   @Roles(UserRole.ADMIN, UserRole.MANAGER)
+  @Get('reports/dashboard')
+  getDashboard() {
+    return this.reports.getDashboard();
+  }
+
+  @Roles(UserRole.ADMIN, UserRole.MANAGER)
   @Get('reports/profit')
   getLotProfitability() {
     return this.reports.getLotProfitability();
