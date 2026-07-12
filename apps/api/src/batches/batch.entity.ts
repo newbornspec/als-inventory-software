@@ -9,6 +9,7 @@ import {
 } from 'typeorm';
 import { Location } from '../locations/location.entity';
 import { User } from '../users/user.entity';
+import { numericTransformer } from '../common/numeric.transformer';
 
 export enum BatchStatus {
   DRAFT = 'draft', // purchase lot created before goods arrive; details still being filled in
@@ -64,6 +65,19 @@ export class Batch {
 
   @Column({ name: 'expected_unit_count', type: 'int', nullable: true })
   expectedUnitCount: number | null;
+
+  // What the whole purchase lot cost. The basis for per-unit cost allocation
+  // (even split across the lot's units) and lot profitability — see
+  // ReportsService.getLotProfitability. Nullable: cost is "unknown" until set.
+  @Column({
+    name: 'total_cost',
+    type: 'numeric',
+    precision: 12,
+    scale: 2,
+    nullable: true,
+    transformer: numericTransformer,
+  })
+  totalCost: number | null;
 
   @Column({ type: 'enum', enum: BatchStatus, default: BatchStatus.OPEN })
   status: BatchStatus;

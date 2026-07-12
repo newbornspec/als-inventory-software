@@ -1,4 +1,13 @@
-import { IsDateString, IsEnum, IsInt, IsOptional, IsString, IsUUID, Min } from 'class-validator';
+import {
+  IsDateString,
+  IsEnum,
+  IsInt,
+  IsNumber,
+  IsOptional,
+  IsString,
+  IsUUID,
+  Min,
+} from 'class-validator';
 import { BatchStatus } from '../batch.entity';
 
 export class CreateBatchDto {
@@ -19,6 +28,9 @@ export class CreateBatchDto {
   @IsOptional()
   @IsEnum(BatchStatus)
   status?: BatchStatus;
+
+  // What the whole lot cost — the basis for per-unit allocation and profit.
+  @IsOptional() @IsNumber() @Min(0) totalCost?: number;
 
   @IsOptional() @IsString() notes?: string;
 }

@@ -5,9 +5,11 @@ import type { Batch, Lot, ReconciliationResult } from '@/lib/actions/batches';
 import type { Asset } from '@/lib/actions/assets';
 import { Nav } from '@/app/components/nav';
 import { formatLabel } from '@/lib/asset-options';
+import { money } from '@/lib/money';
 import { NewLotForm } from './new-lot-form';
 import { BatchStatusSelect } from './status-select';
 import { ImportExpected } from './import-expected';
+import { LotCost } from './lot-cost';
 
 // 404 (deleted lot) -> Next's not-found page instead of a server-side crash.
 async function loadBatch(
@@ -61,6 +63,17 @@ export default async function BatchDetailPage({ params }: { params: Promise<{ id
             <dd className="text-neutral-200">{batch.receivedDate ?? '—'}</dd>
           </div>
         </dl>
+
+        <div className="mt-4 flex items-center gap-3 text-sm">
+          <span className="text-xs uppercase tracking-wide text-neutral-500">Lot cost</span>
+          {canManage ? (
+            <LotCost batchId={batch.id} totalCost={batch.totalCost} />
+          ) : (
+            <span className="text-neutral-200">
+              {batch.totalCost != null ? money(batch.totalCost) : '—'}
+            </span>
+          )}
+        </div>
 
         <div className="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-4">
           <div className="rounded-lg border border-neutral-800 bg-neutral-900 p-4">

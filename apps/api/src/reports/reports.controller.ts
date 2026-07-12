@@ -25,4 +25,18 @@ export class ReportsController {
   async exportAssetsCsv() {
     return this.reports.exportAssetsCsv();
   }
+
+  @Roles(UserRole.ADMIN, UserRole.MANAGER)
+  @Get('reports/profit')
+  getLotProfitability() {
+    return this.reports.getLotProfitability();
+  }
+
+  @Roles(UserRole.ADMIN, UserRole.MANAGER)
+  @Get('reports/profit.csv')
+  @Header('Content-Type', 'text/csv')
+  @Header('Content-Disposition', 'attachment; filename="lot-profit.csv"')
+  async exportProfitCsv() {
+    return this.reports.exportProfitCsv();
+  }
 }

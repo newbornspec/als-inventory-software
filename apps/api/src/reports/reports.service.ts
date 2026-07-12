@@ -2,6 +2,8 @@ import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Asset, AssetAuditStatus, AssetStockStatus } from '../assets/asset.entity';
+import { Batch } from '../batches/batch.entity';
+import { OrderLine } from '../sales/order-line.entity';
 
 export interface Notification {
   id: string;
@@ -13,11 +15,109 @@ export interface Notification {
   message: string;
 }
 
+// One row of the lot-profitability report. Revenue and cost-of-sold cover only
+// the units actually shipped, so profit is realized (not speculative). totalCost
+// is shown alongside so a lot with cost still to recoup is obvious.
+export interface LotProfit {
+  batchId: string;
+  batchNumber: string;
+  source: string | null;
+  totalCost: number | null;
+  units: number;
+  unitsSold: number;
+  revenue: number;
+  costOfSold: number;
+  profit: number;
+  margin: number | null;
+}
+
 const WARRANTY_LOOKAHEAD_DAYS = 30;
 
 @Injectable()
 export class ReportsService {
-  constructor(@InjectRepository(Asset) private assets: Repository<Asset>) {}
+  constructor(
+    @InjectRepository(Asset) private assets: Repository<Asset>,
+    @InjectRepository(Batch) private batches: Repository<Batch>,
+    @InjectRepository(OrderLine) private lines: Repository<OrderLine>,
+  ) {}
+
+  // Profit per purchase lot (D6). Per-unit cost = the asset's manual override if
+  // set, else an even split of the lot's total_cost across the lot's units.
+  async getLotProfitability(): Promise<LotProfit[]> {
+    const [batches, assets, lines] = await Promise.all([
+      this.batches.find({ order: { createdAt: 'DESC' } }),
+      this.assets.find(),
+      this.lines.find(),
+    ]);
+
+    // Realized sale value per asset (a shipped serial has exactly one line).
+    const saleByAsset = new Map<string, number>();
+    for (const l of lines) {
+      if (!l.assetId) continue;
+      const amount = (l.unitPrice ?? 0) * l.quantity;
+      saleByAsset.set(l.assetId, (saleByAsset.get(l.assetId) ?? 0) + amount);
+    }
+
+    const byBatch = new Map<string, Asset[]>();
+    for (const a of assets) {
+      if (!a.batchId) continue;
+      const arr = byBatch.get(a.batchId) ?? [];
+      arr.push(a);
+      byBatch.set(a.batchId, arr);
+    }
+
+    return batches.map((b) => {
+      const units = byBatch.get(b.id) ?? [];
+      const evenSplit = b.totalCost != null && units.length > 0 ? b.totalCost / units.length : null;
+      const sold = units.filter((a) => a.stockStatus === AssetStockStatus.SHIPPED);
+      const revenue = sold.reduce((s, a) => s + (saleByAsset.get(a.id) ?? 0), 0);
+      const costOfSold = sold.reduce((s, a) => s + (a.purchaseCost ?? evenSplit ?? 0), 0);
+      const profit = revenue - costOfSold;
+      return {
+        batchId: b.id,
+        batchNumber: b.batchNumber,
+        source: b.source,
+        totalCost: b.totalCost,
+        units: units.length,
+        unitsSold: sold.length,
+        revenue: round2(revenue),
+        costOfSold: round2(costOfSold),
+        profit: round2(profit),
+        margin: revenue > 0 ? round2(profit / revenue) : null,
+      };
+    });
+  }
+
+  async exportProfitCsv(): Promise<string> {
+    const rows = await this.getLotProfitability();
+    const header = [
+      'lot',
+      'source',
+      'total_cost',
+      'units',
+      'units_sold',
+      'revenue',
+      'cost_of_sold',
+      'profit',
+      'margin_pct',
+    ];
+    const body = rows.map((r) =>
+      [
+        r.batchNumber,
+        r.source ?? '',
+        r.totalCost ?? '',
+        String(r.units),
+        String(r.unitsSold),
+        r.revenue.toFixed(2),
+        r.costOfSold.toFixed(2),
+        r.profit.toFixed(2),
+        r.margin == null ? '' : (r.margin * 100).toFixed(1),
+      ]
+        .map((v) => csvEscape(String(v)))
+        .join(','),
+    );
+    return [header.join(','), ...body].join('\n');
+  }
 
   async getNotifications(): Promise<Notification[]> {
     const assets = await this.assets.find({ relations: ['location'] });
@@ -132,4 +232,8 @@ function csvEscape(value: string): string {
     return `"${value.replace(/"/g, '""')}"`;
   }
   return value;
+}
+
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
 }

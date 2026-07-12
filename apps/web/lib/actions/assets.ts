@@ -16,6 +16,7 @@ export interface Asset {
   ownerId: string | null;
   imageUrl: string | null;
   warrantyExpiresAt: string | null;
+  purchaseCost: number | null;
   batchId: string | null;
   lotId: string | null;
   updatedAt: string;
@@ -64,6 +65,7 @@ export async function updateAsset(
     conditionGrade: emptyToUndefined(formData.get('conditionGrade')),
     locationId: emptyToUndefined(formData.get('locationId')),
     warrantyExpiresAt: emptyToUndefined(formData.get('warrantyExpiresAt')),
+    purchaseCost: toNumberOrUndefined(formData.get('purchaseCost')),
   };
 
   try {
@@ -86,4 +88,11 @@ export async function deleteAsset(id: string): Promise<void> {
 function emptyToUndefined(value: FormDataEntryValue | null): string | undefined {
   const str = String(value ?? '').trim();
   return str === '' ? undefined : str;
+}
+
+function toNumberOrUndefined(value: FormDataEntryValue | null): number | undefined {
+  const str = String(value ?? '').trim();
+  if (str === '') return undefined;
+  const n = parseFloat(str);
+  return Number.isNaN(n) ? undefined : n;
 }

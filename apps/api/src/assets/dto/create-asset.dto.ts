@@ -1,4 +1,4 @@
-import { IsDateString, IsEnum, IsOptional, IsString, IsUUID } from 'class-validator';
+import { IsDateString, IsEnum, IsNumber, IsOptional, IsString, IsUUID, Min } from 'class-validator';
 import { AssetAuditStatus, AssetConditionGrade, AssetStockStatus } from '../asset.entity';
 
 export class CreateAssetDto {
@@ -38,6 +38,12 @@ export class CreateAssetDto {
   @IsOptional()
   @IsDateString()
   warrantyExpiresAt?: string;
+
+  // Optional manual per-unit cost override (else even split of the lot cost).
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  purchaseCost?: number;
 
   @IsOptional()
   @IsUUID()

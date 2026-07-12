@@ -15,6 +15,7 @@ export interface Batch {
   deliveryNote: string | null;
   purchaseDate: string | null;
   expectedUnitCount: number | null;
+  totalCost: number | null;
   status: string;
   notes: string | null;
   actualUnitCount: number;
@@ -105,6 +106,15 @@ export async function updateBatchStatus(id: string, formData: FormData): Promise
   await apiFetch(`/batches/${id}`, { method: 'PATCH', body: JSON.stringify({ status }) });
   revalidatePath(`/batches/${id}`);
   revalidatePath('/batches');
+}
+
+export async function updateBatchCost(id: string, formData: FormData): Promise<void> {
+  const raw = String(formData.get('totalCost') ?? '').trim();
+  const totalCost = raw === '' ? undefined : parseFloat(raw);
+  await apiFetch(`/batches/${id}`, { method: 'PATCH', body: JSON.stringify({ totalCost }) });
+  revalidatePath(`/batches/${id}`);
+  revalidatePath('/batches');
+  revalidatePath('/reports');
 }
 
 export async function createLot(

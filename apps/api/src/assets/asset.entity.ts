@@ -12,6 +12,7 @@ import { User } from '../users/user.entity';
 import { Batch } from '../batches/batch.entity';
 import { Lot } from '../batches/lot.entity';
 import { Product } from '../products/product.entity';
+import { numericTransformer } from '../common/numeric.transformer';
 
 // Warehouse/lifecycle pipeline — "where is this asset right now".
 export enum AssetStockStatus {
@@ -144,6 +145,18 @@ export class Asset {
 
   @Column({ name: 'warranty_expires_at', type: 'date', nullable: true })
   warrantyExpiresAt: string | null;
+
+  // Optional manual per-unit cost override. When null, this unit's cost basis is
+  // the even split of its purchase lot's total_cost across the lot's units.
+  @Column({
+    name: 'purchase_cost',
+    type: 'numeric',
+    precision: 12,
+    scale: 2,
+    nullable: true,
+    transformer: numericTransformer,
+  })
+  purchaseCost: number | null;
 
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;

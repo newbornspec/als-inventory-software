@@ -82,6 +82,18 @@ export function AssetEditForm({ asset, locations }: { asset: Asset; locations: L
           className="w-full rounded-md border border-neutral-700 bg-neutral-950 px-3 py-2 text-sm outline-none focus:border-neutral-500"
         />
       </div>
+      <div className="space-y-1">
+        <label className="text-sm text-neutral-300">Unit cost override (£)</label>
+        <input
+          type="number"
+          min={0}
+          step="0.01"
+          name="purchaseCost"
+          defaultValue={asset.purchaseCost ?? ''}
+          placeholder="leave blank to use even split of lot cost"
+          className="w-full rounded-md border border-neutral-700 bg-neutral-950 px-3 py-2 text-sm outline-none focus:border-neutral-500"
+        />
+      </div>
 
       {state.error && <p className="text-sm text-red-400">{state.error}</p>}
 
