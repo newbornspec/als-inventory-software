@@ -4,6 +4,7 @@ import { deleteStockLine, type StockLine } from '@/lib/actions/stock';
 import { Nav } from '@/app/components/nav';
 import { BackLink } from '@/app/components/back-link';
 import { formatLabel } from '@/lib/asset-options';
+import { StockStatusBadge } from '../stock-status-badge';
 import { AdjustStock } from './adjust-form';
 
 async function loadLine(id: string): Promise<StockLine> {
@@ -50,10 +51,21 @@ export default async function StockDetailPage({ params }: { params: Promise<{ id
         <div className="mt-6 grid gap-8 md:grid-cols-2">
           <section>
             <div className="rounded-lg border border-neutral-800 bg-neutral-900 p-4">
-              <div className={'text-3xl font-semibold ' + (line.quantity === 0 ? 'text-amber-400' : '')}>
+              <div
+                className={
+                  'text-3xl font-semibold ' +
+                  (line.status === 'out_of_stock'
+                    ? 'text-red-400'
+                    : line.status === 'low_stock'
+                      ? 'text-amber-400'
+                      : '')
+                }
+              >
                 {line.quantity}
               </div>
-              <div className="mt-1 text-sm text-neutral-400">On hand</div>
+              <div className="mt-1 flex items-center gap-2 text-sm text-neutral-400">
+                On hand <StockStatusBadge status={line.status} />
+              </div>
             </div>
             {canManage && (
               <div className="mt-4">

@@ -5,6 +5,8 @@ import { Asset, AssetAuditStatus, AssetStockStatus } from '../assets/asset.entit
 import { Batch } from '../batches/batch.entity';
 import { OrderLine } from '../sales/order-line.entity';
 import { RepairLog, RepairStatus } from '../repairs/repair-log.entity';
+import { StockLine } from '../stock/stock-line.entity';
+import { stockStatusFor } from '../stock/stock.service';
 
 export interface Notification {
   id: string;
@@ -63,6 +65,7 @@ export interface DashboardSummary {
   ageing: { key: string; count: number }[]; // in-stock devices by age
   repairs: { pending: number; inProgress: number; completed: number; spend: number };
   lots: { total: number; reconciled: number };
+  consumables: { total: number; lowStock: number; outOfStock: number };
 }
 
 const WARRANTY_LOOKAHEAD_DAYS = 30;
@@ -74,6 +77,7 @@ export class ReportsService {
     @InjectRepository(Batch) private batches: Repository<Batch>,
     @InjectRepository(OrderLine) private lines: Repository<OrderLine>,
     @InjectRepository(RepairLog) private repairLogs: Repository<RepairLog>,
+    @InjectRepository(StockLine) private stockLines: Repository<StockLine>,
   ) {}
 
   // Profit per purchase lot (D6). Per-unit cost = the asset's manual override if
@@ -203,7 +207,7 @@ export class ReportsService {
   }
 
   async getDashboard(): Promise<DashboardSummary> {
-    const [assets, batches, lines, repairs] = await Promise.all([
+    const [assets, batches, lines, repairs, stock] = await Promise.all([
       this.assets
         .createQueryBuilder('a')
         .select(['a.id', 'a.batchId', 'a.purchaseCost', 'a.stockStatus', 'a.conditionGrade', 'a.createdAt'])
@@ -211,6 +215,7 @@ export class ReportsService {
       this.batches.find(),
       this.lines.find(),
       this.repairLogs.find(),
+      this.stockLines.find({ select: { id: true, quantity: true } }),
     ]);
 
     const unitsPerBatch = new Map<string, number>();
@@ -311,6 +316,11 @@ export class ReportsService {
       lots: {
         total: batches.length,
         reconciled: batches.filter((b) => b.status === 'reconciled').length,
+      },
+      consumables: {
+        total: stock.length,
+        lowStock: stock.filter((s) => stockStatusFor(s.quantity) === 'low_stock').length,
+        outOfStock: stock.filter((s) => stockStatusFor(s.quantity) === 'out_of_stock').length,
       },
     };
   }

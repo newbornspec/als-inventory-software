@@ -7,6 +7,17 @@ import { CreateStockLineDto } from './dto/create-stock-line.dto';
 import { UpdateStockLineDto } from './dto/update-stock-line.dto';
 import { AdjustStockDto } from './dto/adjust-stock.dto';
 
+// Consumable stock status is DERIVED from on-hand quantity (never stored, so it
+// can't drift): 0 → out of stock, below the threshold → low, otherwise in stock.
+export const LOW_STOCK_THRESHOLD = 10;
+export type StockStatus = 'in_stock' | 'low_stock' | 'out_of_stock';
+export function stockStatusFor(quantity: number): StockStatus {
+  if (quantity <= 0) return 'out_of_stock';
+  if (quantity < LOW_STOCK_THRESHOLD) return 'low_stock';
+  return 'in_stock';
+}
+export type StockLineWithStatus = StockLine & { status: StockStatus };
+
 @Injectable()
 export class StockService {
   constructor(
@@ -14,7 +25,7 @@ export class StockService {
     @InjectRepository(StockMovement) private movements: Repository<StockMovement>,
   ) {}
 
-  findAll(search?: string): Promise<StockLine[]> {
+  async findAll(search?: string): Promise<StockLineWithStatus[]> {
     const qb = this.lines
       .createQueryBuilder('line')
       .leftJoinAndSelect('line.location', 'location')
@@ -24,17 +35,20 @@ export class StockService {
         s: `%${search}%`,
       });
     }
-    return qb.getMany();
+    const rows = await qb.getMany();
+    return rows.map((r) => ({ ...r, status: stockStatusFor(r.quantity) }));
   }
 
-  async findOne(id: string): Promise<StockLine & { movements: StockMovement[] }> {
+  async findOne(
+    id: string,
+  ): Promise<StockLineWithStatus & { movements: StockMovement[] }> {
     const line = await this.lines.findOne({ where: { id }, relations: ['location'] });
     if (!line) throw new NotFoundException(`Stock line ${id} not found`);
     const movements = await this.movements.find({
       where: { stockLineId: id },
       order: { createdAt: 'DESC' },
     });
-    return { ...line, movements };
+    return { ...line, status: stockStatusFor(line.quantity), movements };
   }
 
   // Create the line and, if it opens with stock, record that as the first

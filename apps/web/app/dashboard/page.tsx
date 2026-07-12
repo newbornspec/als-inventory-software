@@ -29,10 +29,26 @@ interface DashboardSummary {
   ageing: Bucket[];
   repairs: { pending: number; inProgress: number; completed: number; spend: number };
   lots: { total: number; reconciled: number };
+  consumables: { total: number; lowStock: number; outOfStock: number };
 }
 
-function Tile({ label, value, tone }: { label: string; value: string | number; tone?: 'good' | 'bad' }) {
-  const color = tone === 'good' ? 'text-emerald-400' : tone === 'bad' ? 'text-red-400' : '';
+function Tile({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string | number;
+  tone?: 'good' | 'bad' | 'warn';
+}) {
+  const color =
+    tone === 'good'
+      ? 'text-emerald-400'
+      : tone === 'bad'
+        ? 'text-red-400'
+        : tone === 'warn'
+          ? 'text-amber-400'
+          : '';
   return (
     <div className="rounded-lg border border-neutral-800 bg-neutral-900 p-4">
       <div className={'text-2xl font-semibold ' + color}>{value}</div>
@@ -104,6 +120,16 @@ export default async function DashboardPage() {
                 tone={summary.realizedProfit > 0 ? 'good' : summary.realizedProfit < 0 ? 'bad' : undefined}
               />
               <Tile label="Pending repairs" value={summary.repairs.pending + summary.repairs.inProgress} />
+              <Tile
+                label="Consumables low stock"
+                value={summary.consumables.lowStock}
+                tone={summary.consumables.lowStock > 0 ? 'warn' : undefined}
+              />
+              <Tile
+                label="Consumables out of stock"
+                value={summary.consumables.outOfStock}
+                tone={summary.consumables.outOfStock > 0 ? 'bad' : undefined}
+              />
             </div>
 
             <div className="mt-8 grid gap-8 md:grid-cols-2">

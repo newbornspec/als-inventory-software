@@ -10,7 +10,7 @@ import { StockLine } from './stock-line.entity';
 
 export enum StockMovementReason {
   RECEIVED = 'received',
-  SOLD = 'sold',
+  USED = 'used', // consumed internally (was 'sold' — consumables aren't sold)
   ADJUSTED = 'adjusted', // manual correction / recount
   RETURNED = 'returned',
   SCRAPPED = 'scrapped',

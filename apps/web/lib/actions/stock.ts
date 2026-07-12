@@ -5,7 +5,9 @@ import { revalidatePath } from 'next/cache';
 import { apiFetch, ApiError } from '@/lib/api-server';
 import type { ActionState } from './assets';
 
-export type StockMovementReason = 'received' | 'sold' | 'adjusted' | 'returned' | 'scrapped';
+export type StockMovementReason = 'received' | 'used' | 'adjusted' | 'returned' | 'scrapped';
+
+export type StockStatus = 'in_stock' | 'low_stock' | 'out_of_stock';
 
 export interface StockMovement {
   id: string;
@@ -25,6 +27,7 @@ export interface StockLine {
   productId: string | null;
   locationId: string | null;
   quantity: number;
+  status: StockStatus;
   notes: string | null;
   location?: { id: string; name: string } | null;
   movements?: StockMovement[];

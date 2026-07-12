@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { adjustStock, type StockMovementReason } from '@/lib/actions/stock';
 import { formatLabel } from '@/lib/asset-options';
 
-const REASONS: StockMovementReason[] = ['received', 'sold', 'adjusted', 'returned', 'scrapped'];
+const REASONS: StockMovementReason[] = ['received', 'used', 'adjusted', 'returned', 'scrapped'];
 
 export function AdjustStock({ lineId }: { lineId: string }) {
   const router = useRouter();

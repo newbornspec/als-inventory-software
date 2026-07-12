@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { apiFetch, getSessionUser } from '@/lib/api-server';
 import type { StockLine } from '@/lib/actions/stock';
 import { Nav } from '@/app/components/nav';
+import { StockStatusBadge } from './stock-status-badge';
 
 export default async function StockPage({
   searchParams,
@@ -50,6 +51,7 @@ export default async function StockPage({
                 <th className="px-4 py-3">Category</th>
                 <th className="px-4 py-3">Location</th>
                 <th className="px-4 py-3">On hand</th>
+                <th className="px-4 py-3">Status</th>
               </tr>
             </thead>
             <tbody>
@@ -63,18 +65,15 @@ export default async function StockPage({
                   <td className="px-4 py-3 text-neutral-400">{s.sku ?? '—'}</td>
                   <td className="px-4 py-3 text-neutral-400">{s.category ?? '—'}</td>
                   <td className="px-4 py-3 text-neutral-400">{s.location?.name ?? '—'}</td>
-                  <td
-                    className={
-                      'px-4 py-3 font-medium ' + (s.quantity === 0 ? 'text-amber-400' : '')
-                    }
-                  >
-                    {s.quantity}
+                  <td className="px-4 py-3 font-medium">{s.quantity}</td>
+                  <td className="px-4 py-3">
+                    <StockStatusBadge status={s.status} />
                   </td>
                 </tr>
               ))}
               {items.length === 0 && (
                 <tr>
-                  <td colSpan={5} className="px-4 py-8 text-center text-neutral-500">
+                  <td colSpan={6} className="px-4 py-8 text-center text-neutral-500">
                     No consumables yet.
                   </td>
                 </tr>
