@@ -143,9 +143,6 @@ export class Asset {
   @JoinColumn({ name: 'product_id' })
   product: Product | null;
 
-  @Column({ name: 'warranty_expires_at', type: 'date', nullable: true })
-  warrantyExpiresAt: string | null;
-
   // Optional manual per-unit cost override. When null, this unit's cost basis is
   // the even split of its purchase lot's total_cost across the lot's units.
   @Column({

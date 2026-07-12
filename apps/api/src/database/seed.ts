@@ -65,9 +65,6 @@ async function seed() {
     }),
   );
 
-  const in20Days = new Date(Date.now() + 20 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-  const lastMonth = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-
   const assetSeeds = [
     {
       tag: 'AST-0001',
@@ -77,7 +74,6 @@ async function seed() {
       stockStatus: AssetStockStatus.IN_STOCK,
       conditionGrade: AssetConditionGrade.GRADE_A,
       auditStatus: AssetAuditStatus.READY_FOR_SALE,
-      warrantyExpiresAt: in20Days,
     },
     {
       tag: 'AST-0002',
@@ -93,7 +89,6 @@ async function seed() {
       location: hq,
       stockStatus: AssetStockStatus.ALLOCATED,
       owner: manager,
-      warrantyExpiresAt: lastMonth,
     },
     {
       tag: 'AST-0004',
@@ -126,7 +121,6 @@ async function seed() {
         auditStatus: s.auditStatus ?? null,
         locationId: s.location.id,
         ownerId: s.owner?.id ?? null,
-        warrantyExpiresAt: s.warrantyExpiresAt ?? null,
       }),
     );
     createdAssets[s.tag] = asset;

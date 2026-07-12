@@ -10,12 +10,10 @@ import { stockStatusFor } from '../stock/stock.service';
 
 export interface Notification {
   id: string;
-  type: 'warranty_expired' | 'warranty_expiring' | 'quarantined' | 'repair_required' | 'ber';
+  type: 'quarantined' | 'repair_required' | 'ber' | 'out_of_stock' | 'low_stock';
   severity: 'critical' | 'warning';
-  assetId: string;
-  assetTag: string;
-  assetName: string;
   message: string;
+  href: string; // where clicking the alert goes
 }
 
 // One row of the lot-profitability report. Revenue and cost-of-sold cover only
@@ -67,8 +65,6 @@ export interface DashboardSummary {
   lots: { total: number; reconciled: number };
   consumables: { total: number; lowStock: number; outOfStock: number };
 }
-
-const WARRANTY_LOOKAHEAD_DAYS = 30;
 
 @Injectable()
 export class ReportsService {
@@ -326,9 +322,10 @@ export class ReportsService {
   }
 
   async getNotifications(): Promise<Notification[]> {
-    const assets = await this.assets.find({ relations: ['location'] });
-    const now = new Date();
-    const lookahead = new Date(now.getTime() + WARRANTY_LOOKAHEAD_DAYS * 24 * 60 * 60 * 1000);
+    const [assets, stock] = await Promise.all([
+      this.assets.find({ relations: ['location'] }),
+      this.stockLines.find(),
+    ]);
     const notifications: Notification[] = [];
 
     for (const asset of assets) {
@@ -337,10 +334,8 @@ export class ReportsService {
           id: `${asset.id}:quarantined`,
           type: 'quarantined',
           severity: 'warning',
-          assetId: asset.id,
-          assetTag: asset.tag,
-          assetName: asset.name,
           message: `${asset.name} (${asset.tag}) is quarantined/on hold`,
+          href: `/assets/${asset.id}`,
         });
       }
 
@@ -349,10 +344,8 @@ export class ReportsService {
           id: `${asset.id}:repair_required`,
           type: 'repair_required',
           severity: 'warning',
-          assetId: asset.id,
-          assetTag: asset.tag,
-          assetName: asset.name,
           message: `${asset.name} (${asset.tag}) needs repair`,
+          href: `/assets/${asset.id}`,
         });
       }
 
@@ -361,36 +354,31 @@ export class ReportsService {
           id: `${asset.id}:ber`,
           type: 'ber',
           severity: 'critical',
-          assetId: asset.id,
-          assetTag: asset.tag,
-          assetName: asset.name,
           message: `${asset.name} (${asset.tag}) is beyond economic repair`,
+          href: `/assets/${asset.id}`,
         });
       }
+    }
 
-      if (asset.warrantyExpiresAt) {
-        const expiresAt = new Date(asset.warrantyExpiresAt);
-        if (expiresAt < now) {
-          notifications.push({
-            id: `${asset.id}:warranty_expired`,
-            type: 'warranty_expired',
-            severity: 'critical',
-            assetId: asset.id,
-            assetTag: asset.tag,
-            assetName: asset.name,
-            message: `${asset.name} (${asset.tag}) warranty expired on ${asset.warrantyExpiresAt}`,
-          });
-        } else if (expiresAt <= lookahead) {
-          notifications.push({
-            id: `${asset.id}:warranty_expiring`,
-            type: 'warranty_expiring',
-            severity: 'warning',
-            assetId: asset.id,
-            assetTag: asset.tag,
-            assetName: asset.name,
-            message: `${asset.name} (${asset.tag}) warranty expires on ${asset.warrantyExpiresAt}`,
-          });
-        }
+    // Consumables running low or out — the operational alert that replaces warranty.
+    for (const line of stock) {
+      const status = stockStatusFor(line.quantity);
+      if (status === 'out_of_stock') {
+        notifications.push({
+          id: `${line.id}:out_of_stock`,
+          type: 'out_of_stock',
+          severity: 'critical',
+          message: `${line.name} is out of stock`,
+          href: `/stock/${line.id}`,
+        });
+      } else if (status === 'low_stock') {
+        notifications.push({
+          id: `${line.id}:low_stock`,
+          type: 'low_stock',
+          severity: 'warning',
+          message: `${line.name} is low on stock (${line.quantity} left)`,
+          href: `/stock/${line.id}`,
+        });
       }
     }
 
@@ -409,7 +397,6 @@ export class ReportsService {
       'audit_status',
       'location',
       'owner',
-      'warranty_expires_at',
       'updated_at',
     ];
     const rows = assets.map((a) =>
@@ -422,7 +409,6 @@ export class ReportsService {
         a.auditStatus ?? '',
         a.location?.name ?? '',
         a.owner?.name ?? '',
-        a.warrantyExpiresAt ?? '',
         a.updatedAt.toISOString(),
       ]
         .map(csvEscape)

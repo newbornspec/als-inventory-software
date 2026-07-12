@@ -15,7 +15,6 @@ export interface Asset {
   locationId: string | null;
   ownerId: string | null;
   imageUrl: string | null;
-  warrantyExpiresAt: string | null;
   purchaseCost: number | null;
   batchId: string | null;
   lotId: string | null;
@@ -35,7 +34,6 @@ export async function createAsset(_prev: ActionState, formData: FormData): Promi
     stockStatus: String(formData.get('stockStatus') ?? 'received'),
     conditionGrade: emptyToUndefined(formData.get('conditionGrade')),
     locationId: emptyToUndefined(formData.get('locationId')),
-    warrantyExpiresAt: emptyToUndefined(formData.get('warrantyExpiresAt')),
   };
 
   if (!dto.tag || !dto.name || !dto.category) {
@@ -64,7 +62,6 @@ export async function updateAsset(
     stockStatus: String(formData.get('stockStatus') ?? ''),
     conditionGrade: emptyToUndefined(formData.get('conditionGrade')),
     locationId: emptyToUndefined(formData.get('locationId')),
-    warrantyExpiresAt: emptyToUndefined(formData.get('warrantyExpiresAt')),
     purchaseCost: toNumberOrUndefined(formData.get('purchaseCost')),
   };
 

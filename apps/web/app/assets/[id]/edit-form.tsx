@@ -74,15 +74,6 @@ export function AssetEditForm({ asset, locations }: { asset: Asset; locations: L
         </select>
       </div>
       <div className="space-y-1">
-        <label className="text-sm text-neutral-300">Warranty expires</label>
-        <input
-          type="date"
-          name="warrantyExpiresAt"
-          defaultValue={asset.warrantyExpiresAt ?? ''}
-          className="w-full rounded-md border border-neutral-700 bg-neutral-950 px-3 py-2 text-sm outline-none focus:border-neutral-500"
-        />
-      </div>
-      <div className="space-y-1">
         <label className="text-sm text-neutral-300">Unit cost override (£)</label>
         <input
           type="number"

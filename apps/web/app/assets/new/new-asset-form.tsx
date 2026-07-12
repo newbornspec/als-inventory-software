@@ -81,15 +81,6 @@ export function NewAssetForm({ locations }: { locations: Location[] }) {
           ))}
         </select>
       </div>
-      <div className="space-y-1">
-        <label className="text-sm text-neutral-300">Warranty expires (optional)</label>
-        <input
-          type="date"
-          name="warrantyExpiresAt"
-          className="w-full rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm outline-none focus:border-neutral-500"
-        />
-      </div>
-
       {state.error && <p className="text-sm text-red-400">{state.error}</p>}
 
       <button

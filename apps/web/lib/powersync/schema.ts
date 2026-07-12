@@ -14,7 +14,6 @@ export const AppSchema = new Schema({
     location_id: column.text,
     owner_id: column.text,
     image_url: column.text,
-    warranty_expires_at: column.text,
     batch_id: column.text,
     lot_id: column.text,
     updated_at: column.text,

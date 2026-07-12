@@ -7,8 +7,8 @@ import { money } from '@/lib/money';
 interface Notification {
   id: string;
   severity: 'critical' | 'warning';
-  assetId: string;
   message: string;
+  href: string;
 }
 
 interface Bucket {
@@ -169,7 +169,7 @@ export default async function DashboardPage() {
             {notifications.map((n) => (
               <li key={n.id}>
                 <Link
-                  href={`/assets/${n.assetId}`}
+                  href={n.href}
                   className={
                     'block rounded-md border px-4 py-2 text-sm ' +
                     (n.severity === 'critical'
