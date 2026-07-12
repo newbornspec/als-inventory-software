@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   addOrderLine,
+  addOrderLineByTag,
   updateOrderLine,
   deleteOrderLine,
   type OrderLine,
@@ -23,6 +24,8 @@ export function OrderLines({
   const [desc, setDesc] = useState('');
   const [qty, setQty] = useState('1');
   const [price, setPrice] = useState('');
+  const [serial, setSerial] = useState('');
+  const [serialPrice, setSerialPrice] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -47,6 +50,24 @@ export function OrderLines({
     setDesc('');
     setQty('1');
     setPrice('');
+    router.refresh();
+  }
+
+  async function addDevice() {
+    if (!serial.trim()) {
+      setError('Scan or type a serial / asset tag.');
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    const res = await addOrderLineByTag(orderId, serial, serialPrice ? parseFloat(serialPrice) : null);
+    setBusy(false);
+    if (res.error) {
+      setError(res.error);
+      return;
+    }
+    setSerial('');
+    setSerialPrice('');
     router.refresh();
   }
 
@@ -170,6 +191,41 @@ export function OrderLines({
                 >
                   {busy ? '…' : 'Add'}
                 </button>
+              </td>
+            </tr>
+            <tr className="border-t border-neutral-800 bg-neutral-900/40">
+              <td colSpan={5} className="px-3 py-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-xs text-neutral-500">or add a device by serial:</span>
+                  <input
+                    value={serial}
+                    onChange={(e) => setSerial(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        addDevice();
+                      }
+                    }}
+                    placeholder="scan / type an asset tag"
+                    className="min-w-[12rem] flex-1 rounded border border-neutral-700 bg-neutral-900 px-2 py-1"
+                  />
+                  <input
+                    type="number"
+                    min={0}
+                    step="0.01"
+                    value={serialPrice}
+                    onChange={(e) => setSerialPrice(e.target.value)}
+                    placeholder="price"
+                    className="w-24 rounded border border-neutral-700 bg-neutral-900 px-2 py-1"
+                  />
+                  <button
+                    onClick={addDevice}
+                    disabled={busy}
+                    className="rounded border border-neutral-600 px-2 py-1 text-xs font-medium text-neutral-100 disabled:opacity-50"
+                  >
+                    {busy ? '…' : 'Add device'}
+                  </button>
+                </div>
               </td>
             </tr>
           </tfoot>

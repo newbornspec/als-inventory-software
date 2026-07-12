@@ -92,6 +92,25 @@ export async function addOrderLine(
   return {};
 }
 
+export async function addOrderLineByTag(
+  orderId: string,
+  tag: string,
+  unitPrice: number | null,
+): Promise<{ error?: string }> {
+  if (!tag.trim()) return { error: 'Enter a serial / asset tag.' };
+  try {
+    await apiFetch(`/orders/${orderId}/lines`, {
+      method: 'POST',
+      body: JSON.stringify({ assetTag: tag.trim(), unitPrice: unitPrice ?? undefined }),
+    });
+  } catch (err) {
+    return { error: err instanceof ApiError ? err.message : 'Failed to add device.' };
+  }
+  revalidatePath(`/orders/${orderId}`);
+  revalidatePath('/orders');
+  return {};
+}
+
 export async function updateOrderLine(
   orderId: string,
   lineId: string,
