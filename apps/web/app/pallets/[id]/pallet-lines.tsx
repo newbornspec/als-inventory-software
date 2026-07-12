@@ -61,9 +61,7 @@ export function PalletLines({
       await fn();
       router.refresh();
     } catch {
-      setError(
-        'Couldn’t save that change — your session may have expired. Refresh the page and sign in, then try again.',
-      );
+      setError('Couldn’t save that change. Please try again — refresh the page if it persists.');
     }
   }
 

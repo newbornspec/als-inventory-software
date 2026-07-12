@@ -36,8 +36,13 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
     throw new ApiError(res.status, body.message ?? `Request failed: ${res.status}`);
   }
 
+  // DELETE (and other void) endpoints return 200/204 with an EMPTY body. Calling
+  // res.json() on nothing throws "Unexpected end of JSON input", which used to
+  // surface as a bogus "session expired" / server-side-exception on every delete.
+  // Read as text and only parse when there's actually something to parse.
   if (res.status === 204) return undefined as T;
-  return res.json();
+  const text = await res.text();
+  return (text ? JSON.parse(text) : undefined) as T;
 }
 
 // Decodes (does NOT verify) the JWT payload for UI-gating purposes only —
