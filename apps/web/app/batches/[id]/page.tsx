@@ -4,6 +4,7 @@ import { apiFetch, ApiError, getSessionUser } from '@/lib/api-server';
 import type { Batch, Lot, ReconciliationResult } from '@/lib/actions/batches';
 import type { Asset } from '@/lib/actions/assets';
 import { Nav } from '@/app/components/nav';
+import { BackLink } from '@/app/components/back-link';
 import { formatLabel } from '@/lib/asset-options';
 import { money } from '@/lib/money';
 import { NewLotForm } from './new-lot-form';
@@ -42,7 +43,8 @@ export default async function BatchDetailPage({ params }: { params: Promise<{ id
     <main className="min-h-screen bg-neutral-950 text-neutral-100">
       <Nav />
       <div className="p-8">
-        <h1 className="text-2xl font-semibold">{batch.batchNumber}</h1>
+        <BackLink href="/batches" label="Back to Lots" />
+        <h1 className="mt-3 text-2xl font-semibold">{batch.batchNumber}</h1>
         <p className="mt-1 text-sm text-neutral-400">{batch.source ?? 'No supplier recorded'}</p>
 
         <dl className="mt-4 flex flex-wrap gap-x-8 gap-y-2 text-sm">

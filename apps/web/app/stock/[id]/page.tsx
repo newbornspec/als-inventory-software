@@ -2,6 +2,7 @@ import { notFound } from 'next/navigation';
 import { apiFetch, ApiError, getSessionUser } from '@/lib/api-server';
 import { deleteStockLine, type StockLine } from '@/lib/actions/stock';
 import { Nav } from '@/app/components/nav';
+import { BackLink } from '@/app/components/back-link';
 import { formatLabel } from '@/lib/asset-options';
 import { AdjustStock } from './adjust-form';
 
@@ -25,7 +26,8 @@ export default async function StockDetailPage({ params }: { params: Promise<{ id
     <main className="min-h-screen bg-neutral-950 text-neutral-100">
       <Nav />
       <div className="p-8">
-        <div className="flex items-start justify-between">
+        <BackLink href="/stock" label="Back to Consumables" />
+        <div className="mt-3 flex items-start justify-between">
           <div>
             <h1 className="text-2xl font-semibold">{line.name}</h1>
             <p className="mt-1 text-sm text-neutral-400">

@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { apiFetch, ApiError } from '@/lib/api-server';
 import type { Asset } from '@/lib/actions/assets';
@@ -19,6 +20,14 @@ export default async function AssetLabelPage({
 
   return (
     <main className="min-h-screen bg-white p-8 text-neutral-900">
+      <div className="mx-auto mb-4 max-w-xs print:hidden">
+        <Link
+          href={`/assets/${asset.id}`}
+          className="text-sm text-neutral-600 hover:text-neutral-900"
+        >
+          ← Back to device
+        </Link>
+      </div>
       <div className="mx-auto max-w-xs border border-neutral-300 p-4 text-center print:border-black">
         <div className="text-sm font-semibold">{asset.name}</div>
         <div className="text-xs text-neutral-500">{asset.category}</div>
