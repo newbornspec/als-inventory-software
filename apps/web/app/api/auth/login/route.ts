@@ -22,7 +22,7 @@ export async function POST(request: Request) {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
     sameSite: 'strict',
-    maxAge: 60 * 15, // matches JWT_EXPIRES_IN default of 15m
+    maxAge: 60 * 60 * 12, // matches JWT_EXPIRES_IN default of 12h
     path: '/',
   });
   response.cookies.set('refreshToken', data.refreshToken, {

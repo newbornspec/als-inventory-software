@@ -53,31 +53,48 @@ export function PalletLines({
     router.refresh();
   }
 
+  // Run a line mutation and surface any failure instead of silently swallowing
+  // it — a stale session (expired token) is the usual cause and must be visible.
+  async function run(fn: () => Promise<void>) {
+    setError(null);
+    try {
+      await fn();
+      router.refresh();
+    } catch {
+      setError(
+        'Couldn’t save that change — your session may have expired. Refresh the page and sign in, then try again.',
+      );
+    }
+  }
+
   // Each field saves on blur, carrying the line's other current values so an
   // edit to one field never wipes the others — this is the per-item "edit".
-  async function saveVariant(line: PalletLine, next: string) {
+  function saveVariant(line: PalletLine, next: string) {
     if (!next.trim() || next.trim() === line.variant) return;
-    await updatePalletLine(palletId, line.id, next, line.quantity, line.unitCost, line.supplier ?? '');
-    router.refresh();
+    void run(() =>
+      updatePalletLine(palletId, line.id, next, line.quantity, line.unitCost, line.supplier ?? ''),
+    );
   }
-  async function saveSupplier(line: PalletLine, next: string) {
+  function saveSupplier(line: PalletLine, next: string) {
     if (next.trim() === (line.supplier ?? '')) return;
-    await updatePalletLine(palletId, line.id, line.variant, line.quantity, line.unitCost, next);
-    router.refresh();
+    void run(() =>
+      updatePalletLine(palletId, line.id, line.variant, line.quantity, line.unitCost, next),
+    );
   }
-  async function saveQty(line: PalletLine, next: number) {
+  function saveQty(line: PalletLine, next: number) {
     if (Number.isNaN(next) || next === line.quantity) return;
-    await updatePalletLine(palletId, line.id, line.variant, next, line.unitCost, line.supplier ?? '');
-    router.refresh();
+    void run(() =>
+      updatePalletLine(palletId, line.id, line.variant, next, line.unitCost, line.supplier ?? ''),
+    );
   }
-  async function saveCost(line: PalletLine, next: number | null) {
+  function saveCost(line: PalletLine, next: number | null) {
     if (next === line.unitCost) return;
-    await updatePalletLine(palletId, line.id, line.variant, line.quantity, next, line.supplier ?? '');
-    router.refresh();
+    void run(() =>
+      updatePalletLine(palletId, line.id, line.variant, line.quantity, next, line.supplier ?? ''),
+    );
   }
-  async function remove(line: PalletLine) {
-    await deletePalletLine(palletId, line.id);
-    router.refresh();
+  function remove(line: PalletLine) {
+    void run(() => deletePalletLine(palletId, line.id));
   }
 
   const cols = canManage ? 6 : 5;

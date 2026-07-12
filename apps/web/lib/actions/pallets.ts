@@ -125,7 +125,13 @@ export async function updatePalletLine(
 }
 
 export async function deletePalletLine(palletId: string, lineId: string): Promise<void> {
-  await apiFetch(`/pallets/${palletId}/lines/${lineId}`, { method: 'DELETE' });
+  try {
+    await apiFetch(`/pallets/${palletId}/lines/${lineId}`, { method: 'DELETE' });
+  } catch (err) {
+    // Already gone? That's the desired end state. Anything else (e.g. an expired
+    // session -> 401) propagates so the caller can show it instead of failing silently.
+    if (!(err instanceof ApiError && err.status === 404)) throw err;
+  }
   revalidatePath(`/pallets/${palletId}`);
   revalidatePath('/pallets');
 }
