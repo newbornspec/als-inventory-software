@@ -8,6 +8,7 @@ import { CreateAssetDto } from './dto/create-asset.dto';
 import { UpdateAssetDto } from './dto/update-asset.dto';
 import { QueryAssetsDto } from './dto/query-assets.dto';
 import { CreateAssetAuditDto } from './dto/create-asset-audit.dto';
+import { HardwareAuditDto } from './dto/hardware-audit.dto';
 import { sanitizeUser } from '../users/sanitize-user';
 
 @Injectable()
@@ -146,6 +147,23 @@ export class AssetsService {
     );
 
     return audit;
+  }
+
+  // Ingest a hardware audit from the bootable capture tool: match the device by
+  // its tag/serial, then record the specs as an audit. Unmatched serials are
+  // reported (not silently dropped) so the tool can surface them.
+  async hardwareAudit(
+    dto: HardwareAuditDto,
+    userId: string,
+  ): Promise<{ matched: boolean; tag: string; assetId?: string }> {
+    const { tag, ...auditFields } = dto;
+    const asset = await this.assets
+      .createQueryBuilder('a')
+      .where('LOWER(a.tag) = LOWER(:tag)', { tag: tag.trim() })
+      .getOne();
+    if (!asset) return { matched: false, tag };
+    await this.createAudit(asset.id, auditFields, userId);
+    return { matched: true, tag: asset.tag, assetId: asset.id };
   }
 
   async remove(id: string): Promise<void> {
