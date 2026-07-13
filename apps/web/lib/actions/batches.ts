@@ -144,6 +144,21 @@ export async function createLot(
   return { error: null };
 }
 
+// Assign (or clear, with lotId=null) a device's sub-lot. The device already lives
+// in the parent purchase lot; this groups it into one of that lot's sub-lots.
+export async function assignSubLot(
+  assetId: string,
+  lotId: string | null,
+  batchId: string,
+): Promise<void> {
+  await apiFetch(`/assets/${assetId}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ lotId }),
+  });
+  revalidatePath(`/batches/${batchId}`);
+  revalidatePath('/assets');
+}
+
 // Bulk import of a parsed supplier list — replaces the lot's expected inventory.
 export async function importExpectedLineItems(
   batchId: string,

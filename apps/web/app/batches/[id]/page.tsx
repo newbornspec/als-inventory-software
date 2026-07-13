@@ -1,4 +1,3 @@
-import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { apiFetch, ApiError, getSessionUser } from '@/lib/api-server';
 import type { Batch, Lot, ReconciliationResult } from '@/lib/actions/batches';
@@ -11,6 +10,7 @@ import { NewLotForm } from './new-lot-form';
 import { BatchStatusSelect } from './status-select';
 import { ImportExpected } from './import-expected';
 import { LotCost } from './lot-cost';
+import { LotAssets } from './lot-assets';
 
 // 404 (deleted lot) -> Next's not-found page instead of a server-side crash.
 async function loadBatch(
@@ -38,6 +38,10 @@ export default async function BatchDetailPage({ params }: { params: Promise<{ id
   const canManage = user?.role === 'admin' || user?.role === 'manager';
   const expected = batch.expectedUnitCount;
   const discrepancy = expected != null ? batch.actualUnitCount - expected : null;
+
+  // Roll-up: how many of the lot's devices are grouped into sub-lots.
+  const groupedCount = lots.reduce((sum, l) => sum + l.actualUnitCount, 0);
+  const ungroupedCount = Math.max(0, assets.length - groupedCount);
 
   return (
     <main className="min-h-screen bg-neutral-950 text-neutral-100">
@@ -243,34 +247,66 @@ export default async function BatchDetailPage({ params }: { params: Promise<{ id
             <h2 className="text-sm font-medium text-neutral-400">
               Assets in this lot ({assets.length})
             </h2>
-            <ul className="mt-3 space-y-1">
-              {assets.map((a) => (
-                <li key={a.id}>
-                  <Link href={`/assets/${a.id}`} className="text-sm text-neutral-200 underline">
-                    {a.name}
-                  </Link>
-                </li>
-              ))}
-              {assets.length === 0 && (
-                <li className="text-sm text-neutral-500">
-                  No assets scanned into this lot yet — use Receiving mode on the Scan page.
-                </li>
-              )}
-            </ul>
+            <LotAssets
+              assets={assets}
+              subLots={lots}
+              batchId={batch.id}
+              canManage={canManage}
+            />
           </section>
 
           <section>
-            <h2 className="text-sm font-medium text-neutral-400">Sub-lots ({lots.length})</h2>
+            <div className="flex items-baseline justify-between gap-3">
+              <h2 className="text-sm font-medium text-neutral-400">Sub-lots ({lots.length})</h2>
+              {lots.length > 0 && (
+                <span className="text-xs text-neutral-500">
+                  {groupedCount} of {assets.length} grouped · {ungroupedCount} unassigned
+                </span>
+              )}
+            </div>
             <ul className="mt-3 space-y-2">
-              {lots.map((lot) => (
-                <li key={lot.id} className="rounded-md border border-neutral-800 p-2 text-sm">
-                  <div className="text-neutral-200">{lot.lotNumber}</div>
-                  {lot.description && <div className="text-neutral-500">{lot.description}</div>}
-                  <div className="text-xs text-neutral-500">
-                    {lot.actualUnitCount} / {lot.expectedUnitCount ?? '—'} units
-                  </div>
+              {lots.map((lot) => {
+                const pct =
+                  lot.expectedUnitCount && lot.expectedUnitCount > 0
+                    ? Math.min(100, Math.round((lot.actualUnitCount / lot.expectedUnitCount) * 100))
+                    : null;
+                return (
+                  <li key={lot.id} className="rounded-md border border-neutral-800 p-3 text-sm">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-medium text-neutral-200">{lot.lotNumber}</span>
+                      <span className="rounded-full border border-neutral-700 px-2 py-0.5 text-xs text-neutral-400">
+                        {formatLabel(lot.status)}
+                      </span>
+                    </div>
+                    {lot.description && (
+                      <div className="mt-0.5 text-neutral-400">{lot.description}</div>
+                    )}
+                    <div className="mt-2 flex items-baseline justify-between text-xs text-neutral-500">
+                      <span>
+                        <span className="text-neutral-300">{lot.actualUnitCount}</span> asset
+                        {lot.actualUnitCount === 1 ? '' : 's'}
+                        {lot.expectedUnitCount != null
+                          ? ` / ${lot.expectedUnitCount} expected`
+                          : ''}
+                      </span>
+                      {pct != null && <span>{pct}%</span>}
+                    </div>
+                    {pct != null && (
+                      <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-neutral-800">
+                        <div
+                          className="h-full rounded-full bg-emerald-600"
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
+                    )}
+                  </li>
+                );
+              })}
+              {lots.length === 0 && (
+                <li className="text-sm text-neutral-500">
+                  No sub-lots yet. Create one below to group these devices by specification.
                 </li>
-              ))}
+              )}
             </ul>
             {canManage && <NewLotForm batchId={batch.id} />}
           </section>
