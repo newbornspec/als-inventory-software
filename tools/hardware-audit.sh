@@ -5,14 +5,20 @@
 # Boot the device off a Linux live USB (SystemRescue or Ubuntu), then run:
 #   bash hardware-audit.sh
 #
-# It connects to Wi-Fi automatically, reads the machine's hardware, and files it
-# as an audit INTO the lot you selected in the web app ("Set audit target" on the
-# Lots page). It does NOT verify anything against a list — it creates/updates the
-# device in that lot.
+# It connects to Wi-Fi automatically, reads a COMPREHENSIVE hardware profile
+# (identification, system/BIOS, CPU, memory, per-drive storage + SMART, graphics,
+# display, battery, network, security) and files it as an audit INTO the lot you
+# selected in the web app ("Set audit target" on the Lots page). It does NOT verify
+# anything against a list — it creates/updates the device in that lot.
+#
+# The profile is sent as a nested JSON object; the server stores it verbatim
+# (JSONB), so new fields added here need no backend change.
 #
 # Preconfigure everything once in an "audit.conf" beside this script:
 #   AUDIT_URL, AUDIT_EMAIL, AUDIT_PASSWORD, WIFI_SSID, WIFI_PASSWORD
-# Then each run is just: confirm, and it uploads.
+#
+# Tip: run `AUDIT_DEBUG=1 bash hardware-audit.sh` to print the captured JSON
+# and exit WITHOUT uploading — handy for checking what a machine reports.
 
 API_DEFAULT="https://als-inventory-software-production.up.railway.app"
 
@@ -27,10 +33,18 @@ echo "=================================================="
 echo "  ALS Inventory — Hardware Audit"
 echo "=================================================="
 
-# --- tiny JSON helpers (no jq dependency) ---
-jesc() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr -d '\r\n'; }
+# --- JSON helpers (no jq dependency) ---
+esc() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr -d '\r\n\t'; }
 jstr() { printf '%s' "$1" | grep -o "\"$2\":\"[^\"]*\"" | head -n1 | sed 's/.*":"//; s/"$//'; }
 jraw() { printf '%s' "$1" | grep -o "\"$2\":[^,}]*" | head -n1 | sed 's/.*://; s/[[:space:]]//g'; }
+
+# Build a JSON object incrementally in OB. o_s = string field, o_n = numeric field
+# (both skip empty/invalid values so the profile only carries what was read).
+OB=""
+o_begin() { OB=""; }
+o_s() { [ -n "$2" ] || return 0; OB="$OB,\"$1\":\"$(esc "$2")\""; }
+o_n() { [ -n "$2" ] || return 0; case "$2" in ''|*[!0-9]*) return 0;; esac; OB="$OB,\"$1\":$2"; }
+o_end() { printf '{%s}' "${OB#,}"; }
 
 online() { curl -s --max-time 6 -o /dev/null "$API" 2>/dev/null; }
 
@@ -64,32 +78,282 @@ connect_wifi() {
   return 1
 }
 
-# --- make sure the tools we need exist (SystemRescue/Ubuntu both ship these) ---
+# --- ensure the read tools exist (SystemRescue/Ubuntu ship most already) ---
 ensure_tools() {
-  local miss=""
-  for c in curl dmidecode lsblk; do command -v "$c" >/dev/null 2>&1 || miss="$miss $c"; done
-  [ -z "$miss" ] && return 0
+  command -v curl >/dev/null 2>&1 && command -v dmidecode >/dev/null 2>&1 \
+    && command -v lsblk >/dev/null 2>&1 && command -v smartctl >/dev/null 2>&1 \
+    && command -v lspci >/dev/null 2>&1 && return 0
   if command -v pacman >/dev/null 2>&1; then
-    pacman -Sy --noconfirm curl dmidecode util-linux >/dev/null 2>&1
+    pacman -Sy --noconfirm curl dmidecode util-linux smartmontools pciutils usbutils mokutil >/dev/null 2>&1
   elif command -v apt-get >/dev/null 2>&1; then
-    apt-get update -qq >/dev/null 2>&1 && apt-get install -y -qq curl dmidecode util-linux >/dev/null 2>&1
+    apt-get update -qq >/dev/null 2>&1
+    apt-get install -y -qq curl dmidecode util-linux smartmontools pciutils usbutils mokutil >/dev/null 2>&1
   fi
 }
 
-connect_wifi || exit 1
+if [ "${AUDIT_DEBUG:-0}" != "1" ]; then
+  connect_wifi || exit 1
+fi
 ensure_tools
 
-# --- login ---
+# ================= read the hardware profile =================
+dmi() { dmidecode -s "$1" 2>/dev/null | grep -v '^#' | head -n1 | sed 's/[[:space:]]*$//'; }
+notspecified() { case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
+  ''|'not specified'|'to be filled by o.e.m.'|'default string'|'none'|'system serial number'|'0'|'na'|'n/a') return 0;; *) return 1;; esac; }
+clean() { notspecified "$1" && printf '' || printf '%s' "$1"; }
+
+# Dell express service code = base-36 value of the 7-char service tag, in decimal.
+express_code() {
+  local tag n=0 i c d
+  tag=$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]')
+  case "$tag" in *[!0-9A-Z]*|'') return 0;; esac
+  [ "${#tag}" -ge 5 ] && [ "${#tag}" -le 8 ] || return 0
+  for ((i=0;i<${#tag};i++)); do
+    c=${tag:$i:1}
+    case $c in [0-9]) d=$c;; *) d=$(( $(printf '%d' "'$c") - 55 ));; esac
+    n=$(( n*36 + d ))
+  done
+  printf '%s' "$n"
+}
+
+# --- identification ---
+MFR=$(clean "$(dmi system-manufacturer)")
+FAMILY=$(clean "$(dmi system-family)")
+MODEL=$(clean "$(dmi system-product-name)")
+SERIAL=$(clean "$(dmi system-serial-number)")
+UUID=$(clean "$(dmi system-uuid)")
+ASSET_TAG=$(clean "$(dmi chassis-asset-tag)")
+CHASSIS=$(dmidecode --string chassis-type 2>/dev/null | head -n1)
+case "$(printf '%s' "$CHASSIS" | tr '[:upper:]' '[:lower:]')" in
+  *notebook*|*laptop*|*portable*|*convertible*|*detachable*) DEVICE_TYPE="Laptop";;
+  *server*|*rack*|*blade*) DEVICE_TYPE="Server";;
+  *workstation*) DEVICE_TYPE="Workstation";;
+  *desktop*|*tower*|*mini*|*space*|*"all in one"*|*"all-in-one"*) DEVICE_TYPE="Desktop";;
+  *) DEVICE_TYPE="";;
+esac
+EXPRESS=""
+case "$(printf '%s' "$MFR" | tr '[:upper:]' '[:lower:]')" in *dell*) EXPRESS=$(express_code "$SERIAL");; esac
+
+# --- system / BIOS / firmware ---
+BIOS_VER=$(clean "$(dmi bios-version)")
+BIOS_DATE=$(clean "$(dmi bios-release-date)")
+BOOT_MODE=$([ -d /sys/firmware/efi ] && echo "UEFI" || echo "Legacy")
+SECURE_BOOT=""
+if command -v mokutil >/dev/null 2>&1; then
+  SECURE_BOOT=$(mokutil --sb-state 2>/dev/null | grep -io 'enabled\|disabled' | head -n1)
+fi
+[ -z "$SECURE_BOOT" ] && [ "$BOOT_MODE" = "Legacy" ] && SECURE_BOOT="n/a"
+TPM_VER=""
+if [ -r /sys/class/tpm/tpm0/tpm_version_major ]; then
+  TPM_VER="$(cat /sys/class/tpm/tpm0/tpm_version_major 2>/dev/null).0"
+elif [ -e /sys/class/tpm/tpm0 ]; then
+  TPM_VER="present"
+fi
+
+# --- CPU ---
+LSCPU=$(LC_ALL=C lscpu 2>/dev/null)
+cpu_val() { printf '%s\n' "$LSCPU" | sed -n "s/^$1:[[:space:]]*//p" | head -n1; }
+CPU_MODEL=$(cpu_val 'Model name')
+[ -z "$CPU_MODEL" ] && CPU_MODEL=$(grep -m1 'model name' /proc/cpuinfo 2>/dev/null | cut -d: -f2 | sed 's/^ //')
+case "$(cpu_val 'Vendor ID')" in *Intel*) CPU_VENDOR="Intel";; *AMD*) CPU_VENDOR="AMD";; *) CPU_VENDOR="";; esac
+CPU_SOCKETS=$(cpu_val 'Socket(s)'); CPU_PERCORE=$(cpu_val 'Core(s) per socket'); CPU_ALL=$(cpu_val 'CPU(s)')
+CPU_CORES=""; { [ -n "$CPU_SOCKETS" ] && [ -n "$CPU_PERCORE" ]; } && CPU_CORES=$(( CPU_SOCKETS * CPU_PERCORE ))
+CPU_THREADS="$CPU_ALL"
+CPU_MAXMHZ=$(cpu_val 'CPU max MHz')
+CPU_MAX=""; [ -n "$CPU_MAXMHZ" ] && CPU_MAX=$(awk -v m="$CPU_MAXMHZ" 'BEGIN{ if(m+0>0) printf "%.1f GHz", m/1000 }')
+CPU_GEN=""
+if [ "$CPU_VENDOR" = "Intel" ]; then
+  n=$(printf '%s' "$CPU_MODEL" | grep -oE 'i[3579][- ]?[0-9]{4,5}' | grep -oE '[0-9]{4,5}' | head -n1)
+  [ -n "$n" ] && [ "${#n}" -gt 3 ] && CPU_GEN="${n%???}th Gen"
+fi
+
+# --- memory ---
+MEM_KB=$(grep MemTotal /proc/meminfo 2>/dev/null | awk '{print $2}')
+RAM_GB=""; [ -n "$MEM_KB" ] && RAM_GB=$(( (MEM_KB + 512*1024) / (1024*1024) ))
+MEMT=$(dmidecode -t memory 2>/dev/null)
+RAM_TYPE=$(printf '%s\n' "$MEMT" | sed -n 's/^[[:space:]]*Type:[[:space:]]*//p' | grep -iE '^DDR|^LPDDR' | head -n1)
+RAM_SPEED=$(printf '%s\n' "$MEMT" | sed -n 's/^[[:space:]]*Speed:[[:space:]]*//p' | grep -iE 'MT/s|MHz' | head -n1)
+RAM_SLOTS=$(printf '%s\n' "$MEMT" | grep -c '^Memory Device')
+RAM_MODULES=$(printf '%s\n' "$MEMT" | sed -n 's/^[[:space:]]*Size:[[:space:]]*//p' | grep -iE 'MB|GB' | grep -vi 'No Module' | wc -l | tr -d ' ')
+# 0 here means dmidecode had nothing to say — omit rather than report "0 slots".
+[ "$RAM_SLOTS" = "0" ] && RAM_SLOTS=""
+[ "$RAM_MODULES" = "0" ] && RAM_MODULES=""
+RAM_MAX_RAW=$(printf '%s\n' "$MEMT" | sed -n 's/^[[:space:]]*Maximum Capacity:[[:space:]]*//p' | head -n1)
+RAM_MAX=""
+case "$RAM_MAX_RAW" in
+  *TB) RAM_MAX=$(( $(printf '%s' "$RAM_MAX_RAW" | grep -oE '[0-9]+') * 1024 ));;
+  *GB) RAM_MAX=$(printf '%s' "$RAM_MAX_RAW" | grep -oE '[0-9]+');;
+esac
+
+# --- storage (one element per fixed drive; skip the live USB) ---
+STOR_ELEMS=""
+while IFS= read -r line; do
+  [ -z "$line" ] && continue
+  NAME=""; TYPE=""; TRAN=""; RM=""; SIZE=""; MODEL=""; SERIAL_D=""; ROTA=""
+  eval "$line" 2>/dev/null
+  [ "$TYPE" = "disk" ] || continue
+  [ "$TRAN" = "usb" ] && continue
+  [ "$RM" = "1" ] && continue
+  CAP=""; [ -n "$SIZE" ] && CAP=$(awk -v b="$SIZE" 'BEGIN{ if(b+0>0) printf "%.0fGB", b/1000000000 }')
+  case "$NAME" in nvme*) DTYPE="NVMe"; IFACE_D="NVMe";; esac
+  if [ -z "$DTYPE" ]; then
+    [ "$ROTA" = "1" ] && DTYPE="HDD" || DTYPE="SSD"
+    case "$TRAN" in sata) IFACE_D="SATA";; ata) IFACE_D="SATA";; *) IFACE_D="$TRAN";; esac
+  fi
+  SMART=""
+  if command -v smartctl >/dev/null 2>&1; then
+    SMART=$(smartctl -H "/dev/$NAME" 2>/dev/null | sed -n 's/.*self-assessment test result:[[:space:]]*//p; s/.*SMART Health Status:[[:space:]]*//p' | head -n1 | tr -d ' ')
+  fi
+  o_begin
+  o_s model "$MODEL"; o_s capacity "$CAP"; o_s type "$DTYPE"
+  o_s interface "$IFACE_D"; o_s smartStatus "$SMART"; o_s serialNumber "$SERIAL_D"
+  STOR_ELEMS="$STOR_ELEMS,$(o_end)"
+  DTYPE=""; IFACE_D=""
+done <<STOREOF
+$(lsblk -bdP -o NAME,TYPE,TRAN,RM,SIZE,MODEL,SERIAL,ROTA 2>/dev/null)
+STOREOF
+STORAGE="[${STOR_ELEMS#,}]"
+
+# --- graphics ---
+GFX_ELEMS=""
+while IFS= read -r l; do
+  [ -z "$l" ] && continue
+  vend=$(printf '%s' "$l" | awk -F'"' '{print $4}')
+  dev=$(printf '%s' "$l" | awk -F'"' '{print $6}')
+  case "$vend" in *Intel*) vend="Intel"; gtype="Integrated";;
+    *NVIDIA*) vend="NVIDIA"; gtype="Dedicated";;
+    *Advanced\ Micro*|*AMD*|*ATI*) vend="AMD"; gtype="";;
+    *) gtype="";; esac
+  o_begin; o_s manufacturer "$vend"; o_s model "$dev"; o_s type "$gtype"
+  GFX_ELEMS="$GFX_ELEMS,$(o_end)"
+done <<GFXEOF
+$(lspci -mm 2>/dev/null | grep -iE '"(VGA compatible controller|3D controller|Display controller)"')
+GFXEOF
+GRAPHICS="[${GFX_ELEMS#,}]"
+
+# --- display (best-effort EDID; often blank on a headless live boot) ---
+DISP_RES=""; DISP_SIZE=""
+if command -v edid-decode >/dev/null 2>&1; then
+  for e in /sys/class/drm/*/edid; do
+    [ -s "$e" ] || continue
+    dec=$(edid-decode "$e" 2>/dev/null)
+    DISP_RES=$(printf '%s\n' "$dec" | grep -oE 'DTD [0-9]+:[[:space:]]*[0-9]+x[0-9]+' | grep -oE '[0-9]+x[0-9]+' | head -n1)
+    DISP_SIZE=$(printf '%s\n' "$dec" | sed -n 's/.*Maximum image size:[[:space:]]*//p' | head -n1)
+    [ -n "$DISP_RES" ] && break
+  done
+fi
+
+# --- battery ---
+BAT_HEALTH=""; BAT_DESIGN=""; BAT_FULL=""; BAT_CYCLES=""; BAT_STATUS=""
+for b in /sys/class/power_supply/BAT*; do
+  [ -e "$b" ] || continue
+  ef=$(cat "$b/energy_full" 2>/dev/null); efd=$(cat "$b/energy_full_design" 2>/dev/null)
+  full=${ef:-$(cat "$b/charge_full" 2>/dev/null)}
+  design=${efd:-$(cat "$b/charge_full_design" 2>/dev/null)}
+  { [ -n "$full" ] && [ -n "$design" ] && [ "$design" -gt 0 ] 2>/dev/null; } && BAT_HEALTH="$(( full*100/design ))%"
+  [ -n "$ef" ]  && BAT_FULL=$(awk -v v="$ef" 'BEGIN{printf "%.0f Wh", v/1000000}')
+  [ -n "$efd" ] && BAT_DESIGN=$(awk -v v="$efd" 'BEGIN{printf "%.0f Wh", v/1000000}')
+  BAT_CYCLES=$(cat "$b/cycle_count" 2>/dev/null)
+  BAT_STATUS=$(cat "$b/status" 2>/dev/null)
+  break
+done
+[ "$BAT_CYCLES" = "0" ] && BAT_CYCLES=""
+[ -z "$DEVICE_TYPE" ] && { [ -n "$BAT_HEALTH" ] && DEVICE_TYPE="Laptop" || DEVICE_TYPE="Desktop"; }
+
+# --- network ---
+NET_ETH=$(lspci -mm 2>/dev/null | grep -i '"Ethernet controller"' | awk -F'"' '{print $6}' | head -n1)
+NET_WIFI=$(lspci -mm 2>/dev/null | grep -i '"Network controller"' | awk -F'"' '{print $6}' | head -n1)
+NET_BT=""
+command -v lsusb >/dev/null 2>&1 && NET_BT=$(lsusb 2>/dev/null | grep -i bluetooth | sed 's/.*ID [0-9a-fA-F:]*[[:space:]]*//' | head -n1)
+NET_MAC=""
+for n in /sys/class/net/*; do
+  ifn=$(basename "$n")
+  case "$ifn" in lo|wl*|ww*) continue;; esac
+  [ -r "$n/address" ] && NET_MAC=$(cat "$n/address" 2>/dev/null) && break
+done
+
+# ================= assemble the profile JSON =================
+o_begin
+o_s manufacturer "$MFR"; o_s productFamily "$FAMILY"; o_s model "$MODEL"
+o_s deviceType "$DEVICE_TYPE"; o_s serialNumber "$SERIAL"; o_s serviceTag "$SERIAL"
+o_s expressServiceCode "$EXPRESS"; o_s biosUuid "$UUID"; o_s assetTag "$ASSET_TAG"
+IDENT=$(o_end)
+
+o_begin
+o_s biosVersion "$BIOS_VER"; o_s biosReleaseDate "$BIOS_DATE"; o_s bootMode "$BOOT_MODE"
+o_s secureBoot "$SECURE_BOOT"; o_s tpmVersion "$TPM_VER"
+SYSTEM=$(o_end)
+
+o_begin
+o_s manufacturer "$CPU_VENDOR"; o_s model "$CPU_MODEL"; o_s generation "$CPU_GEN"
+o_n cores "$CPU_CORES"; o_n threads "$CPU_THREADS"; o_s maxClock "$CPU_MAX"
+CPU=$(o_end)
+
+o_begin
+o_n totalGb "$RAM_GB"; o_s type "$RAM_TYPE"; o_s speed "$RAM_SPEED"
+o_n modules "$RAM_MODULES"; o_n slots "$RAM_SLOTS"; o_n maxGb "$RAM_MAX"
+MEMORY=$(o_end)
+
+o_begin
+o_s size "$DISP_SIZE"; o_s resolution "$DISP_RES"
+DISPLAY=$(o_end)
+
+o_begin
+o_s health "$BAT_HEALTH"; o_s designCapacity "$BAT_DESIGN"; o_s fullChargeCapacity "$BAT_FULL"
+o_n cycleCount "$BAT_CYCLES"; o_s status "$BAT_STATUS"
+BATTERY=$(o_end)
+
+o_begin
+o_s ethernet "$NET_ETH"; o_s wifi "$NET_WIFI"; o_s bluetooth "$NET_BT"; o_s macAddress "$NET_MAC"
+NETWORK=$(o_end)
+
+o_begin
+o_s tpm "$TPM_VER"; o_s secureBoot "$SECURE_BOOT"
+SECURITY=$(o_end)
+
+# Join non-empty sections into the profile.
+PB=""
+p_obj() { [ "$2" = "{}" ] || [ "$2" = "[]" ] && return 0; PB="$PB,\"$1\":$2"; }
+p_obj identification "$IDENT"
+p_obj system "$SYSTEM"
+p_obj cpu "$CPU"
+p_obj memory "$MEMORY"
+p_obj storage "$STORAGE"
+p_obj graphics "$GRAPHICS"
+p_obj display "$DISPLAY"
+p_obj battery "$BATTERY"
+p_obj network "$NETWORK"
+p_obj security "$SECURITY"
+PROFILE="{${PB#,}}"
+
+# ================= summary =================
+echo
+echo "Detected on this machine:"
+printf "  %-14s %s\n" "Device"   "${MFR:-?} ${MODEL:-?} (${DEVICE_TYPE:-?})"
+printf "  %-14s %s\n" "Serial"   "${SERIAL:-?}${EXPRESS:+  ·  express $EXPRESS}"
+printf "  %-14s %s\n" "CPU"      "${CPU_MODEL:-?} — ${CPU_CORES:-?}C/${CPU_THREADS:-?}T"
+printf "  %-14s %s\n" "RAM"      "${RAM_GB:-?} GB ${RAM_TYPE} ${RAM_SPEED}"
+printf "  %-14s %s\n" "Storage"  "$(printf '%s' "$STORAGE" | grep -oE '"capacity":"[^"]*"' | sed 's/.*://; s/"//g' | paste -sd', ' -)"
+printf "  %-14s %s\n" "Battery"  "${BAT_HEALTH:-n/a}"
+printf "  %-14s %s\n" "TPM/Boot" "${TPM_VER:-none} / ${BOOT_MODE} ${SECURE_BOOT:+(SecureBoot $SECURE_BOOT)}"
+echo
+
+if [ "${AUDIT_DEBUG:-0}" = "1" ]; then
+  echo "--- captured JSON (debug; not uploaded) ---"
+  printf '%s\n' "$PROFILE"
+  exit 0
+fi
+
+# ================= login + target + upload =================
 [ -z "${AUDIT_EMAIL:-}" ] && read -rp "Login email: " AUDIT_EMAIL
 [ -z "${AUDIT_PASSWORD:-}" ] && { read -rsp "Password: " AUDIT_PASSWORD; echo; }
 
 echo "Signing in…"
 LOGIN=$(curl -sS -X POST "$API/auth/login" -H 'Content-Type: application/json' \
-  -d "{\"email\":\"$(jesc "$AUDIT_EMAIL")\",\"password\":\"$(jesc "$AUDIT_PASSWORD")\"}")
+  -d "{\"email\":\"$(esc "$AUDIT_EMAIL")\",\"password\":\"$(esc "$AUDIT_PASSWORD")\"}")
 TOKEN=$(jstr "$LOGIN" accessToken)
 [ -z "$TOKEN" ] && { echo "Sign-in failed — check audit.conf (email/password/URL)."; exit 1; }
 
-# --- which lot? (chosen in the web app) ---
 TARGET=$(curl -sS "$API/devices/audit-target" -H "Authorization: Bearer $TOKEN")
 LOT=$(jstr "$TARGET" batchNumber)
 if [ -z "$LOT" ]; then
@@ -99,59 +363,12 @@ if [ -z "$LOT" ]; then
   exit 1
 fi
 
-# --- read hardware ---
-dmi() { dmidecode -s "$1" 2>/dev/null | grep -v '^#' | head -n1 | sed 's/[[:space:]]*$//'; }
-MANUFACTURER=$(dmi system-manufacturer)
-MODEL=$(dmi system-product-name)
-SERIAL=$(dmi system-serial-number)
-CPU=$(lscpu 2>/dev/null | sed -n 's/^Model name:[[:space:]]*//p' | head -n1)
-[ -z "$CPU" ] && CPU=$(grep -m1 'model name' /proc/cpuinfo 2>/dev/null | cut -d: -f2 | sed 's/^ //')
-MEM_KB=$(grep MemTotal /proc/meminfo 2>/dev/null | awk '{print $2}')
-RAM_GB=0; [ -n "$MEM_KB" ] && RAM_GB=$(( (MEM_KB + 512 * 1024) / (1024 * 1024) ))
-STORAGE=""
-DEV=$(lsblk -dno NAME,TYPE 2>/dev/null | awk '$2=="disk"{print $1; exit}')
-if [ -n "$DEV" ]; then
-  DSIZE=$(lsblk -dnbo SIZE "/dev/$DEV" 2>/dev/null | awk '{printf "%.0f", $1/1000000000}')
-  DMODEL=$(lsblk -dno MODEL "/dev/$DEV" 2>/dev/null | sed 's/[[:space:]]*$//')
-  STORAGE="${DSIZE}GB${DMODEL:+ $DMODEL}"
-fi
-BATTERY=""
-for b in /sys/class/power_supply/BAT*; do
-  [ -e "$b" ] || continue
-  full=$(cat "$b/energy_full" 2>/dev/null || cat "$b/charge_full" 2>/dev/null)
-  design=$(cat "$b/energy_full_design" 2>/dev/null || cat "$b/charge_full_design" 2>/dev/null)
-  [ -n "$full" ] && [ -n "$design" ] && [ "$design" -gt 0 ] 2>/dev/null && BATTERY="$(( full * 100 / design ))%"
-  break
-done
-CATEGORY="Desktop"; [ -n "$BATTERY" ] && CATEGORY="Laptop"
-
-echo
-echo "Detected on this machine:"
-printf "  %-14s %s\n" "Manufacturer" "${MANUFACTURER:-?}"
-printf "  %-14s %s\n" "Model"        "${MODEL:-?}"
-printf "  %-14s %s\n" "Serial"       "${SERIAL:-?}"
-printf "  %-14s %s\n" "CPU"          "${CPU:-?}"
-printf "  %-14s %s\n" "RAM"          "${RAM_GB} GB"
-printf "  %-14s %s\n" "Storage"      "${STORAGE:-?}"
-printf "  %-14s %s\n" "Battery"      "${BATTERY:-n/a}"
-echo
 read -rp "Start audit into ${LOT}? [Y/n] " GO
 case "${GO:-Y}" in [nN]*) echo "Cancelled."; exit 0 ;; esac
 
-# --- build payload (no jq) ---
-P="{\"category\":\"$(jesc "$CATEGORY")\""
-add() { [ -n "$2" ] && P="$P,\"$1\":\"$(jesc "$2")\""; }
-add manufacturer "$MANUFACTURER"
-add model "$MODEL"
-add serialNumber "$SERIAL"
-add cpu "$CPU"
-add storageCapacity "$STORAGE"
-add batteryHealth "$BATTERY"
-[ "$RAM_GB" -gt 0 ] 2>/dev/null && P="$P,\"ramGb\":$RAM_GB"
-P="$P}"
-
 RESP=$(curl -sS -X POST "$API/devices/hardware-audit" \
-  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d "$P")
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d "{\"profile\":$PROFILE}")
 
 if [ -n "$(jstr "$RESP" assetId)" ]; then
   VERB=$([ "$(jraw "$RESP" created)" = "true" ] && echo "added to" || echo "re-audited in")

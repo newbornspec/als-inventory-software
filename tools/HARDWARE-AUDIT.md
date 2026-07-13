@@ -86,11 +86,29 @@ run above so they can eyeball the specs before uploading.
 
 ## What it fills vs. what you finish
 
+The tool captures a **full hardware profile** and stores it verbatim (extensible —
+new fields need no software change). Warehouse/manual fields are kept separate and
+are **never overwritten** by an audit.
+
 | Filled automatically by the tool | You finish on the device's page |
 |---|---|
-| Manufacturer, model, serial, category | Cosmetic grade (A/B/C/D/scrap) |
-| CPU, RAM, storage | Functional tests (keyboard, ports, webcam, Wi-Fi…) |
-| Battery health % | Data-wipe status + method, disposition |
+| Manufacturer, family, model, device type, serial, **Dell express code**, BIOS UUID | Cosmetic grade (A/B/C/D/scrap) |
+| BIOS version/date, UEFI/Legacy, Secure Boot, TPM | Functional tests (keyboard, ports, webcam, Wi-Fi…) |
+| CPU model/cores/threads/clock, RAM size/type/speed/slots | Data-wipe status + method, disposition |
+| Per-drive model/capacity/type/interface/**SMART**/serial | Grade, cost, location, notes, resale value |
+| Graphics, battery (design/full/cycle/health), network + MAC | |
+
+Some fields depend on the machine and boot: **OS/build** (usually none — units are
+wiped), **BitLocker / BIOS-password state**, and **display EDID** may come back blank.
+That's expected — the profile simply omits what it can't read.
+
+### Check a machine without uploading
+
+To see exactly what a device reports (handy for a new model), run:
+```bash
+AUDIT_DEBUG=1 bash /run/archiso/bootmnt/hardware-audit.sh
+```
+It prints the captured JSON and exits — no Wi-Fi, no login, no upload.
 
 ## Troubleshooting
 
