@@ -25,9 +25,10 @@ export class AssetsService {
       .orderBy('asset.updatedAt', 'DESC');
 
     if (query.search) {
-      qb.andWhere('(asset.tag ILIKE :search OR asset.name ILIKE :search)', {
-        search: `%${query.search}%`,
-      });
+      qb.andWhere(
+        '(asset.tag ILIKE :search OR asset.name ILIKE :search OR asset.serialNumber ILIKE :search OR asset.expressServiceCode ILIKE :search)',
+        { search: `%${query.search}%` },
+      );
     }
     if (query.category) {
       qb.andWhere('asset.category = :category', { category: query.category });

@@ -12,6 +12,7 @@ import { AssetEditForm } from './edit-form';
 import { AuditSection, type AssetAuditRecord } from './audit-section';
 import { RepairsSection } from './repairs-section';
 import { PhotosSection } from './photos-section';
+import { HardwareSection } from './hardware-section';
 
 interface AssetHistoryEntry {
   id: string;
@@ -92,6 +93,9 @@ export default async function AssetDetailPage({
             <h1 className="text-2xl font-semibold">{asset.name}</h1>
             <p className="mt-1 text-sm text-neutral-400">
               Tag: <span className="text-neutral-200">{asset.tag}</span> · {asset.category}
+              {asset.serialNumber && asset.serialNumber !== asset.tag && (
+                <> · S/N: <span className="text-neutral-200">{asset.serialNumber}</span></>
+              )}
               {asset.batchId && (
                 <>
                   {' · '}
@@ -142,6 +146,8 @@ export default async function AssetDetailPage({
           </section>
 
           <AuditSection assetId={asset.id} audits={audits} />
+
+          <HardwareSection profile={asset.hardwareProfile} />
 
           <div className="md:col-span-2">
             <RepairsSection assetId={asset.id} repairs={repairs} canManage={canEdit} />
