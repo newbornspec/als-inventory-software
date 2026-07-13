@@ -56,12 +56,18 @@ export function LotAssets({
               aria-label={`Sub-lot for ${a.name}`}
             >
               <option value="">— No sub-lot —</option>
-              {subLots.map((l) => (
-                <option key={l.id} value={l.id}>
-                  {l.lotNumber}
-                  {l.description ? ` · ${l.description}` : ''}
-                </option>
-              ))}
+              {subLots.map((l) => {
+                const spec =
+                  [l.manufacturer, l.model, l.cpu, l.ramGb ? `${l.ramGb}GB` : null, l.storage]
+                    .filter(Boolean)
+                    .join(' · ') || l.description;
+                return (
+                  <option key={l.id} value={l.id}>
+                    {l.lotNumber}
+                    {spec ? ` · ${spec}` : ''}
+                  </option>
+                );
+              })}
             </select>
           )}
         </li>

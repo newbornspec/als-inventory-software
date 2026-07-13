@@ -32,6 +32,12 @@ export interface Lot {
   lotNumber: string;
   batchId: string | null;
   description: string | null;
+  manufacturer: string | null;
+  model: string | null;
+  cpu: string | null;
+  ramGb: number | null;
+  storage: string | null;
+  screenSize: string | null;
   expectedUnitCount: number | null;
   status: string;
   notes: string | null;
@@ -129,6 +135,12 @@ export async function createLot(
   const dto = {
     batchId,
     description: emptyToUndefined(formData.get('description')),
+    manufacturer: emptyToUndefined(formData.get('manufacturer')),
+    model: emptyToUndefined(formData.get('model')),
+    cpu: emptyToUndefined(formData.get('cpu')),
+    ramGb: toIntOrUndefined(formData.get('ramGb')),
+    storage: emptyToUndefined(formData.get('storage')),
+    screenSize: emptyToUndefined(formData.get('screenSize')),
     expectedUnitCount: toIntOrUndefined(formData.get('expectedUnitCount')),
     notes: emptyToUndefined(formData.get('notes')),
   };

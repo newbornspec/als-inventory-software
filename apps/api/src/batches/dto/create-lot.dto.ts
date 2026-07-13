@@ -5,6 +5,14 @@ export class CreateLotDto {
   @IsOptional() @IsUUID() batchId?: string;
   @IsOptional() @IsString() description?: string;
 
+  // Declared spec for this sub-lot (the spec bucket's identity).
+  @IsOptional() @IsString() manufacturer?: string;
+  @IsOptional() @IsString() model?: string;
+  @IsOptional() @IsString() cpu?: string;
+  @IsOptional() @IsInt() @Min(0) ramGb?: number;
+  @IsOptional() @IsString() storage?: string;
+  @IsOptional() @IsString() screenSize?: string;
+
   @IsOptional()
   @IsInt()
   @Min(0)

@@ -270,6 +270,17 @@ export default async function BatchDetailPage({ params }: { params: Promise<{ id
                   lot.expectedUnitCount && lot.expectedUnitCount > 0
                     ? Math.min(100, Math.round((lot.actualUnitCount / lot.expectedUnitCount) * 100))
                     : null;
+                const spec = [
+                  lot.manufacturer,
+                  lot.model,
+                  lot.cpu,
+                  lot.ramGb ? `${lot.ramGb}GB` : null,
+                  lot.storage,
+                  lot.screenSize,
+                ]
+                  .filter(Boolean)
+                  .join(' · ');
+                const specLabel = spec || lot.description;
                 return (
                   <li key={lot.id} className="rounded-md border border-neutral-800 p-3 text-sm">
                     <div className="flex items-center justify-between gap-2">
@@ -278,8 +289,8 @@ export default async function BatchDetailPage({ params }: { params: Promise<{ id
                         {formatLabel(lot.status)}
                       </span>
                     </div>
-                    {lot.description && (
-                      <div className="mt-0.5 text-neutral-400">{lot.description}</div>
+                    {specLabel && (
+                      <div className="mt-0.5 text-neutral-400">{specLabel}</div>
                     )}
                     <div className="mt-2 flex items-baseline justify-between text-xs text-neutral-500">
                       <span>
