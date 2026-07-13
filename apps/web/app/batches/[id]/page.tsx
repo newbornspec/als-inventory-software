@@ -254,7 +254,7 @@ export default async function BatchDetailPage({ params }: { params: Promise<{ id
               batchId={batch.id}
               canManage={canManage}
             />
-            {canManage && <AddAssetForm batchId={batch.id} />}
+            {canManage && <AddAssetForm batchId={batch.id} subLots={lots} />}
           </section>
 
           <section>

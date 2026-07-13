@@ -118,7 +118,13 @@ export async function addManualAsset(
   try {
     await apiFetch('/devices/hardware-audit', {
       method: 'POST',
-      body: JSON.stringify({ lotId: batchId, manual: true, notes: s('notes'), profile }),
+      body: JSON.stringify({
+        lotId: batchId,
+        subLotId: s('subLotId'), // optional sub-lot chosen in the form
+        manual: true,
+        notes: s('notes'),
+        profile,
+      }),
     });
   } catch (err) {
     return { error: err instanceof ApiError ? err.message : 'Failed to add asset.' };

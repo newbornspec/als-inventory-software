@@ -8,7 +8,8 @@ import type { HardwareProfile } from '../hardware-profile.type';
 // the flat fields below remain for backward compatibility with the simple path
 // and are used only as fallbacks when the profile omits them.
 export class IngestAuditDto {
-  @IsOptional() @IsUUID() lotId?: string; // else the operator's active lot
+  @IsOptional() @IsUUID() lotId?: string; // parent purchase lot; else the operator's active lot
+  @IsOptional() @IsUUID() subLotId?: string; // optional sub-lot (spec bucket) within that lot
 
   // Comprehensive hardware profile — stored verbatim as JSONB. Loosely validated
   // on purpose: the tool may add fields over time without a backend change.

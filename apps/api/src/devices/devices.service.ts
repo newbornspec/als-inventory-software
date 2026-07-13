@@ -85,6 +85,8 @@ export class DevicesService {
         // cast: QueryDeepPartialEntity rejects the profile's open index signature.
         hardwareProfile: profile as any,
         ...(asset.batchId !== lotId ? { batchId: lotId } : {}),
+        // Only touch the sub-lot when one was supplied (the USB tool never sends it).
+        ...(dto.subLotId !== undefined ? { lotId: dto.subLotId } : {}),
       });
     } else {
       asset = await this.assets.save(
@@ -97,6 +99,7 @@ export class DevicesService {
           expressServiceCode: expressCode,
           hardwareProfile: profile,
           batchId: lotId,
+          lotId: dto.subLotId ?? null, // optional sub-lot (spec bucket)
           stockStatus: AssetStockStatus.AUDITED,
         }),
       );
