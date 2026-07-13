@@ -47,11 +47,15 @@ export class BatchesService {
   // then the full list of devices scanned into it (with allocated cost).
   async generateReport(id: string): Promise<{ buffer: Buffer; filename: string }> {
     const batch = await this.findOne(id);
-    const assets = await this.assets.find({
-      where: { batchId: id },
-      relations: ['location'],
-      order: { tag: 'ASC' },
-    });
+    // Load hardwareProfile too (select:false by default) so the report can carry
+    // the full spec of each audited device, not just its identifiers.
+    const assets = await this.assets
+      .createQueryBuilder('asset')
+      .leftJoinAndSelect('asset.location', 'location')
+      .addSelect('asset.hardwareProfile')
+      .where('asset.batchId = :id', { id })
+      .orderBy('asset.tag', 'ASC')
+      .getMany();
     const evenSplit =
       batch.totalCost != null && assets.length > 0 ? batch.totalCost / assets.length : null;
     const missing =
@@ -62,18 +66,30 @@ export class BatchesService {
     const wb = new ExcelJS.Workbook();
     wb.creator = 'ALS Trade Wholesales';
     const ws = wb.addWorksheet('Lot Report');
-    ws.columns = [
-      { width: 22 },
-      { width: 30 },
-      { width: 16 },
-      { width: 16 },
-      { width: 12 },
-      { width: 18 },
-      { width: 14 },
+    const headers = [
+      'Manufacturer',
+      'Model',
+      'Device type',
+      'Serial number',
+      'Service tag',
+      'Tag',
+      'Grade',
+      'Audit status',
+      'CPU',
+      'RAM',
+      'Storage',
+      'Graphics',
+      'Display',
+      'Operating system',
+      'Battery health',
+      'Unit cost (£)',
     ];
+    const widths = [16, 22, 12, 18, 14, 16, 10, 16, 30, 20, 26, 22, 18, 18, 14, 13];
+    ws.columns = widths.map((w) => ({ width: w }));
+    const lastCol = ws.getColumn(headers.length).letter;
 
     const title = (row: number, text: string, size: number) => {
-      ws.mergeCells(`A${row}:G${row}`);
+      ws.mergeCells(`A${row}:${lastCol}${row}`);
       const cell = ws.getCell(`A${row}`);
       cell.value = text;
       cell.font = { size, bold: true };
@@ -109,7 +125,7 @@ export class BatchesService {
 
     const headerRowIndex = r + 1;
     const headerRow = ws.getRow(headerRowIndex);
-    headerRow.values = ['Tag', 'Name', 'Category', 'Stock status', 'Grade', 'Audit status', 'Unit cost (£)'];
+    headerRow.values = headers;
     headerRow.font = { bold: true };
     headerRow.eachCell((cell) => {
       cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEFEFEF' } };
@@ -121,13 +137,56 @@ export class BatchesService {
     for (const a of assets) {
       const cost = a.purchaseCost ?? evenSplit;
       if (cost != null) costTotal += cost;
+
+      // Compose readable spec strings from the captured hardware profile; each
+      // falls back to '' so a device with no profile just leaves cells blank.
+      const hp = a.hardwareProfile;
+      const ident = hp?.identification;
+      const cpu = hp?.cpu;
+      const mem = hp?.memory;
+      const cpuStr = cpu
+        ? [
+            cpu.model,
+            cpu.cores || cpu.threads ? `(${cpu.cores ?? '?'}C/${cpu.threads ?? '?'}T)` : '',
+          ]
+            .filter(Boolean)
+            .join(' ')
+        : '';
+      const ramStr = mem
+        ? [mem.totalGb ? `${mem.totalGb} GB` : '', mem.type, mem.speed].filter(Boolean).join(' ')
+        : '';
+      const storageStr = hp?.storage?.length
+        ? hp.storage
+            .map((d) => [d.capacity, d.type].filter(Boolean).join(' '))
+            .filter(Boolean)
+            .join(', ')
+        : '';
+      const gfxStr = hp?.graphics?.length
+        ? hp.graphics
+            .map((g) => g.model)
+            .filter(Boolean)
+            .join(', ')
+        : '';
+      const displayStr = hp?.display
+        ? [hp.display.size, hp.display.resolution].filter(Boolean).join(' ')
+        : '';
+
       ws.getRow(dataRow).values = [
+        ident?.manufacturer ?? a.name ?? '',
+        ident?.model ?? '',
+        a.deviceType ?? ident?.deviceType ?? a.category ?? '',
+        a.serialNumber ?? ident?.serialNumber ?? '',
+        ident?.serviceTag ?? '',
         a.tag,
-        a.name,
-        a.category,
-        prettyLabel(a.stockStatus),
         prettyLabel(a.conditionGrade),
         prettyLabel(a.auditStatus),
+        cpuStr,
+        ramStr,
+        storageStr,
+        gfxStr,
+        displayStr,
+        hp?.system?.os ?? '',
+        hp?.battery?.health ?? '',
         cost != null ? cost : '',
       ];
       dataRow += 1;
@@ -136,7 +195,7 @@ export class BatchesService {
     const totalRow = ws.getRow(dataRow + 1);
     totalRow.getCell(1).value = 'Total';
     totalRow.getCell(2).value = `${assets.length} devices`;
-    totalRow.getCell(7).value = costTotal > 0 ? costTotal : '';
+    totalRow.getCell(headers.length).value = costTotal > 0 ? costTotal : '';
     totalRow.font = { bold: true };
 
     const buffer = Buffer.from(await wb.xlsx.writeBuffer());
