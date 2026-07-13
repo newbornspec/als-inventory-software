@@ -247,9 +247,8 @@ export default async function BatchDetailPage({ params }: { params: Promise<{ id
               {assets.map((a) => (
                 <li key={a.id}>
                   <Link href={`/assets/${a.id}`} className="text-sm text-neutral-200 underline">
-                    {a.tag}
+                    {a.name}
                   </Link>
-                  <span className="ml-2 text-xs text-neutral-500">{a.name}</span>
                 </li>
               ))}
               {assets.length === 0 && (

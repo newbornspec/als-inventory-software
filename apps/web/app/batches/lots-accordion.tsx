@@ -168,7 +168,6 @@ export function LotsAccordion({
                     <table className="w-full text-left text-xs">
                       <thead className="text-neutral-500">
                         <tr>
-                          <th className="px-3 py-2">Tag</th>
                           <th className="px-3 py-2">Name</th>
                           <th className="px-3 py-2">Category</th>
                           <th className="px-3 py-2">Status</th>
@@ -180,10 +179,9 @@ export function LotsAccordion({
                           <tr key={a.id} className="border-t border-neutral-800">
                             <td className="px-3 py-2">
                               <Link href={`/assets/${a.id}`} className="text-neutral-200 underline">
-                                {a.tag}
+                                {a.name}
                               </Link>
                             </td>
-                            <td className="px-3 py-2 text-neutral-300">{a.name}</td>
                             <td className="px-3 py-2 text-neutral-500">{a.category}</td>
                             <td className="px-3 py-2 text-neutral-500">
                               {formatLabel(a.stockStatus)}

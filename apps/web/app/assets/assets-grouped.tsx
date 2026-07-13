@@ -15,7 +15,6 @@ function AssetRows({ assets }: { assets: Asset[] }) {
     <table className="w-full text-left text-sm">
       <thead className="bg-neutral-900 text-neutral-400">
         <tr>
-          <th className="px-4 py-2">Tag</th>
           <th className="px-4 py-2">Name</th>
           <th className="px-4 py-2">Category</th>
           <th className="px-4 py-2">Stock Status</th>
@@ -29,10 +28,9 @@ function AssetRows({ assets }: { assets: Asset[] }) {
           <tr key={a.id} className="border-t border-neutral-800 hover:bg-neutral-900">
             <td className="px-4 py-2">
               <Link href={`/assets/${a.id}`} className="text-neutral-100 underline">
-                {a.tag}
+                {a.name}
               </Link>
             </td>
-            <td className="px-4 py-2">{a.name}</td>
             <td className="px-4 py-2 text-neutral-400">{a.category}</td>
             <td className="px-4 py-2">
               <span className="rounded-full border border-neutral-700 px-2 py-0.5 text-xs">

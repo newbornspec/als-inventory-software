@@ -136,7 +136,6 @@ export default async function AssetsPage({
             <table className="w-full text-left text-sm">
               <thead className="bg-neutral-900 text-neutral-400">
                 <tr>
-                  <th className="px-4 py-3">Tag</th>
                   <th className="px-4 py-3">Name</th>
                   <th className="px-4 py-3">Category</th>
                   <th className="px-4 py-3">Stock Status</th>
@@ -150,10 +149,9 @@ export default async function AssetsPage({
                   <tr key={asset.id} className="border-t border-neutral-800 hover:bg-neutral-900">
                     <td className="px-4 py-3">
                       <Link href={`/assets/${asset.id}`} className="text-neutral-100 underline">
-                        {asset.tag}
+                        {asset.name}
                       </Link>
                     </td>
-                    <td className="px-4 py-3">{asset.name}</td>
                     <td className="px-4 py-3 text-neutral-400">{asset.category}</td>
                     <td className="px-4 py-3">
                       <span className="rounded-full border border-neutral-700 px-2 py-0.5 text-xs">
@@ -171,7 +169,7 @@ export default async function AssetsPage({
                 ))}
                 {flat.length === 0 && (
                   <tr>
-                    <td colSpan={7} className="px-4 py-8 text-center text-neutral-500">
+                    <td colSpan={6} className="px-4 py-8 text-center text-neutral-500">
                       No assets match this search.
                     </td>
                   </tr>
