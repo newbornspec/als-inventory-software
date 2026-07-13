@@ -82,6 +82,53 @@ export async function updateAsset(
   return { error: null };
 }
 
+// Manually add a device into a lot. Routes through the SAME endpoint the capture
+// tool uses (/devices/hardware-audit with an explicit lotId), so a hand-entered
+// device is identical to an audited one: it lands in the lot, gets a hardware
+// profile + audit record, and shows in lists, search, reports and totals.
+export async function addManualAsset(
+  batchId: string,
+  _prev: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const s = (k: string) => {
+    const v = String(formData.get(k) ?? '').trim();
+    return v === '' ? undefined : v;
+  };
+  const ramRaw = String(formData.get('ramGb') ?? '').trim();
+  const ramGb = ramRaw === '' ? undefined : parseInt(ramRaw, 10);
+
+  if (!s('manufacturer') && !s('model') && !s('serialNumber')) {
+    return { error: 'Enter at least a manufacturer, model, or serial number.' };
+  }
+
+  const ident: Record<string, string> = {};
+  for (const k of ['manufacturer', 'model', 'deviceType', 'serialNumber'] as const) {
+    const v = s(k);
+    if (v) ident[k] = v;
+  }
+  const profile: Record<string, unknown> = {};
+  if (Object.keys(ident).length) profile.identification = ident;
+  if (s('cpu')) profile.cpu = { model: s('cpu') };
+  if (ramGb != null && !Number.isNaN(ramGb)) profile.memory = { totalGb: ramGb };
+  if (s('storage')) profile.storage = [{ capacity: s('storage') }];
+  if (s('screenSize')) profile.display = { size: s('screenSize') };
+  if (s('batteryHealth')) profile.battery = { health: s('batteryHealth') };
+
+  try {
+    await apiFetch('/devices/hardware-audit', {
+      method: 'POST',
+      body: JSON.stringify({ lotId: batchId, manual: true, notes: s('notes'), profile }),
+    });
+  } catch (err) {
+    return { error: err instanceof ApiError ? err.message : 'Failed to add asset.' };
+  }
+
+  revalidatePath(`/batches/${batchId}`);
+  revalidatePath('/assets');
+  return { error: null };
+}
+
 export async function deleteAsset(id: string): Promise<void> {
   try {
     await apiFetch(`/assets/${id}`, { method: 'DELETE' });

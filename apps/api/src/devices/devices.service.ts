@@ -134,7 +134,9 @@ export class DevicesService {
         assetId: asset.id,
         eventType: AssetEventType.AUDITED,
         userId,
-        notes: `Hardware audit captured into ${batch.batchNumber}`,
+        notes: dto.manual
+          ? `Manually added to ${batch.batchNumber}`
+          : `Hardware audit captured into ${batch.batchNumber}`,
       }),
     );
 

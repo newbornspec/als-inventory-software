@@ -11,6 +11,7 @@ import { BatchStatusSelect } from './status-select';
 import { ImportExpected } from './import-expected';
 import { LotCost } from './lot-cost';
 import { LotAssets } from './lot-assets';
+import { AddAssetForm } from './add-asset-form';
 
 // 404 (deleted lot) -> Next's not-found page instead of a server-side crash.
 async function loadBatch(
@@ -253,6 +254,7 @@ export default async function BatchDetailPage({ params }: { params: Promise<{ id
               batchId={batch.id}
               canManage={canManage}
             />
+            {canManage && <AddAssetForm batchId={batch.id} />}
           </section>
 
           <section>

@@ -28,4 +28,8 @@ export class IngestAuditDto {
   @IsOptional() @IsBoolean() biosLocked?: boolean;
   @IsOptional() @IsBoolean() chargerIncluded?: boolean;
   @IsOptional() @IsString() notes?: string;
+
+  // True when a human entered this via the "Add asset" form rather than the
+  // capture tool — only affects the history-note wording (provenance).
+  @IsOptional() @IsBoolean() manual?: boolean;
 }
