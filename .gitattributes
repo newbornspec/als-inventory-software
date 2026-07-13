@@ -1,0 +1,3 @@
+# Shell scripts must keep LF endings or they break on Linux (bad interpreter ^M).
+# The hardware-audit tool is copied straight to a Linux live USB and run there.
+*.sh text eol=lf
