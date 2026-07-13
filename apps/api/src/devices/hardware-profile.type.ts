@@ -8,8 +8,9 @@
 export interface HardwareProfile {
   identification?: {
     manufacturer?: string;
+    model?: string; // friendly marketing name, e.g. "ThinkPad T440" / "Latitude 5420"
+    productName?: string; // raw SMBIOS product name / machine-type code
     productFamily?: string;
-    model?: string;
     deviceType?: string; // Laptop | Desktop | Workstation | Server | Monitor
     serialNumber?: string;
     serviceTag?: string;

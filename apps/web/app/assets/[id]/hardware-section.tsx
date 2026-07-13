@@ -41,6 +41,7 @@ const KEY_LABELS: Record<string, string> = {
   os: 'OS',
   osVersion: 'OS version',
   osBuild: 'OS build',
+  productName: 'Product name',
   productFamily: 'Product family',
   deviceType: 'Device type',
   maxClock: 'Max clock',

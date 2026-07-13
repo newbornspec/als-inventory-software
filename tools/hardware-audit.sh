@@ -116,13 +116,21 @@ express_code() {
   printf '%s' "$n"
 }
 
-# --- identification ---
+# --- identification (from SMBIOS/DMI — the computer itself, never attached devices) ---
 MFR=$(clean "$(dmi system-manufacturer)")
 FAMILY=$(clean "$(dmi system-family)")
-MODEL=$(clean "$(dmi system-product-name)")
+PRODUCT_NAME=$(clean "$(dmi system-product-name)")
+VERSION=$(clean "$(dmi system-version)")
 SERIAL=$(clean "$(dmi system-serial-number)")
 UUID=$(clean "$(dmi system-uuid)")
 ASSET_TAG=$(clean "$(dmi chassis-asset-tag)")
+# Friendly model name: Lenovo puts the marketing name ("ThinkPad T440") in
+# system-version and a type code in system-product-name; Dell/HP/most others put
+# the marketing name ("Latitude 5420") in system-product-name.
+case "$(printf '%s' "$MFR" | tr '[:upper:]' '[:lower:]')" in
+  *lenovo*) MODEL="${VERSION:-$PRODUCT_NAME}";;
+  *) MODEL="${PRODUCT_NAME:-$VERSION}";;
+esac
 CHASSIS=$(dmidecode --string chassis-type 2>/dev/null | head -n1)
 case "$(printf '%s' "$CHASSIS" | tr '[:upper:]' '[:lower:]')" in
   *notebook*|*laptop*|*portable*|*convertible*|*detachable*) DEVICE_TYPE="Laptop";;
@@ -185,30 +193,39 @@ case "$RAM_MAX_RAW" in
   *GB) RAM_MAX=$(printf '%s' "$RAM_MAX_RAW" | grep -oE '[0-9]+');;
 esac
 
-# --- storage (one element per fixed drive; skip the live USB) ---
+# --- storage (INTERNAL fixed drives only; ignore all external/removable media) ---
+# Pull KEY="value" from an lsblk -P line WITHOUT eval. eval would define shell
+# vars literally named MODEL/SERIAL and clobber the machine's identity read above
+# (lsblk's column names collide with ours) — that mis-identified the PC as its USB
+# boot stick. Distinct D_* names + manual parsing keep the two completely separate.
+pval() { printf ' %s' "$1" | grep -oE " $2=\"[^\"]*\"" | head -n1 | sed -e "s/^ $2=\"//" -e 's/"$//'; }
+
 STOR_ELEMS=""
 while IFS= read -r line; do
   [ -z "$line" ] && continue
-  NAME=""; TYPE=""; TRAN=""; RM=""; SIZE=""; MODEL=""; SERIAL_D=""; ROTA=""
-  eval "$line" 2>/dev/null
-  [ "$TYPE" = "disk" ] || continue
-  [ "$TRAN" = "usb" ] && continue
-  [ "$RM" = "1" ] && continue
-  CAP=""; [ -n "$SIZE" ] && CAP=$(awk -v b="$SIZE" 'BEGIN{ if(b+0>0) printf "%.0fGB", b/1000000000 }')
-  case "$NAME" in nvme*) DTYPE="NVMe"; IFACE_D="NVMe";; esac
+  D_NAME=$(pval "$line" NAME); D_TYPE=$(pval "$line" TYPE); D_TRAN=$(pval "$line" TRAN)
+  D_RM=$(pval "$line" RM); D_SIZE=$(pval "$line" SIZE); D_MODEL=$(pval "$line" MODEL)
+  D_SERIAL=$(pval "$line" SERIAL); D_ROTA=$(pval "$line" ROTA)
+  [ "$D_TYPE" = "disk" ] || continue
+  # Exclude USB sticks, external HDD/SSD, SD cards and the live boot medium.
+  [ "$D_TRAN" = "usb" ] && continue
+  [ "$D_RM" = "1" ] && continue
+  [ "$(cat "/sys/block/$D_NAME/removable" 2>/dev/null)" = "1" ] && continue
+  CAP=""; [ -n "$D_SIZE" ] && CAP=$(awk -v b="$D_SIZE" 'BEGIN{ if(b+0>0) printf "%.0fGB", b/1000000000 }')
+  DTYPE=""; IFACE_D=""
+  case "$D_NAME" in nvme*) DTYPE="NVMe"; IFACE_D="NVMe";; esac
   if [ -z "$DTYPE" ]; then
-    [ "$ROTA" = "1" ] && DTYPE="HDD" || DTYPE="SSD"
-    case "$TRAN" in sata) IFACE_D="SATA";; ata) IFACE_D="SATA";; *) IFACE_D="$TRAN";; esac
+    [ "$D_ROTA" = "1" ] && DTYPE="HDD" || DTYPE="SSD"
+    case "$D_TRAN" in sata|ata) IFACE_D="SATA";; *) IFACE_D="$D_TRAN";; esac
   fi
   SMART=""
   if command -v smartctl >/dev/null 2>&1; then
-    SMART=$(smartctl -H "/dev/$NAME" 2>/dev/null | sed -n 's/.*self-assessment test result:[[:space:]]*//p; s/.*SMART Health Status:[[:space:]]*//p' | head -n1 | tr -d ' ')
+    SMART=$(smartctl -H "/dev/$D_NAME" 2>/dev/null | sed -n 's/.*self-assessment test result:[[:space:]]*//p; s/.*SMART Health Status:[[:space:]]*//p' | head -n1 | tr -d ' ')
   fi
   o_begin
-  o_s model "$MODEL"; o_s capacity "$CAP"; o_s type "$DTYPE"
-  o_s interface "$IFACE_D"; o_s smartStatus "$SMART"; o_s serialNumber "$SERIAL_D"
+  o_s model "$D_MODEL"; o_s capacity "$CAP"; o_s type "$DTYPE"
+  o_s interface "$IFACE_D"; o_s smartStatus "$SMART"; o_s serialNumber "$D_SERIAL"
   STOR_ELEMS="$STOR_ELEMS,$(o_end)"
-  DTYPE=""; IFACE_D=""
 done <<STOREOF
 $(lsblk -bdP -o NAME,TYPE,TRAN,RM,SIZE,MODEL,SERIAL,ROTA 2>/dev/null)
 STOREOF
@@ -274,8 +291,9 @@ done
 
 # ================= assemble the profile JSON =================
 o_begin
-o_s manufacturer "$MFR"; o_s productFamily "$FAMILY"; o_s model "$MODEL"
-o_s deviceType "$DEVICE_TYPE"; o_s serialNumber "$SERIAL"; o_s serviceTag "$SERIAL"
+o_s manufacturer "$MFR"; o_s model "$MODEL"; o_s productName "$PRODUCT_NAME"
+o_s productFamily "$FAMILY"; o_s deviceType "$DEVICE_TYPE"
+o_s serialNumber "$SERIAL"; o_s serviceTag "$SERIAL"
 o_s expressServiceCode "$EXPRESS"; o_s biosUuid "$UUID"; o_s assetTag "$ASSET_TAG"
 IDENT=$(o_end)
 
