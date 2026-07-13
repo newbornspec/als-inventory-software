@@ -60,7 +60,15 @@ export class AssetsService {
   }
 
   async findOne(id: string): Promise<Asset> {
-    const asset = await this.assets.findOne({ where: { id }, relations: ['location', 'owner'] });
+    // hardwareProfile is select:false (kept out of list views), so add it back
+    // explicitly here where the full device detail is wanted.
+    const asset = await this.assets
+      .createQueryBuilder('asset')
+      .leftJoinAndSelect('asset.location', 'location')
+      .leftJoinAndSelect('asset.owner', 'owner')
+      .addSelect('asset.hardwareProfile')
+      .where('asset.id = :id', { id })
+      .getOne();
     if (!asset) throw new NotFoundException(`Asset ${id} not found`);
     // owner is a User relation — never return it with passwordHash intact.
     if (asset.owner) asset.owner = sanitizeUser(asset.owner) as Asset['owner'];

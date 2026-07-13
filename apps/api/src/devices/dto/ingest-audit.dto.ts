@@ -1,9 +1,20 @@
-import { IsBoolean, IsInt, IsOptional, IsString, IsUUID, Min } from 'class-validator';
+import { IsBoolean, IsInt, IsObject, IsOptional, IsString, IsUUID, Min } from 'class-validator';
+import type { HardwareProfile } from '../hardware-profile.type';
 
 // Auto-read specs from the capture tool. No asset tag / no verification — the
 // device is created (or re-audited) in the target lot using its serial.
+//
+// `profile` is the comprehensive, extensible capture (all hardware categories);
+// the flat fields below remain for backward compatibility with the simple path
+// and are used only as fallbacks when the profile omits them.
 export class IngestAuditDto {
   @IsOptional() @IsUUID() lotId?: string; // else the operator's active lot
+
+  // Comprehensive hardware profile — stored verbatim as JSONB. Loosely validated
+  // on purpose: the tool may add fields over time without a backend change.
+  @IsOptional() @IsObject() profile?: HardwareProfile;
+
+  // --- legacy flat fields (fallbacks) ---
   @IsOptional() @IsString() manufacturer?: string;
   @IsOptional() @IsString() model?: string;
   @IsOptional() @IsString() serialNumber?: string;

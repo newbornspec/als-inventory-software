@@ -13,6 +13,7 @@ import { Batch } from '../batches/batch.entity';
 import { Lot } from '../batches/lot.entity';
 import { Product } from '../products/product.entity';
 import { numericTransformer } from '../common/numeric.transformer';
+import { HardwareProfile } from '../devices/hardware-profile.type';
 
 // Warehouse/lifecycle pipeline — "where is this asset right now".
 export enum AssetStockStatus {
@@ -154,6 +155,24 @@ export class Asset {
     transformer: numericTransformer,
   })
   purchaseCost: number | null;
+
+  // --- Auto-captured hardware audit (Phase 4) ---
+  // The full, current hardware profile from the audit tool. JSONB so new capture
+  // fields need no migration; see devices/hardware-profile.type.ts. Kept strictly
+  // separate from the warehouse fields above — the audit never overwrites those.
+  // select:false so list views don't drag the blob; loaded explicitly on detail.
+  @Column({ name: 'hardware_profile', type: 'jsonb', nullable: true, select: false })
+  hardwareProfile: HardwareProfile | null;
+
+  // Promoted from the profile for fast search/filter across the device register.
+  @Column({ name: 'serial_number', type: 'varchar', nullable: true })
+  serialNumber: string | null;
+
+  @Column({ name: 'express_service_code', type: 'varchar', nullable: true })
+  expressServiceCode: string | null;
+
+  @Column({ name: 'device_type', type: 'varchar', nullable: true })
+  deviceType: string | null;
 
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;

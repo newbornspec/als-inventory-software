@@ -8,6 +8,7 @@ import {
 } from 'typeorm';
 import { Asset, AssetAuditStatus, AssetConditionGrade } from './asset.entity';
 import { User } from '../users/user.entity';
+import { HardwareProfile } from '../devices/hardware-profile.type';
 
 export enum DataWipeStatus {
   NOT_STARTED = 'not_started',
@@ -95,6 +96,11 @@ export class AssetAudit {
 
   @Column({ name: 'functional_tests', type: 'jsonb', nullable: true })
   functionalTests: FunctionalTestResults | null;
+
+  // Full auto-captured hardware profile snapshot for this audit event — the
+  // append-only compliance trail. See devices/hardware-profile.type.ts.
+  @Column({ name: 'hardware_profile', type: 'jsonb', nullable: true })
+  hardwareProfile: HardwareProfile | null;
 
   @Column({ name: 'bios_locked', type: 'boolean', nullable: true })
   biosLocked: boolean | null;
