@@ -6,3 +6,7 @@ dist/
 !.env.example
 *.log
 .turbo/
+
+# Hardware-audit tool config — contains login credentials, never commit
+audit.conf
+tools/audit.conf
