@@ -2,25 +2,34 @@
 #
 # ALS Inventory — Hardware Audit capture tool
 # --------------------------------------------
-# Run this ON the device you are auditing, from a booted Linux live environment
-# (e.g. an Ubuntu "Try Ubuntu" USB) that is connected to Wi-Fi or Ethernet.
-#
-# It reads this machine's real hardware (CPU / RAM / storage / serial / battery)
-# and files it as an audit against the matching device in Als Inventory — matched
-# by the asset tag you enter (the label on the device).
+# Boot the device off a Linux live USB, connect to Wi-Fi, and run this. It reads
+# the machine's hardware and files it as an audit INTO the lot you selected in
+# the web app ("Set audit target" on the Lots page). It does NOT verify anything
+# against a list — it simply creates/updates the device in that lot.
 #
 #   sudo bash hardware-audit.sh
 #
-# Cosmetic grade and functional test results stay a human judgement — record
-# those on the device's page in Als Inventory afterwards.
+# Preconfigure login once by putting an "audit.conf" next to this script:
+#   AUDIT_URL="https://als-inventory-software-production.up.railway.app"
+#   AUDIT_EMAIL="you@company.com"
+#   AUDIT_PASSWORD="your-password"
+# Then each run is just: confirm, and it uploads. (If audit.conf is missing it
+# will ask once.)
 
 API_DEFAULT="https://als-inventory-software-production.up.railway.app"
+
+# --- load preconfigured settings if present ---
+SELF_DIR=$(cd "$(dirname "$0")" 2>/dev/null && pwd)
+for conf in "$SELF_DIR/audit.conf" /cdrom/audit.conf ./audit.conf; do
+  [ -f "$conf" ] && . "$conf" && break
+done
+API="${AUDIT_URL:-$API_DEFAULT}"
 
 echo "=================================================="
 echo "  ALS Inventory — Hardware Audit"
 echo "=================================================="
 
-# --- ensure the tools we need are present (needs network) ---
+# --- tools ---
 missing=""
 for c in curl jq dmidecode lsblk; do
   command -v "$c" >/dev/null 2>&1 || missing="$missing $c"
@@ -31,8 +40,28 @@ if [ -n "$missing" ]; then
   sudo apt-get install -y -qq curl jq dmidecode util-linux smartmontools >/dev/null 2>&1
 fi
 
-dmi() { sudo dmidecode -s "$1" 2>/dev/null | grep -v '^#' | head -n1 | sed 's/[[:space:]]*$//'; }
+# --- login (from config, or prompt once) ---
+if [ -z "${AUDIT_EMAIL:-}" ]; then read -rp "Login email: " AUDIT_EMAIL; fi
+if [ -z "${AUDIT_PASSWORD:-}" ]; then read -rsp "Password: " AUDIT_PASSWORD; echo; fi
 
+echo "Signing in…"
+TOKEN=$(curl -sS -X POST "$API/auth/login" -H 'Content-Type: application/json' \
+  -d "$(jq -n --arg e "$AUDIT_EMAIL" --arg p "$AUDIT_PASSWORD" '{email:$e,password:$p}')" \
+  | jq -r '.accessToken // empty')
+if [ -z "$TOKEN" ]; then echo "Sign-in failed — check audit.conf (email/password/URL)."; exit 1; fi
+
+# --- which lot are we auditing into? (chosen in the web app) ---
+TARGET=$(curl -sS "$API/devices/audit-target" -H "Authorization: Bearer $TOKEN")
+LOT=$(echo "$TARGET" | jq -r '.batchNumber // empty')
+if [ -z "$LOT" ]; then
+  echo
+  echo "No audit lot selected. In Als Inventory → Lots → 'Set audit target' on the"
+  echo "lot you're working on, then re-run this tool."
+  exit 1
+fi
+
+# --- read hardware ---
+dmi() { sudo dmidecode -s "$1" 2>/dev/null | grep -v '^#' | head -n1 | sed 's/[[:space:]]*$//'; }
 MANUFACTURER=$(dmi system-manufacturer)
 MODEL=$(dmi system-product-name)
 SERIAL=$(dmi system-serial-number)
@@ -41,8 +70,7 @@ CPU=$(lscpu 2>/dev/null | sed -n 's/^Model name:[[:space:]]*//p' | head -n1)
 [ -z "$CPU" ] && CPU=$(grep -m1 'model name' /proc/cpuinfo 2>/dev/null | cut -d: -f2 | sed 's/^ //')
 
 MEM_KB=$(grep MemTotal /proc/meminfo 2>/dev/null | awk '{print $2}')
-RAM_GB=0
-[ -n "$MEM_KB" ] && RAM_GB=$(( (MEM_KB + 512 * 1024) / (1024 * 1024) ))
+RAM_GB=0; [ -n "$MEM_KB" ] && RAM_GB=$(( (MEM_KB + 512 * 1024) / (1024 * 1024) ))
 
 STORAGE=""
 DEV=$(lsblk -dno NAME,TYPE 2>/dev/null | awk '$2=="disk"{print $1; exit}')
@@ -62,6 +90,7 @@ for b in /sys/class/power_supply/BAT*; do
   fi
   break
 done
+CATEGORY="Desktop"; [ -n "$BATTERY" ] && CATEGORY="Laptop"
 
 echo
 echo "Detected on this machine:"
@@ -73,27 +102,13 @@ printf "  %-14s %s\n" "RAM"          "${RAM_GB} GB"
 printf "  %-14s %s\n" "Storage"      "${STORAGE:-?}"
 printf "  %-14s %s\n" "Battery"      "${BATTERY:-n/a}"
 echo
-
-read -rp "Asset tag (the label on this device): " TAG
-if [ -z "$TAG" ]; then echo "No tag entered — aborting."; exit 1; fi
-read -rp "Als Inventory URL [$API_DEFAULT]: " API
-API=${API:-$API_DEFAULT}
-read -rp "Your login email: " EMAIL
-read -rsp "Your password: " PASSWORD; echo
-
-echo "Signing in…"
-TOKEN=$(curl -sS -X POST "$API/auth/login" -H 'Content-Type: application/json' \
-  -d "$(jq -n --arg e "$EMAIL" --arg p "$PASSWORD" '{email:$e,password:$p}')" \
-  | jq -r '.accessToken // empty')
-if [ -z "$TOKEN" ]; then
-  echo "Sign-in failed — check the email, password and URL, then re-run."
-  exit 1
-fi
+read -rp "Start audit into ${LOT}? [Y/n] " GO
+case "${GO:-Y}" in [nN]*) echo "Cancelled."; exit 0 ;; esac
 
 PAYLOAD=$(jq -n \
-  --arg tag "$TAG" --arg man "$MANUFACTURER" --arg mod "$MODEL" --arg ser "$SERIAL" \
+  --arg man "$MANUFACTURER" --arg mod "$MODEL" --arg ser "$SERIAL" --arg cat "$CATEGORY" \
   --arg cpu "$CPU" --argjson ram "$RAM_GB" --arg sto "$STORAGE" --arg bat "$BATTERY" '
-  {tag: $tag}
+  {category: $cat}
   + (if $man != "" then {manufacturer: $man} else {} end)
   + (if $mod != "" then {model: $mod} else {} end)
   + (if $ser != "" then {serialNumber: $ser} else {} end)
@@ -102,15 +117,14 @@ PAYLOAD=$(jq -n \
   + (if $sto != "" then {storageCapacity: $sto} else {} end)
   + (if $bat != "" then {batteryHealth: $bat} else {} end)')
 
-RESP=$(curl -sS -X POST "$API/assets/hardware-audit" \
+RESP=$(curl -sS -X POST "$API/devices/hardware-audit" \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d "$PAYLOAD")
 
-if [ "$(echo "$RESP" | jq -r '.matched // false')" = "true" ]; then
+if echo "$RESP" | jq -e '.assetId' >/dev/null 2>&1; then
+  VERB=$([ "$(echo "$RESP" | jq -r '.created')" = "true" ] && echo "added to" || echo "re-audited in")
   echo
-  echo "✓ Hardware audit filed for device $(echo "$RESP" | jq -r '.tag')."
-  echo "  Finish grading and functional tests on its page in Als Inventory."
+  echo "✓ $(echo "$RESP" | jq -r '.name') ($(echo "$RESP" | jq -r '.tag')) $VERB $(echo "$RESP" | jq -r '.lot')."
 else
   echo
-  echo "✗ No device found with tag \"$TAG\"."
-  echo "  Create/receive it in Als Inventory first, then re-run this tool."
+  echo "✗ Upload failed: $(echo "$RESP" | jq -r '.message // .')"
 fi

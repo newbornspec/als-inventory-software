@@ -22,7 +22,6 @@ import { CreateAssetDto } from './dto/create-asset.dto';
 import { UpdateAssetDto } from './dto/update-asset.dto';
 import { QueryAssetsDto } from './dto/query-assets.dto';
 import { CreateAssetAuditDto } from './dto/create-asset-audit.dto';
-import { HardwareAuditDto } from './dto/hardware-audit.dto';
 
 @Controller('assets')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -47,14 +46,6 @@ export class AssetsController {
   @Get(':id/history')
   findHistory(@Param('id') id: string) {
     return this.assets.findHistory(id);
-  }
-
-  // Ingest endpoint for the bootable hardware-capture tool. Open to any
-  // authenticated role, like recording an audit — matches a device by tag/serial
-  // and files the auto-read specs as an audit.
-  @Post('hardware-audit')
-  hardwareAudit(@Body() dto: HardwareAuditDto, @Req() req: any) {
-    return this.assets.hardwareAudit(dto, req.user.userId);
   }
 
   @Get(':id/audits')

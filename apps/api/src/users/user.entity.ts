@@ -29,6 +29,11 @@ export class User {
   @Column({ type: 'enum', enum: UserRole, default: UserRole.TECHNICIAN })
   role: UserRole;
 
+  // The lot this user is currently auditing devices into (set from the web,
+  // read by the capture tool). No ORM relation — resolved by id where needed.
+  @Column({ name: 'active_audit_lot_id', type: 'uuid', nullable: true })
+  activeAuditLotId: string | null;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 

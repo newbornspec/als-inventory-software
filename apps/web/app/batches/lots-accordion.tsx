@@ -1,16 +1,32 @@
 'use client';
 
 import { useState } from 'react';
+import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import type { Batch } from '@/lib/actions/batches';
 import type { Asset } from '@/lib/actions/assets';
+import { setAuditLot } from '@/lib/actions/devices';
 import { formatLabel } from '@/lib/asset-options';
 
 type LotAssets = { loading: boolean; error: string | null; assets: Asset[] };
 
-export function LotsAccordion({ lots, canExport }: { lots: Batch[]; canExport: boolean }) {
+export function LotsAccordion({
+  lots,
+  canExport,
+  activeAuditLotId,
+}: {
+  lots: Batch[];
+  canExport: boolean;
+  activeAuditLotId: string | null;
+}) {
+  const router = useRouter();
   const [open, setOpen] = useState<Record<string, boolean>>({});
   const [cache, setCache] = useState<Record<string, LotAssets>>({});
+
+  async function makeAuditTarget(id: string) {
+    await setAuditLot(id);
+    router.refresh();
+  }
 
   async function toggle(id: string) {
     const willOpen = !open[id];
@@ -112,6 +128,18 @@ export function LotsAccordion({ lots, canExport }: { lots: Batch[]; canExport: b
                   tone={lot.quarantine > 0 ? 'amber' : undefined}
                 />
                 <div className="ml-auto flex items-center gap-3 self-center">
+                  {lot.id === activeAuditLotId ? (
+                    <span className="rounded-full border border-emerald-900 bg-emerald-950/40 px-2 py-0.5 text-xs text-emerald-300">
+                      ✓ Audit target
+                    </span>
+                  ) : (
+                    <button
+                      onClick={() => makeAuditTarget(lot.id)}
+                      className="text-neutral-400 underline"
+                    >
+                      Set audit target
+                    </button>
+                  )}
                   {canExport && (
                     <a
                       href={`/api/batches/${lot.id}/report`}

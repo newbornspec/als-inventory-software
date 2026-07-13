@@ -36,6 +36,7 @@ import { CustomersModule } from './customers/customers.module';
 import { SalesModule } from './sales/sales.module';
 import { RepairsModule } from './repairs/repairs.module';
 import { PhotosModule } from './photos/photos.module';
+import { DevicesModule } from './devices/devices.module';
 
 @Module({
   imports: [
@@ -69,6 +70,7 @@ import { PhotosModule } from './photos/photos.module';
     SalesModule,
     RepairsModule,
     PhotosModule,
+    DevicesModule,
   ],
   controllers: [AppController],
   providers: [AppService],
