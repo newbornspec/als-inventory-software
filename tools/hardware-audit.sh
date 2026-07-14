@@ -25,7 +25,11 @@ API_DEFAULT="https://als-inventory-software-production.up.railway.app"
 # --- load preconfigured settings ---
 SELF_DIR=$(cd "$(dirname "$0")" 2>/dev/null && pwd)
 for conf in "$SELF_DIR/audit.conf" /cdrom/audit.conf /run/archiso/bootmnt/audit.conf ./audit.conf; do
-  [ -f "$conf" ] && . "$conf" && break
+  [ -f "$conf" ] || continue
+  # Strip any Windows CRLF endings before sourcing — audit.conf is usually edited
+  # on Windows, and a stray carriage return would otherwise end up inside the
+  # Wi-Fi password / URL and break the run.
+  . <(sed 's/\r$//' "$conf") && break
 done
 API="${AUDIT_URL:-$API_DEFAULT}"
 
