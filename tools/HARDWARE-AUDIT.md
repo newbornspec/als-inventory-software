@@ -83,14 +83,42 @@ No network setup needed — the script connects to the Wi-Fi in `audit.conf` its
 Repeat per machine: shut down, move the USB to the next device, boot, run — choosing
 each machine's lot on the spot, no web round-trip.
 
-### Optional — run it fully automatically at boot (SystemRescue autorun)
+## Run it without typing the command
 
-SystemRescue can run a script the moment it boots, so the operator does nothing at all:
-name a copy of the script `autorun` in the USB root and boot with the `ar_nowait`
-option (Tab/`e` at the boot menu, append `ar_nowait=1`). The script connects Wi-Fi and
-audits with no typing. Keep the interactive confirm off for this mode by answering `Y`
-by default (it already defaults to Yes on Enter). Most operators prefer the one-command
-run above so they can eyeball the specs before uploading.
+You don't have to type `bash …/hardware-audit.sh`. Two ways, pick one:
+
+### A. Auto-run at boot (recommended — no typing at all)
+
+SystemRescue automatically executes a file named **`autorun`** found on the boot
+device. So the machine boots straight into the audit — connect Wi-Fi → read specs →
+show the lot menu — and the operator only picks the lot and confirms.
+
+1. Copy **all three** files to the **root of the USB stick**: `autorun`,
+   `hardware-audit.sh`, and `audit.conf`.
+2. Boot the machine off the USB. The `autorun` script runs on its own.
+   - By default SystemRescue pauses for a keypress when a script finishes. To skip
+     that pause, add the boot option **`ar_nowait`**: at the boot menu press `Tab`
+     (BIOS) or `e` (UEFI), append ` ar_nowait` to the kernel line, and boot. To make
+     it permanent, add `ar_nowait` to the default entry in the USB's bootloader
+     config (grub.cfg / syslinux.cfg).
+   - Reference: <https://www.system-rescue.org/manual/Run_your_own_scripts_with_autorun/>
+
+`autorun` is just a tiny wrapper that finds and runs `hardware-audit.sh` on the USB —
+so it stays in sync with the real script. (It must keep Linux LF line endings; the
+repo enforces that.)
+
+### B. Click-to-run icon (if you use the graphical desktop)
+
+If you start the desktop with `startx`, copy **`hardware-audit.desktop`** to the
+desktop (or `~/.local/share/applications/`) and mark it executable
+(`chmod +x hardware-audit.desktop`). Double-click **“Hardware Audit”** and it opens a
+terminal and runs — no command typed.
+
+### C. Fully baked custom image (advanced)
+
+For a fleet, you can rebuild a custom SystemRescue ISO with the script, `audit.conf`
+and `ar_nowait` compiled in, so a written USB just works. This is a lot more effort
+than option A for the same end result, so only do it at scale.
 
 ---
 

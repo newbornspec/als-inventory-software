@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# SystemRescue AUTORUN entry — runs the hardware audit automatically at boot.
+#
+# Put this file (named exactly "autorun", no extension) in the ROOT of the USB
+# stick, next to hardware-audit.sh and audit.conf. SystemRescue executes autorun
+# scripts it finds on the boot device, so the audit starts on its own — the
+# operator only picks the lot and confirms. No command to type.
+#
+# See: https://www.system-rescue.org/manual/Run_your_own_scripts_with_autorun/
+
+for d in /run/archiso/bootmnt /cdrom /mnt/usb "$(dirname "$0")"; do
+  if [ -f "$d/hardware-audit.sh" ]; then
+    exec bash "$d/hardware-audit.sh"
+  fi
+done
+
+echo "hardware-audit.sh was not found on the boot media."
+echo "Make sure autorun, hardware-audit.sh and audit.conf are all in the USB root."
+read -rp "Press Enter to continue…" _

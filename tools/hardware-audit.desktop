@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Hardware Audit
+Comment=Run the ALS Inventory hardware audit
+Exec=bash /run/archiso/bootmnt/hardware-audit.sh
+Terminal=true
+Icon=computer
+Categories=Utility;System;
