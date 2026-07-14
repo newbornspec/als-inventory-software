@@ -60,12 +60,20 @@ export default async function BatchDetailPage({ params }: { params: Promise<{ id
             </p>
           </div>
           {canManage && (
-            <a
-              href={`/api/batches/${batch.id}/report`}
-              className="shrink-0 rounded-md bg-neutral-100 px-3 py-1.5 text-sm font-medium text-neutral-900"
-            >
-              Export to Excel
-            </a>
+            <div className="flex shrink-0 gap-2">
+              <a
+                href={`/api/batches/${batch.id}/erasure-certificate`}
+                className="rounded-md border border-emerald-800 px-3 py-1.5 text-sm text-emerald-300 hover:bg-emerald-950/40"
+              >
+                Erasure certificate (PDF)
+              </a>
+              <a
+                href={`/api/batches/${batch.id}/report`}
+                className="rounded-md bg-neutral-100 px-3 py-1.5 text-sm font-medium text-neutral-900"
+              >
+                Export to Excel
+              </a>
+            </div>
           )}
         </div>
 

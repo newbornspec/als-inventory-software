@@ -10,9 +10,10 @@ import { LotsController } from './lots.controller';
 import { LotsService } from './lots.service';
 import { ExpectedLineItemsController } from './expected-line-items.controller';
 import { ExpectedLineItemsService } from './expected-line-items.service';
+import { AssetsModule } from '../assets/assets.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Batch, Lot, ExpectedLineItem, Asset])],
+  imports: [TypeOrmModule.forFeature([Batch, Lot, ExpectedLineItem, Asset]), AssetsModule],
   controllers: [BatchesController, LotsController, ExpectedLineItemsController],
   providers: [BatchesService, LotsService, ExpectedLineItemsService],
 })

@@ -17,11 +17,15 @@ import { UserRole } from '../users/user.entity';
 import { BatchesService } from './batches.service';
 import { CreateBatchDto } from './dto/create-batch.dto';
 import { UpdateBatchDto } from './dto/update-batch.dto';
+import { CertificatesService } from '../assets/certificates.service';
 
 @Controller('batches')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class BatchesController {
-  constructor(private batches: BatchesService) {}
+  constructor(
+    private batches: BatchesService,
+    private certificates: CertificatesService,
+  ) {}
 
   // Any role can view — technicians select an open batch to receive against
   // on the scan page, same reasoning as asset read access.
@@ -41,6 +45,16 @@ export class BatchesController {
     const { buffer, filename } = await this.batches.generateReport(id);
     return new StreamableFile(buffer, {
       type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      disposition: `attachment; filename="${filename}"`,
+    });
+  }
+
+  // Bulk Certificate of Data Erasure for every wiped device in the lot (PDF).
+  @Get(':id/erasure-certificate.pdf')
+  async erasureCertificate(@Param('id') id: string): Promise<StreamableFile> {
+    const { buffer, filename } = await this.certificates.lotErasureCertificate(id);
+    return new StreamableFile(buffer, {
+      type: 'application/pdf',
       disposition: `attachment; filename="${filename}"`,
     });
   }

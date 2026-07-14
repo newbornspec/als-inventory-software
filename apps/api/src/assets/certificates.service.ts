@@ -1,9 +1,10 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import PDFDocument from 'pdfkit';
 import { Asset } from './asset.entity';
 import { AssetAudit, DataWipeStatus } from './asset-audit.entity';
+import { Batch } from '../batches/batch.entity';
 
 // Issuer details for compliance documents. Overridable via env so the same
 // codebase can be white-labelled without a code change.
@@ -25,7 +26,63 @@ export class CertificatesService {
   constructor(
     @InjectRepository(Asset) private assets: Repository<Asset>,
     @InjectRepository(AssetAudit) private audits: Repository<AssetAudit>,
+    @InjectRepository(Batch) private batches: Repository<Batch>,
   ) {}
+
+  // One bundled certificate listing every device in a lot that has a completed
+  // wipe on record. Devices without a wipe are excluded; if none qualify it
+  // refuses, same as the per-device certificate.
+  async lotErasureCertificate(batchId: string): Promise<{ buffer: Buffer; filename: string }> {
+    const batch = await this.batches.findOne({ where: { id: batchId } });
+    if (!batch) throw new NotFoundException(`Lot ${batchId} not found`);
+
+    const assets = await this.assets
+      .createQueryBuilder('asset')
+      .addSelect('asset.hardwareProfile')
+      .where('asset.batchId = :id', { id: batchId })
+      .getMany();
+
+    const wipes = assets.length
+      ? await this.audits.find({
+          where: { assetId: In(assets.map((a) => a.id)), dataWipeStatus: DataWipeStatus.WIPED },
+          order: { createdAt: 'DESC' },
+        })
+      : [];
+    const latest = new Map<string, AssetAudit>();
+    for (const w of wipes) if (!latest.has(w.assetId)) latest.set(w.assetId, w);
+
+    const rows = assets
+      .filter((a) => latest.has(a.id))
+      .map((a) => {
+        const w = latest.get(a.id)!;
+        const hp = (a.hardwareProfile ?? {}) as Record<string, any>;
+        const ident = (hp.identification ?? {}) as Record<string, any>;
+        const storage = Array.isArray(hp.storage)
+          ? hp.storage
+              .map((d: any) => [d.capacity, d.type].filter(Boolean).join(' '))
+              .filter(Boolean)
+              .join(', ')
+          : w.storageCapacity ?? '';
+        return {
+          serial: a.serialNumber ?? ident.serialNumber ?? a.tag,
+          device: [ident.manufacturer ?? w.manufacturer, ident.model ?? w.model ?? a.name]
+            .filter(Boolean)
+            .join(' '),
+          storage,
+          method: w.dataWipeMethod?.trim() || 'Not specified',
+          date: new Date(w.createdAt),
+        };
+      });
+
+    if (rows.length === 0) {
+      throw new BadRequestException(
+        'No wiped devices in this lot — record data-wipe audits with status "Wiped" first.',
+      );
+    }
+
+    const buffer = await this.renderLot(batch, rows);
+    return { buffer, filename: `erasure-certificate-${batch.batchNumber}.pdf` };
+  }
 
   // A Certificate of Data Erasure for a device that has a completed wipe on
   // record. Refuses to issue one if no wipe was recorded — the document must
@@ -176,6 +233,118 @@ export class CertificatesService {
       doc.strokeColor('#111111').moveTo(right - 160, sigY).lineTo(right, sigY).stroke();
       doc.font('Helvetica').fontSize(9).fillColor('#666666').text('Authorised signatory', left, sigY + 4);
       doc.text('Date', right - 160, sigY + 4);
+
+      doc.end();
+    });
+  }
+
+  private renderLot(
+    batch: Batch,
+    rows: Array<{ serial: string; device: string; storage: string; method: string; date: Date }>,
+  ): Promise<Buffer> {
+    return new Promise((resolve, reject) => {
+      const doc = new PDFDocument({ size: 'A4', margin: 40 });
+      const chunks: Buffer[] = [];
+      doc.on('data', (c: Buffer) => chunks.push(c));
+      doc.on('end', () => resolve(Buffer.concat(chunks)));
+      doc.on('error', reject);
+
+      const left = 40;
+      const right = doc.page.width - 40;
+      const t = new Date();
+      const ymd = `${t.getFullYear()}${String(t.getMonth() + 1).padStart(2, '0')}${String(
+        t.getDate(),
+      ).padStart(2, '0')}`;
+      const certNo = `ERA-LOT-${batch.batchNumber}-${ymd}`;
+      const issuedOn = t.toLocaleDateString('en-GB', { day: '2-digit', month: 'long', year: 'numeric' });
+
+      doc.font('Helvetica-Bold').fontSize(18).fillColor('#111111').text(COMPANY.name);
+      doc.font('Helvetica').fontSize(9).fillColor('#666666').text(`Company No. ${COMPANY.registration}`);
+      doc.moveDown(0.8);
+      doc
+        .font('Helvetica-Bold')
+        .fontSize(14)
+        .fillColor('#111111')
+        .text('Certificate of Data Erasure — Bulk / Lot');
+      doc.moveDown(0.2);
+      doc
+        .font('Helvetica')
+        .fontSize(9)
+        .fillColor('#666666')
+        .text(`Certificate No: ${certNo}`)
+        .text(`Issued: ${issuedOn}`);
+      doc.moveDown(0.5);
+      doc
+        .font('Helvetica')
+        .fontSize(10)
+        .fillColor('#222222')
+        .text(`Lot: ${batch.batchNumber}${batch.source ? '     Supplier: ' + batch.source : ''}`)
+        .text(`Devices certified erased: ${rows.length}`);
+      doc.moveDown(0.5);
+      doc
+        .font('Helvetica')
+        .fontSize(9.5)
+        .fillColor('#222222')
+        .text(
+          'This certifies that the data-storage media in each device listed below has been sanitised using the method stated, rendering previously stored data unrecoverable by generally available means.',
+          { width: right - left },
+        );
+      doc.moveDown(0.6);
+
+      const cols = [
+        { key: 'idx', label: '#', x: left, w: 20 },
+        { key: 'serial', label: 'Serial / Tag', x: left + 20, w: 108 },
+        { key: 'device', label: 'Device', x: left + 128, w: 150 },
+        { key: 'storage', label: 'Storage', x: left + 278, w: 85 },
+        { key: 'method', label: 'Method', x: left + 363, w: 92 },
+        { key: 'date', label: 'Wiped', x: left + 455, w: right - (left + 455) },
+      ] as const;
+      const bottom = doc.page.height - doc.page.margins.bottom - 80;
+
+      const header = () => {
+        const y = doc.y;
+        doc.font('Helvetica-Bold').fontSize(8).fillColor('#111111');
+        for (const c of cols) doc.text(c.label, c.x, y, { width: c.w });
+        doc.moveDown(0.15);
+        doc.strokeColor('#999999').lineWidth(0.5).moveTo(left, doc.y).lineTo(right, doc.y).stroke();
+        doc.moveDown(0.2);
+      };
+      header();
+
+      rows.forEach((r, i) => {
+        const vals: Record<string, string> = {
+          idx: String(i + 1),
+          serial: r.serial,
+          device: r.device || '—',
+          storage: r.storage || '—',
+          method: r.method,
+          date: r.date.toLocaleDateString('en-GB'),
+        };
+        doc.font('Helvetica').fontSize(8).fillColor('#222222');
+        const h = Math.max(...cols.map((c) => doc.heightOfString(vals[c.key], { width: c.w - 4 })));
+        if (doc.y + h > bottom) {
+          doc.addPage();
+          header();
+        }
+        const y = doc.y;
+        for (const c of cols) doc.text(vals[c.key], c.x, y, { width: c.w - 4 });
+        doc.y = y + h + 3;
+        doc.strokeColor('#eeeeee').lineWidth(0.5).moveTo(left, doc.y - 1).lineTo(right, doc.y - 1).stroke();
+      });
+
+      if (doc.y + 90 > doc.page.height - doc.page.margins.bottom) doc.addPage();
+      doc.moveDown(1);
+      doc
+        .font('Helvetica')
+        .fontSize(8.5)
+        .fillColor('#666666')
+        .text(`Issued by ${COMPANY.name} (Company No. ${COMPANY.registration}).`, left, doc.y);
+      doc.moveDown(2.5);
+      const sy = doc.y;
+      doc.strokeColor('#111111').lineWidth(1).moveTo(left, sy).lineTo(left + 200, sy).stroke();
+      doc.moveTo(right - 160, sy).lineTo(right, sy).stroke();
+      doc.font('Helvetica').fontSize(9).fillColor('#666666').text('Authorised signatory', left, sy + 4);
+      doc.text('Date', right - 160, sy + 4);
 
       doc.end();
     });
