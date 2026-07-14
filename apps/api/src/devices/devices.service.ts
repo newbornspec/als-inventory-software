@@ -34,6 +34,13 @@ export class DevicesService {
     return { batchId: batch.id, batchNumber: batch.batchNumber };
   }
 
+  // Compact lot list for the capture tool's on-device lot picker — id + number
+  // only, so the bash script can parse it without a JSON library.
+  async listLots() {
+    const batches = await this.batches.find({ order: { batchNumber: 'ASC' } });
+    return batches.map((b) => ({ id: b.id, batchNumber: b.batchNumber }));
+  }
+
   // Collect a hardware audit INTO a lot. Deliberately no verification/matching
   // against a manifest and no "received" check — it simply creates the device in
   // the lot (or re-audits it if the same serial comes through again).

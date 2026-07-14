@@ -19,11 +19,13 @@ no `jq` or other extras.
 Create a lot  →  Select it (Set audit target)  →  Run the script  →  device saved into that lot
 ```
 
-1. **Create a lot** in the web app (Lots → New Lot), e.g. `BATCH-000020`.
-2. **Select the lot** you're auditing into: Lots → **"Set audit target"** on that lot.
-   The banner at the top shows the current target. The tool files every audit here
-   until you change it.
-3. **Run the script** on each device (below). Confirm, and it uploads.
+1. **Create your lots** in the web app (Lots → New Lot), e.g. `BATCH-000020`.
+2. *(Optional)* **Set a default lot**: Lots → **"Set audit target"**. The script
+   pre-selects it, so a run of machines into one lot is just Enter each time.
+3. **Run the script** on each device (below). It lists every lot and lets you
+   **pick which one this device goes into** (press Enter for the default target,
+   or type a number to switch) — and optionally a sub-lot — so you can send
+   different machines to different lots without touching the web between them.
 
 Devices then appear under that lot (expand the lot on the Lots page). Cosmetic grade
 and functional tests stay a human call — finish those on the device's page.
@@ -67,11 +69,19 @@ No network setup needed — the script connects to the Wi-Fi in `audit.conf` its
    bash /run/archiso/bootmnt/hardware-audit.sh
    ```
    (On Ubuntu: `sudo bash /media/*/*/hardware-audit.sh`.)
-2. It brings up Wi-Fi (**"Connecting to Wi-Fi …"** → **"Wi-Fi connected."**), reads the
-   specs, shows the target lot, then asks **`Start audit into BATCH-000020? [Y/n]`**.
-   Press Enter — it uploads and prints **✓ added to BATCH-000020**.
+2. It brings up Wi-Fi (**"Connecting to Wi-Fi …"** → **"Wi-Fi connected."**) and reads
+   the specs, then lists your lots:
+   ```
+   Available lots:
+     1) BATCH-000020  ← current audit target
+     2) BATCH-000021
+   File this device into which lot? [number, or Enter for BATCH-000020]
+   ```
+   Press Enter for the default, or type a number to send this machine elsewhere;
+   optionally pick a sub-lot; confirm **`Start audit into … ? [Y/n]`** and it uploads.
 
-Repeat per machine: shut down, move the USB to the next device, boot, run.
+Repeat per machine: shut down, move the USB to the next device, boot, run — choosing
+each machine's lot on the spot, no web round-trip.
 
 ### Optional — run it fully automatically at boot (SystemRescue autorun)
 

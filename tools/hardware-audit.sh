@@ -372,21 +372,64 @@ LOGIN=$(curl -sS -X POST "$API/auth/login" -H 'Content-Type: application/json' \
 TOKEN=$(jstr "$LOGIN" accessToken)
 [ -z "$TOKEN" ] && { echo "Sign-in failed — check audit.conf (email/password/URL)."; exit 1; }
 
+# Which lot to file this device into? Pick from the pre-created lots on the
+# server. Defaults to the web-set audit target, so a run of machines into one lot
+# is just Enter each time — and you can switch lot per machine here without
+# touching the web app.
 TARGET=$(curl -sS "$API/devices/audit-target" -H "Authorization: Bearer $TOKEN")
-LOT=$(jstr "$TARGET" batchNumber)
-if [ -z "$LOT" ]; then
+DEFAULT_ID=$(jstr "$TARGET" batchId); DEFAULT_NUM=$(jstr "$TARGET" batchNumber)
+
+# Parse the compact [{id,batchNumber}] list. Each object has exactly one "id" and
+# one "batchNumber", in that order, so pulling each field in document order gives
+# two index-aligned arrays (portable — no reliance on sed \n in the replacement).
+LOTS=$(curl -sS "$API/devices/lots" -H "Authorization: Bearer $TOKEN")
+mapfile -t LOT_IDS  < <(printf '%s' "$LOTS" | grep -oE '"id":"[^"]*"'          | sed 's/"id":"//; s/"$//')
+mapfile -t LOT_NUMS < <(printf '%s' "$LOTS" | grep -oE '"batchNumber":"[^"]*"' | sed 's/"batchNumber":"//; s/"$//')
+
+if [ "${#LOT_IDS[@]}" -eq 0 ]; then
   echo
-  echo "No audit lot selected. In Als Inventory → Lots → 'Set audit target' on the lot"
-  echo "you're working on, then re-run this tool."
+  echo "No lots found. Create one in Als Inventory → Lots → New Lot, then re-run."
   exit 1
 fi
 
-read -rp "Start audit into ${LOT}? [Y/n] " GO
+echo
+echo "Available lots:"
+for j in "${!LOT_NUMS[@]}"; do
+  mark=""; [ "${LOT_IDS[$j]}" = "$DEFAULT_ID" ] && mark="  ← current audit target"
+  printf "  %2d) %s%s\n" "$((j + 1))" "${LOT_NUMS[$j]}" "$mark"
+done
+read -rp "File this device into which lot? [number${DEFAULT_NUM:+, or Enter for $DEFAULT_NUM}] " sel
+if [ -z "$sel" ]; then
+  CHOSEN_ID="$DEFAULT_ID"; CHOSEN_NUM="$DEFAULT_NUM"
+else
+  CHOSEN_ID="${LOT_IDS[$((sel - 1))]:-}"; CHOSEN_NUM="${LOT_NUMS[$((sel - 1))]:-}"
+fi
+[ -z "$CHOSEN_ID" ] && { echo "No lot selected. Cancelled."; exit 1; }
+
+# Optional: drop it into a sub-lot (spec bucket) within the chosen lot.
+CHOSEN_SUB_ID=""; CHOSEN_SUB_NUM=""
+SUBS=$(curl -sS "$API/lots?batchId=$CHOSEN_ID" -H "Authorization: Bearer $TOKEN")
+mapfile -t SUB_IDS  < <(printf '%s' "$SUBS" | grep -oE '"id":"[^"]*"'        | sed 's/"id":"//; s/"$//')
+mapfile -t SUB_NUMS < <(printf '%s' "$SUBS" | grep -oE '"lotNumber":"[^"]*"' | sed 's/"lotNumber":"//; s/"$//')
+if [ "${#SUB_IDS[@]}" -gt 0 ]; then
+  echo "Sub-lots in ${CHOSEN_NUM}:    0) none"
+  for j in "${!SUB_NUMS[@]}"; do printf "  %2d) %s\n" "$((j + 1))" "${SUB_NUMS[$j]}"; done
+  read -rp "Sub-lot? [number, or Enter for none] " ssel
+  if [ -n "$ssel" ] && [ "$ssel" != "0" ]; then
+    CHOSEN_SUB_ID="${SUB_IDS[$((ssel - 1))]:-}"; CHOSEN_SUB_NUM="${SUB_NUMS[$((ssel - 1))]:-}"
+  fi
+fi
+
+read -rp "Start audit into ${CHOSEN_NUM}${CHOSEN_SUB_NUM:+ / $CHOSEN_SUB_NUM}? [Y/n] " GO
 case "${GO:-Y}" in [nN]*) echo "Cancelled."; exit 0 ;; esac
+
+BODY="{\"lotId\":\"$CHOSEN_ID\""
+[ -n "$CHOSEN_SUB_ID" ] && BODY="$BODY,\"subLotId\":\"$CHOSEN_SUB_ID\""
+BODY="$BODY,\"profile\":$PROFILE}"
 
 RESP=$(curl -sS -X POST "$API/devices/hardware-audit" \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d "{\"profile\":$PROFILE}")
+  -d "$BODY")
 
 if [ -n "$(jstr "$RESP" assetId)" ]; then
   VERB=$([ "$(jraw "$RESP" created)" = "true" ] && echo "added to" || echo "re-audited in")

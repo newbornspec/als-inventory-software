@@ -17,6 +17,11 @@ export class DevicesController {
     return this.devices.getActiveLot(req.user.userId);
   }
 
+  @Get('lots')
+  lots() {
+    return this.devices.listLots();
+  }
+
   @Post('active-lot')
   setLot(@Body() dto: SetAuditLotDto, @Req() req: any) {
     return this.devices.setActiveLot(req.user.userId, dto.batchId);
