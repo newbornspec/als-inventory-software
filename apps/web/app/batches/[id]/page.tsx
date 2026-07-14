@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { apiFetch, ApiError, getSessionUser } from '@/lib/api-server';
 import type { Batch, Lot, ReconciliationResult } from '@/lib/actions/batches';
@@ -12,6 +13,7 @@ import { ImportExpected } from './import-expected';
 import { LotCost } from './lot-cost';
 import { LotAssets } from './lot-assets';
 import { AddAssetForm } from './add-asset-form';
+import { DeleteSubLotButton } from './delete-sublot-button';
 
 // 404 (deleted lot) -> Next's not-found page instead of a server-side crash.
 async function loadBatch(
@@ -37,6 +39,7 @@ export default async function BatchDetailPage({ params }: { params: Promise<{ id
   const [batch, assets, lots, recon] = await loadBatch(id);
 
   const canManage = user?.role === 'admin' || user?.role === 'manager';
+  const canDelete = user?.role === 'admin';
   const expected = batch.expectedUnitCount;
   const discrepancy = expected != null ? batch.actualUnitCount - expected : null;
 
@@ -286,10 +289,25 @@ export default async function BatchDetailPage({ params }: { params: Promise<{ id
                 return (
                   <li key={lot.id} className="rounded-md border border-neutral-800 p-3 text-sm">
                     <div className="flex items-center justify-between gap-2">
-                      <span className="font-medium text-neutral-200">{lot.lotNumber}</span>
-                      <span className="rounded-full border border-neutral-700 px-2 py-0.5 text-xs text-neutral-400">
-                        {formatLabel(lot.status)}
-                      </span>
+                      <Link
+                        href={`/batches/${batch.id}/sublots/${lot.id}`}
+                        className="font-medium text-neutral-200 underline"
+                      >
+                        {lot.lotNumber}
+                      </Link>
+                      <div className="flex items-center gap-2">
+                        <span className="rounded-full border border-neutral-700 px-2 py-0.5 text-xs text-neutral-400">
+                          {formatLabel(lot.status)}
+                        </span>
+                        {canDelete && (
+                          <DeleteSubLotButton
+                            lotId={lot.id}
+                            lotNumber={lot.lotNumber}
+                            batchId={batch.id}
+                            assetCount={lot.actualUnitCount}
+                          />
+                        )}
+                      </div>
                     </div>
                     {specLabel && (
                       <div className="mt-0.5 text-neutral-400">{specLabel}</div>
@@ -312,6 +330,12 @@ export default async function BatchDetailPage({ params }: { params: Promise<{ id
                         />
                       </div>
                     )}
+                    <Link
+                      href={`/batches/${batch.id}/sublots/${lot.id}`}
+                      className="mt-2 inline-block text-xs text-neutral-400 underline"
+                    >
+                      View contents →
+                    </Link>
                   </li>
                 );
               })}

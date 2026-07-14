@@ -156,6 +156,14 @@ export async function createLot(
   return { error: null };
 }
 
+// Delete a sub-lot. Its assets are automatically returned to the parent lot
+// (asset.lot_id FK is ON DELETE SET NULL) — they are never deleted.
+export async function deleteSubLot(lotId: string, batchId: string): Promise<void> {
+  await apiFetch(`/lots/${lotId}`, { method: 'DELETE' });
+  revalidatePath(`/batches/${batchId}`);
+  revalidatePath('/assets');
+}
+
 // Assign (or clear, with lotId=null) a device's sub-lot. The device already lives
 // in the parent purchase lot; this groups it into one of that lot's sub-lots.
 export async function assignSubLot(

@@ -52,9 +52,12 @@ export class BatchesService {
     const assets = await this.assets
       .createQueryBuilder('asset')
       .leftJoinAndSelect('asset.location', 'location')
+      .leftJoinAndSelect('asset.lot', 'lot')
       .addSelect('asset.hardwareProfile')
       .where('asset.batchId = :id', { id })
-      .orderBy('asset.tag', 'ASC')
+      // Group each sub-lot's devices together (ungrouped sort last), then by tag.
+      .orderBy('lot.lotNumber', 'ASC')
+      .addOrderBy('asset.tag', 'ASC')
       .getMany();
     const evenSplit =
       batch.totalCost != null && assets.length > 0 ? batch.totalCost / assets.length : null;
@@ -73,6 +76,7 @@ export class BatchesService {
       'Serial number',
       'Service tag',
       'Tag',
+      'Sub-lot',
       'Grade',
       'Audit status',
       'CPU',
@@ -84,7 +88,7 @@ export class BatchesService {
       'Battery health',
       'Unit cost (£)',
     ];
-    const widths = [16, 22, 12, 18, 14, 16, 10, 16, 30, 20, 26, 22, 18, 18, 14, 13];
+    const widths = [16, 22, 12, 18, 14, 16, 14, 10, 16, 30, 20, 26, 22, 18, 18, 14, 13];
     ws.columns = widths.map((w) => ({ width: w }));
     const lastCol = ws.getColumn(headers.length).letter;
 
@@ -178,6 +182,7 @@ export class BatchesService {
         a.serialNumber ?? ident?.serialNumber ?? '',
         ident?.serviceTag ?? '',
         a.tag,
+        a.lot?.lotNumber ?? '',
         prettyLabel(a.conditionGrade),
         prettyLabel(a.auditStatus),
         cpuStr,
