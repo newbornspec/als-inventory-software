@@ -6,11 +6,12 @@ import { AssetAudit } from './asset-audit.entity';
 import { AssetsController } from './assets.controller';
 import { AssetsService } from './assets.service';
 import { BarcodeService } from './barcode.service';
+import { CertificatesService } from './certificates.service';
 
 @Module({
   imports: [TypeOrmModule.forFeature([Asset, AssetHistory, AssetAudit])],
   controllers: [AssetsController],
-  providers: [AssetsService, BarcodeService],
+  providers: [AssetsService, BarcodeService, CertificatesService],
   exports: [AssetsService],
 })
 export class AssetsModule {}

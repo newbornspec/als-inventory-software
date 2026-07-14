@@ -18,6 +18,7 @@ import { RolesGuard } from '../auth/guards/roles.guard';
 import { UserRole } from '../users/user.entity';
 import { AssetsService } from './assets.service';
 import { BarcodeService, BarcodeType } from './barcode.service';
+import { CertificatesService } from './certificates.service';
 import { CreateAssetDto } from './dto/create-asset.dto';
 import { UpdateAssetDto } from './dto/update-asset.dto';
 import { QueryAssetsDto } from './dto/query-assets.dto';
@@ -29,6 +30,7 @@ export class AssetsController {
   constructor(
     private assets: AssetsService,
     private barcodeService: BarcodeService,
+    private certificates: CertificatesService,
   ) {}
 
   // Any authenticated role can view/search — technicians need this to look
@@ -63,6 +65,18 @@ export class AssetsController {
     @Req() req: any,
   ) {
     return this.assets.createAudit(id, dto, req.user.userId);
+  }
+
+  // Certificate of Data Erasure (PDF). Any authed role — a technician who wiped
+  // the unit may need to produce the certificate for the customer.
+  @Get(':id/erasure-certificate.pdf')
+  @Header('Cache-Control', 'no-store')
+  async erasureCertificate(@Param('id') id: string): Promise<StreamableFile> {
+    const { buffer, filename } = await this.certificates.erasureCertificate(id);
+    return new StreamableFile(buffer, {
+      type: 'application/pdf',
+      disposition: `attachment; filename="${filename}"`,
+    });
   }
 
   @Get(':id/barcode')

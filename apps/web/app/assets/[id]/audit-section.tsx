@@ -18,6 +18,7 @@ export interface AssetAuditRecord {
 export function AuditSection({ assetId, audits }: { assetId: string; audits: AssetAuditRecord[] }) {
   const [showForm, setShowForm] = useState(false);
   const router = useRouter();
+  const hasWipe = audits.some((a) => a.dataWipeStatus === 'wiped');
 
   return (
     <section>
@@ -29,6 +30,15 @@ export function AuditSection({ assetId, audits }: { assetId: string; audits: Ass
           </button>
         )}
       </div>
+
+      {hasWipe && (
+        <a
+          href={`/api/assets/${assetId}/erasure-certificate`}
+          className="mt-2 inline-block rounded-md border border-emerald-800 px-3 py-1.5 text-xs text-emerald-300 hover:bg-emerald-950/40"
+        >
+          ↓ Data-erasure certificate (PDF)
+        </a>
+      )}
 
       {showForm && (
         <div className="mt-3">

@@ -24,6 +24,7 @@ export function AuditForm({ assetId, onSaved }: { assetId: string; onSaved?: () 
   const [cosmeticGrade, setCosmeticGrade] = useState('');
   const [tests, setTests] = useState<Record<string, string>>({});
   const [dataWipeStatus, setDataWipeStatus] = useState('');
+  const [dataWipeMethod, setDataWipeMethod] = useState('');
   const [finalDisposition, setFinalDisposition] = useState('');
   const [notes, setNotes] = useState('');
   const [saving, setSaving] = useState(false);
@@ -38,14 +39,15 @@ export function AuditForm({ assetId, onSaved }: { assetId: string; onSaved?: () 
     await db.execute(
       `INSERT INTO asset_audits (
          id, asset_id, audit_status, cosmetic_grade, functional_tests,
-         data_wipe_status, final_disposition, notes, created_at
-       ) VALUES (uuid(), ?, ?, ?, ?, ?, ?, ?, ?)`,
+         data_wipe_status, data_wipe_method, final_disposition, notes, created_at
+       ) VALUES (uuid(), ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         assetId,
         auditStatus || null,
         cosmeticGrade || null,
         Object.keys(tests).length ? JSON.stringify(tests) : null,
         dataWipeStatus || null,
+        dataWipeMethod || null,
         finalDisposition || null,
         notes || null,
         now,
@@ -168,6 +170,17 @@ export function AuditForm({ assetId, onSaved }: { assetId: string; onSaved?: () 
             ))}
           </select>
         </div>
+      </div>
+
+      <div className="space-y-1">
+        <label className="text-xs text-neutral-400">Data wipe method</label>
+        <input
+          value={dataWipeMethod}
+          onChange={(e) => setDataWipeMethod(e.target.value)}
+          placeholder="e.g. NIST SP 800-88, DBAN, ATA Secure Erase, Physical destruction"
+          className="w-full rounded-md border border-neutral-700 bg-neutral-900 px-2 py-1.5 text-sm"
+        />
+        <p className="text-xs text-neutral-600">Appears on the data-erasure certificate.</p>
       </div>
 
       <div className="space-y-1">
