@@ -89,23 +89,30 @@ You don't have to type `bash …/hardware-audit.sh`. Two ways, pick one:
 
 ### A. Auto-run at boot (recommended — no typing at all)
 
-SystemRescue automatically executes a file named **`autorun`** found on the boot
-device. So the machine boots straight into the audit — connect Wi-Fi → read specs →
-show the lot menu — and the operator only picks the lot and confirms.
+Per SystemRescue's manual, it runs scripts found **inside an `autorun` folder** at the
+boot-device root — **not** a file named `autorun` in the root. Autorun is on by
+default and doesn't pause (`ar_nowait` defaults to true), so no boot options are
+needed. Set it up once per stick, at the console:
 
-1. Copy **all three** files to the **root of the USB stick**: `autorun`,
-   `hardware-audit.sh`, and `audit.conf`.
-2. Boot the machine off the USB. The `autorun` script runs on its own.
-   - By default SystemRescue pauses for a keypress when a script finishes. To skip
-     that pause, add the boot option **`ar_nowait`**: at the boot menu press `Tab`
-     (BIOS) or `e` (UEFI), append ` ar_nowait` to the kernel line, and boot. To make
-     it permanent, add `ar_nowait` to the default entry in the USB's bootloader
-     config (grub.cfg / syslinux.cfg).
-   - Reference: <https://www.system-rescue.org/manual/Run_your_own_scripts_with_autorun/>
+```bash
+mount -o remount,rw /run/archiso/bootmnt
+mkdir -p /run/archiso/bootmnt/autorun
+printf '#!/bin/bash\nexec bash /run/archiso/bootmnt/hardware-audit.sh\n' > /run/archiso/bootmnt/autorun/autorun
+cat /run/archiso/bootmnt/autorun/autorun   # should show the two lines
+sync && reboot
+```
 
-`autorun` is just a tiny wrapper that finds and runs `hardware-audit.sh` on the USB —
-so it stays in sync with the real script. (It must keep Linux LF line endings; the
-repo enforces that.)
+After the reboot the machine launches the audit on its own — connect Wi-Fi → read
+specs → lot menu — and the operator only picks the lot and confirms.
+
+The `autorun/autorun` script is just a one-line wrapper that runs `hardware-audit.sh`
+from the USB. `hardware-audit.sh` and `audit.conf` still live in the USB **root**.
+(A ready-made copy of the wrapper is `tools/autorun` in this repo; place it at
+`autorun/autorun` on the stick.) Reference:
+<https://www.system-rescue.org/manual/Run_your_own_scripts_with_autorun/>
+
+> Quick reference for operators: see **`SETUP-AUTORUN.txt`** (plain text) in this
+> folder — copy it onto the USB so the steps are always to hand.
 
 ### B. Click-to-run icon (if you use the graphical desktop)
 

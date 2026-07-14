@@ -1,0 +1,84 @@
+=====================================================================
+  ALS Inventory - Hardware Audit USB: quick reference (SystemRescue)
+=====================================================================
+
+GOAL: boot a machine off the USB and have the audit start by itself,
+so you only pick the lot and press Y. No commands to type.
+
+KEY RULE (from SystemRescue's manual): it runs scripts found INSIDE an
+"autorun" FOLDER at the root of the USB. So the script must live at:
+
+      /run/archiso/bootmnt/autorun/autorun
+
+NOT a file called "autorun" in the root - that does nothing.
+
+
+---------------------------------------------------------------------
+  A) ONE-TIME AUTO-RUN SETUP   (do once per USB stick)
+---------------------------------------------------------------------
+Boot the USB to the console prompt  [root@sysrescue ~]#  then type
+these lines ONE AT A TIME, pressing Enter after each:
+
+   mount -o remount,rw /run/archiso/bootmnt
+
+   mkdir -p /run/archiso/bootmnt/autorun
+
+   printf '#!/bin/bash\nexec bash /run/archiso/bootmnt/hardware-audit.sh\n' > /run/archiso/bootmnt/autorun/autorun
+
+Check it worked (should print two lines starting with #!/bin/bash):
+
+   cat /run/archiso/bootmnt/autorun/autorun
+
+Reboot to test:
+
+   sync
+   reboot
+
+IMPORTANT:
+ * The  >  in the printf line is REQUIRED - it writes the file.
+   Type it exactly. No spaces inside the /paths.
+ * "mount -o remount,rw ..." is only needed when you want to CHANGE
+   files (the USB mounts read-only on each boot). Once written, the
+   autorun script stays on the stick permanently.
+
+
+---------------------------------------------------------------------
+  B) RUN IT BY HAND   (if autorun ever doesn't fire)
+---------------------------------------------------------------------
+   bash /run/archiso/bootmnt/hardware-audit.sh
+
+TIP - use the TAB key so you barely type:
+   bash /run/ar <TAB>  boot <TAB>  hard <TAB>   then Enter
+
+
+---------------------------------------------------------------------
+  C) CHANGE THE WI-FI   (network name / password)
+---------------------------------------------------------------------
+   mount -o remount,rw /run/archiso/bootmnt
+   nano /run/archiso/bootmnt/audit.conf
+
+Change these two lines (keep the quotes):
+   WIFI_SSID="YourNetworkName"
+   WIFI_PASSWORD="YourPassword"
+
+Save in nano:  Ctrl+O , Enter , then Ctrl+X
+
+
+---------------------------------------------------------------------
+  D) FILES THAT MUST BE ON THE USB
+---------------------------------------------------------------------
+   /hardware-audit.sh        the audit script
+   /audit.conf               server URL + login + Wi-Fi
+   /autorun/autorun          the auto-run script (from section A)
+
+
+---------------------------------------------------------------------
+  E) IF AUTO-RUN DOESN'T START ON BOOT
+---------------------------------------------------------------------
+ * Confirm the script is INSIDE the folder:
+      cat /run/archiso/bootmnt/autorun/autorun
+ * If it launches but won't take your keypresses at the lot menu,
+   tell the developer - the script can be tweaked to read the
+   keyboard directly.
+ * You can always fall back to section B (run it by hand).
+=====================================================================
