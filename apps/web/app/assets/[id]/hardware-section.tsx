@@ -33,6 +33,7 @@ const KEY_LABELS: Record<string, string> = {
   macAddress: 'MAC address',
   vram: 'VRAM',
   smartStatus: 'SMART status',
+  healthPct: 'Health (%)',
   powerOnHours: 'Power-on hours',
   powerCycles: 'Power cycles',
   reallocatedSectors: 'Reallocated sectors',

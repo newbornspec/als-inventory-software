@@ -311,7 +311,7 @@ esac
 # boot stick. Distinct D_* names + manual parsing keep the two completely separate.
 pval() { printf ' %s' "$1" | grep -oE " $2=\"[^\"]*\"" | head -n1 | sed -e "s/^ $2=\"//" -e 's/"$//'; }
 
-STOR_ELEMS=""
+STOR_ELEMS=""; SMART_SUMMARY=""
 while IFS= read -r line; do
   [ -z "$line" ] && continue
   D_NAME=$(pval "$line" NAME); D_TYPE=$(pval "$line" TYPE); D_TRAN=$(pval "$line" TRAN)
@@ -332,7 +332,7 @@ while IFS= read -r line; do
   # SMART health report — overall status plus the attributes that matter for
   # grading (drive age + failure indicators). Best-effort parse of smartctl -a,
   # which covers both ATA and NVMe layouts.
-  SMART=""; SM_POH=""; SM_PCY=""; SM_REALLOC=""; SM_PENDING=""; SM_USED=""
+  SMART=""; SM_POH=""; SM_PCY=""; SM_REALLOC=""; SM_PENDING=""; SM_USED=""; SM_HEALTH=""
   if command -v smartctl >/dev/null 2>&1; then
     SM=$(smartctl -a "/dev/$D_NAME" 2>/dev/null)
     SMART=$(printf '%s\n' "$SM" | sed -n 's/.*self-assessment test result:[[:space:]]*//p; s/.*SMART Health Status:[[:space:]]*//p' | head -n1 | tr -d ' ')
@@ -341,11 +341,21 @@ while IFS= read -r line; do
     SM_REALLOC=$(printf '%s\n' "$SM" | grep -iE 'Reallocated_Sector' | grep -oE '[0-9]+' | tail -n1)
     SM_PENDING=$(printf '%s\n' "$SM" | grep -iE 'Current_Pending_Sector' | grep -oE '[0-9]+' | tail -n1)
     SM_USED=$(printf '%s\n' "$SM" | grep -iE 'Percentage Used' | grep -oE '[0-9]+' | head -n1)
+    # Health % = life remaining. NVMe reports "Percentage Used" (health = 100-used);
+    # ATA SSDs expose a normalised wear/life attribute (VALUE column, 100 = new).
+    if [ -n "$SM_USED" ]; then
+      SM_HEALTH=$(( 100 - SM_USED ))
+    else
+      hv=$(printf '%s\n' "$SM" | grep -iE 'Media_Wearout_Indicator|SSD_Life_Left|Wear_Leveling_Count|Remaining_Lifetime_Perc' | head -n1 | awk '{print $4}' | grep -oE '^[0-9]+')
+      [ -n "$hv" ] && SM_HEALTH=$(( 10#$hv ))
+    fi
   fi
+  # Show the first drive's health in the on-screen summary so it's easy to confirm.
+  [ -z "$SMART_SUMMARY" ] && SMART_SUMMARY="${SMART:-n/a}${SM_HEALTH:+  ${SM_HEALTH}% health}${SM_POH:+  ${SM_POH}h}${SM_REALLOC:+  realloc ${SM_REALLOC}}"
   o_begin
   o_s model "$D_MODEL"; o_s capacity "$CAP"; o_s type "$DTYPE"
   o_s interface "$IFACE_D"; o_s smartStatus "$SMART"; o_s serialNumber "$D_SERIAL"
-  o_n powerOnHours "$SM_POH"; o_n powerCycles "$SM_PCY"
+  o_n healthPct "$SM_HEALTH"; o_n powerOnHours "$SM_POH"; o_n powerCycles "$SM_PCY"
   o_n reallocatedSectors "$SM_REALLOC"; o_n pendingSectors "$SM_PENDING"; o_n ssdLifeUsedPct "$SM_USED"
   STOR_ELEMS="$STOR_ELEMS,$(o_end)"
 done <<STOREOF
@@ -474,6 +484,7 @@ printf "  %-14s %s\n" "Serial"   "${SERIAL:-?}${EXPRESS:+  ·  express $EXPRESS}
 printf "  %-14s %s\n" "CPU"      "${CPU_MODEL:-?} — ${CPU_CORES:-?}C/${CPU_THREADS:-?}T"
 printf "  %-14s %s\n" "RAM"      "${RAM_GB:-?} GB ${RAM_TYPE} ${RAM_SPEED}"
 printf "  %-14s %s\n" "Storage"  "$(printf '%s' "$STORAGE" | grep -oE '"capacity":"[^"]*"' | sed 's/.*://; s/"//g' | paste -sd', ' -)"
+printf "  %-14s %s\n" "Drive health" "${SMART_SUMMARY:-n/a}"
 printf "  %-14s %s\n" "Battery"  "${BAT_HEALTH:-n/a}"
 printf "  %-14s %s\n" "TPM/Boot" "${TPM_VER:-none} / ${BOOT_MODE} ${SECURE_BOOT:+(SecureBoot $SECURE_BOOT)}"
 echo
