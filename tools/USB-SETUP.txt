@@ -1,0 +1,134 @@
+=====================================================================
+  ALS Inventory - Hardware Audit USB: FULL SETUP (new pen drive)
+=====================================================================
+Everything needed to set up the audit + data wipe on a fresh USB stick.
+Sections A-G. Commands are typed on the SystemRescue machine (the
+  [root@sysrescue ~]#  prompt) unless it says "on Windows".
+
+What ends up on the USB (in the ROOT of the stick):
+   hardware-audit.sh      the audit + wipe script
+   audit.conf             settings (server, login, Wi-Fi, wipe)
+   autorun/autorun        makes it run automatically at boot
+
+
+---------------------------------------------------------------------
+  A) MAKE THE SYSTEMRESCUE USB   (once)
+---------------------------------------------------------------------
+1. Download the SystemRescue ISO from https://www.system-rescue.org
+2. Write it to an 8GB+ USB stick with Rufus (Windows), Ventoy, or
+   balenaEtcher.
+
+
+---------------------------------------------------------------------
+  B) COPY THE FILES ONTO THE USB   (on Windows)
+---------------------------------------------------------------------
+1. Open this project's  tools\  folder:
+      C:\Users\PC\Desktop\Als_Inventory_Software\tools
+2. Copy  hardware-audit.sh  to the ROOT of the USB stick.
+3. Create  audit.conf  in the USB root (contents in section C).
+   (Plain Notepad is fine - the script strips Windows line endings.)
+
+
+---------------------------------------------------------------------
+  C) audit.conf CONTENTS   (fill in your own details)
+---------------------------------------------------------------------
+A plain text file named exactly "audit.conf" in the USB root.
+Use straight quotes ("), no spaces around the = sign:
+
+   AUDIT_URL="https://als-inventory-software-production.up.railway.app"
+   AUDIT_EMAIL="admin@als.com"
+   AUDIT_PASSWORD="YOUR_PASSWORD"
+
+   # Wi-Fi to connect to at the start of each run (blank = use Ethernet)
+   WIFI_SSID="YOUR_WIFI_NAME"
+   WIFI_PASSWORD="YOUR_WIFI_PASSWORD"
+
+   # DATA WIPE (DESTRUCTIVE):  "0" = audit only,  "1" = also erase drives
+   AUDIT_WIPE="0"
+   # Wipe method:  auto | crypto | secure | overwrite   (see bottom)
+   AUDIT_WIPE_METHOD="auto"
+   # Try to unfreeze SATA drives via suspend/resume:  0 = off, 1 = on
+   AUDIT_WIPE_UNFREEZE="0"
+
+
+---------------------------------------------------------------------
+  D) SET UP AUTO-RUN   (on the SystemRescue machine)
+---------------------------------------------------------------------
+SystemRescue runs scripts inside an "autorun" FOLDER at the USB root.
+Boot the machine off the USB to the  [root@sysrescue ~]#  prompt, then
+type these ONE AT A TIME (press Enter after each):
+
+   mount -o remount,rw /run/archiso/bootmnt
+   mkdir -p /run/archiso/bootmnt/autorun
+   printf '#!/bin/bash\nexec bash /run/archiso/bootmnt/hardware-audit.sh\n' > /run/archiso/bootmnt/autorun/autorun
+
+Check it worked (should print two lines starting with #!/bin/bash):
+
+   cat /run/archiso/bootmnt/autorun/autorun
+
+IMPORTANT: the ">" in the printf line is REQUIRED (it writes the file).
+Type it exactly. No spaces inside the /paths.
+
+
+---------------------------------------------------------------------
+  E) ENABLE / CHANGE THE DATA WIPE   (optional, DESTRUCTIVE)
+---------------------------------------------------------------------
+If you didn't already set it in section C, turn wiping on here:
+
+   mount -o remount,rw /run/archiso/bootmnt
+   echo 'AUDIT_WIPE="1"' >> /run/archiso/bootmnt/audit.conf
+   echo 'AUDIT_WIPE_METHOD="crypto"' >> /run/archiso/bootmnt/audit.conf
+
+Check:
+
+   cat /run/archiso/bootmnt/audit.conf
+
+Note: the LAST AUDIT_WIPE / AUDIT_WIPE_METHOD line wins, so to change a
+value you can just append a new line ( >> ) with the new value.
+
+Two safety gates: wiping only happens when AUDIT_WIPE="1"  AND  you type
+WIPE on each machine when asked. USB / removable drives are never wiped.
+
+
+---------------------------------------------------------------------
+  F) RUN IT
+---------------------------------------------------------------------
+Automatic: just boot the USB - it runs on its own. Pick the lot, press
+   Y, and (if wiping is on) type WIPE when asked. The result stays on
+   screen until you press Enter.
+
+By hand:
+   bash /run/archiso/bootmnt/hardware-audit.sh
+   (Tip: type  bash /run/ar <TAB>  boot <TAB>  hard <TAB>  then Enter)
+
+See what it captures WITHOUT uploading or wiping (safe test):
+   AUDIT_DEBUG=1 bash /run/archiso/bootmnt/hardware-audit.sh
+
+
+---------------------------------------------------------------------
+  G) UPDATING THE SCRIPT LATER
+---------------------------------------------------------------------
+When hardware-audit.sh is updated, copy the new file over the old one
+in the USB root - autorun always runs whatever is there. To make the
+USB writable first (needed after every boot):
+
+   mount -o remount,rw /run/archiso/bootmnt
+
+
+---------------------------------------------------------------------
+  WIPE METHODS (AUDIT_WIPE_METHOD)
+---------------------------------------------------------------------
+   crypto    = cryptographic erase - destroys the drive's encryption
+               key (NVMe / self-encrypting drives). NIST 800-88 "Purge".
+   secure    = firmware secure / block erase. NIST "Purge".
+   auto      = crypto -> secure -> overwrite (best the drive supports).
+   overwrite = single-pass overwrite + zero (HDDs). NIST "Clear".
+
+Every wipe is verified (read-back zeros) or controller-confirmed (crypto
+erase leaves ciphertext, not zeros), and the exact method is recorded on
+the device's audit and its data-erasure certificate.
+
+Check a drive's firmware-erase support (read-only, erases nothing):
+   nvme id-ctrl /dev/nvme0 -H | grep -i crypto
+   nvme id-ctrl /dev/nvme0 -H | grep -i sanitize
+=====================================================================
