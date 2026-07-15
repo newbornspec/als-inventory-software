@@ -150,6 +150,10 @@ Safety:
 - Method by drive type: NVMe → `nvme format` secure erase; SSD → `blkdiscard`
   (TRIM); HDD → single-pass overwrite + zero (`shred`, NIST 800-88 "Clear"). The
   exact method used is recorded on the certificate.
+- **Verification pass:** after erasing, the tool reads the drive back (start,
+  middle and end) to confirm it reads as zeros. If the fast erase didn't read
+  clean, it forces a full zero-overwrite and re-checks. A drive is only recorded
+  as **"Wiped — verified"** if it passes; otherwise it's recorded as **failed**.
 
 > ⚠️ This permanently destroys data. Test it on a **sacrificial drive** first, and
 > double-check the drive list before typing `WIPE`.

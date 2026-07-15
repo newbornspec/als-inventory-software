@@ -102,6 +102,24 @@ ensure_tools() {
 # so the boot stick is never at risk. Sets WIPE_STATUS + WIPE_METHOD for the
 # upload so the wipe lands on the audit record and the erasure certificate.
 WIPE_STATUS=""; WIPE_METHOD=""
+
+# Verification pass: sampled read-back confirming the device now reads as zeros
+# at the start, middle and near the end. Returns 0 (verified) or 1 (not clean).
+verify_zero() {
+  local dev="$1" sz mb offs o n
+  sz=$(blockdev --getsize64 "$dev" 2>/dev/null)
+  case "$sz" in ''|*[!0-9]*) return 1;; esac
+  [ "$sz" -gt 0 ] || return 1
+  mb=$(( sz / 1048576 ))
+  offs="0"
+  [ "$mb" -gt 128 ] && offs="0 $(( mb / 2 )) $(( mb - 32 ))"
+  for o in $offs; do
+    n=$(dd if="$dev" bs=1M count=32 skip="$o" 2>/dev/null | tr -d '\0' | wc -c | tr -d ' ')
+    [ "${n:-1}" = "0" ] || return 1
+  done
+  return 0
+}
+
 wipe_internal_drives() {
   [ "${AUDIT_WIPE:-0}" = "1" ] || return 0
 
@@ -133,27 +151,46 @@ WIPEEOF
   read -rp "Type WIPE to erase, or press Enter to skip: " ans
   [ "$ans" = "WIPE" ] || { echo "Data wipe skipped."; return 0; }
 
-  local all_ok=1 methods="" dev rota m res
+  local all_ok=1 methods="" dev rota m verified
   for d in "${disks[@]}"; do
-    dev="/dev/$d"; m=""; res=1
+    dev="/dev/$d"; m=""; verified=0
     rota=$(cat "/sys/block/$d/queue/rotational" 2>/dev/null)
     echo "Erasing $dev …"
+
+    # Fast, type-appropriate erase first.
     case "$d" in
       nvme*)
-        if command -v nvme >/dev/null 2>&1 && nvme format "$dev" -s 1 --force >/dev/null 2>&1; then
-          m="NVMe secure erase (nvme format)"; res=0
-        fi
+        command -v nvme >/dev/null 2>&1 && nvme format "$dev" -s 1 --force >/dev/null 2>&1 \
+          && m="NVMe secure erase (nvme format)"
         ;;
     esac
-    if [ $res -ne 0 ] && [ "$rota" = "0" ] && command -v blkdiscard >/dev/null 2>&1 \
+    if [ -z "$m" ] && [ "$rota" = "0" ] && command -v blkdiscard >/dev/null 2>&1 \
        && blkdiscard -f "$dev" >/dev/null 2>&1; then
-      m="Block discard / TRIM (SSD)"; res=0
+      m="Block discard / TRIM (SSD)"
     fi
-    if [ $res -ne 0 ] && command -v shred >/dev/null 2>&1 \
+    if [ -z "$m" ] && command -v shred >/dev/null 2>&1 \
        && shred -f -n 1 -z "$dev" >/dev/null 2>&1; then
-      m="Overwrite — shred 1 pass + zero (NIST Clear)"; res=0
+      m="Overwrite — shred 1 pass + zero (NIST Clear)"
     fi
-    if [ $res -eq 0 ]; then echo "  ✓ $m"; methods="${methods:+$methods; }$m"; else echo "  ✗ FAILED on $dev"; all_ok=0; fi
+
+    # Verification pass — confirm the drive reads back as zeros.
+    if [ -n "$m" ]; then
+      echo "  verifying …"
+      if verify_zero "$dev"; then
+        verified=1
+      elif command -v shred >/dev/null 2>&1 && shred -f -n 1 -z "$dev" >/dev/null 2>&1 && verify_zero "$dev"; then
+        # Fast erase didn't read back clean — force a full zero overwrite, re-verify.
+        m="Overwrite — shred 1 pass + zero (NIST Clear)"; verified=1
+      fi
+    fi
+
+    if [ -n "$m" ] && [ "$verified" = "1" ]; then
+      echo "  ✓ $m — verified"
+      methods="${methods:+$methods; }$m — verified"
+    else
+      echo "  ✗ FAILED on $dev${m:+ ($m; verification did not pass)}"
+      all_ok=0
+    fi
   done
 
   WIPE_METHOD=$(printf '%s' "$methods" | tr ';' '\n' | sed 's/^ *//' | grep -v '^$' | sort -u | paste -sd'; ' -)
