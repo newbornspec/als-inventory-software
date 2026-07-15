@@ -166,12 +166,13 @@ firmware_erase() {
   case "$d" in
     nvme*)
       command -v nvme >/dev/null 2>&1 || return 1
-      if { [ "$want" = "crypto" ] || [ "$want" = "auto" ]; } \
-         && nvme format "$dev" -s 2 --force >/dev/null 2>&1; then
-        M="NVMe cryptographic erase (nvme format -s2)"; return 0
+      local err=""
+      if [ "$want" = "crypto" ] || [ "$want" = "auto" ]; then
+        err=$(nvme format "$dev" -s 2 --force 2>&1) && { M="NVMe cryptographic erase (nvme format -s2)"; return 0; }
+        [ "$want" = "crypto" ] && { echo "    crypto erase unavailable — $(printf '%s' "$err" | head -n1)"; return 1; }
       fi
-      [ "$want" = "crypto" ] && return 1
-      nvme format "$dev" -s 1 --force >/dev/null 2>&1 && { M="NVMe secure erase (nvme format -s1)"; return 0; }
+      err=$(nvme format "$dev" -s 1 --force 2>&1) && { M="NVMe secure erase (nvme format -s1)"; return 0; }
+      echo "    NVMe firmware erase unavailable — $(printf '%s' "$err" | head -n1)"
       return 1
       ;;
     *)
