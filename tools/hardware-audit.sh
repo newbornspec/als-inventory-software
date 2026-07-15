@@ -573,7 +573,9 @@ if [ -n "$(jstr "$RESP" assetId)" ]; then
   echo
   echo "✓ $(jstr "$RESP" name) ($(jstr "$RESP" tag)) $VERB $(jstr "$RESP" lot)."
   [ -n "$WIPE_STATUS" ] && echo "  Data wipe: $WIPE_STATUS — $WIPE_METHOD"
+  exit 0
 else
   echo
   echo "✗ Upload failed: $(jstr "$RESP" message)"
+  exit 1
 fi
