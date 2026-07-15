@@ -329,13 +329,24 @@ while IFS= read -r line; do
     [ "$D_ROTA" = "1" ] && DTYPE="HDD" || DTYPE="SSD"
     case "$D_TRAN" in sata|ata) IFACE_D="SATA";; *) IFACE_D="$D_TRAN";; esac
   fi
-  SMART=""
+  # SMART health report — overall status plus the attributes that matter for
+  # grading (drive age + failure indicators). Best-effort parse of smartctl -a,
+  # which covers both ATA and NVMe layouts.
+  SMART=""; SM_POH=""; SM_PCY=""; SM_REALLOC=""; SM_PENDING=""; SM_USED=""
   if command -v smartctl >/dev/null 2>&1; then
-    SMART=$(smartctl -H "/dev/$D_NAME" 2>/dev/null | sed -n 's/.*self-assessment test result:[[:space:]]*//p; s/.*SMART Health Status:[[:space:]]*//p' | head -n1 | tr -d ' ')
+    SM=$(smartctl -a "/dev/$D_NAME" 2>/dev/null)
+    SMART=$(printf '%s\n' "$SM" | sed -n 's/.*self-assessment test result:[[:space:]]*//p; s/.*SMART Health Status:[[:space:]]*//p' | head -n1 | tr -d ' ')
+    SM_POH=$(printf '%s\n' "$SM" | grep -iE 'Power.?[- ]?On.?[- ]?Hours' | grep -oE '[0-9][0-9,]*' | tail -n1 | tr -d ',')
+    SM_PCY=$(printf '%s\n' "$SM" | grep -iE 'Power.?[- ]?Cycle' | grep -oE '[0-9][0-9,]*' | tail -n1 | tr -d ',')
+    SM_REALLOC=$(printf '%s\n' "$SM" | grep -iE 'Reallocated_Sector' | grep -oE '[0-9]+' | tail -n1)
+    SM_PENDING=$(printf '%s\n' "$SM" | grep -iE 'Current_Pending_Sector' | grep -oE '[0-9]+' | tail -n1)
+    SM_USED=$(printf '%s\n' "$SM" | grep -iE 'Percentage Used' | grep -oE '[0-9]+' | head -n1)
   fi
   o_begin
   o_s model "$D_MODEL"; o_s capacity "$CAP"; o_s type "$DTYPE"
   o_s interface "$IFACE_D"; o_s smartStatus "$SMART"; o_s serialNumber "$D_SERIAL"
+  o_n powerOnHours "$SM_POH"; o_n powerCycles "$SM_PCY"
+  o_n reallocatedSectors "$SM_REALLOC"; o_n pendingSectors "$SM_PENDING"; o_n ssdLifeUsedPct "$SM_USED"
   STOR_ELEMS="$STOR_ELEMS,$(o_end)"
 done <<STOREOF
 $(lsblk -bdP -o NAME,TYPE,TRAN,RM,SIZE,MODEL,SERIAL,ROTA 2>/dev/null)

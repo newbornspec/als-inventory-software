@@ -171,7 +171,7 @@ are **never overwritten** by an audit.
 | Manufacturer, family, model, device type, serial, **Dell express code**, BIOS UUID | Cosmetic grade (A/B/C/D/scrap) |
 | BIOS version/date, UEFI/Legacy, Secure Boot, TPM | Functional tests (keyboard, ports, webcam, Wi-Fi…) |
 | CPU model/cores/threads/clock, RAM size/type/speed/slots | Data-wipe status + method, disposition |
-| Per-drive model/capacity/type/interface/**SMART**/serial | Grade, cost, location, notes, resale value |
+| Per-drive model/capacity/type/interface/serial + **SMART health** (status, power-on hours, reallocated/pending sectors, SSD life used) | Grade, cost, location, notes, resale value |
 | Graphics, battery (design/full/cycle/health), network + MAC | |
 
 Some fields depend on the machine and boot: **OS/build** (usually none — units are
