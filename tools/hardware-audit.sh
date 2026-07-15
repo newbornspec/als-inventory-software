@@ -156,6 +156,22 @@ ata_secure_erase() {
   return 1
 }
 
+# Run an NVMe SANITIZE (action 4 = crypto erase, 2 = block erase) on the
+# controller and wait for it to finish. Sanitize is asynchronous, so poll the
+# sanitize-log until it reports completion. Returns 0 on success.
+nvme_sanitize() {
+  local ctrl="$1" act="$2" i log
+  nvme sanitize "$ctrl" -a "$act" >/dev/null 2>&1 || return 1
+  echo "    sanitize started — waiting for completion …"
+  for i in $(seq 1 240); do
+    log=$(nvme sanitize-log "$ctrl" -H 2>/dev/null)
+    printf '%s\n' "$log" | grep -qi 'completed successfully' && return 0
+    printf '%s\n' "$log" | grep -qi 'sanitize.*fail' && return 1
+    sleep 5
+  done
+  return 1
+}
+
 # Firmware crypto / secure erase for ONE drive per AUDIT_WIPE_METHOD
 # (auto|crypto|secure|overwrite). Sets M, returns 0 on success (else the caller
 # falls back to TRIM/overwrite).
@@ -166,12 +182,15 @@ firmware_erase() {
   case "$d" in
     nvme*)
       command -v nvme >/dev/null 2>&1 || return 1
-      local err=""
+      local ctrl="/dev/${d%%n[0-9]*}" err=""   # nvme0n1 -> nvme0
       if [ "$want" = "crypto" ] || [ "$want" = "auto" ]; then
+        # Prefer format-based crypto, else the SANITIZE crypto-erase (widely supported).
         err=$(nvme format "$dev" -s 2 --force 2>&1) && { M="NVMe cryptographic erase (nvme format -s2)"; return 0; }
+        nvme_sanitize "$ctrl" 4 && { M="NVMe cryptographic erase (sanitize)"; return 0; }
         [ "$want" = "crypto" ] && { echo "    crypto erase unavailable — $(printf '%s' "$err" | head -n1)"; return 1; }
       fi
       err=$(nvme format "$dev" -s 1 --force 2>&1) && { M="NVMe secure erase (nvme format -s1)"; return 0; }
+      nvme_sanitize "$ctrl" 2 && { M="NVMe block-erase sanitize"; return 0; }
       echo "    NVMe firmware erase unavailable — $(printf '%s' "$err" | head -n1)"
       return 1
       ;;
