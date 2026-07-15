@@ -120,6 +120,66 @@ verify_zero() {
   return 0
 }
 
+# ATA Secure Erase for one SATA/ATA drive via hdparm, honouring the wanted method
+# ("crypto" needs enhanced/SED support). Sets M. Returns 0 on success. Handles the
+# BIOS "frozen" state (optional suspend/resume) and clears the temporary password
+# if the erase fails so the drive is never left locked.
+ata_secure_erase() {
+  local dev="$1" want="$2" info enh="" eraseflag="--security-erase" pass="ALSwipe1" label="ATA secure erase"
+  command -v hdparm >/dev/null 2>&1 || return 1
+  info=$(hdparm -I "$dev" 2>/dev/null | tr '\t' ' ' | tr -s ' ')
+  printf '%s\n' "$info" | grep -qi 'Security:' || return 1
+  printf '%s\n' "$info" | grep -qi 'supported: enhanced erase' && enh="yes"
+
+  if ! printf '%s\n' "$info" | grep -qi 'not frozen'; then
+    if [ "${AUDIT_WIPE_UNFREEZE:-0}" = "1" ] && command -v rtcwake >/dev/null 2>&1; then
+      echo "    $dev is frozen — suspending ~6s to unfreeze …"
+      rtcwake -m mem -s 6 >/dev/null 2>&1; sleep 2
+      info=$(hdparm -I "$dev" 2>/dev/null | tr '\t' ' ' | tr -s ' ')
+    fi
+    printf '%s\n' "$info" | grep -qi 'not frozen' || { echo "    $dev still frozen — will overwrite instead."; return 1; }
+  fi
+
+  if [ "$want" = "crypto" ]; then
+    [ -n "$enh" ] || return 1
+    eraseflag="--security-erase-enhanced"; label="ATA enhanced secure erase (crypto on self-encrypting drives)"
+  elif [ -n "$enh" ]; then
+    eraseflag="--security-erase-enhanced"; label="ATA enhanced secure erase"
+  fi
+
+  hdparm --user-master u --security-set-pass "$pass" "$dev" >/dev/null 2>&1 || return 1
+  if hdparm --user-master u $eraseflag "$pass" "$dev" >/dev/null 2>&1; then
+    M="$label"; return 0
+  fi
+  hdparm --user-master u --security-disable "$pass" "$dev" >/dev/null 2>&1
+  echo "    ATA secure erase failed on $dev — will overwrite instead."
+  return 1
+}
+
+# Firmware crypto / secure erase for ONE drive per AUDIT_WIPE_METHOD
+# (auto|crypto|secure|overwrite). Sets M, returns 0 on success (else the caller
+# falls back to TRIM/overwrite).
+firmware_erase() {
+  local dev="$1" d="$2" want="${AUDIT_WIPE_METHOD:-auto}"
+  M=""
+  [ "$want" = "overwrite" ] && return 1
+  case "$d" in
+    nvme*)
+      command -v nvme >/dev/null 2>&1 || return 1
+      if { [ "$want" = "crypto" ] || [ "$want" = "auto" ]; } \
+         && nvme format "$dev" -s 2 --force >/dev/null 2>&1; then
+        M="NVMe cryptographic erase (nvme format -s2)"; return 0
+      fi
+      [ "$want" = "crypto" ] && return 1
+      nvme format "$dev" -s 1 --force >/dev/null 2>&1 && { M="NVMe secure erase (nvme format -s1)"; return 0; }
+      return 1
+      ;;
+    *)
+      ata_secure_erase "$dev" "$want"
+      ;;
+  esac
+}
+
 wipe_internal_drives() {
   [ "${AUDIT_WIPE:-0}" = "1" ] || return 0
 
@@ -157,38 +217,38 @@ WIPEEOF
     rota=$(cat "/sys/block/$d/queue/rotational" 2>/dev/null)
     echo "Erasing $dev …"
 
-    # Fast, type-appropriate erase first.
-    case "$d" in
-      nvme*)
-        command -v nvme >/dev/null 2>&1 && nvme format "$dev" -s 1 --force >/dev/null 2>&1 \
-          && m="NVMe secure erase (nvme format)"
-        ;;
-    esac
+    # 1) Firmware crypto/secure erase where the drive supports it (NIST Purge).
+    local fw=0
+    if firmware_erase "$dev" "$d"; then m="$M"; fw=1; fi
+    # 2) SSD TRIM discard.
     if [ -z "$m" ] && [ "$rota" = "0" ] && command -v blkdiscard >/dev/null 2>&1 \
        && blkdiscard -f "$dev" >/dev/null 2>&1; then
       m="Block discard / TRIM (SSD)"
     fi
+    # 3) Overwrite fallback (NIST Clear).
     if [ -z "$m" ] && command -v shred >/dev/null 2>&1 \
        && shred -f -n 1 -z "$dev" >/dev/null 2>&1; then
       m="Overwrite — shred 1 pass + zero (NIST Clear)"
     fi
 
-    # Verification pass — confirm the drive reads back as zeros.
+    # Verification — overwrite must read back as zeros; a firmware crypto erase
+    # leaves undecryptable ciphertext (not zeros), so it's controller-confirmed.
     if [ -n "$m" ]; then
       echo "  verifying …"
       if verify_zero "$dev"; then
-        verified=1
+        verified=1; m="$m — verified (reads as zeros)"
+      elif [ "$fw" = "1" ]; then
+        verified=1; m="$m — controller-confirmed"
       elif command -v shred >/dev/null 2>&1 && shred -f -n 1 -z "$dev" >/dev/null 2>&1 && verify_zero "$dev"; then
-        # Fast erase didn't read back clean — force a full zero overwrite, re-verify.
-        m="Overwrite — shred 1 pass + zero (NIST Clear)"; verified=1
+        m="Overwrite — shred 1 pass + zero (NIST Clear) — verified (reads as zeros)"; verified=1
       fi
     fi
 
     if [ -n "$m" ] && [ "$verified" = "1" ]; then
-      echo "  ✓ $m — verified"
-      methods="${methods:+$methods; }$m — verified"
+      echo "  ✓ $m"
+      methods="${methods:+$methods; }$m"
     else
-      echo "  ✗ FAILED on $dev${m:+ ($m; verification did not pass)}"
+      echo "  ✗ FAILED on $dev${m:+ ($m)}"
       all_ok=0
     fi
   done

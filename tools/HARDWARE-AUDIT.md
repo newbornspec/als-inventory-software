@@ -147,9 +147,22 @@ Safety:
 - Only **internal, fixed** drives are erased. USB sticks, USB-attached drives, SD
   cards and the CD/DVD are excluded — **the USB you booted from is never touched.**
 - Every erase command targets one specific device, so it can't spill onto another.
-- Method by drive type: NVMe → `nvme format` secure erase; SSD → `blkdiscard`
-  (TRIM); HDD → single-pass overwrite + zero (`shred`, NIST 800-88 "Clear"). The
-  exact method used is recorded on the certificate.
+- Method is chosen by `AUDIT_WIPE_METHOD` in `audit.conf`:
+  - `auto` (default) — **cryptographic erase** if the drive supports it, else
+    firmware **secure erase**, else single-pass overwrite.
+  - `crypto` — cryptographic erase only (self-encrypting drives / NVMe), else overwrite.
+  - `secure` — firmware secure erase (ATA `hdparm` / NVMe), else overwrite.
+  - `overwrite` — single-pass overwrite + zero (`shred`, NIST "Clear").
+- Firmware **secure/crypto erase** = NIST 800-88 **"Purge"** (stronger than
+  overwrite; wipes spare/reallocated areas too). NVMe uses `nvme format` (`-s2`
+  crypto / `-s1` secure); SATA uses `hdparm` ATA (enhanced) secure erase.
+- **Frozen SATA drives:** the BIOS usually marks SATA drives *security-frozen* at
+  boot, blocking ATA secure erase. `AUDIT_WIPE_UNFREEZE="1"` briefly suspends/
+  resumes to unfreeze — but some machines don't resume, so it's off by default;
+  frozen drives fall back to overwrite. (NVMe has no frozen state.)
+- The exact method is recorded on the certificate. A **crypto erase** leaves
+  undecryptable ciphertext (not zeros), so it's marked *controller-confirmed*
+  rather than zero-verified; overwrites are verified by read-back.
 - **Verification pass:** after erasing, the tool reads the drive back (start,
   middle and end) to confirm it reads as zeros. If the fast erase didn't read
   clean, it forces a full zero-overwrite and re-checks. A drive is only recorded
