@@ -129,6 +129,33 @@ than option A for the same end result, so only do it at scale.
 
 ---
 
+## Secure data wipe (optional — DESTRUCTIVE)
+
+The tool can securely erase the machine's **internal** drives during the audit and
+record the wipe automatically (it lands on the device's audit and feeds the
+**data-erasure certificate**). It is **off by default**.
+
+**Enable it** in `audit.conf`:
+```
+AUDIT_WIPE="1"
+```
+Then, on each machine, after you confirm the lot, it lists the internal drives and
+asks you to **type `WIPE`** to erase them (press Enter to skip). Two independent
+safeguards: the `AUDIT_WIPE=1` toggle **and** the typed confirmation.
+
+Safety:
+- Only **internal, fixed** drives are erased. USB sticks, USB-attached drives, SD
+  cards and the CD/DVD are excluded — **the USB you booted from is never touched.**
+- Every erase command targets one specific device, so it can't spill onto another.
+- Method by drive type: NVMe → `nvme format` secure erase; SSD → `blkdiscard`
+  (TRIM); HDD → single-pass overwrite + zero (`shred`, NIST 800-88 "Clear"). The
+  exact method used is recorded on the certificate.
+
+> ⚠️ This permanently destroys data. Test it on a **sacrificial drive** first, and
+> double-check the drive list before typing `WIPE`.
+
+---
+
 ## What it fills vs. what you finish
 
 The tool captures a **full hardware profile** and stores it verbatim (extensible —

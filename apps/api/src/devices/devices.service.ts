@@ -134,6 +134,8 @@ export class DevicesService {
         batteryHealth: profile?.battery?.health ?? dto.batteryHealth ?? null,
         biosLocked: dto.biosLocked ?? null,
         chargerIncluded: dto.chargerIncluded ?? null,
+        dataWipeStatus: dto.dataWipeStatus ?? null,
+        dataWipeMethod: dto.dataWipeMethod ?? null,
         notes: dto.notes ?? null,
         auditedById: userId,
       }),

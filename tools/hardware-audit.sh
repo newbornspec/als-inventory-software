@@ -95,6 +95,76 @@ ensure_tools() {
   fi
 }
 
+# --- OPTIONAL, DESTRUCTIVE: securely erase the machine's INTERNAL drives ---
+# Runs ONLY when AUDIT_WIPE=1 in audit.conf, AND the operator types WIPE to
+# confirm. Every command targets ONE specific device (nvme format / blkdiscard /
+# shred) — none can touch another drive — and USB/removable disks are excluded,
+# so the boot stick is never at risk. Sets WIPE_STATUS + WIPE_METHOD for the
+# upload so the wipe lands on the audit record and the erasure certificate.
+WIPE_STATUS=""; WIPE_METHOD=""
+wipe_internal_drives() {
+  [ "${AUDIT_WIPE:-0}" = "1" ] || return 0
+
+  local disks=() line n t tr rm
+  while IFS= read -r line; do
+    [ -z "$line" ] && continue
+    n=$(pval "$line" NAME); t=$(pval "$line" TYPE); tr=$(pval "$line" TRAN); rm=$(pval "$line" RM)
+    [ "$t" = "disk" ] || continue
+    [ "$tr" = "usb" ] && continue
+    [ "$rm" = "1" ] && continue
+    [ "$(cat "/sys/block/$n/removable" 2>/dev/null)" = "1" ] && continue
+    disks+=("$n")
+  done <<WIPEEOF
+$(lsblk -dP -o NAME,TYPE,TRAN,RM 2>/dev/null)
+WIPEEOF
+
+  [ "${#disks[@]}" -eq 0 ] && { echo "Data wipe: no internal drive found — skipped."; return 0; }
+
+  echo
+  echo "=====================  DATA WIPE  ====================="
+  echo "This will PERMANENTLY erase the internal drive(s) below."
+  local d
+  for d in "${disks[@]}"; do
+    printf "   /dev/%-9s %8s  %s\n" "$d" \
+      "$(lsblk -dno SIZE "/dev/$d" 2>/dev/null)" "$(lsblk -dno MODEL "/dev/$d" 2>/dev/null)"
+  done
+  echo "(The USB you booted from is NOT listed and will not be touched.)"
+  local ans
+  read -rp "Type WIPE to erase, or press Enter to skip: " ans
+  [ "$ans" = "WIPE" ] || { echo "Data wipe skipped."; return 0; }
+
+  local all_ok=1 methods="" dev rota m res
+  for d in "${disks[@]}"; do
+    dev="/dev/$d"; m=""; res=1
+    rota=$(cat "/sys/block/$d/queue/rotational" 2>/dev/null)
+    echo "Erasing $dev …"
+    case "$d" in
+      nvme*)
+        if command -v nvme >/dev/null 2>&1 && nvme format "$dev" -s 1 --force >/dev/null 2>&1; then
+          m="NVMe secure erase (nvme format)"; res=0
+        fi
+        ;;
+    esac
+    if [ $res -ne 0 ] && [ "$rota" = "0" ] && command -v blkdiscard >/dev/null 2>&1 \
+       && blkdiscard -f "$dev" >/dev/null 2>&1; then
+      m="Block discard / TRIM (SSD)"; res=0
+    fi
+    if [ $res -ne 0 ] && command -v shred >/dev/null 2>&1 \
+       && shred -f -n 1 -z "$dev" >/dev/null 2>&1; then
+      m="Overwrite — shred 1 pass + zero (NIST Clear)"; res=0
+    fi
+    if [ $res -eq 0 ]; then echo "  ✓ $m"; methods="${methods:+$methods; }$m"; else echo "  ✗ FAILED on $dev"; all_ok=0; fi
+  done
+
+  WIPE_METHOD=$(printf '%s' "$methods" | tr ';' '\n' | sed 's/^ *//' | grep -v '^$' | sort -u | paste -sd'; ' -)
+  if [ $all_ok -eq 1 ]; then
+    WIPE_STATUS="wiped"; echo "Data wipe complete."
+  else
+    WIPE_STATUS="failed"; echo "Data wipe had failures — recording as FAILED."
+  fi
+  echo "======================================================"
+}
+
 if [ "${AUDIT_DEBUG:-0}" != "1" ]; then
   connect_wifi || exit 1
 fi
@@ -427,8 +497,12 @@ fi
 read -rp "Start audit into ${CHOSEN_NUM}${CHOSEN_SUB_NUM:+ / $CHOSEN_SUB_NUM}? [Y/n] " GO
 case "${GO:-Y}" in [nN]*) echo "Cancelled."; exit 0 ;; esac
 
+# Destructive data wipe (only if AUDIT_WIPE=1 and the operator confirms).
+wipe_internal_drives
+
 BODY="{\"lotId\":\"$CHOSEN_ID\""
 [ -n "$CHOSEN_SUB_ID" ] && BODY="$BODY,\"subLotId\":\"$CHOSEN_SUB_ID\""
+[ -n "$WIPE_STATUS" ] && BODY="$BODY,\"dataWipeStatus\":\"$WIPE_STATUS\",\"dataWipeMethod\":\"$(esc "$WIPE_METHOD")\""
 BODY="$BODY,\"profile\":$PROFILE}"
 
 RESP=$(curl -sS -X POST "$API/devices/hardware-audit" \
@@ -439,6 +513,7 @@ if [ -n "$(jstr "$RESP" assetId)" ]; then
   VERB=$([ "$(jraw "$RESP" created)" = "true" ] && echo "added to" || echo "re-audited in")
   echo
   echo "✓ $(jstr "$RESP" name) ($(jstr "$RESP" tag)) $VERB $(jstr "$RESP" lot)."
+  [ -n "$WIPE_STATUS" ] && echo "  Data wipe: $WIPE_STATUS — $WIPE_METHOD"
 else
   echo
   echo "✗ Upload failed: $(jstr "$RESP" message)"
