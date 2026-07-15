@@ -633,10 +633,27 @@ if [ -n "$(jstr "$RESP" assetId)" ]; then
   VERB=$([ "$(jraw "$RESP" created)" = "true" ] && echo "added to" || echo "re-audited in")
   echo
   echo "✓ $(jstr "$RESP" name) ($(jstr "$RESP" tag)) $VERB $(jstr "$RESP" lot)."
-  [ -n "$WIPE_STATUS" ] && echo "  Data wipe: $WIPE_STATUS — $WIPE_METHOD"
-  exit 0
+  if [ -n "$WIPE_STATUS" ]; then
+    echo
+    echo "  ═══════════════  DATA WIPE  ═══════════════"
+    echo "   Result       : $WIPE_STATUS"
+    echo "   Method        : $WIPE_METHOD"
+    case "$WIPE_METHOD" in
+      *verified*)  echo "   Verification : PASSED";;
+      *confirmed*) echo "   Verification : controller-confirmed";;
+      *)           echo "   Verification : —";;
+    esac
+    echo "  ═══════════════════════════════════════════"
+  fi
+  RESULT=0
 else
   echo
   echo "✗ Upload failed: $(jstr "$RESP" message)"
-  exit 1
+  RESULT=1
 fi
+
+# Keep the result (and the wipe verification) on screen until the operator
+# acknowledges it — it does NOT auto-clear.
+echo
+read -rp "Press Enter when you have read the result… " _
+exit "$RESULT"
