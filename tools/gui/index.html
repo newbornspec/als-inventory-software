@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ALS Audit Station</title>
+<style>
+  :root{
+    --bg:#0a0f14; --panel:#131c26; --panel2:#0f1720; --line:#243441;
+    --ink:#e8eef4; --mute:#8ba0b2; --accent:#10b981; --accent2:#0e8f6c;
+    --warn:#f59e0b; --bad:#ef4444;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{background:var(--bg);color:var(--ink);font:16px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+       -webkit-user-select:none;user-select:none}
+  header{display:flex;align-items:center;gap:16px;padding:16px 24px;border-bottom:1px solid var(--line);background:var(--panel2)}
+  header h1{font-size:18px;margin:0;font-weight:700;letter-spacing:.2px}
+  header .sp{flex:1}
+  .dot{width:10px;height:10px;border-radius:50%;background:var(--mute);display:inline-block;margin-right:8px}
+  .dot.ok{background:var(--accent)} .dot.bad{background:var(--bad)}
+  main{padding:24px;max-width:1200px;margin:0 auto}
+  h2{font-size:22px;margin:0 0 4px}
+  .sub{color:var(--mute);margin:0 0 20px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:16px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:20px;
+        text-align:left;color:var(--ink);cursor:pointer;transition:.12s;min-height:132px;display:flex;
+        flex-direction:column;gap:6px;font:inherit}
+  .card:hover:not([disabled]){border-color:var(--accent);transform:translateY(-2px)}
+  .card[disabled]{opacity:.45;cursor:not-allowed}
+  .card .ic{font-size:26px;line-height:1}
+  .card .t{font-weight:700;font-size:17px}
+  .card .d{color:var(--mute);font-size:13.5px}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:20px;margin-bottom:16px}
+  .row{display:flex;justify-content:space-between;gap:16px;padding:7px 0;border-bottom:1px solid rgba(255,255,255,.04)}
+  .row:last-child{border-bottom:0}
+  .row .k{color:var(--mute)} .row .v{text-align:right;font-weight:600}
+  label{display:block;color:var(--mute);font-size:13px;margin:14px 0 6px}
+  input[type=text],select,textarea{width:100%;background:var(--panel2);border:1px solid var(--line);color:var(--ink);
+       border-radius:10px;padding:14px;font:inherit}
+  .list{max-height:260px;overflow:auto;border:1px solid var(--line);border-radius:10px;margin-top:8px}
+  .opt{padding:14px 16px;cursor:pointer;border-bottom:1px solid rgba(255,255,255,.04)}
+  .opt:last-child{border-bottom:0}
+  .opt:hover{background:rgba(16,185,129,.08)}
+  .opt.sel{background:rgba(16,185,129,.16);border-left:3px solid var(--accent)}
+  .btns{display:flex;gap:12px;margin-top:22px;flex-wrap:wrap}
+  button.b{border:0;border-radius:11px;padding:16px 26px;font:inherit;font-weight:700;cursor:pointer;min-width:130px}
+  .b.pri{background:var(--accent);color:#06231a} .b.pri:hover{background:var(--accent2)}
+  .b.gho{background:transparent;color:var(--ink);border:1px solid var(--line)}
+  .b[disabled]{opacity:.45;cursor:not-allowed}
+  .hide{display:none!important}
+  .banner{border-radius:11px;padding:14px 16px;margin-bottom:16px}
+  .banner.err{background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.4);color:#fecaca}
+  .banner.ok{background:rgba(16,185,129,.12);border:1px solid rgba(16,185,129,.4);color:#a7f3d0}
+  pre{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:14px;
+      overflow:auto;max-height:320px;color:var(--mute);font-size:13px;white-space:pre-wrap}
+  .spin{width:20px;height:20px;border:3px solid var(--line);border-top-color:var(--accent);
+        border-radius:50%;animation:s 1s linear infinite;display:inline-block;vertical-align:-4px}
+  @keyframes s{to{transform:rotate(360deg)}}
+  .tag{display:inline-block;font-size:12px;padding:3px 9px;border-radius:999px;border:1px solid var(--line);color:var(--mute)}
+</style>
+</head>
+<body>
+<header>
+  <h1>ALS Audit Station</h1>
+  <span class="tag" id="devtag">detecting…</span>
+  <span class="sp"></span>
+  <span><span class="dot" id="dot"></span><span id="conn" class="tag">connecting…</span></span>
+</header>
+<main>
+  <div id="err" class="banner err hide"></div>
+
+  <!-- DASHBOARD -->
+  <section id="v-dash">
+    <h2>What would you like to do?</h2>
+    <p class="sub">Choose an option. Nothing is changed on this computer until you confirm.</p>
+    <div class="grid">
+      <button class="card" onclick="go('audit')">
+        <div class="ic">🔍</div><div class="t">Audit Device</div>
+        <div class="d">Read this computer's parts and file it into a lot.</div>
+      </button>
+      <button class="card" id="c-wipe" onclick="go('wipe')">
+        <div class="ic">🧹</div><div class="t">Data Wiping</div>
+        <div class="d">Securely erase the internal drives and certify it.</div>
+      </button>
+      <button class="card" onclick="go('health')">
+        <div class="ic">💽</div><div class="t">Disk Health / SMART</div>
+        <div class="d">Drive health, power-on hours and wear.</div>
+      </button>
+      <button class="card" onclick="go('info')">
+        <div class="ic">📋</div><div class="t">Device Details</div>
+        <div class="d">Everything detected on this machine.</div>
+      </button>
+      <button class="card" onclick="rescan()">
+        <div class="ic">🔄</div><div class="t">Re-scan Hardware</div>
+        <div class="d">Read this computer again.</div>
+      </button>
+      <button class="card" onclick="go('shutdown')">
+        <div class="ic">⏻</div><div class="t">Shut Down</div>
+        <div class="d">Finish and power off safely.</div>
+      </button>
+    </div>
+  </section>
+
+  <!-- AUDIT -->
+  <section id="v-audit" class="hide">
+    <h2>Audit this device</h2>
+    <p class="sub">Pick where this computer should be filed, then start.</p>
+    <div class="panel" id="devpanel"></div>
+    <div class="panel">
+      <label>1. Choose the lot (batch)</label>
+      <input type="text" id="lotq" placeholder="Type to search lots…" oninput="renderLots()">
+      <div class="list" id="lotlist"></div>
+      <label>2. Choose a sub-lot (optional)</label>
+      <div class="list" id="sublist"><div class="opt sel" data-id="">— No sub-lot —</div></div>
+    </div>
+    <div class="btns">
+      <button class="b pri" id="startaudit" onclick="startAudit()" disabled>Start audit</button>
+      <button class="b gho" onclick="go('dash')">Back</button>
+    </div>
+  </section>
+
+  <!-- HEALTH -->
+  <section id="v-health" class="hide">
+    <h2>Disk health (SMART)</h2>
+    <p class="sub">Read directly from each internal drive.</p>
+    <div id="healthbody"></div>
+    <div class="btns"><button class="b gho" onclick="go('dash')">Back</button></div>
+  </section>
+
+  <!-- INFO -->
+  <section id="v-info" class="hide">
+    <h2>Device details</h2>
+    <p class="sub">Everything the audit detected on this machine.</p>
+    <pre id="infobody"></pre>
+    <div class="btns"><button class="b gho" onclick="go('dash')">Back</button></div>
+  </section>
+
+  <!-- WIPE (phase 2 placeholder) -->
+  <section id="v-wipe" class="hide">
+    <h2>Data wiping</h2>
+    <div class="banner err">The graphical wipe workflow is the next phase. For now, wiping runs
+      from the audit script (set <b>AUDIT_WIPE="1"</b> in audit.conf).</div>
+    <div class="btns"><button class="b gho" onclick="go('dash')">Back</button></div>
+  </section>
+
+  <!-- SHUTDOWN -->
+  <section id="v-shutdown" class="hide">
+    <h2>Shut down?</h2>
+    <p class="sub">Make sure any audit has finished uploading first.</p>
+    <div class="btns">
+      <button class="b pri" onclick="alert('Close the browser and type: poweroff')">How to power off</button>
+      <button class="b gho" onclick="go('dash')">Cancel</button>
+    </div>
+  </section>
+
+  <!-- BUSY / RESULT -->
+  <section id="v-busy" class="hide">
+    <h2><span class="spin"></span> <span id="busytitle">Working…</span></h2>
+    <p class="sub" id="busytext">Please wait.</p>
+  </section>
+  <section id="v-result" class="hide">
+    <h2 id="restitle">Done</h2>
+    <div id="resbody"></div>
+    <div class="btns"><button class="b pri" onclick="go('dash')">Back to menu</button></div>
+  </section>
+</main>
+
+<script>
+let S = {lots:[], lotId:null, subId:null, device:null, profileText:''};
+const $ = id => document.getElementById(id);
+const views = ['dash','audit','health','info','wipe','shutdown','busy','result'];
+
+function go(v){ views.forEach(x => $('v-'+x).classList.toggle('hide', x!==v));
+  if(v==='health') renderHealth(); if(v==='info') $('infobody').textContent = S.profileText; }
+
+function busy(t, d){ $('busytitle').textContent=t; $('busytext').textContent=d||''; go('busy'); }
+
+async function boot(){
+  try{
+    const r = await fetch('/api/bootstrap'); const b = await r.json();
+    if(b.error){ $('err').textContent = b.error; $('err').classList.remove('hide'); }
+    else $('err').classList.add('hide');
+    $('dot').className = 'dot ' + (b.error ? 'bad' : (b.ready ? 'ok' : ''));
+    $('conn').textContent = b.error ? 'problem' : (b.capturing ? 'scanning…' : 'ready');
+    $('c-wipe').disabled = false;
+    if(b.device){
+      S.device = b.device; S.profileText = b.summary || '';
+      $('devtag').textContent = b.device.name + (b.device.serial ? ' · ' + b.device.serial : '');
+      renderDevice();
+    }
+    S.lots = b.lots || []; renderLots();
+    if(b.capturing) setTimeout(boot, 1500);
+  }catch(e){ $('err').textContent = 'Cannot reach the local service. ' + e; $('err').classList.remove('hide'); }
+}
+
+function renderDevice(){
+  const d = S.device; if(!d) return;
+  $('devpanel').innerHTML = [
+    ['Device', d.name], ['Type', d.deviceType||'—'], ['Serial', d.serial||'—'],
+    ['CPU', d.cpu||'—'], ['Memory', d.ramGb ? d.ramGb+' GB' : '—'],
+    ['Storage', d.storage||'—'], ['Battery', d.battery||'—'],
+  ].map(([k,v]) => `<div class="row"><span class="k">${k}</span><span class="v">${esc(v)}</span></div>`).join('');
+}
+
+function renderLots(){
+  const q = ($('lotq').value||'').toLowerCase();
+  const items = S.lots.filter(l => l.batchNumber.toLowerCase().includes(q));
+  $('lotlist').innerHTML = items.length ? items.map(l =>
+    `<div class="opt ${S.lotId===l.id?'sel':''}" onclick="pickLot('${l.id}','${esc(l.batchNumber)}')">${esc(l.batchNumber)}</div>`
+  ).join('') : '<div class="opt">No lots found.</div>';
+}
+
+async function pickLot(id){
+  S.lotId = id; S.subId = null; renderLots();
+  $('startaudit').disabled = false;
+  $('sublist').innerHTML = '<div class="opt">Loading sub-lots…</div>';
+  try{
+    const subs = await (await fetch('/api/sublots?batchId='+encodeURIComponent(id))).json();
+    const rows = ['<div class="opt sel" onclick="pickSub(null,this)">— No sub-lot —</div>']
+      .concat((subs||[]).map(s => `<div class="opt" onclick="pickSub('${s.id}',this)">${esc(s.lotNumber)}${s.description? ' · '+esc(s.description):''}</div>`));
+    $('sublist').innerHTML = rows.join('');
+  }catch(e){ $('sublist').innerHTML = '<div class="opt">Could not load sub-lots.</div>'; }
+}
+
+function pickSub(id, el){
+  S.subId = id;
+  [...$('sublist').children].forEach(c => c.classList.remove('sel'));
+  el.classList.add('sel');
+}
+
+async function startAudit(){
+  busy('Uploading audit…', 'Filing this device into the selected lot.');
+  try{
+    const r = await fetch('/api/audit', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({lotId:S.lotId, subLotId:S.subId})});
+    const out = await r.json();
+    if(!r.ok || out.message){ throw new Error(out.message || 'Upload failed'); }
+    $('restitle').textContent = '✓ Audit saved';
+    $('resbody').innerHTML = `<div class="banner ok"><b>${esc(out.name||'Device')}</b> (${esc(out.tag||'')})
+      ${out.created ? 'added to' : 're-audited in'} <b>${esc(out.lot||'')}</b>.</div>`;
+  }catch(e){
+    $('restitle').textContent = '✗ Audit failed';
+    $('resbody').innerHTML = `<div class="banner err">${esc(e.message)}</div>`;
+  }
+  go('result');
+}
+
+function renderHealth(){
+  const drives = (S.device && S.device.drives) || [];
+  $('healthbody').innerHTML = drives.length ? drives.map(d => `<div class="panel">
+      <div class="row"><span class="k">Drive</span><span class="v">${esc([d.model,d.capacity,d.type].filter(Boolean).join(' · '))}</span></div>
+      <div class="row"><span class="k">SMART status</span><span class="v">${esc(d.smartStatus||'—')}</span></div>
+      <div class="row"><span class="k">Health</span><span class="v">${d.healthPct!=null? d.healthPct+'%':'—'}</span></div>
+      <div class="row"><span class="k">Power-on hours</span><span class="v">${d.powerOnHours!=null? d.powerOnHours:'—'}</span></div>
+      <div class="row"><span class="k">Reallocated sectors</span><span class="v">${d.reallocatedSectors!=null? d.reallocatedSectors:'—'}</span></div>
+    </div>`).join('') : '<div class="panel">No internal drives detected.</div>';
+}
+
+async function rescan(){
+  busy('Re-scanning hardware…', 'Reading this computer again.');
+  await fetch('/api/rescan', {method:'POST'});
+  setTimeout(async () => { await boot(); go('dash'); }, 2500);
+}
+
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c =>
+  ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+boot();
+</script>
+</body>
+</html>
