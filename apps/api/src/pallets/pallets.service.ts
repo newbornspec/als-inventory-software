@@ -76,16 +76,17 @@ export class PalletsService {
     wb.creator = 'ALS Trade Wholesales';
     const ws = wb.addWorksheet('Pallet Report');
     ws.columns = [
-      { width: 36 },
-      { width: 22 },
-      { width: 12 },
-      { width: 14 },
-      { width: 14 },
-      { width: 16 },
+      { width: 40 }, // Variant / size (wider so long names fit)
+      { width: 22 }, // Buyer
+      { width: 10 }, // Tier
+      { width: 12 }, // Quantity
+      { width: 14 }, // Grade
+      { width: 14 }, // Unit cost
+      { width: 16 }, // Line total
     ];
 
     const title = (row: number, text: string, size: number) => {
-      ws.mergeCells(`A${row}:F${row}`);
+      ws.mergeCells(`A${row}:G${row}`);
       const cell = ws.getCell(`A${row}`);
       cell.value = text;
       cell.font = { size, bold: true };
@@ -114,7 +115,8 @@ export class PalletsService {
     const headerRow = ws.getRow(headerRowIndex);
     headerRow.values = [
       'Variant / size',
-      'Supplier',
+      'Buyer',
+      'Tier',
       'Quantity',
       'Grade',
       'Unit cost (£)',
@@ -135,7 +137,8 @@ export class PalletsService {
       const row = ws.getRow(dataRow);
       row.values = [
         line.variant,
-        line.supplier || pallet.supplier || '',
+        line.buyer || '',
+        slugLabel(line.tier),
         line.quantity,
         gradeLabel(line.grade),
         cost != null ? cost : '',
@@ -146,8 +149,8 @@ export class PalletsService {
 
     const totalRow = ws.getRow(dataRow + 1);
     totalRow.getCell(1).value = 'Total';
-    totalRow.getCell(3).value = pallet.totalQuantity;
-    totalRow.getCell(6).value = costTotal > 0 ? costTotal : '';
+    totalRow.getCell(4).value = pallet.totalQuantity;
+    totalRow.getCell(7).value = costTotal > 0 ? costTotal : '';
     totalRow.font = { bold: true };
 
     const buffer = Buffer.from(await wb.xlsx.writeBuffer());
@@ -213,8 +216,13 @@ export class PalletsService {
 
 // e.g. "grade_a" -> "Grade A", "for_parts" -> "For Parts".
 function gradeLabel(grade: string | null): string {
-  if (!grade) return '';
-  return grade
+  return slugLabel(grade);
+}
+
+// e.g. "tier_1" -> "Tier 1"; empty for null.
+function slugLabel(value: string | null): string {
+  if (!value) return '';
+  return value
     .split('_')
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
     .join(' ');

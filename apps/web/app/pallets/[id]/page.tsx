@@ -73,15 +73,13 @@ export default async function PalletDetailPage({ params }: { params: Promise<{ i
         </div>
 
         <div className="mt-4 flex items-center gap-3 text-sm">
-          <span className="text-xs uppercase tracking-wide text-neutral-500">Default supplier</span>
+          <span className="text-xs uppercase tracking-wide text-neutral-500">Supplier</span>
           {canManage ? (
             <PalletSupplier palletId={pallet.id} supplier={pallet.supplier} />
           ) : (
             <span className="text-neutral-200">{pallet.supplier || '—'}</span>
           )}
-          <span className="text-xs text-neutral-600">
-            per-variant suppliers set below override this
-          </span>
+          <span className="text-xs text-neutral-600">who this pallet was bought from</span>
         </div>
 
         <div className="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-4">
@@ -107,7 +105,7 @@ export default async function PalletDetailPage({ params }: { params: Promise<{ i
           </div>
         </div>
 
-        <section className="mt-8 max-w-3xl">
+        <section className="mt-8 max-w-5xl">
           <h2 className="text-sm font-medium text-neutral-400">Contents by variant</h2>
           <PalletLines palletId={pallet.id} lines={pallet.lines ?? []} canManage={canManage} />
         </section>

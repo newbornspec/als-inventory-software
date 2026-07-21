@@ -1,10 +1,12 @@
-import { IsEnum, IsInt, IsNumber, IsOptional, IsString, IsUUID, Min } from 'class-validator';
+import { IsEnum, IsIn, IsInt, IsNumber, IsOptional, IsString, IsUUID, Min } from 'class-validator';
 import { AssetConditionGrade } from '../../assets/asset.entity';
 
 export class CreatePalletLineDto {
   @IsString() variant: string;
 
-  @IsOptional() @IsString() supplier?: string;
+  @IsOptional() @IsString() buyer?: string;
+
+  @IsOptional() @IsIn(['tier_1', 'tier_2']) tier?: string;
 
   @IsInt()
   @Min(0)

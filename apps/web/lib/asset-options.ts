@@ -16,6 +16,10 @@ export const STOCK_STATUSES = [
 
 export const CONDITION_GRADES = ['grade_a', 'grade_b', 'grade_c', 'grade_d', 'for_parts', 'scrap'];
 
+// Sale tiers for pallet variant lines. Slugs so formatLabel renders "Tier 1" etc.
+// Extend here (e.g. 'tier_3') without any schema change — the column is free text.
+export const PALLET_TIERS = ['tier_1', 'tier_2'];
+
 export const AUDIT_STATUSES = [
   'passed_testing',
   'failed_testing',

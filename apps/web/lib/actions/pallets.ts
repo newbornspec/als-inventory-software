@@ -11,7 +11,8 @@ export interface PalletLine {
   id: string;
   palletId: string;
   variant: string;
-  supplier: string | null;
+  buyer: string | null;
+  tier: string | null;
   quantity: number;
   grade: string | null;
   unitCost: number | null;
@@ -82,8 +83,9 @@ export async function addPalletLine(
   variant: string,
   quantity: number,
   unitCost: number | null,
-  supplier: string,
+  buyer: string,
   grade: string,
+  tier: string,
 ): Promise<{ error?: string }> {
   const v = variant.trim();
   if (!v) return { error: 'Variant is required.' };
@@ -92,7 +94,8 @@ export async function addPalletLine(
       method: 'POST',
       body: JSON.stringify({
         variant: v,
-        supplier: supplier.trim() || undefined,
+        buyer: buyer.trim() || undefined,
+        tier: tier || undefined,
         quantity: Math.max(0, Math.trunc(quantity) || 0),
         grade: grade || undefined,
         unitCost: unitCost ?? undefined,
@@ -112,14 +115,16 @@ export async function updatePalletLine(
   variant: string,
   quantity: number,
   unitCost: number | null,
-  supplier: string,
+  buyer: string,
   grade: string,
+  tier: string,
 ): Promise<void> {
   await apiFetch(`/pallets/${palletId}/lines/${lineId}`, {
     method: 'PATCH',
     body: JSON.stringify({
       variant: variant.trim(),
-      supplier: supplier.trim(),
+      buyer: buyer.trim(),
+      tier: tier || null,
       quantity: Math.max(0, Math.trunc(quantity) || 0),
       grade: grade || null,
       unitCost: unitCost ?? undefined,
