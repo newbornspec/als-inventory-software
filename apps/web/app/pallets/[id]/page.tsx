@@ -8,6 +8,7 @@ import { money } from '@/lib/money';
 import { PalletStatusSelect } from './status-select';
 import { PalletLines } from './pallet-lines';
 import { PalletSupplier } from './pallet-supplier';
+import { PalletBuyer } from './pallet-buyer';
 
 // 404 (deleted pallet) -> Next's not-found page instead of a server-side crash.
 async function loadPallet(id: string): Promise<Pallet> {
@@ -72,14 +73,29 @@ export default async function PalletDetailPage({ params }: { params: Promise<{ i
           </div>
         </div>
 
-        <div className="mt-4 flex items-center gap-3 text-sm">
-          <span className="text-xs uppercase tracking-wide text-neutral-500">Supplier</span>
-          {canManage ? (
-            <PalletSupplier palletId={pallet.id} supplier={pallet.supplier} />
-          ) : (
-            <span className="text-neutral-200">{pallet.supplier || '—'}</span>
-          )}
-          <span className="text-xs text-neutral-600">who this pallet was bought from</span>
+        <div className="mt-4 space-y-2 text-sm">
+          <div className="flex items-center gap-3">
+            <span className="w-16 shrink-0 text-xs uppercase tracking-wide text-neutral-500">
+              Supplier
+            </span>
+            {canManage ? (
+              <PalletSupplier palletId={pallet.id} supplier={pallet.supplier} />
+            ) : (
+              <span className="text-neutral-200">{pallet.supplier || '—'}</span>
+            )}
+            <span className="text-xs text-neutral-600">who this pallet was bought from</span>
+          </div>
+          <div className="flex items-center gap-3">
+            <span className="w-16 shrink-0 text-xs uppercase tracking-wide text-neutral-500">
+              Buyer
+            </span>
+            {canManage ? (
+              <PalletBuyer palletId={pallet.id} buyer={pallet.buyer} />
+            ) : (
+              <span className="text-neutral-200">{pallet.buyer || '—'}</span>
+            )}
+            <span className="text-xs text-neutral-600">who this pallet is being sold to</span>
+          </div>
         </div>
 
         <div className="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-4">

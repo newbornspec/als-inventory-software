@@ -30,12 +30,6 @@ export class PalletLine {
   @Column({ type: 'varchar' })
   variant: string;
 
-  // The buyer for this specific variant — a pallet's variants can go to different
-  // buyers. Optional. The physical column keeps its original name "supplier" so
-  // no column rename is needed on deploy; only the app-facing name is "buyer".
-  @Column({ name: 'supplier', type: 'varchar', nullable: true })
-  buyer: string | null;
-
   // Sale tier for this variant (e.g. "tier_1", "tier_2"); NULL means none.
   // Free text so new tiers need no schema change.
   @Column({ type: 'varchar', nullable: true })

@@ -29,6 +29,14 @@ export function NewPalletForm({ locations }: { locations: Location[] }) {
         />
       </div>
       <div className="space-y-1">
+        <label className="text-sm text-neutral-300">Buyer</label>
+        <input
+          name="buyer"
+          placeholder="e.g. ABC Traders"
+          className="w-full rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm outline-none focus:border-neutral-500"
+        />
+      </div>
+      <div className="space-y-1">
         <label className="text-sm text-neutral-300">Location</label>
         <select
           name="locationId"

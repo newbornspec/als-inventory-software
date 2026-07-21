@@ -77,7 +77,6 @@ export class PalletsService {
     const ws = wb.addWorksheet('Pallet Report');
     ws.columns = [
       { width: 40 }, // Variant / size (wider so long names fit)
-      { width: 22 }, // Buyer
       { width: 10 }, // Tier
       { width: 12 }, // Quantity
       { width: 14 }, // Grade
@@ -86,7 +85,7 @@ export class PalletsService {
     ];
 
     const title = (row: number, text: string, size: number) => {
-      ws.mergeCells(`A${row}:G${row}`);
+      ws.mergeCells(`A${row}:F${row}`);
       const cell = ws.getCell(`A${row}`);
       cell.value = text;
       cell.font = { size, bold: true };
@@ -98,6 +97,7 @@ export class PalletsService {
       ['Date generated', new Date().toLocaleString('en-GB')],
       ['Pallet number', pallet.palletNumber],
       ['Supplier', pallet.supplier ?? '—'],
+      ['Buyer', pallet.buyer ?? '—'],
       ['Description', pallet.description ?? '—'],
       ['Location', pallet.location?.name ?? '—'],
       ['Status', pallet.status],
@@ -115,7 +115,6 @@ export class PalletsService {
     const headerRow = ws.getRow(headerRowIndex);
     headerRow.values = [
       'Variant / size',
-      'Buyer',
       'Tier',
       'Quantity',
       'Grade',
@@ -137,7 +136,6 @@ export class PalletsService {
       const row = ws.getRow(dataRow);
       row.values = [
         line.variant,
-        line.buyer || '',
         slugLabel(line.tier),
         line.quantity,
         gradeLabel(line.grade),
@@ -149,8 +147,8 @@ export class PalletsService {
 
     const totalRow = ws.getRow(dataRow + 1);
     totalRow.getCell(1).value = 'Total';
-    totalRow.getCell(4).value = pallet.totalQuantity;
-    totalRow.getCell(7).value = costTotal > 0 ? costTotal : '';
+    totalRow.getCell(3).value = pallet.totalQuantity;
+    totalRow.getCell(6).value = costTotal > 0 ? costTotal : '';
     totalRow.font = { bold: true };
 
     const buffer = Buffer.from(await wb.xlsx.writeBuffer());

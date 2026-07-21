@@ -11,7 +11,6 @@ export interface PalletLine {
   id: string;
   palletId: string;
   variant: string;
-  buyer: string | null;
   tier: string | null;
   quantity: number;
   grade: string | null;
@@ -25,6 +24,7 @@ export interface Pallet {
   palletNumber: string;
   description: string | null;
   supplier: string | null;
+  buyer: string | null;
   locationId: string | null;
   status: PalletStatus;
   notes: string | null;
@@ -39,6 +39,7 @@ export async function createPallet(_prev: ActionState, formData: FormData): Prom
   const dto = {
     description: str(formData.get('description')),
     supplier: str(formData.get('supplier')),
+    buyer: str(formData.get('buyer')),
     locationId: str(formData.get('locationId')),
     notes: str(formData.get('notes')),
   };
@@ -66,6 +67,13 @@ export async function updatePalletSupplier(id: string, formData: FormData): Prom
   revalidatePath('/pallets');
 }
 
+export async function updatePalletBuyer(id: string, formData: FormData): Promise<void> {
+  const buyer = String(formData.get('buyer') ?? '').trim();
+  await apiFetch(`/pallets/${id}`, { method: 'PATCH', body: JSON.stringify({ buyer }) });
+  revalidatePath(`/pallets/${id}`);
+  revalidatePath('/pallets');
+}
+
 export async function deletePallet(id: string): Promise<void> {
   try {
     await apiFetch(`/pallets/${id}`, { method: 'DELETE' });
@@ -83,7 +91,6 @@ export async function addPalletLine(
   variant: string,
   quantity: number,
   unitCost: number | null,
-  buyer: string,
   grade: string,
   tier: string,
 ): Promise<{ error?: string }> {
@@ -94,7 +101,6 @@ export async function addPalletLine(
       method: 'POST',
       body: JSON.stringify({
         variant: v,
-        buyer: buyer.trim() || undefined,
         tier: tier || undefined,
         quantity: Math.max(0, Math.trunc(quantity) || 0),
         grade: grade || undefined,
@@ -115,7 +121,6 @@ export async function updatePalletLine(
   variant: string,
   quantity: number,
   unitCost: number | null,
-  buyer: string,
   grade: string,
   tier: string,
 ): Promise<void> {
@@ -123,7 +128,6 @@ export async function updatePalletLine(
     method: 'PATCH',
     body: JSON.stringify({
       variant: variant.trim(),
-      buyer: buyer.trim(),
       tier: tier || null,
       quantity: Math.max(0, Math.trunc(quantity) || 0),
       grade: grade || null,

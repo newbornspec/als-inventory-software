@@ -22,7 +22,6 @@ export function PalletLines({
 }) {
   const router = useRouter();
   const [variant, setVariant] = useState('');
-  const [buyer, setBuyer] = useState('');
   const [qty, setQty] = useState('');
   const [grade, setGrade] = useState('');
   const [tier, setTier] = useState('');
@@ -52,7 +51,6 @@ export function PalletLines({
       variant,
       parseInt(qty || '0', 10),
       cost ? parseFloat(cost) : null,
-      buyer,
       grade,
       tier,
     );
@@ -62,7 +60,6 @@ export function PalletLines({
       return;
     }
     setVariant('');
-    setBuyer('');
     setQty('');
     setGrade('');
     setTier('');
@@ -75,44 +72,38 @@ export function PalletLines({
   function saveVariant(line: PalletLine, next: string) {
     if (!next.trim() || next.trim() === line.variant) return;
     void run(() =>
-      updatePalletLine(palletId, line.id, next, line.quantity, line.unitCost, line.buyer ?? '', line.grade ?? '', line.tier ?? ''),
-    );
-  }
-  function saveBuyer(line: PalletLine, next: string) {
-    if (next.trim() === (line.buyer ?? '')) return;
-    void run(() =>
-      updatePalletLine(palletId, line.id, line.variant, line.quantity, line.unitCost, next, line.grade ?? '', line.tier ?? ''),
+      updatePalletLine(palletId, line.id, next, line.quantity, line.unitCost, line.grade ?? '', line.tier ?? ''),
     );
   }
   function saveQty(line: PalletLine, next: number) {
     if (Number.isNaN(next) || next === line.quantity) return;
     void run(() =>
-      updatePalletLine(palletId, line.id, line.variant, next, line.unitCost, line.buyer ?? '', line.grade ?? '', line.tier ?? ''),
+      updatePalletLine(palletId, line.id, line.variant, next, line.unitCost, line.grade ?? '', line.tier ?? ''),
     );
   }
   function saveGrade(line: PalletLine, next: string) {
     if (next === (line.grade ?? '')) return;
     void run(() =>
-      updatePalletLine(palletId, line.id, line.variant, line.quantity, line.unitCost, line.buyer ?? '', next, line.tier ?? ''),
+      updatePalletLine(palletId, line.id, line.variant, line.quantity, line.unitCost, next, line.tier ?? ''),
     );
   }
   function saveTier(line: PalletLine, next: string) {
     if (next === (line.tier ?? '')) return;
     void run(() =>
-      updatePalletLine(palletId, line.id, line.variant, line.quantity, line.unitCost, line.buyer ?? '', line.grade ?? '', next),
+      updatePalletLine(palletId, line.id, line.variant, line.quantity, line.unitCost, line.grade ?? '', next),
     );
   }
   function saveCost(line: PalletLine, next: number | null) {
     if (next === line.unitCost) return;
     void run(() =>
-      updatePalletLine(palletId, line.id, line.variant, line.quantity, next, line.buyer ?? '', line.grade ?? '', line.tier ?? ''),
+      updatePalletLine(palletId, line.id, line.variant, line.quantity, next, line.grade ?? '', line.tier ?? ''),
     );
   }
   function remove(line: PalletLine) {
     void run(() => deletePalletLine(palletId, line.id));
   }
 
-  const cols = canManage ? 8 : 7;
+  const cols = canManage ? 7 : 6;
 
   return (
     <div className="mt-3 overflow-x-auto rounded-lg border border-neutral-800">
@@ -120,7 +111,6 @@ export function PalletLines({
         <thead className="bg-neutral-900 text-neutral-400">
           <tr>
             <th className="min-w-[18rem] px-3 py-2">Variant / size</th>
-            <th className="min-w-[10rem] px-3 py-2">Buyer</th>
             <th className="w-28 px-3 py-2">Tier</th>
             <th className="w-24 px-3 py-2">Quantity</th>
             <th className="w-32 px-3 py-2">Grade</th>
@@ -141,18 +131,6 @@ export function PalletLines({
                   />
                 ) : (
                   <span className="text-neutral-200">{l.variant}</span>
-                )}
-              </td>
-              <td className="px-3 py-2">
-                {canManage ? (
-                  <input
-                    defaultValue={l.buyer ?? ''}
-                    placeholder="—"
-                    onBlur={(e) => saveBuyer(l, e.target.value)}
-                    className="w-full rounded border border-neutral-700 bg-neutral-900 px-2 py-1.5"
-                  />
-                ) : (
-                  <span className="text-neutral-400">{l.buyer || '—'}</span>
                 )}
               </td>
               <td className="px-3 py-2">
@@ -249,14 +227,6 @@ export function PalletLines({
                   value={variant}
                   onChange={(e) => setVariant(e.target.value)}
                   placeholder="e.g. 22 inch"
-                  className="w-full rounded border border-neutral-700 bg-neutral-900 px-2 py-1.5"
-                />
-              </td>
-              <td className="px-3 py-2">
-                <input
-                  value={buyer}
-                  onChange={(e) => setBuyer(e.target.value)}
-                  placeholder="buyer (optional)"
                   className="w-full rounded border border-neutral-700 bg-neutral-900 px-2 py-1.5"
                 />
               </td>

@@ -4,8 +4,6 @@ import { AssetConditionGrade } from '../../assets/asset.entity';
 export class CreatePalletLineDto {
   @IsString() variant: string;
 
-  @IsOptional() @IsString() buyer?: string;
-
   @IsOptional() @IsIn(['tier_1', 'tier_2']) tier?: string;
 
   @IsInt()

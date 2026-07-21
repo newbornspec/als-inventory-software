@@ -36,6 +36,10 @@ export class Pallet {
   @Column({ type: 'varchar', nullable: true })
   supplier: string | null;
 
+  // Who the whole pallet is being sold to — optional, shown on the report.
+  @Column({ type: 'varchar', nullable: true })
+  buyer: string | null;
+
   @Column({ name: 'location_id', type: 'uuid', nullable: true })
   locationId: string | null;
 
