@@ -15,6 +15,14 @@ export enum PalletStatus {
   SHIPPED = 'shipped',
 }
 
+// Which "New Pallet" layout created this pallet. It doesn't change the pallet's
+// data — only which export report it generates: VARIANT is Layout 1's original
+// report; SPEC is Layout 2's split-column (Manufacturer/Model/…) report.
+export enum PalletEntryLayout {
+  VARIANT = 'variant',
+  SPEC = 'spec',
+}
+
 // A physical pallet holding counted quantities by variant — the monitor case
 // from the spec ("Pallet 102: 20 × 22", 35 × 23", 15 × 24"") that was tracked
 // in Excel. Unlike serialized assets, the contents aren't individual rows;
@@ -49,6 +57,12 @@ export class Pallet {
 
   @Column({ type: 'enum', enum: PalletStatus, default: PalletStatus.OPEN })
   status: PalletStatus;
+
+  // Which New-Pallet layout created this pallet — drives the export report shape.
+  // Free-text varchar (like `tier`) to avoid a rigid pg enum; defaults to VARIANT
+  // so Layout 1 and all pre-existing pallets keep the original report.
+  @Column({ name: 'entry_layout', type: 'varchar', default: PalletEntryLayout.VARIANT })
+  entryLayout: string;
 
   @Column({ type: 'varchar', nullable: true })
   notes: string | null;

@@ -2,7 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { FindOptionsWhere, IsNull, Repository } from 'typeorm';
 import * as ExcelJS from 'exceljs';
-import { Pallet, PalletStatus } from './pallet.entity';
+import { Pallet, PalletStatus, PalletEntryLayout } from './pallet.entity';
 import { PalletLine } from './pallet-line.entity';
 import { Product, ProductTrackingType } from '../products/product.entity';
 import { CreatePalletDto } from './dto/create-pallet.dto';
@@ -56,7 +56,9 @@ export class PalletsService {
   async createFromSpec(dto: CreatePalletSpecDto): Promise<Pallet> {
     const { rows, ...meta } = dto;
     const palletNumber = await this.nextPalletNumber();
-    const pallet = await this.pallets.save(this.pallets.create({ ...meta, palletNumber }));
+    const pallet = await this.pallets.save(
+      this.pallets.create({ ...meta, palletNumber, entryLayout: PalletEntryLayout.SPEC }),
+    );
 
     for (const row of rows) {
       await this.persistLookups(row);
@@ -146,11 +148,14 @@ export class PalletsService {
     )[0];
   }
 
-  // Build a formatted .xlsx pallet report with a company header block and the
-  // full variant list (with costs). Returned as a buffer for the controller to
-  // stream as a download.
+  // Build a formatted .xlsx pallet report. The columns differ by the layout the
+  // pallet was created with: Layout 2 (spec) gets a split-column report, every
+  // other pallet keeps the original variant report below.
   async generateReport(id: string): Promise<{ buffer: Buffer; filename: string }> {
     const pallet = await this.findOne(id);
+    if (pallet.entryLayout === PalletEntryLayout.SPEC) {
+      return this.generateSpecReport(pallet);
+    }
 
     const wb = new ExcelJS.Workbook();
     wb.creator = 'ALS Trade Wholesales';
@@ -235,6 +240,102 @@ export class PalletsService {
     return { buffer, filename: `${pallet.palletNumber}-report.xlsx` };
   }
 
+  // Layout 2 export: each spec attribute in its own column, pulled from the
+  // line's linked catalogue product, with a bold header row. No dotted variant,
+  // no cost/tier/grade columns — a separate report from Layout 1's.
+  private async generateSpecReport(
+    pallet: PalletWithTotals & { lines: PalletLine[] },
+  ): Promise<{ buffer: Buffer; filename: string }> {
+    // findOne doesn't load the product; the spec columns come from it.
+    const lines = await this.lines.find({
+      where: { palletId: pallet.id },
+      relations: ['product'],
+      order: { createdAt: 'ASC' },
+    });
+
+    const wb = new ExcelJS.Workbook();
+    wb.creator = 'ALS Trade Wholesales';
+    const ws = wb.addWorksheet('Pallet Report');
+    ws.columns = [
+      { width: 16 }, // Manufacturer
+      { width: 22 }, // Model
+      { width: 12 }, // Chassis
+      { width: 20 }, // CPU
+      { width: 10 }, // RAM
+      { width: 16 }, // Storage
+      { width: 12 }, // Quantity
+    ];
+
+    const title = (row: number, text: string, size: number) => {
+      ws.mergeCells(`A${row}:G${row}`);
+      const cell = ws.getCell(`A${row}`);
+      cell.value = text;
+      cell.font = { size, bold: true };
+    };
+    title(1, 'ALS Trade Wholesales', 16);
+    title(2, 'Pallet Report', 12);
+
+    const meta: [string, string | number][] = [
+      ['Date generated', new Date().toLocaleString('en-GB')],
+      ['Pallet number', pallet.palletNumber],
+      ['Supplier', pallet.supplier ?? '—'],
+      ['Buyer', pallet.buyer ?? '—'],
+      ['Description', pallet.description ?? '—'],
+      ['Location', pallet.location?.name ?? '—'],
+      ['Status', pallet.status],
+      ['Total items', pallet.totalQuantity],
+    ];
+    let r = 4;
+    for (const [label, value] of meta) {
+      ws.getCell(`A${r}`).value = label;
+      ws.getCell(`A${r}`).font = { bold: true };
+      ws.getCell(`B${r}`).value = value;
+      r += 1;
+    }
+
+    const headerRowIndex = r + 1;
+    const headerRow = ws.getRow(headerRowIndex);
+    headerRow.values = [
+      'Manufacturer',
+      'Model',
+      'Chassis',
+      'CPU',
+      'RAM',
+      'Storage',
+      'Quantity',
+    ];
+    headerRow.font = { bold: true };
+    headerRow.eachCell((cell) => {
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEFEFEF' } };
+      cell.border = { bottom: { style: 'thin' } };
+    });
+
+    let qtyTotal = 0;
+    let dataRow = headerRowIndex + 1;
+    for (const line of lines) {
+      const s = specColumns(line.product, line.variant);
+      qtyTotal += line.quantity;
+      ws.getRow(dataRow).values = [
+        s.manufacturer,
+        s.model,
+        s.chassis,
+        s.cpu,
+        s.ram,
+        s.storage,
+        line.quantity,
+      ];
+      dataRow += 1;
+    }
+
+    const totalRow = ws.getRow(dataRow + 1);
+    totalRow.getCell(1).value = 'Total';
+    totalRow.getCell(7).value = qtyTotal;
+    totalRow.font = { bold: true };
+
+    const buffer = Buffer.from(await wb.xlsx.writeBuffer());
+    return { buffer, filename: `${pallet.palletNumber}-report.xlsx` };
+  }
+
   async remove(id: string): Promise<void> {
     await this.assertPallet(id);
     await this.pallets.delete(id); // cascades pallet_lines
@@ -296,6 +397,33 @@ export class PalletsService {
 function nz(v: string | null | undefined): string | null {
   const s = (v ?? '').trim();
   return s === '' ? null : s;
+}
+
+// The six spec fields for one Layout 2 export row, taken from the linked
+// catalogue product (RAM rendered back as "8 GB"). If the product was somehow
+// unlinked, fall back to the composed variant label so no data is lost.
+function specColumns(
+  product: Product | null,
+  variant: string,
+): {
+  manufacturer: string;
+  model: string;
+  chassis: string;
+  cpu: string;
+  ram: string;
+  storage: string;
+} {
+  if (product) {
+    return {
+      manufacturer: product.manufacturer ?? '',
+      model: product.model ?? '',
+      chassis: product.chassis ?? '',
+      cpu: product.cpu ?? '',
+      ram: product.ramGb != null ? `${product.ramGb} GB` : '',
+      storage: product.storage ?? '',
+    };
+  }
+  return { manufacturer: '', model: variant ?? '', chassis: '', cpu: '', ram: '', storage: '' };
 }
 
 // "8 GB" / "16GB" -> 8 / 16; null when there's no number.
