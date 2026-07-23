@@ -84,6 +84,9 @@ export function LotsAccordion({
             <div className="px-4 pb-3">
               <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs text-neutral-400">
                 <span>
+                  Owner: <span className="text-neutral-300">{lot.owner?.name ?? '—'}</span>
+                </span>
+                <span>
                   Supplier: <span className="text-neutral-300">{lot.source ?? '—'}</span>
                 </span>
                 <span>

@@ -89,6 +89,19 @@ export default async function BatchDetailPage({ params }: { params: Promise<{ id
 
         <dl className="mt-4 flex flex-wrap gap-x-8 gap-y-2 text-sm">
           <div>
+            <dt className="text-xs uppercase tracking-wide text-neutral-500">Owner</dt>
+            <dd className="text-neutral-200">{batch.owner?.name ?? '—'}</dd>
+          </div>
+          <div>
+            <dt className="text-xs uppercase tracking-wide text-neutral-500">Created by</dt>
+            <dd className="text-neutral-200">
+              {batch.createdBy?.name ?? '—'}
+              <span className="ml-1 text-xs text-neutral-500">
+                {batch.createdAt ? `· ${new Date(batch.createdAt).toLocaleDateString('en-GB')}` : ''}
+              </span>
+            </dd>
+          </div>
+          <div>
             <dt className="text-xs uppercase tracking-wide text-neutral-500">Purchase order</dt>
             <dd className="text-neutral-200">{batch.purchaseOrder ?? '—'}</dd>
           </div>

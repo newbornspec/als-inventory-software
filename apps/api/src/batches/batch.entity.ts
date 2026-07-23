@@ -50,6 +50,22 @@ export class Batch {
   @JoinColumn({ name: 'received_by_id' })
   receivedBy: User | null;
 
+  // --- Ownership (traceability). Owner is accountable for the batch and can be
+  // reassigned by an admin; createdBy is the immutable author of the record. ---
+  @Column({ name: 'owner_id', type: 'uuid', nullable: true })
+  ownerId: string | null;
+
+  @ManyToOne(() => User, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'owner_id' })
+  owner: User | null;
+
+  @Column({ name: 'created_by_id', type: 'uuid', nullable: true })
+  createdById: string | null;
+
+  @ManyToOne(() => User, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'created_by_id' })
+  createdBy: User | null;
+
   @Column({ name: 'received_date', type: 'date', nullable: true })
   receivedDate: string | null;
 

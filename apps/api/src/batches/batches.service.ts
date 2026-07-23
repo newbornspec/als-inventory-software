@@ -8,8 +8,10 @@ import { UpdateBatchDto } from './dto/update-batch.dto';
 import { Asset } from '../assets/asset.entity';
 import { sanitizeUser, type SafeUser } from '../users/sanitize-user';
 
-export interface BatchWithCount extends Omit<Batch, 'receivedBy'> {
+export interface BatchWithCount extends Omit<Batch, 'receivedBy' | 'owner' | 'createdBy'> {
   receivedBy: SafeUser | null;
+  owner: SafeUser | null;
+  createdBy: SafeUser | null;
   actualUnitCount: number;
   // Live per-lot roll-ups so the Lots view can show operational progress
   // (audit/grading throughput) without loading every asset.
@@ -28,7 +30,7 @@ export class BatchesService {
 
   async findAll(): Promise<BatchWithCount[]> {
     const batches = await this.batches.find({
-      relations: ['location', 'receivedBy'],
+      relations: ['location', 'receivedBy', 'owner', 'createdBy'],
       order: { createdAt: 'DESC' },
     });
     return this.withCounts(batches);
@@ -37,7 +39,7 @@ export class BatchesService {
   async findOne(id: string): Promise<BatchWithCount> {
     const batch = await this.batches.findOne({
       where: { id },
-      relations: ['location', 'receivedBy'],
+      relations: ['location', 'receivedBy', 'owner', 'createdBy'],
     });
     if (!batch) throw new NotFoundException(`Batch ${id} not found`);
     return (await this.withCounts([batch]))[0];
@@ -209,8 +211,16 @@ export class BatchesService {
 
   async create(dto: CreateBatchDto, userId: string): Promise<Batch> {
     const batchNumber = await this.nextBatchNumber();
+    // Owner + author + receiver all default to the creator; an admin can
+    // reassign ownership later. receivedById kept for backward compatibility.
     return this.batches.save(
-      this.batches.create({ ...dto, batchNumber, receivedById: userId }),
+      this.batches.create({
+        ...dto,
+        batchNumber,
+        receivedById: userId,
+        ownerId: userId,
+        createdById: userId,
+      }),
     );
   }
 
@@ -256,6 +266,8 @@ export class BatchesService {
       return {
         ...b,
         receivedBy: b.receivedBy ? sanitizeUser(b.receivedBy) : null,
+        owner: b.owner ? sanitizeUser(b.owner) : null,
+        createdBy: b.createdBy ? sanitizeUser(b.createdBy) : null,
         actualUnitCount: r ? parseInt(r.total, 10) : 0,
         readyForSale: r ? parseInt(r.readyForSale, 10) : 0,
         scrap: r ? parseInt(r.scrap, 10) : 0,

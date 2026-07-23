@@ -24,8 +24,12 @@ export interface Batch {
   quarantine: number;
   audited: number;
   createdAt: string;
+  ownerId?: string | null;
+  createdById?: string | null;
   location?: { id: string; name: string } | null;
   receivedBy?: { id: string; name: string } | null;
+  owner?: { id: string; name: string } | null;
+  createdBy?: { id: string; name: string } | null;
 }
 
 export interface Lot {
