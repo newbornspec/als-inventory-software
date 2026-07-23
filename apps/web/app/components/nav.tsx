@@ -22,7 +22,10 @@ const MANAGER_LINKS = [
   { href: '/reports', label: 'Reports' },
   { href: '/activity', label: 'Activity' },
 ];
-const ADMIN_LINKS = [{ href: '/users', label: 'Users' }];
+const ADMIN_LINKS = [
+  { href: '/users', label: 'Users' },
+  { href: '/lookups', label: 'Lookups' },
+];
 
 export function Nav() {
   const pathname = usePathname();

@@ -19,6 +19,7 @@ import { OrderLine } from '../sales/order-line.entity';
 import { RepairLog } from '../repairs/repair-log.entity';
 import { AssetPhoto } from '../photos/asset-photo.entity';
 import { ActivityLog } from '../activity/activity-log.entity';
+import { LookupValue } from '../lookups/lookup-value.entity';
 
 // Used by the TypeORM CLI for generating/running migrations.
 // The running NestJS app configures its own connection via TypeOrmModule in app.module.ts.
