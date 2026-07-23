@@ -23,9 +23,9 @@ bucket_definitions:
       - SELECT id, name, role FROM users
       - SELECT id, name, address, assigned_user_id FROM locations
 
-  # Managers: only the lots they own.
+  # Managers: the lots they own PLUS unowned "pool" lots (e.g. technician-created).
   owned_lots:
-    parameters: SELECT id AS batch_id FROM batches WHERE owner_id = request.user_id() AND request.jwt() ->> 'role' = 'manager'
+    parameters: SELECT id AS batch_id FROM batches WHERE (owner_id = request.user_id() OR owner_id IS NULL) AND request.jwt() ->> 'role' = 'manager'
     data:
       - SELECT * FROM assets WHERE batch_id = bucket.batch_id
       - SELECT * FROM lots WHERE batch_id = bucket.batch_id

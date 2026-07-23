@@ -5,7 +5,12 @@ import PDFDocument from 'pdfkit';
 import { Asset } from './asset.entity';
 import { AssetAudit, DataWipeStatus } from './asset-audit.entity';
 import { Batch } from '../batches/batch.entity';
-import { assertOwnsBatch, isScopedManager, type RequestUser } from '../common/ownership';
+import {
+  assertOwnsBatch,
+  isScopedManager,
+  managerCanAccessBatch,
+  type RequestUser,
+} from '../common/ownership';
 
 // Issuer details for compliance documents. Overridable via env so the same
 // codebase can be white-labelled without a code change.
@@ -102,12 +107,9 @@ export class CertificatesService {
       .where('asset.id = :id', { id: assetId })
       .getOne();
     if (!asset) throw new NotFoundException(`Asset ${assetId} not found`);
-    // A scoped manager can only certify a device in a lot they own.
-    if (isScopedManager(user)) {
-      const owns =
-        asset.batchId != null &&
-        (await this.batches.count({ where: { id: asset.batchId, ownerId: user!.userId } })) > 0;
-      if (!owns) throw new NotFoundException(`Asset ${assetId} not found`);
+    // A scoped manager can only certify a device in a lot they can access.
+    if (isScopedManager(user) && !(await managerCanAccessBatch(this.batches, asset.batchId, user!))) {
+      throw new NotFoundException(`Asset ${assetId} not found`);
     }
 
     const wipe = await this.audits.findOne({

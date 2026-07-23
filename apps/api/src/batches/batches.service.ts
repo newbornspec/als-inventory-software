@@ -8,7 +8,8 @@ import { UpdateBatchDto } from './dto/update-batch.dto';
 import { Asset } from '../assets/asset.entity';
 import { sanitizeUser, type SafeUser } from '../users/sanitize-user';
 import { ActivityService } from '../activity/activity.service';
-import { assertOwnsBatch, ownerWhere, type RequestUser } from '../common/ownership';
+import { assertOwnsBatch, accessibleBatchWhere, type RequestUser } from '../common/ownership';
+import { UserRole } from '../users/user.entity';
 
 export interface BatchWithCount extends Omit<Batch, 'receivedBy' | 'owner' | 'createdBy'> {
   receivedBy: SafeUser | null;
@@ -35,7 +36,7 @@ export class BatchesService {
   // internal callers (no user) see all.
   async findAll(user?: RequestUser): Promise<BatchWithCount[]> {
     const batches = await this.batches.find({
-      where: ownerWhere(user),
+      where: accessibleBatchWhere(user),
       relations: ['location', 'receivedBy', 'owner', 'createdBy'],
       order: { createdAt: 'DESC' },
     });
@@ -227,21 +228,23 @@ export class BatchesService {
     return { buffer, filename: `${batch.batchNumber}-report.xlsx` };
   }
 
-  async create(dto: CreateBatchDto, userId: string): Promise<Batch> {
+  async create(dto: CreateBatchDto, user: RequestUser): Promise<Batch> {
     const batchNumber = await this.nextBatchNumber();
-    // Owner + author + receiver all default to the creator; an admin can
-    // reassign ownership later. receivedById kept for backward compatibility.
+    // A technician's lot is UNOWNED (a shared "pool" lot every manager can see
+    // and manage); admins/managers own what they create. createdBy/receivedBy
+    // always record who actually made it (an admin can reassign the owner later).
+    const ownerId = user.role === UserRole.TECHNICIAN ? null : user.userId;
     const batch = await this.batches.save(
       this.batches.create({
         ...dto,
         batchNumber,
-        receivedById: userId,
-        ownerId: userId,
-        createdById: userId,
+        receivedById: user.userId,
+        ownerId,
+        createdById: user.userId,
       }),
     );
     await this.activity.record({
-      userId,
+      userId: user.userId,
       action: 'batch.created',
       entityType: 'batch',
       entityId: batch.id,

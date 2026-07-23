@@ -5,7 +5,7 @@ import { Asset } from '../assets/asset.entity';
 import { AssetEventType, AssetHistory } from '../assets/asset-history.entity';
 import { AssetAudit } from '../assets/asset-audit.entity';
 import { Batch } from '../batches/batch.entity';
-import { isScopedManager, type RequestUser } from '../common/ownership';
+import { isScopedManager, managerCanAccessBatch, type RequestUser } from '../common/ownership';
 
 interface CrudEntry {
   op: 'PUT' | 'PATCH' | 'DELETE';
@@ -72,9 +72,8 @@ export class PowerSyncService {
   // legitimate offline batch never wedges the upload queue.
   private async assertManagerMayWrite(entry: CrudEntry, user: RequestUser): Promise<void> {
     if (!isScopedManager(user)) return;
-    const owns = async (batchId: unknown): Promise<boolean> =>
-      typeof batchId === 'string' &&
-      (await this.batches.count({ where: { id: batchId, ownerId: user.userId } })) > 0;
+    const owns = (batchId: unknown): Promise<boolean> =>
+      managerCanAccessBatch(this.batches, typeof batchId === 'string' ? batchId : null, user);
 
     if (entry.table === 'assets') {
       const existing = await this.assets.findOne({

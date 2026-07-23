@@ -11,7 +11,12 @@ import { QueryAssetsDto } from './dto/query-assets.dto';
 import { CreateAssetAuditDto } from './dto/create-asset-audit.dto';
 import { sanitizeUser } from '../users/sanitize-user';
 import { ActivityService } from '../activity/activity.service';
-import { isScopedManager, type RequestUser } from '../common/ownership';
+import {
+  isScopedManager,
+  managerBatchCondition,
+  managerCanAccessBatch,
+  type RequestUser,
+} from '../common/ownership';
 
 @Injectable()
 export class AssetsService {
@@ -23,13 +28,13 @@ export class AssetsService {
     private activity: ActivityService,
   ) {}
 
-  // A scoped manager may only place/keep an asset in a lot they own.
+  // A scoped manager may only place/keep an asset in a lot they can access
+  // (their own, or an unowned pool lot).
   private async assertOwnsTargetLot(batchId: string | null | undefined, user?: RequestUser) {
     if (!isScopedManager(user)) return;
-    const ok =
-      batchId != null &&
-      (await this.batches.count({ where: { id: batchId, ownerId: user!.userId } })) > 0;
-    if (!ok) throw new ForbiddenException('You do not own that lot.');
+    if (!(await managerCanAccessBatch(this.batches, batchId, user!))) {
+      throw new ForbiddenException('You do not own that lot.');
+    }
   }
 
   async findAll(query: QueryAssetsDto, user?: RequestUser): Promise<Asset[]> {
@@ -41,7 +46,7 @@ export class AssetsService {
     // Managers see only assets whose batch they own; the inner join drops
     // unbatched/others' assets. Admins/technicians (and internal calls) see all.
     if (isScopedManager(user)) {
-      qb.innerJoin('asset.batch', 'ownerBatch').andWhere('ownerBatch.ownerId = :ownerUid', {
+      qb.innerJoin('asset.batch', 'ownerBatch').andWhere(managerBatchCondition('ownerBatch'), {
         ownerUid: user!.userId,
       });
     }
@@ -94,7 +99,7 @@ export class AssetsService {
     // For a scoped manager, an asset outside their batches is treated as
     // not-found (don't reveal it exists). Admins/technicians/internal: no filter.
     if (isScopedManager(user)) {
-      qb.innerJoin('asset.batch', 'ownerBatch').andWhere('ownerBatch.ownerId = :ownerUid', {
+      qb.innerJoin('asset.batch', 'ownerBatch').andWhere(managerBatchCondition('ownerBatch'), {
         ownerUid: user!.userId,
       });
     }

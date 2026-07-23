@@ -6,7 +6,12 @@ import { Batch } from './batch.entity';
 import { CreateLotDto } from './dto/create-lot.dto';
 import { UpdateLotDto } from './dto/update-lot.dto';
 import { Asset } from '../assets/asset.entity';
-import { isScopedManager, type RequestUser } from '../common/ownership';
+import {
+  accessibleBatchWhere,
+  isScopedManager,
+  managerCanAccessBatch,
+  type RequestUser,
+} from '../common/ownership';
 
 export interface LotWithCount extends Lot {
   actualUnitCount: number;
@@ -23,16 +28,15 @@ export class LotsService {
   // A scoped manager may only touch sub-lots whose parent lot they own.
   private async assertOwnsParent(batchId: string | null | undefined, user?: RequestUser) {
     if (!isScopedManager(user)) return;
-    const ok =
-      batchId != null &&
-      (await this.batches.count({ where: { id: batchId, ownerId: user!.userId } })) > 0;
-    if (!ok) throw new ForbiddenException('You do not own that lot.');
+    if (!(await managerCanAccessBatch(this.batches, batchId, user!))) {
+      throw new ForbiddenException('You do not own that lot.');
+    }
   }
 
   async findAll(batchId?: string, user?: RequestUser): Promise<LotWithCount[]> {
     if (isScopedManager(user)) {
       const owned = (
-        await this.batches.find({ where: { ownerId: user!.userId }, select: { id: true } })
+        await this.batches.find({ where: accessibleBatchWhere(user), select: { id: true } })
       ).map((b) => b.id);
       if (batchId && !owned.includes(batchId)) return [];
       const ids = batchId ? [batchId] : owned;
@@ -53,12 +57,9 @@ export class LotsService {
   async findOne(id: string, user?: RequestUser): Promise<LotWithCount> {
     const lot = await this.lots.findOne({ where: { id } });
     if (!lot) throw new NotFoundException(`Lot ${id} not found`);
-    // Not-found (don't reveal) for a scoped manager who doesn't own the parent.
-    if (isScopedManager(user)) {
-      const owns =
-        lot.batchId != null &&
-        (await this.batches.count({ where: { id: lot.batchId, ownerId: user!.userId } })) > 0;
-      if (!owns) throw new NotFoundException(`Lot ${id} not found`);
+    // Not-found (don't reveal) for a scoped manager who can't access the parent.
+    if (isScopedManager(user) && !(await managerCanAccessBatch(this.batches, lot.batchId, user!))) {
+      throw new NotFoundException(`Lot ${id} not found`);
     }
     return (await this.withCounts([lot]))[0];
   }

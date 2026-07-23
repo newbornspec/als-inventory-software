@@ -7,7 +7,7 @@ import { OrderLine } from '../sales/order-line.entity';
 import { RepairLog, RepairStatus } from '../repairs/repair-log.entity';
 import { StockLine } from '../stock/stock-line.entity';
 import { stockStatusFor } from '../stock/stock.service';
-import { isScopedManager, type RequestUser } from '../common/ownership';
+import { accessibleBatchWhere, isScopedManager, type RequestUser } from '../common/ownership';
 
 export interface Notification {
   id: string;
@@ -82,7 +82,7 @@ export class ReportsService {
   private async ownedBatchIds(user?: RequestUser): Promise<Set<string> | null> {
     if (!isScopedManager(user)) return null;
     const rows = await this.batches.find({
-      where: { ownerId: user!.userId },
+      where: accessibleBatchWhere(user),
       select: { id: true },
     });
     return new Set(rows.map((r) => r.id));

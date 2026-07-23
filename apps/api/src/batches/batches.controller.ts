@@ -66,7 +66,7 @@ export class BatchesController {
   @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.TECHNICIAN)
   @Post()
   create(@Body() dto: CreateBatchDto, @Req() req: any) {
-    return this.batches.create(dto, req.user.userId);
+    return this.batches.create(dto, req.user);
   }
 
   @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.TECHNICIAN)
