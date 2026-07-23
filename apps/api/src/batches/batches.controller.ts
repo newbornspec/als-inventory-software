@@ -61,13 +61,15 @@ export class BatchesController {
     });
   }
 
-  @Roles(UserRole.ADMIN, UserRole.MANAGER)
+  // Technicians (floor staff) can create + input, same as managers; only
+  // delete/reassign stay admin-only.
+  @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.TECHNICIAN)
   @Post()
   create(@Body() dto: CreateBatchDto, @Req() req: any) {
     return this.batches.create(dto, req.user.userId);
   }
 
-  @Roles(UserRole.ADMIN, UserRole.MANAGER)
+  @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.TECHNICIAN)
   @Patch(':id')
   update(@Param('id') id: string, @Body() dto: UpdateBatchDto, @Req() req: any) {
     return this.batches.update(id, dto, req.user);

@@ -60,7 +60,8 @@ function PalletTable({ pallets, shipped }: { pallets: Pallet[]; shipped: boolean
 
 export default async function PalletsPage() {
   const [pallets, user] = await Promise.all([apiFetch<Pallet[]>('/pallets'), getSessionUser()]);
-  const canCreate = user?.role === 'admin' || user?.role === 'manager';
+  const canCreate =
+    user?.role === 'admin' || user?.role === 'manager' || user?.role === 'technician';
 
   const active = pallets.filter((p) => p.status !== 'shipped');
   const shipped = pallets.filter((p) => p.status === 'shipped');

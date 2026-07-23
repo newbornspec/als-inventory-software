@@ -23,7 +23,8 @@ async function loadPallet(id: string): Promise<Pallet> {
 export default async function PalletDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const [pallet, user] = await Promise.all([loadPallet(id), getSessionUser()]);
-  const canManage = user?.role === 'admin' || user?.role === 'manager';
+  const canManage =
+    user?.role === 'admin' || user?.role === 'manager' || user?.role === 'technician';
   const canDelete = user?.role === 'admin';
 
   const estValue = (pallet.lines ?? []).reduce(

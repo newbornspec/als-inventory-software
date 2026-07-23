@@ -22,13 +22,13 @@ export class LotsController {
     return this.lots.findOne(id, req.user);
   }
 
-  @Roles(UserRole.ADMIN, UserRole.MANAGER)
+  @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.TECHNICIAN)
   @Post()
   create(@Body() dto: CreateLotDto, @Req() req: any) {
     return this.lots.create(dto, req.user);
   }
 
-  @Roles(UserRole.ADMIN, UserRole.MANAGER)
+  @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.TECHNICIAN)
   @Patch(':id')
   update(@Param('id') id: string, @Body() dto: UpdateLotDto, @Req() req: any) {
     return this.lots.update(id, dto, req.user);

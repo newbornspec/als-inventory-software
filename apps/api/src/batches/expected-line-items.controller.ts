@@ -25,7 +25,7 @@ export class ExpectedLineItemsController {
 
   // Bulk import of parsed supplier rows — replaces any existing expected list
   // for this lot. Import is a manager/admin action (same as creating the lot).
-  @Roles(UserRole.ADMIN, UserRole.MANAGER)
+  @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.TECHNICIAN)
   @Post('import')
   import(@Param('batchId') batchId: string, @Body() dto: ImportExpectedDto, @Req() req: any) {
     return this.expected.importForBatch(batchId, dto, req.user);

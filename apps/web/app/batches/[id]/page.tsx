@@ -41,7 +41,9 @@ export default async function BatchDetailPage({ params }: { params: Promise<{ id
 
   const [batch, assets, lots, recon, allBatches] = await loadBatch(id);
 
-  const canManage = user?.role === 'admin' || user?.role === 'manager';
+  // Technicians can create + input like managers; only delete/reassign are gated.
+  const canManage =
+    user?.role === 'admin' || user?.role === 'manager' || user?.role === 'technician';
   const canDelete = user?.role === 'admin';
   const isAdmin = user?.role === 'admin';
   const otherBatches = allBatches

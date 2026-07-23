@@ -12,7 +12,8 @@ export default async function LotsPage() {
     getSessionUser(),
     apiFetch<AuditTarget | null>('/devices/audit-target').catch(() => null),
   ]);
-  const canCreate = user?.role === 'admin' || user?.role === 'manager';
+  const canCreate =
+    user?.role === 'admin' || user?.role === 'manager' || user?.role === 'technician';
 
   return (
     <main className="min-h-screen bg-neutral-950 text-neutral-100">

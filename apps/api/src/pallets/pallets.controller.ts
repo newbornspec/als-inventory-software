@@ -44,13 +44,13 @@ export class PalletsController {
     });
   }
 
-  @Roles(UserRole.ADMIN, UserRole.MANAGER)
+  @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.TECHNICIAN)
   @Post()
   create(@Body() dto: CreatePalletDto) {
     return this.pallets.create(dto);
   }
 
-  @Roles(UserRole.ADMIN, UserRole.MANAGER)
+  @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.TECHNICIAN)
   @Patch(':id')
   update(@Param('id') id: string, @Body() dto: UpdatePalletDto) {
     return this.pallets.update(id, dto);
@@ -64,13 +64,13 @@ export class PalletsController {
 
   // --- lines ---
 
-  @Roles(UserRole.ADMIN, UserRole.MANAGER)
+  @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.TECHNICIAN)
   @Post(':id/lines')
   addLine(@Param('id') id: string, @Body() dto: CreatePalletLineDto) {
     return this.pallets.addLine(id, dto);
   }
 
-  @Roles(UserRole.ADMIN, UserRole.MANAGER)
+  @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.TECHNICIAN)
   @Patch(':id/lines/:lineId')
   updateLine(
     @Param('id') id: string,
@@ -80,7 +80,9 @@ export class PalletsController {
     return this.pallets.updateLine(id, lineId, dto);
   }
 
-  @Roles(UserRole.ADMIN, UserRole.MANAGER)
+  // Removing a mistyped line is content-correction (input), not deleting the
+  // whole pallet — technicians may do it. Whole-pallet delete stays admin-only.
+  @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.TECHNICIAN)
   @Delete(':id/lines/:lineId')
   removeLine(@Param('id') id: string, @Param('lineId') lineId: string) {
     return this.pallets.removeLine(id, lineId);

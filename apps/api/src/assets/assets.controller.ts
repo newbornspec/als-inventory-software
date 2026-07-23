@@ -92,13 +92,13 @@ export class AssetsController {
     return new StreamableFile(buffer);
   }
 
-  @Roles(UserRole.ADMIN, UserRole.MANAGER)
+  @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.TECHNICIAN)
   @Post()
   create(@Body() dto: CreateAssetDto, @Req() req: any) {
     return this.assets.create(dto, req.user);
   }
 
-  @Roles(UserRole.ADMIN, UserRole.MANAGER)
+  @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.TECHNICIAN)
   @Patch(':id')
   update(@Param('id') id: string, @Body() dto: UpdateAssetDto, @Req() req: any) {
     return this.assets.update(id, dto, req.user);
