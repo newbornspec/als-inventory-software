@@ -58,8 +58,12 @@ export default async function AssetsPage({
           <div>
             <h1 className="text-2xl font-semibold">Assets</h1>
             <p className="mt-1 text-sm text-neutral-400">
-              Devices grouped by their lot — expand a lot to see its units, or search to jump
-              straight to one.
+              Serialized devices only, grouped by their lot — expand a lot to see its units, or
+              search to jump straight to one. For pallet stock and consumables, see{' '}
+              <Link href="/inventory" className="text-neutral-300 underline hover:text-neutral-100">
+                All Inventory
+              </Link>
+              .
             </p>
           </div>
           {canCreate && (
