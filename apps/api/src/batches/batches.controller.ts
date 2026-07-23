@@ -52,8 +52,8 @@ export class BatchesController {
 
   // Bulk Certificate of Data Erasure for every wiped device in the lot (PDF).
   @Get(':id/erasure-certificate.pdf')
-  async erasureCertificate(@Param('id') id: string): Promise<StreamableFile> {
-    const { buffer, filename } = await this.certificates.lotErasureCertificate(id);
+  async erasureCertificate(@Param('id') id: string, @Req() req: any): Promise<StreamableFile> {
+    const { buffer, filename } = await this.certificates.lotErasureCertificate(id, req.user);
     return new StreamableFile(buffer, {
       type: 'application/pdf',
       disposition: `attachment; filename="${filename}"`,

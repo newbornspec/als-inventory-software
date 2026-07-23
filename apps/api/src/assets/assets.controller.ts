@@ -71,8 +71,8 @@ export class AssetsController {
   // the unit may need to produce the certificate for the customer.
   @Get(':id/erasure-certificate.pdf')
   @Header('Cache-Control', 'no-store')
-  async erasureCertificate(@Param('id') id: string): Promise<StreamableFile> {
-    const { buffer, filename } = await this.certificates.erasureCertificate(id);
+  async erasureCertificate(@Param('id') id: string, @Req() req: any): Promise<StreamableFile> {
+    const { buffer, filename } = await this.certificates.erasureCertificate(id, req.user);
     return new StreamableFile(buffer, {
       type: 'application/pdf',
       disposition: `attachment; filename="${filename}"`,

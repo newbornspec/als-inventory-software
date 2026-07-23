@@ -7,6 +7,7 @@ import { OrderLine } from '../sales/order-line.entity';
 import { RepairLog, RepairStatus } from '../repairs/repair-log.entity';
 import { StockLine } from '../stock/stock-line.entity';
 import { stockStatusFor } from '../stock/stock.service';
+import { isScopedManager, type RequestUser } from '../common/ownership';
 
 export interface Notification {
   id: string;
@@ -76,14 +77,30 @@ export class ReportsService {
     @InjectRepository(StockLine) private stockLines: Repository<StockLine>,
   ) {}
 
+  // The batch ids a scoped manager owns; null means "no restriction"
+  // (admins/technicians and internal callers see everything).
+  private async ownedBatchIds(user?: RequestUser): Promise<Set<string> | null> {
+    if (!isScopedManager(user)) return null;
+    const rows = await this.batches.find({
+      where: { ownerId: user!.userId },
+      select: { id: true },
+    });
+    return new Set(rows.map((r) => r.id));
+  }
+
   // Profit per purchase lot (D6). Per-unit cost = the asset's manual override if
   // set, else an even split of the lot's total_cost across the lot's units.
-  async getLotProfitability(): Promise<LotProfit[]> {
-    const [batches, assets, lines] = await Promise.all([
+  async getLotProfitability(user?: RequestUser): Promise<LotProfit[]> {
+    let [batches, assets] = await Promise.all([
       this.batches.find({ order: { createdAt: 'DESC' } }),
       this.assets.find(),
-      this.lines.find(),
     ]);
+    const lines = await this.lines.find();
+    const owned = await this.ownedBatchIds(user);
+    if (owned) {
+      batches = batches.filter((b) => owned.has(b.id));
+      assets = assets.filter((a) => a.batchId != null && owned.has(a.batchId));
+    }
 
     // Realized sale value per asset (a shipped serial has exactly one line).
     const saleByAsset = new Map<string, number>();
@@ -123,9 +140,14 @@ export class ReportsService {
     });
   }
 
-  async getAssetCosting(assetId: string): Promise<AssetCosting> {
+  async getAssetCosting(assetId: string, user?: RequestUser): Promise<AssetCosting> {
     const asset = await this.assets.findOne({ where: { id: assetId } });
     if (!asset) throw new NotFoundException(`Asset ${assetId} not found`);
+    // A scoped manager can only cost an asset in a lot they own.
+    const owned = await this.ownedBatchIds(user);
+    if (owned && !(asset.batchId != null && owned.has(asset.batchId))) {
+      throw new NotFoundException(`Asset ${assetId} not found`);
+    }
 
     let lotTotalCost: number | null = null;
     let unitsInLot = 0;
@@ -171,8 +193,8 @@ export class ReportsService {
     };
   }
 
-  async exportProfitCsv(): Promise<string> {
-    const rows = await this.getLotProfitability();
+  async exportProfitCsv(user?: RequestUser): Promise<string> {
+    const rows = await this.getLotProfitability(user);
     const header = [
       'lot',
       'source',
@@ -202,8 +224,9 @@ export class ReportsService {
     return [header.join(','), ...body].join('\n');
   }
 
-  async getDashboard(): Promise<DashboardSummary> {
-    const [assets, batches, lines, repairs, stock] = await Promise.all([
+  async getDashboard(user?: RequestUser): Promise<DashboardSummary> {
+    // eslint-disable-next-line prefer-const
+    let [assets, batches, lines, repairs, stock] = await Promise.all([
       this.assets
         .createQueryBuilder('a')
         .select(['a.id', 'a.batchId', 'a.purchaseCost', 'a.stockStatus', 'a.conditionGrade', 'a.createdAt'])
@@ -213,6 +236,16 @@ export class ReportsService {
       this.repairLogs.find(),
       this.stockLines.find({ select: { id: true, quantity: true } }),
     ]);
+
+    // Managers: restrict device/lot/repair metrics to their own lots. Sales
+    // (lines) and consumables (stock) stay global — they're shared modules.
+    const owned = await this.ownedBatchIds(user);
+    if (owned) {
+      batches = batches.filter((b) => owned.has(b.id));
+      assets = assets.filter((a) => a.batchId != null && owned.has(a.batchId));
+      const assetIds = new Set(assets.map((a) => a.id));
+      repairs = repairs.filter((r) => assetIds.has(r.assetId));
+    }
 
     const unitsPerBatch = new Map<string, number>();
     for (const a of assets) {
@@ -321,11 +354,14 @@ export class ReportsService {
     };
   }
 
-  async getNotifications(): Promise<Notification[]> {
-    const [assets, stock] = await Promise.all([
+  async getNotifications(user?: RequestUser): Promise<Notification[]> {
+    let [assets, stock] = await Promise.all([
       this.assets.find({ relations: ['location'] }),
       this.stockLines.find(),
     ]);
+    const owned = await this.ownedBatchIds(user);
+    if (owned) assets = assets.filter((a) => a.batchId != null && owned.has(a.batchId));
+    // stock (consumables) stays global — shared module.
     const notifications: Notification[] = [];
 
     for (const asset of assets) {
@@ -385,8 +421,10 @@ export class ReportsService {
     return notifications;
   }
 
-  async exportAssetsCsv(): Promise<string> {
-    const assets = await this.assets.find({ relations: ['location', 'owner'] });
+  async exportAssetsCsv(user?: RequestUser): Promise<string> {
+    let assets = await this.assets.find({ relations: ['location', 'owner'] });
+    const owned = await this.ownedBatchIds(user);
+    if (owned) assets = assets.filter((a) => a.batchId != null && owned.has(a.batchId));
 
     const header = [
       'tag',

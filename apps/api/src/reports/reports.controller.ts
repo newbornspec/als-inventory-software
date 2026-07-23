@@ -1,4 +1,4 @@
-import { Controller, Get, Header, Param, UseGuards } from '@nestjs/common';
+import { Controller, Get, Header, Param, Req, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { Roles } from '../auth/guards/roles.decorator';
 import { RolesGuard } from '../auth/guards/roles.guard';
@@ -14,41 +14,41 @@ export class ReportsController {
   // from knowing an asset they're about to touch is flagged just as much
   // as an admin does.
   @Get('notifications')
-  getNotifications() {
-    return this.reports.getNotifications();
+  getNotifications(@Req() req: any) {
+    return this.reports.getNotifications(req.user);
   }
 
   @Roles(UserRole.ADMIN, UserRole.MANAGER)
   @Get('reports/assets.csv')
   @Header('Content-Type', 'text/csv')
   @Header('Content-Disposition', 'attachment; filename="assets.csv"')
-  async exportAssetsCsv() {
-    return this.reports.exportAssetsCsv();
+  async exportAssetsCsv(@Req() req: any) {
+    return this.reports.exportAssetsCsv(req.user);
   }
 
   @Roles(UserRole.ADMIN, UserRole.MANAGER)
   @Get('reports/dashboard')
-  getDashboard() {
-    return this.reports.getDashboard();
+  getDashboard(@Req() req: any) {
+    return this.reports.getDashboard(req.user);
   }
 
   @Roles(UserRole.ADMIN, UserRole.MANAGER)
   @Get('reports/profit')
-  getLotProfitability() {
-    return this.reports.getLotProfitability();
+  getLotProfitability(@Req() req: any) {
+    return this.reports.getLotProfitability(req.user);
   }
 
   @Roles(UserRole.ADMIN, UserRole.MANAGER)
   @Get('reports/assets/:id/costing')
-  getAssetCosting(@Param('id') id: string) {
-    return this.reports.getAssetCosting(id);
+  getAssetCosting(@Param('id') id: string, @Req() req: any) {
+    return this.reports.getAssetCosting(id, req.user);
   }
 
   @Roles(UserRole.ADMIN, UserRole.MANAGER)
   @Get('reports/profit.csv')
   @Header('Content-Type', 'text/csv')
   @Header('Content-Disposition', 'attachment; filename="lot-profit.csv"')
-  async exportProfitCsv() {
-    return this.reports.exportProfitCsv();
+  async exportProfitCsv(@Req() req: any) {
+    return this.reports.exportProfitCsv(req.user);
   }
 }

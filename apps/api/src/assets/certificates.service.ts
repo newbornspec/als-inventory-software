@@ -5,6 +5,7 @@ import PDFDocument from 'pdfkit';
 import { Asset } from './asset.entity';
 import { AssetAudit, DataWipeStatus } from './asset-audit.entity';
 import { Batch } from '../batches/batch.entity';
+import { assertOwnsBatch, isScopedManager, type RequestUser } from '../common/ownership';
 
 // Issuer details for compliance documents. Overridable via env so the same
 // codebase can be white-labelled without a code change.
@@ -32,9 +33,13 @@ export class CertificatesService {
   // One bundled certificate listing every device in a lot that has a completed
   // wipe on record. Devices without a wipe are excluded; if none qualify it
   // refuses, same as the per-device certificate.
-  async lotErasureCertificate(batchId: string): Promise<{ buffer: Buffer; filename: string }> {
+  async lotErasureCertificate(
+    batchId: string,
+    user?: RequestUser,
+  ): Promise<{ buffer: Buffer; filename: string }> {
     const batch = await this.batches.findOne({ where: { id: batchId } });
     if (!batch) throw new NotFoundException(`Lot ${batchId} not found`);
+    assertOwnsBatch(batch.ownerId, user); // 403 for a manager who doesn't own it
 
     const assets = await this.assets
       .createQueryBuilder('asset')
@@ -87,13 +92,23 @@ export class CertificatesService {
   // A Certificate of Data Erasure for a device that has a completed wipe on
   // record. Refuses to issue one if no wipe was recorded — the document must
   // reflect an action that actually happened.
-  async erasureCertificate(assetId: string): Promise<{ buffer: Buffer; filename: string }> {
+  async erasureCertificate(
+    assetId: string,
+    user?: RequestUser,
+  ): Promise<{ buffer: Buffer; filename: string }> {
     const asset = await this.assets
       .createQueryBuilder('asset')
       .addSelect('asset.hardwareProfile')
       .where('asset.id = :id', { id: assetId })
       .getOne();
     if (!asset) throw new NotFoundException(`Asset ${assetId} not found`);
+    // A scoped manager can only certify a device in a lot they own.
+    if (isScopedManager(user)) {
+      const owns =
+        asset.batchId != null &&
+        (await this.batches.count({ where: { id: asset.batchId, ownerId: user!.userId } })) > 0;
+      if (!owns) throw new NotFoundException(`Asset ${assetId} not found`);
+    }
 
     const wipe = await this.audits.findOne({
       where: { assetId, dataWipeStatus: DataWipeStatus.WIPED },
