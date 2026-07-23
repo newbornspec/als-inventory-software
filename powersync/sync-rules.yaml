@@ -1,22 +1,40 @@
-# Simplified to one unconditional global bucket: PowerSync's sync-rules
-# engine doesn't support JOINs in data queries (needed to scope asset_history
-# by asset.location_id), and a parameterized bucket must reference its bucket
-# parameter in every data query (the "admins get everything" bucket didn't).
-# Working around both by denormalizing location_id onto asset_history, or by
-# splitting into more buckets that satisfy the parameter-coverage rule, is a
-# legitimate follow-up — not attempted here since it doesn't change actual
-# security: NestJS's RolesGuard already allows any authenticated role to read
-# all assets/history/locations via the REST API, so syncing all of it to
-# every device's local SQLite doesn't expose anything the API wasn't already
-# exposing. It just means every device caches the whole inventory rather than
-# a location-scoped slice, which will matter more once the dataset is large.
+# Per-user isolation for offline (PowerSync) clients — enforcement phase E5.
+# Mirrors the REST-side "managers-only" isolation (apps/api/src/common/ownership.ts):
+#   - MANAGERS sync only the purchase lots they own.
+#   - ADMINS + TECHNICIANS sync every lot (technicians are floor staff).
+#
+# Design:
+#   * Both role buckets are parameterized by batch_id (a manager's owned ids, or
+#     ALL ids for admin/technician), so every data query references its bucket
+#     parameter — PowerSync requires this, and it avoids any schema
+#     denormalization (batches already carry owner_id).
+#   * asset_history / asset_audits are intentionally NOT synced down: the offline
+#     scan/audit UI only ever WRITES them (never reads), and local writes still
+#     upload fine even when a table isn't in a download bucket. This also stops a
+#     manager's device from caching other lots' audit history.
+#   * users + locations are shared reference data (global bucket, all users).
+#
+# NOTE: this file is baked into powersync/Dockerfile, so the angelic-charm
+# PowerSync service must be REDEPLOYED to pick up changes (see DEPLOYMENT.md).
 bucket_definitions:
-  global:
+  # Shared reference data everyone needs for lookups.
+  reference:
     data:
-      - SELECT * FROM assets
-      - SELECT * FROM asset_history
-      - SELECT * FROM asset_audits
-      - SELECT * FROM batches
-      - SELECT * FROM lots
-      - SELECT id, name, address, assigned_user_id FROM locations
       - SELECT id, name, role FROM users
+      - SELECT id, name, address, assigned_user_id FROM locations
+
+  # Managers: only the lots they own.
+  owned_lots:
+    parameters: SELECT id AS batch_id FROM batches WHERE owner_id = request.user_id() AND request.jwt() ->> 'role' = 'manager'
+    data:
+      - SELECT * FROM assets WHERE batch_id = bucket.batch_id
+      - SELECT * FROM lots WHERE batch_id = bucket.batch_id
+      - SELECT * FROM batches WHERE id = bucket.batch_id
+
+  # Admins + technicians: every lot.
+  all_lots:
+    parameters: SELECT id AS batch_id FROM batches WHERE request.jwt() ->> 'role' = 'admin' OR request.jwt() ->> 'role' = 'technician'
+    data:
+      - SELECT * FROM assets WHERE batch_id = bucket.batch_id
+      - SELECT * FROM lots WHERE batch_id = bucket.batch_id
+      - SELECT * FROM batches WHERE id = bucket.batch_id
