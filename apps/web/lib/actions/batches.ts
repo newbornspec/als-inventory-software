@@ -116,6 +116,18 @@ export async function createBatch(_prev: ActionState, formData: FormData): Promi
   redirect(`/batches/${created.id}`);
 }
 
+// Admin-only: hand a lot to a different owner.
+export async function reassignBatchOwner(id: string, formData: FormData): Promise<void> {
+  const ownerId = String(formData.get('ownerId') ?? '').trim();
+  if (!ownerId) return;
+  await apiFetch(`/batches/${id}/owner`, {
+    method: 'PATCH',
+    body: JSON.stringify({ ownerId }),
+  });
+  revalidatePath(`/batches/${id}`);
+  revalidatePath('/batches');
+}
+
 export async function updateBatchStatus(id: string, formData: FormData): Promise<void> {
   const status = String(formData.get('status') ?? '');
   await apiFetch(`/batches/${id}`, { method: 'PATCH', body: JSON.stringify({ status }) });

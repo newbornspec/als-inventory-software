@@ -1,7 +1,8 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Asset } from './asset.entity';
+import { Batch } from '../batches/batch.entity';
 import { AssetEventType, AssetHistory } from './asset-history.entity';
 import { AssetAudit } from './asset-audit.entity';
 import { CreateAssetDto } from './dto/create-asset.dto';
@@ -18,8 +19,18 @@ export class AssetsService {
     @InjectRepository(Asset) private assets: Repository<Asset>,
     @InjectRepository(AssetHistory) private history: Repository<AssetHistory>,
     @InjectRepository(AssetAudit) private audits: Repository<AssetAudit>,
+    @InjectRepository(Batch) private batches: Repository<Batch>,
     private activity: ActivityService,
   ) {}
+
+  // A scoped manager may only place/keep an asset in a lot they own.
+  private async assertOwnsTargetLot(batchId: string | null | undefined, user?: RequestUser) {
+    if (!isScopedManager(user)) return;
+    const ok =
+      batchId != null &&
+      (await this.batches.count({ where: { id: batchId, ownerId: user!.userId } })) > 0;
+    if (!ok) throw new ForbiddenException('You do not own that lot.');
+  }
 
   async findAll(query: QueryAssetsDto, user?: RequestUser): Promise<Asset[]> {
     const qb = this.assets
@@ -110,9 +121,12 @@ export class AssetsService {
     });
   }
 
-  async create(dto: CreateAssetDto, userId: string): Promise<Asset> {
+  async create(dto: CreateAssetDto, user?: RequestUser): Promise<Asset> {
+    // Managers can only create assets inside a lot they own.
+    await this.assertOwnsTargetLot(dto.batchId ?? null, user);
+    const userId = user?.userId;
     const asset = await this.assets.save(this.assets.create(dto));
-    await this.logEvent(asset.id, AssetEventType.CREATED, userId, 'Asset created');
+    if (userId) await this.logEvent(asset.id, AssetEventType.CREATED, userId, 'Asset created');
     await this.activity.record({
       userId,
       action: 'asset.created',
@@ -123,13 +137,21 @@ export class AssetsService {
     return asset;
   }
 
-  async update(id: string, dto: UpdateAssetDto, userId: string): Promise<Asset> {
-    const before = await this.findOne(id);
+  async update(id: string, dto: UpdateAssetDto, user?: RequestUser): Promise<Asset> {
+    // 404s for a scoped manager who doesn't own the asset's current lot.
+    const before = await this.findOne(id, user);
+    // If moving to a different lot, a manager must own the destination too.
+    if (dto.batchId !== undefined && dto.batchId !== before.batchId) {
+      await this.assertOwnsTargetLot(dto.batchId, user);
+    }
+    const userId = user?.userId;
 
     await this.assets.update(id, dto);
+    // Re-read without scoping so a move that lands the asset in the target lot
+    // (already ownership-checked above) still returns it.
     const after = await this.findOne(id);
 
-    if (dto.stockStatus && dto.stockStatus !== before.stockStatus) {
+    if (userId && dto.stockStatus && dto.stockStatus !== before.stockStatus) {
       await this.logEvent(
         id,
         AssetEventType.STATUS_CHANGED,
@@ -137,7 +159,7 @@ export class AssetsService {
         `${before.stockStatus} -> ${after.stockStatus}`,
       );
     }
-    if (dto.conditionGrade && dto.conditionGrade !== before.conditionGrade) {
+    if (userId && dto.conditionGrade && dto.conditionGrade !== before.conditionGrade) {
       await this.logEvent(
         id,
         AssetEventType.CONDITION_CHANGED,
@@ -145,7 +167,7 @@ export class AssetsService {
         `${before.conditionGrade ?? 'ungraded'} -> ${after.conditionGrade}`,
       );
     }
-    if (dto.locationId && dto.locationId !== before.locationId) {
+    if (userId && dto.locationId && dto.locationId !== before.locationId) {
       await this.logEvent(
         id,
         AssetEventType.TRANSFERRED,

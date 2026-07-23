@@ -28,7 +28,7 @@ export class ExpectedLineItemsController {
   @Roles(UserRole.ADMIN, UserRole.MANAGER)
   @Post('import')
   import(@Param('batchId') batchId: string, @Body() dto: ImportExpectedDto, @Req() req: any) {
-    return this.expected.importForBatch(batchId, dto, req.user.userId);
+    return this.expected.importForBatch(batchId, dto, req.user);
   }
 
   @Roles(UserRole.ADMIN, UserRole.MANAGER)

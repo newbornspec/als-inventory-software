@@ -95,13 +95,13 @@ export class AssetsController {
   @Roles(UserRole.ADMIN, UserRole.MANAGER)
   @Post()
   create(@Body() dto: CreateAssetDto, @Req() req: any) {
-    return this.assets.create(dto, req.user.userId);
+    return this.assets.create(dto, req.user);
   }
 
   @Roles(UserRole.ADMIN, UserRole.MANAGER)
   @Patch(':id')
   update(@Param('id') id: string, @Body() dto: UpdateAssetDto, @Req() req: any) {
-    return this.assets.update(id, dto, req.user.userId);
+    return this.assets.update(id, dto, req.user);
   }
 
   @Roles(UserRole.ADMIN)

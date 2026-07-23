@@ -14,6 +14,7 @@ import { LotCost } from './lot-cost';
 import { LotAssets } from './lot-assets';
 import { AddAssetForm } from './add-asset-form';
 import { DeleteSubLotButton } from './delete-sublot-button';
+import { ReassignOwner } from './reassign-owner';
 
 // 404 (deleted lot) -> Next's not-found page instead of a server-side crash.
 async function loadBatch(
@@ -42,9 +43,14 @@ export default async function BatchDetailPage({ params }: { params: Promise<{ id
 
   const canManage = user?.role === 'admin' || user?.role === 'manager';
   const canDelete = user?.role === 'admin';
+  const isAdmin = user?.role === 'admin';
   const otherBatches = allBatches
     .filter((b) => b.id !== batch.id)
     .map((b) => ({ id: b.id, batchNumber: b.batchNumber, source: b.source }));
+  // Admins can reassign ownership — load the user list to choose from.
+  const users = isAdmin
+    ? await apiFetch<{ id: string; name: string; role: string }[]>('/users').catch(() => [])
+    : [];
   const expected = batch.expectedUnitCount;
   const discrepancy = expected != null ? batch.actualUnitCount - expected : null;
 
@@ -91,7 +97,16 @@ export default async function BatchDetailPage({ params }: { params: Promise<{ id
         <dl className="mt-4 flex flex-wrap gap-x-8 gap-y-2 text-sm">
           <div>
             <dt className="text-xs uppercase tracking-wide text-neutral-500">Owner</dt>
-            <dd className="text-neutral-200">{batch.owner?.name ?? '—'}</dd>
+            <dd className="text-neutral-200">
+              {batch.owner?.name ?? '—'}
+              {isAdmin && users.length > 0 && (
+                <ReassignOwner
+                  batchId={batch.id}
+                  currentOwnerId={batch.ownerId ?? null}
+                  users={users}
+                />
+              )}
+            </dd>
           </div>
           <div>
             <dt className="text-xs uppercase tracking-wide text-neutral-500">Created by</dt>

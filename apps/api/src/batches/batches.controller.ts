@@ -17,6 +17,7 @@ import { UserRole } from '../users/user.entity';
 import { BatchesService } from './batches.service';
 import { CreateBatchDto } from './dto/create-batch.dto';
 import { UpdateBatchDto } from './dto/update-batch.dto';
+import { ReassignOwnerDto } from './dto/reassign-owner.dto';
 import { CertificatesService } from '../assets/certificates.service';
 
 @Controller('batches')
@@ -69,7 +70,14 @@ export class BatchesController {
   @Roles(UserRole.ADMIN, UserRole.MANAGER)
   @Patch(':id')
   update(@Param('id') id: string, @Body() dto: UpdateBatchDto, @Req() req: any) {
-    return this.batches.update(id, dto, req.user.userId);
+    return this.batches.update(id, dto, req.user);
+  }
+
+  // Reassign a lot to another owner — admin only.
+  @Roles(UserRole.ADMIN)
+  @Patch(':id/owner')
+  reassignOwner(@Param('id') id: string, @Body() dto: ReassignOwnerDto, @Req() req: any) {
+    return this.batches.reassignOwner(id, dto.ownerId, req.user);
   }
 
   @Roles(UserRole.ADMIN)

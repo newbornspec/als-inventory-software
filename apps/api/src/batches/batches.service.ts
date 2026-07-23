@@ -250,17 +250,33 @@ export class BatchesService {
     return batch;
   }
 
-  async update(id: string, dto: UpdateBatchDto, userId?: string): Promise<BatchWithCount> {
-    const before = await this.findOne(id); // 404s if missing
+  async update(id: string, dto: UpdateBatchDto, user?: RequestUser): Promise<BatchWithCount> {
+    const before = await this.findOne(id, user); // 404s if missing, 403 if not owner
     await this.batches.update(id, dto);
     await this.activity.record({
-      userId,
+      userId: user?.userId,
       action: 'batch.updated',
       entityType: 'batch',
       entityId: id,
       summary: `Edited ${before.batchNumber}`,
     });
-    return this.findOne(id);
+    return this.findOne(id, user);
+  }
+
+  // Admin-only: hand a lot to a different owner. Not owner-guarded (admins are
+  // never scoped); the controller restricts it to admins.
+  async reassignOwner(id: string, ownerId: string, user?: RequestUser): Promise<BatchWithCount> {
+    const before = await this.findOne(id);
+    await this.batches.update(id, { ownerId });
+    const after = await this.findOne(id);
+    await this.activity.record({
+      userId: user?.userId,
+      action: 'batch.ownership_transferred',
+      entityType: 'batch',
+      entityId: id,
+      summary: `Transferred ownership of ${before.batchNumber} to ${after.owner?.name ?? 'another user'}`,
+    });
+    return after;
   }
 
   async remove(id: string, userId?: string): Promise<void> {

@@ -6,6 +6,7 @@ import { ExpectedLineItem } from './expected-line-item.entity';
 import { Asset } from '../assets/asset.entity';
 import { ImportExpectedDto } from './dto/import-expected.dto';
 import { ActivityService } from '../activity/activity.service';
+import { assertOwnsBatch, type RequestUser } from '../common/ownership';
 
 // One expected serialized line matched (or not) against the physically
 // scanned assets in the lot.
@@ -54,9 +55,11 @@ export class ExpectedLineItemsService {
   async importForBatch(
     batchId: string,
     dto: ImportExpectedDto,
-    userId?: string,
+    user?: RequestUser,
   ): Promise<ExpectedLineItem[]> {
-    await this.assertBatch(batchId);
+    const batch = await this.batches.findOne({ where: { id: batchId } });
+    if (!batch) throw new NotFoundException(`Purchase lot ${batchId} not found`);
+    assertOwnsBatch(batch.ownerId, user); // 403 for a manager who doesn't own it
     const result = await this.expected.manager.transaction(async (tx) => {
       const repo = tx.getRepository(ExpectedLineItem);
       await repo.delete({ batchId });
@@ -82,13 +85,12 @@ export class ExpectedLineItemsService {
       return repo.find({ where: { batchId }, order: { createdAt: 'ASC' } });
     });
 
-    const batch = await this.batches.findOne({ where: { id: batchId } });
     await this.activity.record({
-      userId,
+      userId: user?.userId,
       action: 'expected.imported',
       entityType: 'batch',
       entityId: batchId,
-      summary: `Imported ${result.length} expected items${batch ? ` into ${batch.batchNumber}` : ''}`,
+      summary: `Imported ${result.length} expected items into ${batch.batchNumber}`,
     });
     return result;
   }
