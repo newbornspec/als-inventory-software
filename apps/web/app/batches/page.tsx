@@ -3,6 +3,7 @@ import { apiFetch, getSessionUser } from '@/lib/api-server';
 import type { Batch } from '@/lib/actions/batches';
 import type { AuditTarget } from '@/lib/actions/devices';
 import { Nav } from '@/app/components/nav';
+import { Breadcrumbs } from '@/app/components/breadcrumbs';
 import { LotsAccordion } from './lots-accordion';
 
 export default async function LotsPage() {
@@ -17,7 +18,8 @@ export default async function LotsPage() {
     <main className="min-h-screen bg-neutral-950 text-neutral-100">
       <Nav />
       <div className="p-8">
-        <div className="flex items-center justify-between">
+        <Breadcrumbs items={[{ label: 'Dashboard', href: '/dashboard' }, { label: 'Lots' }]} />
+        <div className="mt-3 flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-semibold">Lots</h1>
             <p className="mt-1 text-sm text-neutral-400">

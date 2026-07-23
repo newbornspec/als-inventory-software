@@ -4,7 +4,7 @@ import { apiFetch, ApiError, getSessionUser } from '@/lib/api-server';
 import type { Batch, Lot } from '@/lib/actions/batches';
 import type { Asset } from '@/lib/actions/assets';
 import { Nav } from '@/app/components/nav';
-import { BackLink } from '@/app/components/back-link';
+import { Breadcrumbs } from '@/app/components/breadcrumbs';
 import { formatLabel } from '@/lib/asset-options';
 import { LotAssets } from '../../lot-assets';
 import { DeleteSubLotButton } from '../../delete-sublot-button';
@@ -58,7 +58,14 @@ export default async function SubLotDetailPage({
     <main className="min-h-screen bg-neutral-950 text-neutral-100">
       <Nav />
       <div className="p-8">
-        <BackLink href={`/batches/${id}`} label={`Back to ${batch.batchNumber}`} />
+        <Breadcrumbs
+          items={[
+            { label: 'Dashboard', href: '/dashboard' },
+            { label: 'Lots', href: '/batches' },
+            { label: batch.batchNumber, href: `/batches/${id}` },
+            { label: lot.lotNumber },
+          ]}
+        />
 
         <div className="mt-3 flex items-start justify-between gap-3">
           <div>

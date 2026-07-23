@@ -3,7 +3,9 @@ import { notFound } from 'next/navigation';
 import { apiFetch, ApiError, getSessionUser } from '@/lib/api-server';
 import { getLocations } from '@/lib/data';
 import { deleteAsset, type Asset } from '@/lib/actions/assets';
+import type { Batch } from '@/lib/actions/batches';
 import { Nav } from '@/app/components/nav';
+import { Breadcrumbs, type Crumb } from '@/app/components/breadcrumbs';
 import { formatLabel } from '@/lib/asset-options';
 import { money } from '@/lib/money';
 import type { RepairLog } from '@/lib/actions/repairs';
@@ -69,6 +71,25 @@ export default async function AssetDetailPage({
   const canEdit = user?.role === 'admin' || user?.role === 'manager';
   const canDelete = user?.role === 'admin';
 
+  // Build the drill-down trail. If the device belongs to a lot, route back through
+  // it (the hierarchy); otherwise fall back to the global Assets search.
+  let lot: Batch | null = null;
+  if (asset.batchId) {
+    lot = await apiFetch<Batch>(`/batches/${asset.batchId}`).catch(() => null);
+  }
+  const crumbs: Crumb[] = lot
+    ? [
+        { label: 'Dashboard', href: '/dashboard' },
+        { label: 'Lots', href: '/batches' },
+        { label: lot.batchNumber, href: `/batches/${lot.id}` },
+        { label: asset.name },
+      ]
+    : [
+        { label: 'Dashboard', href: '/dashboard' },
+        { label: 'Assets', href: '/assets' },
+        { label: asset.name },
+      ];
+
   // Costing/profit is manager+ only — fetch it lazily and never let a failure
   // take down the asset page.
   let costing: AssetCosting | null = null;
@@ -84,9 +105,7 @@ export default async function AssetDetailPage({
     <main className="min-h-screen bg-neutral-950 text-neutral-100">
       <Nav />
       <div className="p-8">
-        <Link href="/assets" className="text-sm text-neutral-400 hover:text-neutral-200">
-          ← Back to Assets
-        </Link>
+        <Breadcrumbs items={crumbs} />
 
         <div className="mt-3 flex items-start justify-between">
           <div>
@@ -95,14 +114,6 @@ export default async function AssetDetailPage({
               Tag: <span className="text-neutral-200">{asset.tag}</span> · {asset.category}
               {asset.serialNumber && asset.serialNumber !== asset.tag && (
                 <> · S/N: <span className="text-neutral-200">{asset.serialNumber}</span></>
-              )}
-              {asset.batchId && (
-                <>
-                  {' · '}
-                  <Link href={`/batches/${asset.batchId}`} className="underline">
-                    View purchase lot →
-                  </Link>
-                </>
               )}
             </p>
           </div>
