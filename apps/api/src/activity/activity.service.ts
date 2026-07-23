@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { ActivityLog } from './activity-log.entity';
+import { isScopedManager, type RequestUser } from '../common/ownership';
 
 export interface RecordInput {
   userId?: string | null;
@@ -47,8 +48,10 @@ export class ActivityService {
     }
   }
 
-  async list(limit = 100): Promise<ActivityView[]> {
+  async list(limit = 100, user?: RequestUser): Promise<ActivityView[]> {
+    // Managers see only their own actions; admins/technicians see everything.
     const rows = await this.repo.find({
+      where: isScopedManager(user) ? { userId: user!.userId } : {},
       relations: ['user'],
       order: { createdAt: 'DESC' },
       take: Math.min(Math.max(limit, 1), 500),
