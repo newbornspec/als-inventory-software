@@ -54,7 +54,48 @@ cd apps/api && npm run migration:run
 
 ## PowerSync sync rules
 
-`powersync/sync-rules.yaml` is baked into `powersync/Dockerfile`. Changing which
-tables/columns sync to offline clients requires **redeploying the angelic-charm
-service** so it picks up the new rules — and any table referenced there must
-already be in the Postgres `powersync` publication (added via a migration).
+`powersync/sync-rules.yaml` controls what each offline client caches in its local
+SQLite. It is **baked into `powersync/Dockerfile`** (copied into the image), so
+changing it requires **redeploying the angelic-charm service** — it does *not*
+auto-deploy on a `git push`. Any table referenced must already be in the Postgres
+`powersync` publication (added via a migration).
+
+### Current design — per-user (owner) isolation
+
+Mirrors the REST-side "managers-only" ownership isolation (see
+`apps/api/src/common/ownership.ts`). Three buckets:
+
+| Bucket | Who gets it | Contents |
+|---|---|---|
+| `reference` | everyone (global, no params) | `users` (id/name/role), `locations` |
+| `owned_lots` | **managers** | `assets` / `lots` / `batches` for lots they own |
+| `all_lots` | **admins + technicians** | `assets` / `lots` / `batches` for *all* lots |
+
+Both role buckets are **parameterized by `batch_id`** so every data query
+references its bucket parameter (a PowerSync requirement) — a manager's parameter
+query selects only `batches WHERE owner_id = request.user_id()`; the admin/tech
+one selects all, gated on `request.jwt() ->> 'role'`. This needs **no schema
+denormalization** (`batches` already carries `owner_id`).
+
+`asset_history` and `asset_audits` are **upload-only**: the offline scan/audit UI
+only ever *writes* them (never reads), so they're in the client schema but in no
+download bucket. Local writes still upload fine. The server-side write path also
+enforces ownership — `PowerSyncService.assertManagerMayWrite` rejects a manager
+uploading to a lot they don't own.
+
+> Managers only see lots they own; admins/technicians see everything. Because
+> buckets are additive (union), a manager must never be assigned the `all_lots`
+> bucket — that's why the role gate lives in each parameter query.
+
+### Redeploying after a rules change
+
+1. Push the `powersync/sync-rules.yaml` change to `master` (it stays dormant).
+2. Railway → **angelic-charm** service → newest deployment → **⋮ → Redeploy**.
+3. Watch its **Logs** as it boots. Success looks like:
+   - `Loaded sync config`
+   - a `New checkpoint … buckets: N … param_results: […]` line listing the
+     buckets a connected client resolved (e.g. `all_lots["<batch id>"]` for an
+     admin, `reference[]` for the shared bucket).
+   - **no** errors mentioning sync rules / buckets.
+4. **Rollback:** revert the sync-rules commit and redeploy angelic-charm — the
+   previous rules are always in git history.
