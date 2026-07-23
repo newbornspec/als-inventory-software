@@ -1,9 +1,11 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Asset } from '../assets/asset.entity';
 import { AssetEventType, AssetHistory } from '../assets/asset-history.entity';
 import { AssetAudit } from '../assets/asset-audit.entity';
+import { Batch } from '../batches/batch.entity';
+import { isScopedManager, type RequestUser } from '../common/ownership';
 
 interface CrudEntry {
   op: 'PUT' | 'PATCH' | 'DELETE';
@@ -18,15 +20,21 @@ export class PowerSyncService {
     @InjectRepository(Asset) private assets: Repository<Asset>,
     @InjectRepository(AssetHistory) private history: Repository<AssetHistory>,
     @InjectRepository(AssetAudit) private audits: Repository<AssetAudit>,
+    @InjectRepository(Batch) private batches: Repository<Batch>,
   ) {}
 
-  async applyBatch(batch: CrudEntry[], userId: string): Promise<void> {
+  async applyBatch(batch: CrudEntry[], user: RequestUser): Promise<void> {
     for (const entry of batch) {
-      await this.applyOne(entry, userId);
+      await this.applyOne(entry, user);
     }
   }
 
-  private async applyOne(entry: CrudEntry, userId: string): Promise<void> {
+  private async applyOne(entry: CrudEntry, user: RequestUser): Promise<void> {
+    // Defence-in-depth: a scoped manager's device only holds their own lots'
+    // rows (see powersync/sync-rules.yaml), but block a tampered client from
+    // pushing a write to an asset/lot they don't own.
+    await this.assertManagerMayWrite(entry, user);
+    const userId = user.userId;
     const repo = this.repoFor(entry.table);
     let data = this.toEntityData(entry.data);
 
@@ -55,6 +63,48 @@ export class PowerSyncService {
         break;
       default:
         throw new BadRequestException(`Unsupported op: ${entry.op}`);
+    }
+  }
+
+  // Reject an offline write from a scoped manager that targets an asset/lot they
+  // don't own. No-op for admins/technicians. Kept lenient where ownership can't
+  // be determined (e.g. a child row whose asset hasn't been applied yet) so a
+  // legitimate offline batch never wedges the upload queue.
+  private async assertManagerMayWrite(entry: CrudEntry, user: RequestUser): Promise<void> {
+    if (!isScopedManager(user)) return;
+    const owns = async (batchId: unknown): Promise<boolean> =>
+      typeof batchId === 'string' &&
+      (await this.batches.count({ where: { id: batchId, ownerId: user.userId } })) > 0;
+
+    if (entry.table === 'assets') {
+      const existing = await this.assets.findOne({
+        where: { id: entry.id },
+        select: { id: true, batchId: true },
+      });
+      // Can't touch an asset already filed in a lot you don't own.
+      if (existing && !(await owns(existing.batchId))) {
+        throw new ForbiddenException('You do not own this asset.');
+      }
+      if (entry.op !== 'DELETE') {
+        const incoming = entry.data?.batch_id ?? entry.data?.batchId;
+        if (incoming != null) {
+          // Placing/keeping it in a lot — must be one you own.
+          if (!(await owns(incoming))) throw new ForbiddenException('You do not own that lot.');
+        } else if (!existing) {
+          // A brand-new asset with no lot: a manager must receive into their own.
+          throw new ForbiddenException('A lot you own is required.');
+        }
+      }
+    } else if (entry.table === 'asset_history' || entry.table === 'asset_audits') {
+      const assetId = (entry.data?.asset_id ?? entry.data?.assetId) as string | undefined;
+      if (assetId) {
+        const a = await this.assets.findOne({ where: { id: assetId }, select: { batchId: true } });
+        // Only block when the asset exists and isn't theirs; if it isn't applied
+        // yet, the guarded asset write in the same batch already covers it.
+        if (a && !(await owns(a.batchId))) {
+          throw new ForbiddenException('You do not own this asset.');
+        }
+      }
     }
   }
 

@@ -20,7 +20,7 @@ export class PowerSyncController {
   // checkpoint protocol assumes the data is committed by the time this returns.
   @Post('upload')
   async upload(@Body() body: { batch: CrudEntry[] }, @Req() req: any) {
-    await this.powersync.applyBatch(body.batch, req.user.userId);
+    await this.powersync.applyBatch(body.batch, req.user);
     return { status: 'ok' };
   }
 }
