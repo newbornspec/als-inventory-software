@@ -60,6 +60,7 @@ export function LotsAccordion({
         const extra = expected != null ? Math.max(0, scanned - expected) : null;
         const pct =
           expected && expected > 0 ? Math.min(100, Math.round((scanned / expected) * 100)) : null;
+        const pending = Math.max(0, scanned - lot.audited); // scanned but not yet audited
         const isOpen = !!open[lot.id];
         const data = cache[lot.id];
 
@@ -89,6 +90,12 @@ export function LotsAccordion({
                   PO: <span className="text-neutral-300">{lot.purchaseOrder ?? '—'}</span>
                 </span>
                 <span>
+                  Created:{' '}
+                  <span className="text-neutral-300">
+                    {lot.createdAt ? new Date(lot.createdAt).toLocaleDateString('en-GB') : '—'}
+                  </span>
+                </span>
+                <span>
                   Received: <span className="text-neutral-300">{lot.receivedDate ?? '—'}</span>
                 </span>
                 <span>
@@ -108,8 +115,13 @@ export function LotsAccordion({
               )}
 
               <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
-                <Chip label="Items" value={expected ?? scanned} />
-                <Chip label="Scanned" value={scanned} />
+                <Chip label="Total" value={scanned} />
+                <Chip
+                  label="Audited"
+                  value={lot.audited}
+                  tone={lot.audited > 0 ? 'emerald' : undefined}
+                />
+                <Chip label="Pending" value={pending} tone={pending > 0 ? 'amber' : undefined} />
                 {missing != null && (
                   <Chip label="Missing" value={missing} tone={missing > 0 ? 'amber' : undefined} />
                 )}

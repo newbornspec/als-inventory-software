@@ -23,6 +23,7 @@ export interface Batch {
   scrap: number;
   quarantine: number;
   audited: number;
+  createdAt: string;
   location?: { id: string; name: string } | null;
   receivedBy?: { id: string; name: string } | null;
 }
