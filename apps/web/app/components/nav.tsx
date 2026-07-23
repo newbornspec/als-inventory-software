@@ -9,6 +9,7 @@ import { logout } from '@/lib/auth';
 // find any single device in the global Assets register.
 const BASE_LINKS = [
   { href: '/dashboard', label: 'Dashboard' },
+  { href: '/inventory', label: 'Inventory' },
   { href: '/batches', label: 'Lots' },
   { href: '/scan', label: 'Scan' },
   { href: '/assets', label: 'Assets' },
