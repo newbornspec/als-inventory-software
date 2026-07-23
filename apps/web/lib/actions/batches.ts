@@ -179,6 +179,45 @@ export async function assignSubLot(
   revalidatePath('/assets');
 }
 
+// Move a device to a different purchase lot. Clears its sub-lot too, since a
+// sub-lot belongs to the old lot. Revalidates both lots' pages.
+export async function moveAssetToBatch(
+  assetId: string,
+  targetBatchId: string,
+  currentBatchId: string,
+): Promise<{ error?: string }> {
+  try {
+    await apiFetch(`/assets/${assetId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ batchId: targetBatchId, lotId: null }),
+    });
+  } catch (err) {
+    return { error: err instanceof ApiError ? err.message : 'Could not move the asset.' };
+  }
+  revalidatePath(`/batches/${currentBatchId}`);
+  revalidatePath(`/batches/${targetBatchId}`);
+  revalidatePath('/assets');
+  return {};
+}
+
+// Delete a device from within its lot view (admin only; API enforces the role).
+// Stays on the lot page rather than redirecting like the global deleteAsset.
+export async function deleteAssetFromLot(
+  assetId: string,
+  batchId: string,
+): Promise<{ error?: string }> {
+  try {
+    await apiFetch(`/assets/${assetId}`, { method: 'DELETE' });
+  } catch (err) {
+    if (!(err instanceof ApiError && err.status === 404)) {
+      return { error: err instanceof ApiError ? err.message : 'Could not delete the asset.' };
+    }
+  }
+  revalidatePath(`/batches/${batchId}`);
+  revalidatePath('/assets');
+  return {};
+}
+
 // Bulk import of a parsed supplier list — replaces the lot's expected inventory.
 export async function importExpectedLineItems(
   batchId: string,

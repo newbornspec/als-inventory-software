@@ -25,6 +25,8 @@ export interface Asset {
   serialNumber?: string | null;
   expressServiceCode?: string | null;
   deviceType?: string | null;
+  manufacturer?: string | null;
+  model?: string | null;
   hardwareProfile?: Record<string, unknown> | null;
 }
 

@@ -86,6 +86,8 @@ export class DevicesService {
       await this.assets.update(asset.id, {
         name,
         category,
+        manufacturer,
+        model,
         deviceType,
         serialNumber: serial,
         expressServiceCode: expressCode,
@@ -101,6 +103,8 @@ export class DevicesService {
           tag,
           name,
           category,
+          manufacturer,
+          model,
           deviceType,
           serialNumber: serial,
           expressServiceCode: expressCode,

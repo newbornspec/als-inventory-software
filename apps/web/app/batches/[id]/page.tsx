@@ -18,13 +18,14 @@ import { DeleteSubLotButton } from './delete-sublot-button';
 // 404 (deleted lot) -> Next's not-found page instead of a server-side crash.
 async function loadBatch(
   id: string,
-): Promise<[Batch, Asset[], Lot[], ReconciliationResult]> {
+): Promise<[Batch, Asset[], Lot[], ReconciliationResult, Batch[]]> {
   try {
     return await Promise.all([
       apiFetch<Batch>(`/batches/${id}`),
       apiFetch<Asset[]>(`/assets?batchId=${id}`),
       apiFetch<Lot[]>(`/lots?batchId=${id}`),
       apiFetch<ReconciliationResult>(`/batches/${id}/expected/reconciliation`),
+      apiFetch<Batch[]>('/batches'),
     ]);
   } catch (err) {
     if (err instanceof ApiError && err.status === 404) notFound();
@@ -36,10 +37,13 @@ export default async function BatchDetailPage({ params }: { params: Promise<{ id
   const { id } = await params;
   const user = await getSessionUser();
 
-  const [batch, assets, lots, recon] = await loadBatch(id);
+  const [batch, assets, lots, recon, allBatches] = await loadBatch(id);
 
   const canManage = user?.role === 'admin' || user?.role === 'manager';
   const canDelete = user?.role === 'admin';
+  const otherBatches = allBatches
+    .filter((b) => b.id !== batch.id)
+    .map((b) => ({ id: b.id, batchNumber: b.batchNumber, source: b.source }));
   const expected = batch.expectedUnitCount;
   const discrepancy = expected != null ? batch.actualUnitCount - expected : null;
 
@@ -254,20 +258,22 @@ export default async function BatchDetailPage({ params }: { params: Promise<{ id
           )}
         </section>
 
-        <div className="mt-8 grid gap-8 md:grid-cols-2">
-          <section>
-            <h2 className="text-sm font-medium text-neutral-400">
-              Assets in this lot ({assets.length})
-            </h2>
-            <LotAssets
-              assets={assets}
-              subLots={lots}
-              batchId={batch.id}
-              canManage={canManage}
-            />
-            {canManage && <AddAssetForm batchId={batch.id} subLots={lots} />}
-          </section>
+        <section className="mt-8">
+          <h2 className="text-sm font-medium text-neutral-400">
+            Assets in this lot ({assets.length})
+          </h2>
+          <LotAssets
+            assets={assets}
+            subLots={lots}
+            batchId={batch.id}
+            otherBatches={otherBatches}
+            canManage={canManage}
+            canDelete={canDelete}
+          />
+          {canManage && <AddAssetForm batchId={batch.id} subLots={lots} />}
+        </section>
 
+        <div className="mt-8">
           <section>
             <div className="flex items-baseline justify-between gap-3">
               <h2 className="text-sm font-medium text-neutral-400">Sub-lots ({lots.length})</h2>

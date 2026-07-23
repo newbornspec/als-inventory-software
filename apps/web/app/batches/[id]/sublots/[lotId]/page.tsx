@@ -12,13 +12,14 @@ import { DeleteSubLotButton } from '../../delete-sublot-button';
 async function load(
   batchId: string,
   lotId: string,
-): Promise<[Lot, Asset[], Lot[], Batch]> {
+): Promise<[Lot, Asset[], Lot[], Batch, Batch[]]> {
   try {
     return await Promise.all([
       apiFetch<Lot>(`/lots/${lotId}`),
       apiFetch<Asset[]>(`/assets?lotId=${lotId}`),
       apiFetch<Lot[]>(`/lots?batchId=${batchId}`),
       apiFetch<Batch>(`/batches/${batchId}`),
+      apiFetch<Batch[]>('/batches'),
     ]);
   } catch (err) {
     if (err instanceof ApiError && err.status === 404) notFound();
@@ -33,13 +34,16 @@ export default async function SubLotDetailPage({
 }) {
   const { id, lotId } = await params;
   const user = await getSessionUser();
-  const [lot, assets, siblings, batch] = await load(id, lotId);
+  const [lot, assets, siblings, batch, allBatches] = await load(id, lotId);
 
   // Guard against a mismatched URL (sub-lot that isn't in this batch).
   if (lot.batchId && lot.batchId !== id) notFound();
 
   const canManage = user?.role === 'admin' || user?.role === 'manager';
   const canDelete = user?.role === 'admin';
+  const otherBatches = allBatches
+    .filter((b) => b.id !== id)
+    .map((b) => ({ id: b.id, batchNumber: b.batchNumber, source: b.source }));
 
   const spec =
     [lot.manufacturer, lot.model, lot.cpu, lot.ramGb ? `${lot.ramGb}GB` : null, lot.storage, lot.screenSize]
@@ -105,7 +109,14 @@ export default async function SubLotDetailPage({
             Use the dropdown to move a device to another sub-lot, or “— No sub-lot —” to send it
             back to {batch.batchNumber}.
           </p>
-          <LotAssets assets={assets} subLots={siblings} batchId={id} canManage={canManage} />
+          <LotAssets
+            assets={assets}
+            subLots={siblings}
+            batchId={id}
+            otherBatches={otherBatches}
+            canManage={canManage}
+            canDelete={canDelete}
+          />
         </section>
       </div>
     </main>

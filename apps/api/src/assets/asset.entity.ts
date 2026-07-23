@@ -174,6 +174,12 @@ export class Asset {
   @Column({ name: 'device_type', type: 'varchar', nullable: true })
   deviceType: string | null;
 
+  @Column({ type: 'varchar', nullable: true })
+  manufacturer: string | null;
+
+  @Column({ type: 'varchar', nullable: true })
+  model: string | null;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 
