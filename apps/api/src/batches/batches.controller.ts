@@ -41,8 +41,8 @@ export class BatchesController {
 
   @Roles(UserRole.ADMIN, UserRole.MANAGER)
   @Get(':id/report.xlsx')
-  async report(@Param('id') id: string): Promise<StreamableFile> {
-    const { buffer, filename } = await this.batches.generateReport(id);
+  async report(@Param('id') id: string, @Req() req: any): Promise<StreamableFile> {
+    const { buffer, filename } = await this.batches.generateReport(id, req.user);
     return new StreamableFile(buffer, {
       type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       disposition: `attachment; filename="${filename}"`,
