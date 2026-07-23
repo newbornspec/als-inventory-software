@@ -10,6 +10,7 @@ import { QueryAssetsDto } from './dto/query-assets.dto';
 import { CreateAssetAuditDto } from './dto/create-asset-audit.dto';
 import { sanitizeUser } from '../users/sanitize-user';
 import { ActivityService } from '../activity/activity.service';
+import { isScopedManager, type RequestUser } from '../common/ownership';
 
 @Injectable()
 export class AssetsService {
@@ -20,11 +21,19 @@ export class AssetsService {
     private activity: ActivityService,
   ) {}
 
-  async findAll(query: QueryAssetsDto): Promise<Asset[]> {
+  async findAll(query: QueryAssetsDto, user?: RequestUser): Promise<Asset[]> {
     const qb = this.assets
       .createQueryBuilder('asset')
       .leftJoinAndSelect('asset.location', 'location')
       .orderBy('asset.updatedAt', 'DESC');
+
+    // Managers see only assets whose batch they own; the inner join drops
+    // unbatched/others' assets. Admins/technicians (and internal calls) see all.
+    if (isScopedManager(user)) {
+      qb.innerJoin('asset.batch', 'ownerBatch').andWhere('ownerBatch.ownerId = :ownerUid', {
+        ownerUid: user!.userId,
+      });
+    }
 
     if (query.search) {
       qb.andWhere(
@@ -62,32 +71,39 @@ export class AssetsService {
     return qb.getMany();
   }
 
-  async findOne(id: string): Promise<Asset> {
+  async findOne(id: string, user?: RequestUser): Promise<Asset> {
     // hardwareProfile is select:false (kept out of list views), so add it back
     // explicitly here where the full device detail is wanted.
-    const asset = await this.assets
+    const qb = this.assets
       .createQueryBuilder('asset')
       .leftJoinAndSelect('asset.location', 'location')
       .leftJoinAndSelect('asset.owner', 'owner')
       .addSelect('asset.hardwareProfile')
-      .where('asset.id = :id', { id })
-      .getOne();
+      .where('asset.id = :id', { id });
+    // For a scoped manager, an asset outside their batches is treated as
+    // not-found (don't reveal it exists). Admins/technicians/internal: no filter.
+    if (isScopedManager(user)) {
+      qb.innerJoin('asset.batch', 'ownerBatch').andWhere('ownerBatch.ownerId = :ownerUid', {
+        ownerUid: user!.userId,
+      });
+    }
+    const asset = await qb.getOne();
     if (!asset) throw new NotFoundException(`Asset ${id} not found`);
     // owner is a User relation — never return it with passwordHash intact.
     if (asset.owner) asset.owner = sanitizeUser(asset.owner) as Asset['owner'];
     return asset;
   }
 
-  async findHistory(assetId: string): Promise<AssetHistory[]> {
-    await this.findOne(assetId); // 404s if the asset doesn't exist
+  async findHistory(assetId: string, user?: RequestUser): Promise<AssetHistory[]> {
+    await this.findOne(assetId, user); // 404s if the asset doesn't exist or isn't visible
     return this.history.find({
       where: { assetId },
       order: { createdAt: 'DESC' },
     });
   }
 
-  async findAudits(assetId: string): Promise<AssetAudit[]> {
-    await this.findOne(assetId);
+  async findAudits(assetId: string, user?: RequestUser): Promise<AssetAudit[]> {
+    await this.findOne(assetId, user);
     return this.audits.find({
       where: { assetId },
       order: { createdAt: 'DESC' },

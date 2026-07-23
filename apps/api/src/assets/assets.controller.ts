@@ -36,23 +36,23 @@ export class AssetsController {
   // Any authenticated role can view/search — technicians need this to look
   // up assets in the field, not just admins/managers.
   @Get()
-  findAll(@Query() query: QueryAssetsDto) {
-    return this.assets.findAll(query);
+  findAll(@Query() query: QueryAssetsDto, @Req() req: any) {
+    return this.assets.findAll(query, req.user);
   }
 
   @Get(':id')
-  findOne(@Param('id') id: string) {
-    return this.assets.findOne(id);
+  findOne(@Param('id') id: string, @Req() req: any) {
+    return this.assets.findOne(id, req.user);
   }
 
   @Get(':id/history')
-  findHistory(@Param('id') id: string) {
-    return this.assets.findHistory(id);
+  findHistory(@Param('id') id: string, @Req() req: any) {
+    return this.assets.findHistory(id, req.user);
   }
 
   @Get(':id/audits')
-  findAudits(@Param('id') id: string) {
-    return this.assets.findAudits(id);
+  findAudits(@Param('id') id: string, @Req() req: any) {
+    return this.assets.findAudits(id, req.user);
   }
 
   // Open to any role, unlike create/update/delete — recording a physical
