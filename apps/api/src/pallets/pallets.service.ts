@@ -1,13 +1,16 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { FindOptionsWhere, IsNull, Repository } from 'typeorm';
 import * as ExcelJS from 'exceljs';
 import { Pallet, PalletStatus } from './pallet.entity';
 import { PalletLine } from './pallet-line.entity';
+import { Product, ProductTrackingType } from '../products/product.entity';
 import { CreatePalletDto } from './dto/create-pallet.dto';
 import { UpdatePalletDto } from './dto/update-pallet.dto';
 import { CreatePalletLineDto } from './dto/create-pallet-line.dto';
 import { UpdatePalletLineDto } from './dto/update-pallet-line.dto';
+import { CreatePalletSpecDto, SpecRowDto } from './dto/create-pallet-spec.dto';
+import { LookupsService } from '../lookups/lookups.service';
 
 export interface PalletWithTotals extends Pallet {
   totalQuantity: number;
@@ -19,6 +22,8 @@ export class PalletsService {
   constructor(
     @InjectRepository(Pallet) private pallets: Repository<Pallet>,
     @InjectRepository(PalletLine) private lines: Repository<PalletLine>,
+    @InjectRepository(Product) private products: Repository<Product>,
+    private lookupsService: LookupsService,
   ) {}
 
   async findAll(): Promise<PalletWithTotals[]> {
@@ -43,6 +48,81 @@ export class PalletsService {
   async create(dto: CreatePalletDto): Promise<Pallet> {
     const palletNumber = await this.nextPalletNumber();
     return this.pallets.save(this.pallets.create({ ...dto, palletNumber }));
+  }
+
+  // Layout 2 create: one pallet + a line per spec row. Each row find-or-creates
+  // a catalogue Product (so specs are reusable and searchable), and the line
+  // carries a composed "variant" label so it displays/reports like any other.
+  async createFromSpec(dto: CreatePalletSpecDto): Promise<Pallet> {
+    const { rows, ...meta } = dto;
+    const palletNumber = await this.nextPalletNumber();
+    const pallet = await this.pallets.save(this.pallets.create({ ...meta, palletNumber }));
+
+    for (const row of rows) {
+      await this.persistLookups(row);
+      const product = await this.findOrCreateProduct(row);
+      await this.lines.save(
+        this.lines.create({
+          palletId: pallet.id,
+          productId: product.id,
+          variant: composeVariant(row) || 'Unspecified',
+          quantity: Math.max(0, Math.trunc(row.quantity) || 0),
+        }),
+      );
+    }
+    return pallet;
+  }
+
+  // Save any new dropdown values a user typed so they appear next time. Model is
+  // scoped to its manufacturer (find-or-created first to get its id).
+  private async persistLookups(row: SpecRowDto): Promise<void> {
+    const manufacturer = nz(row.manufacturer);
+    const manLookup = manufacturer
+      ? await this.lookupsService.findOrCreate('manufacturer', manufacturer)
+      : null;
+    if (nz(row.model)) {
+      await this.lookupsService.findOrCreate('model', row.model!, manLookup?.id ?? null);
+    }
+    for (const [category, value] of [
+      ['chassis', row.chassis],
+      ['cpu', row.cpu],
+      ['ram', row.ram],
+      ['storage', row.storage],
+    ] as const) {
+      if (nz(value)) await this.lookupsService.findOrCreate(category, value!);
+    }
+  }
+
+  // Reuse an existing PALLET-tier catalogue entry with the same spec, else make
+  // one — this is what turns a typed spec into reusable, searchable data.
+  private async findOrCreateProduct(row: SpecRowDto): Promise<Product> {
+    const spec = {
+      manufacturer: nz(row.manufacturer),
+      model: nz(row.model),
+      chassis: nz(row.chassis),
+      cpu: nz(row.cpu),
+      ramGb: parseRamGb(row.ram),
+      storage: nz(row.storage),
+    };
+    // NULL columns must be matched with IsNull(), not raw null.
+    const where: FindOptionsWhere<Product> = {
+      trackingType: ProductTrackingType.PALLET,
+      manufacturer: spec.manufacturer ?? IsNull(),
+      model: spec.model ?? IsNull(),
+      chassis: spec.chassis ?? IsNull(),
+      cpu: spec.cpu ?? IsNull(),
+      ramGb: spec.ramGb ?? IsNull(),
+      storage: spec.storage ?? IsNull(),
+    };
+    const existing = await this.products.findOne({ where });
+    if (existing) return existing;
+    return this.products.save(
+      this.products.create({
+        ...spec,
+        name: composeVariant(row) || 'Unspecified',
+        trackingType: ProductTrackingType.PALLET,
+      }),
+    );
   }
 
   async update(id: string, dto: UpdatePalletDto): Promise<PalletWithTotals> {
@@ -210,6 +290,34 @@ export class PalletsService {
     const count = await this.pallets.countBy({ id });
     if (count === 0) throw new NotFoundException(`Pallet ${id} not found`);
   }
+}
+
+// Empty/whitespace -> null, so blank spec cells are stored (and matched) as NULL.
+function nz(v: string | null | undefined): string | null {
+  const s = (v ?? '').trim();
+  return s === '' ? null : s;
+}
+
+// "8 GB" / "16GB" -> 8 / 16; null when there's no number.
+function parseRamGb(ram: string | null | undefined): number | null {
+  const m = (ram ?? '').match(/\d+/);
+  return m ? parseInt(m[0], 10) : null;
+}
+
+// A readable one-line label for a spec row, used as the pallet line's variant
+// and the product name.
+function composeVariant(row: {
+  manufacturer?: string | null;
+  model?: string | null;
+  chassis?: string | null;
+  cpu?: string | null;
+  ram?: string | null;
+  storage?: string | null;
+}): string {
+  return [row.manufacturer, row.model, row.chassis, row.cpu, row.ram, row.storage]
+    .map((x) => (x ?? '').trim())
+    .filter(Boolean)
+    .join(' · ');
 }
 
 // e.g. "grade_a" -> "Grade A", "for_parts" -> "For Parts".

@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { apiFetch, getSessionUser } from '@/lib/api-server';
 import type { Pallet } from '@/lib/actions/pallets';
 import { Nav } from '@/app/components/nav';
+import { NewPalletButton } from './new-pallet-button';
 import { formatLabel } from '@/lib/asset-options';
 
 function PalletTable({ pallets, shipped }: { pallets: Pallet[]; shipped: boolean }) {
@@ -72,14 +73,7 @@ export default async function PalletsPage() {
       <div className="p-8">
         <div className="flex items-center justify-between">
           <h1 className="text-2xl font-semibold">Pallets</h1>
-          {canCreate && (
-            <Link
-              href="/pallets/new"
-              className="rounded-md bg-neutral-100 px-4 py-2 text-sm font-medium text-neutral-900"
-            >
-              New Pallet
-            </Link>
-          )}
+          {canCreate && <NewPalletButton />}
         </div>
 
         <section className="mt-6">

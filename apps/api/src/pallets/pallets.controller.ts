@@ -15,6 +15,7 @@ import { RolesGuard } from '../auth/guards/roles.guard';
 import { UserRole } from '../users/user.entity';
 import { PalletsService } from './pallets.service';
 import { CreatePalletDto } from './dto/create-pallet.dto';
+import { CreatePalletSpecDto } from './dto/create-pallet-spec.dto';
 import { UpdatePalletDto } from './dto/update-pallet.dto';
 import { CreatePalletLineDto } from './dto/create-pallet-line.dto';
 import { UpdatePalletLineDto } from './dto/update-pallet-line.dto';
@@ -48,6 +49,13 @@ export class PalletsController {
   @Post()
   create(@Body() dto: CreatePalletDto) {
     return this.pallets.create(dto);
+  }
+
+  // Layout 2 (spec table): create a pallet and all its lines from spec rows.
+  @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.TECHNICIAN)
+  @Post('spec')
+  createFromSpec(@Body() dto: CreatePalletSpecDto) {
+    return this.pallets.createFromSpec(dto);
   }
 
   @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.TECHNICIAN)

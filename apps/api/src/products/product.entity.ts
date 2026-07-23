@@ -55,6 +55,9 @@ export class Product {
   model: string | null;
 
   @Column({ type: 'varchar', nullable: true })
+  chassis: string | null;
+
+  @Column({ type: 'varchar', nullable: true })
   cpu: string | null;
 
   @Column({ name: 'ram_gb', type: 'int', nullable: true })

@@ -53,6 +53,51 @@ export async function createPallet(_prev: ActionState, formData: FormData): Prom
   redirect(`/pallets/${created.id}`);
 }
 
+export interface SpecRow {
+  manufacturer?: string;
+  model?: string;
+  chassis?: string;
+  cpu?: string;
+  ram?: string;
+  storage?: string;
+  quantity: number;
+}
+
+// Layout 2: create a pallet + all its lines from the spec table in one call.
+// Returns the new pallet id so the client can navigate (kept as a return, not a
+// redirect, so validation errors can be shown in the grid).
+export async function createPalletFromSpec(input: {
+  description?: string;
+  supplier?: string;
+  buyer?: string;
+  locationId?: string;
+  notes?: string;
+  rows: SpecRow[];
+}): Promise<{ id?: string; error?: string }> {
+  const rows = input.rows
+    .filter((r) => [r.manufacturer, r.model, r.chassis, r.cpu, r.ram, r.storage].some((v) => v?.trim()) || r.quantity > 0)
+    .map((r) => ({ ...r, quantity: Math.max(0, Math.trunc(r.quantity) || 0) }));
+  if (rows.length === 0) return { error: 'Add at least one row.' };
+  const clean = (s?: string) => (s && s.trim() ? s.trim() : undefined);
+  try {
+    const created = await apiFetch<Pallet>('/pallets/spec', {
+      method: 'POST',
+      body: JSON.stringify({
+        description: clean(input.description),
+        supplier: clean(input.supplier),
+        buyer: clean(input.buyer),
+        locationId: clean(input.locationId),
+        notes: clean(input.notes),
+        rows,
+      }),
+    });
+    revalidatePath('/pallets');
+    return { id: created.id };
+  } catch (err) {
+    return { error: err instanceof ApiError ? err.message : 'Failed to create pallet.' };
+  }
+}
+
 export async function updatePalletStatus(id: string, formData: FormData): Promise<void> {
   const status = String(formData.get('status') ?? '');
   await apiFetch(`/pallets/${id}`, { method: 'PATCH', body: JSON.stringify({ status }) });
