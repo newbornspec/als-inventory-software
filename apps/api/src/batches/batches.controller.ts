@@ -28,15 +28,16 @@ export class BatchesController {
   ) {}
 
   // Any role can view — technicians select an open batch to receive against
-  // on the scan page, same reasoning as asset read access.
+  // on the scan page. Managers are scoped to their own lots; admins/technicians
+  // see all (see common/ownership.ts).
   @Get()
-  findAll() {
-    return this.batches.findAll();
+  findAll(@Req() req: any) {
+    return this.batches.findAll(req.user);
   }
 
   @Get(':id')
-  findOne(@Param('id') id: string) {
-    return this.batches.findOne(id);
+  findOne(@Param('id') id: string, @Req() req: any) {
+    return this.batches.findOne(id, req.user);
   }
 
   @Roles(UserRole.ADMIN, UserRole.MANAGER)

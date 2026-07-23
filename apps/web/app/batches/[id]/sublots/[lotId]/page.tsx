@@ -22,7 +22,7 @@ async function load(
       apiFetch<Batch[]>('/batches'),
     ]);
   } catch (err) {
-    if (err instanceof ApiError && err.status === 404) notFound();
+    if (err instanceof ApiError && (err.status === 404 || err.status === 403)) notFound();
     throw err;
   }
 }

@@ -8,6 +8,7 @@ import { UpdateBatchDto } from './dto/update-batch.dto';
 import { Asset } from '../assets/asset.entity';
 import { sanitizeUser, type SafeUser } from '../users/sanitize-user';
 import { ActivityService } from '../activity/activity.service';
+import { assertOwnsBatch, ownerWhere, type RequestUser } from '../common/ownership';
 
 export interface BatchWithCount extends Omit<Batch, 'receivedBy' | 'owner' | 'createdBy'> {
   receivedBy: SafeUser | null;
@@ -30,20 +31,26 @@ export class BatchesService {
     private activity: ActivityService,
   ) {}
 
-  async findAll(): Promise<BatchWithCount[]> {
+  // `user` scopes the result to owned lots for managers; admins/technicians and
+  // internal callers (no user) see all.
+  async findAll(user?: RequestUser): Promise<BatchWithCount[]> {
     const batches = await this.batches.find({
+      where: ownerWhere(user),
       relations: ['location', 'receivedBy', 'owner', 'createdBy'],
       order: { createdAt: 'DESC' },
     });
     return this.withCounts(batches);
   }
 
-  async findOne(id: string): Promise<BatchWithCount> {
+  async findOne(id: string, user?: RequestUser): Promise<BatchWithCount> {
     const batch = await this.batches.findOne({
       where: { id },
       relations: ['location', 'receivedBy', 'owner', 'createdBy'],
     });
     if (!batch) throw new NotFoundException(`Batch ${id} not found`);
+    // 403 if a scoped manager opens a lot they don't own. No-op for internal
+    // callers that pass no user (their own ownership guard comes with writes).
+    assertOwnsBatch(batch.ownerId, user);
     return (await this.withCounts([batch]))[0];
   }
 

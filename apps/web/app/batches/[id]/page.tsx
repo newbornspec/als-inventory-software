@@ -28,7 +28,8 @@ async function loadBatch(
       apiFetch<Batch[]>('/batches'),
     ]);
   } catch (err) {
-    if (err instanceof ApiError && err.status === 404) notFound();
+    // 404 (deleted) or 403 (a manager opening a lot they don't own) -> not-found.
+    if (err instanceof ApiError && (err.status === 404 || err.status === 403)) notFound();
     throw err;
   }
 }
