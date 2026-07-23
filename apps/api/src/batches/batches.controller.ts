@@ -67,13 +67,13 @@ export class BatchesController {
 
   @Roles(UserRole.ADMIN, UserRole.MANAGER)
   @Patch(':id')
-  update(@Param('id') id: string, @Body() dto: UpdateBatchDto) {
-    return this.batches.update(id, dto);
+  update(@Param('id') id: string, @Body() dto: UpdateBatchDto, @Req() req: any) {
+    return this.batches.update(id, dto, req.user.userId);
   }
 
   @Roles(UserRole.ADMIN)
   @Delete(':id')
-  remove(@Param('id') id: string) {
-    return this.batches.remove(id);
+  remove(@Param('id') id: string, @Req() req: any) {
+    return this.batches.remove(id, req.user.userId);
   }
 }

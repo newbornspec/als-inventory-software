@@ -20,6 +20,7 @@ const MANAGER_LINKS = [
   { href: '/orders', label: 'Sales' },
   { href: '/customers', label: 'Customers' },
   { href: '/reports', label: 'Reports' },
+  { href: '/activity', label: 'Activity' },
 ];
 const ADMIN_LINKS = [{ href: '/users', label: 'Users' }];
 

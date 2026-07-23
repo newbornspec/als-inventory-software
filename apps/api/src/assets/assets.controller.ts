@@ -106,7 +106,7 @@ export class AssetsController {
 
   @Roles(UserRole.ADMIN)
   @Delete(':id')
-  remove(@Param('id') id: string) {
-    return this.assets.remove(id);
+  remove(@Param('id') id: string, @Req() req: any) {
+    return this.assets.remove(id, req.user.userId);
   }
 }

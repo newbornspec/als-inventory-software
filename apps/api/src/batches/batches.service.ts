@@ -7,6 +7,7 @@ import { CreateBatchDto } from './dto/create-batch.dto';
 import { UpdateBatchDto } from './dto/update-batch.dto';
 import { Asset } from '../assets/asset.entity';
 import { sanitizeUser, type SafeUser } from '../users/sanitize-user';
+import { ActivityService } from '../activity/activity.service';
 
 export interface BatchWithCount extends Omit<Batch, 'receivedBy' | 'owner' | 'createdBy'> {
   receivedBy: SafeUser | null;
@@ -26,6 +27,7 @@ export class BatchesService {
   constructor(
     @InjectRepository(Batch) private batches: Repository<Batch>,
     @InjectRepository(Asset) private assets: Repository<Asset>,
+    private activity: ActivityService,
   ) {}
 
   async findAll(): Promise<BatchWithCount[]> {
@@ -220,7 +222,7 @@ export class BatchesService {
     const batchNumber = await this.nextBatchNumber();
     // Owner + author + receiver all default to the creator; an admin can
     // reassign ownership later. receivedById kept for backward compatibility.
-    return this.batches.save(
+    const batch = await this.batches.save(
       this.batches.create({
         ...dto,
         batchNumber,
@@ -229,17 +231,39 @@ export class BatchesService {
         createdById: userId,
       }),
     );
+    await this.activity.record({
+      userId,
+      action: 'batch.created',
+      entityType: 'batch',
+      entityId: batch.id,
+      summary: `Created ${batch.batchNumber}`,
+    });
+    return batch;
   }
 
-  async update(id: string, dto: UpdateBatchDto): Promise<BatchWithCount> {
-    await this.findOne(id); // 404s if missing
+  async update(id: string, dto: UpdateBatchDto, userId?: string): Promise<BatchWithCount> {
+    const before = await this.findOne(id); // 404s if missing
     await this.batches.update(id, dto);
+    await this.activity.record({
+      userId,
+      action: 'batch.updated',
+      entityType: 'batch',
+      entityId: id,
+      summary: `Edited ${before.batchNumber}`,
+    });
     return this.findOne(id);
   }
 
-  async remove(id: string): Promise<void> {
-    await this.findOne(id);
+  async remove(id: string, userId?: string): Promise<void> {
+    const before = await this.findOne(id);
     await this.batches.delete(id);
+    await this.activity.record({
+      userId,
+      action: 'batch.deleted',
+      entityType: 'batch',
+      entityId: id,
+      summary: `Deleted ${before.batchNumber}`,
+    });
   }
 
   // Never stored — always a live count of assets pointing at this batch, so

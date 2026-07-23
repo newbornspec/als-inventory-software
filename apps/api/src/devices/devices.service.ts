@@ -8,6 +8,7 @@ import { AssetAudit } from '../assets/asset-audit.entity';
 import { AssetHistory, AssetEventType } from '../assets/asset-history.entity';
 import { IngestAuditDto } from './dto/ingest-audit.dto';
 import { HardwareProfile } from './hardware-profile.type';
+import { ActivityService } from '../activity/activity.service';
 
 @Injectable()
 export class DevicesService {
@@ -17,6 +18,7 @@ export class DevicesService {
     @InjectRepository(Asset) private assets: Repository<Asset>,
     @InjectRepository(AssetAudit) private audits: Repository<AssetAudit>,
     @InjectRepository(AssetHistory) private history: Repository<AssetHistory>,
+    private activity: ActivityService,
   ) {}
 
   async setActiveLot(userId: string, batchId: string) {
@@ -155,6 +157,16 @@ export class DevicesService {
           : `Hardware audit captured into ${batch.batchNumber}`,
       }),
     );
+
+    await this.activity.record({
+      userId,
+      action: dto.manual ? 'asset.created' : 'audit.captured',
+      entityType: 'asset',
+      entityId: asset.id,
+      summary: dto.manual
+        ? `Added ${name} to ${batch.batchNumber}`
+        : `${created ? 'Audited new device' : 'Re-audited'} ${name} into ${batch.batchNumber}`,
+    });
 
     return {
       created,

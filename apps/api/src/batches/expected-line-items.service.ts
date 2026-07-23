@@ -5,6 +5,7 @@ import { Batch } from './batch.entity';
 import { ExpectedLineItem } from './expected-line-item.entity';
 import { Asset } from '../assets/asset.entity';
 import { ImportExpectedDto } from './dto/import-expected.dto';
+import { ActivityService } from '../activity/activity.service';
 
 // One expected serialized line matched (or not) against the physically
 // scanned assets in the lot.
@@ -36,6 +37,7 @@ export class ExpectedLineItemsService {
     private expected: Repository<ExpectedLineItem>,
     @InjectRepository(Batch) private batches: Repository<Batch>,
     @InjectRepository(Asset) private assets: Repository<Asset>,
+    private activity: ActivityService,
   ) {}
 
   async findForBatch(batchId: string): Promise<ExpectedLineItem[]> {
@@ -49,9 +51,13 @@ export class ExpectedLineItemsService {
   // Replace-on-import: the uploaded file IS the expected inventory, so a
   // corrected re-import cleanly supersedes the previous one rather than
   // duplicating rows. Runs in a transaction so a batch is never left half-set.
-  async importForBatch(batchId: string, dto: ImportExpectedDto): Promise<ExpectedLineItem[]> {
+  async importForBatch(
+    batchId: string,
+    dto: ImportExpectedDto,
+    userId?: string,
+  ): Promise<ExpectedLineItem[]> {
     await this.assertBatch(batchId);
-    return this.expected.manager.transaction(async (tx) => {
+    const result = await this.expected.manager.transaction(async (tx) => {
       const repo = tx.getRepository(ExpectedLineItem);
       await repo.delete({ batchId });
       const rows = dto.items.map((item) =>
@@ -75,6 +81,16 @@ export class ExpectedLineItemsService {
       await repo.save(rows, { chunk: 500 });
       return repo.find({ where: { batchId }, order: { createdAt: 'ASC' } });
     });
+
+    const batch = await this.batches.findOne({ where: { id: batchId } });
+    await this.activity.record({
+      userId,
+      action: 'expected.imported',
+      entityType: 'batch',
+      entityId: batchId,
+      summary: `Imported ${result.length} expected items${batch ? ` into ${batch.batchNumber}` : ''}`,
+    });
+    return result;
   }
 
   async clearForBatch(batchId: string): Promise<void> {

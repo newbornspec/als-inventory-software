@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Post, Req, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { Roles } from '../auth/guards/roles.decorator';
 import { RolesGuard } from '../auth/guards/roles.guard';
@@ -27,8 +27,8 @@ export class ExpectedLineItemsController {
   // for this lot. Import is a manager/admin action (same as creating the lot).
   @Roles(UserRole.ADMIN, UserRole.MANAGER)
   @Post('import')
-  import(@Param('batchId') batchId: string, @Body() dto: ImportExpectedDto) {
-    return this.expected.importForBatch(batchId, dto);
+  import(@Param('batchId') batchId: string, @Body() dto: ImportExpectedDto, @Req() req: any) {
+    return this.expected.importForBatch(batchId, dto, req.user.userId);
   }
 
   @Roles(UserRole.ADMIN, UserRole.MANAGER)

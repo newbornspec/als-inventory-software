@@ -22,7 +22,9 @@ import { SalesOrder } from './sales/sales-order.entity';
 import { OrderLine } from './sales/order-line.entity';
 import { RepairLog } from './repairs/repair-log.entity';
 import { AssetPhoto } from './photos/asset-photo.entity';
+import { ActivityLog } from './activity/activity-log.entity';
 import { AuthModule } from './auth/auth.module';
+import { ActivityModule } from './activity/activity.module';
 import { PowerSyncModule } from './powersync/powersync.module';
 import { AssetsModule } from './assets/assets.module';
 import { LocationsModule } from './locations/locations.module';
@@ -50,13 +52,14 @@ import { DevicesModule } from './devices/devices.module';
         username: config.get('database.username'),
         password: config.get('database.password'),
         database: config.get('database.name'),
-        entities: [User, Location, Asset, AssetHistory, AssetAudit, Batch, Lot, ExpectedLineItem, Product, Pallet, PalletLine, StockLine, StockMovement, Customer, SalesOrder, OrderLine, RepairLog, AssetPhoto],
+        entities: [User, Location, Asset, AssetHistory, AssetAudit, Batch, Lot, ExpectedLineItem, Product, Pallet, PalletLine, StockLine, StockMovement, Customer, SalesOrder, OrderLine, RepairLog, AssetPhoto, ActivityLog],
         // Migrations only — never let the app auto-mutate the schema.
         synchronize: false,
       }),
     }),
     TypeOrmModule.forFeature([User, Location, Asset, AssetHistory]),
     AuthModule,
+    ActivityModule,
     PowerSyncModule,
     AssetsModule,
     LocationsModule,

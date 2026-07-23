@@ -9,6 +9,7 @@ import { UpdateAssetDto } from './dto/update-asset.dto';
 import { QueryAssetsDto } from './dto/query-assets.dto';
 import { CreateAssetAuditDto } from './dto/create-asset-audit.dto';
 import { sanitizeUser } from '../users/sanitize-user';
+import { ActivityService } from '../activity/activity.service';
 
 @Injectable()
 export class AssetsService {
@@ -16,6 +17,7 @@ export class AssetsService {
     @InjectRepository(Asset) private assets: Repository<Asset>,
     @InjectRepository(AssetHistory) private history: Repository<AssetHistory>,
     @InjectRepository(AssetAudit) private audits: Repository<AssetAudit>,
+    private activity: ActivityService,
   ) {}
 
   async findAll(query: QueryAssetsDto): Promise<Asset[]> {
@@ -95,6 +97,13 @@ export class AssetsService {
   async create(dto: CreateAssetDto, userId: string): Promise<Asset> {
     const asset = await this.assets.save(this.assets.create(dto));
     await this.logEvent(asset.id, AssetEventType.CREATED, userId, 'Asset created');
+    await this.activity.record({
+      userId,
+      action: 'asset.created',
+      entityType: 'asset',
+      entityId: asset.id,
+      summary: `Created ${asset.name}`,
+    });
     return asset;
   }
 
@@ -129,6 +138,16 @@ export class AssetsService {
       );
     }
 
+    // High-level feed entry. If the batch changed, call it a move; else an edit.
+    const moved = dto.batchId !== undefined && dto.batchId !== before.batchId;
+    await this.activity.record({
+      userId,
+      action: moved ? 'asset.moved' : 'asset.updated',
+      entityType: 'asset',
+      entityId: id,
+      summary: moved ? `Moved ${after.name} to another lot` : `Edited ${after.name}`,
+    });
+
     return after;
   }
 
@@ -157,9 +176,16 @@ export class AssetsService {
     return audit;
   }
 
-  async remove(id: string): Promise<void> {
-    await this.findOne(id); // 404s if the asset doesn't exist
+  async remove(id: string, userId?: string): Promise<void> {
+    const before = await this.findOne(id); // 404s if the asset doesn't exist
     await this.assets.delete(id);
+    await this.activity.record({
+      userId,
+      action: 'asset.deleted',
+      entityType: 'asset',
+      entityId: id,
+      summary: `Deleted ${before.name}`,
+    });
   }
 
   private async logEvent(
