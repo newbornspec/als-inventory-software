@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from 'next/server';
 // Every authenticated area of the app. Anything not listed is public.
 const PROTECTED_PREFIXES = [
   '/dashboard',
+  '/inventory',
   '/scan',
   '/assets',
   '/batches',
@@ -12,6 +13,8 @@ const PROTECTED_PREFIXES = [
   '/stock',
   '/orders',
   '/customers',
+  '/activity',
+  '/lookups',
 ];
 
 const ACCESS_MAX_AGE = 60 * 60 * 12; // 12h
@@ -97,6 +100,7 @@ export async function middleware(request: NextRequest) {
 export const config = {
   matcher: [
     '/dashboard/:path*',
+    '/inventory/:path*',
     '/scan/:path*',
     '/assets/:path*',
     '/batches/:path*',
@@ -106,5 +110,7 @@ export const config = {
     '/stock/:path*',
     '/orders/:path*',
     '/customers/:path*',
+    '/activity/:path*',
+    '/lookups/:path*',
   ],
 };
