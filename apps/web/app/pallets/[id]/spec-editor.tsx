@@ -2,12 +2,16 @@
 
 import { useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { savePalletSpec, type SpecRow } from '@/lib/actions/pallets';
+import { savePalletSpec, type PalletLine, type SpecRow } from '@/lib/actions/pallets';
+import { sellPalletLine } from '@/lib/actions/sold';
 import type { LookupValue } from '@/lib/actions/lookups';
 import type { Location } from '@/lib/data';
 
 type Field = 'manufacturer' | 'model' | 'chassis' | 'cpu' | 'gen' | 'ram' | 'storage' | 'quantity';
-type Row = Record<Field, string> & { id: number };
+// lineId ties a row to its saved pallet line (''=not saved yet) — needed to
+// sell from the grid. Refreshed from the server response on every save, since
+// saving recreates the lines.
+type Row = Record<Field, string> & { id: number; lineId: string };
 
 // The persistent Layout 2 editor: a spec pallet always opens back into this
 // grid, so it can be edited, saved and re-edited any time. Saving replaces the
@@ -46,7 +50,7 @@ export function SpecEditor({
 }: {
   palletId: string;
   initialMeta: SpecEditorMeta;
-  initialRows: Record<Exclude<Field, never>, string>[];
+  initialRows: (Record<Field, string> & { lineId?: string })[];
   locations: Location[];
   lookups: LookupValue[];
 }) {
@@ -54,6 +58,7 @@ export function SpecEditor({
   const nextId = useRef(0);
   const blank = (): Row => ({
     id: nextId.current++,
+    lineId: '',
     manufacturer: '',
     model: '',
     chassis: '',
@@ -64,8 +69,24 @@ export function SpecEditor({
     quantity: '',
   });
 
+  // Rebuild grid rows from the server's lines — used at mount (via the page's
+  // initialRows) and after every save, so lineIds always match reality.
+  const rowsFromLines = (lines: PalletLine[]): Row[] =>
+    lines.map((l) => ({
+      id: nextId.current++,
+      lineId: l.id,
+      manufacturer: l.product?.manufacturer ?? '',
+      model: l.product?.model ?? (l.product ? '' : l.variant),
+      chassis: l.product?.chassis ?? '',
+      cpu: l.product?.cpu ?? '',
+      gen: l.product?.gen ?? '',
+      ram: l.product?.ramGb != null ? `${l.product.ramGb} GB` : '',
+      storage: l.product?.storage ?? '',
+      quantity: String(l.quantity),
+    }));
+
   const [rows, setRows] = useState<Row[]>(() => {
-    const initial = initialRows.map((r) => ({ ...r, id: nextId.current++ }));
+    const initial = initialRows.map((r) => ({ ...r, lineId: r.lineId ?? '', id: nextId.current++ }));
     return initial.length > 0 ? initial : [blank(), blank(), blank()];
   });
   const [meta, setMeta] = useState(initialMeta);
@@ -164,9 +185,35 @@ export function SpecEditor({
       setError(res.error);
       return;
     }
+    // Adopt the server's rows (fresh lineIds; empty rows dropped) so in-grid
+    // selling keeps working after the save.
+    const fresh = rowsFromLines(res.pallet?.lines ?? []);
+    setRows(fresh.length > 0 ? fresh : [blank(), blank(), blank()]);
     setSaved(true);
     setTimeout(() => setSaved(false), 3000);
     router.refresh(); // updates the totals/header rendered by the server page
+  }
+
+  // Sell all or part of a saved row's quantity straight from the grid — the
+  // quantity moves to the Sold page and the row shrinks or disappears.
+  async function sellRow(row: Row) {
+    const max = parseInt(row.quantity || '0', 10);
+    if (!row.lineId || max <= 0) return;
+    const raw = window.prompt(`Sell how many? (1–${max})`, String(max));
+    if (raw === null) return;
+    const qty = Math.min(Math.max(1, parseInt(raw, 10) || 0), max);
+    setError(null);
+    const res = await sellPalletLine(palletId, row.lineId, qty);
+    if (res.error) {
+      setError(res.error);
+      return;
+    }
+    setRows((rs) =>
+      qty >= max
+        ? rs.filter((r) => r.id !== row.id)
+        : rs.map((r) => (r.id === row.id ? { ...r, quantity: String(max - qty) } : r)),
+    );
+    router.refresh();
   }
 
   const arrow = (col: Field) => (sort?.col === col ? (sort.dir === 'asc' ? ' ▲' : ' ▼') : '');
@@ -235,7 +282,7 @@ export function SpecEditor({
                   </button>
                 </th>
               ))}
-              <th className="w-10 px-3 py-2" />
+              <th className="w-20 px-3 py-2" />
             </tr>
           </thead>
           <tbody>
@@ -256,10 +303,21 @@ export function SpecEditor({
                       />
                     </td>
                   ))}
-                  <td className="px-2 py-1 text-center">
-                    <button onClick={() => removeRow(r.id)} className="text-xs text-red-400 hover:underline" aria-label="Remove row">
-                      ✕
-                    </button>
+                  <td className="px-2 py-1">
+                    <div className="flex items-center gap-2">
+                      {r.lineId && parseInt(r.quantity || '0', 10) > 0 && (
+                        <button
+                          onClick={() => void sellRow(r)}
+                          className="text-xs text-emerald-400 hover:underline"
+                          title="Sell all or part of this row"
+                        >
+                          Sell…
+                        </button>
+                      )}
+                      <button onClick={() => removeRow(r.id)} className="text-xs text-red-400 hover:underline" aria-label="Remove row">
+                        ✕
+                      </button>
+                    </div>
                   </td>
                 </tr>
               );

@@ -310,6 +310,9 @@ export class BatchesService {
       .addSelect(`COUNT(*) FILTER (WHERE asset.stock_status = 'quarantined')`, 'quarantine')
       .addSelect(`COUNT(*) FILTER (WHERE asset.audit_status IS NOT NULL)`, 'audited')
       .where('asset.batchId IN (:...ids)', { ids: batches.map((b) => b.id) })
+      // Sold assets keep their batch link for provenance but are out of active
+      // inventory — they must not count toward any lot's live totals.
+      .andWhere(`asset.stock_status != 'sold'`)
       .groupBy('asset.batchId')
       .getRawMany<{
         batchId: string;

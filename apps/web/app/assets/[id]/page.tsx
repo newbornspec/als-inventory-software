@@ -11,6 +11,7 @@ import { money } from '@/lib/money';
 import type { RepairLog } from '@/lib/actions/repairs';
 import type { PhotoMeta } from '@/lib/actions/photos';
 import { AssetEditForm } from './edit-form';
+import { SellAssetButton } from './sell-button';
 import { AuditSection, type AssetAuditRecord } from './audit-section';
 import { RepairsSection } from './repairs-section';
 import { PhotosSection } from './photos-section';
@@ -68,8 +69,12 @@ export default async function AssetDetailPage({
   const [asset, history, audits, repairs, photos] = await loadAsset(id);
   const locations = await getLocations();
 
-  const canEdit = user?.role === 'admin' || user?.role === 'manager';
+  const isSold = asset.stockStatus === 'sold';
+  // A sold asset is locked: no editing for anyone here (admins use Return to
+  // Inventory on the Sold page instead of editing in place).
+  const canEdit = (user?.role === 'admin' || user?.role === 'manager') && !isSold;
   const canDelete = user?.role === 'admin';
+  const canSell = !isSold && !!user;
 
   // Build the drill-down trail. If the device belongs to a lot, route back through
   // it (the hierarchy); otherwise fall back to the global Assets search.
@@ -117,17 +122,34 @@ export default async function AssetDetailPage({
               )}
             </p>
           </div>
-          {canDelete && (
-            <form action={deleteAsset.bind(null, asset.id)}>
-              <button
-                type="submit"
-                className="rounded-md border border-red-900 px-3 py-1.5 text-sm text-red-400 hover:bg-red-950"
-              >
-                Delete
-              </button>
-            </form>
-          )}
+          <div className="flex items-center gap-2">
+            {canSell && <SellAssetButton assetId={asset.id} name={asset.name} />}
+            {canDelete && !isSold && (
+              <form action={deleteAsset.bind(null, asset.id)}>
+                <button
+                  type="submit"
+                  className="rounded-md border border-red-900 px-3 py-1.5 text-sm text-red-400 hover:bg-red-950"
+                >
+                  Delete
+                </button>
+              </form>
+            )}
+          </div>
         </div>
+
+        {isSold && (
+          <div className="mt-4 max-w-2xl rounded-md border border-amber-800 bg-amber-950/40 p-3 text-sm text-amber-300">
+            <strong>SOLD</strong> — this asset has left active inventory and is locked.
+            {user?.role === 'admin' ? (
+              <>
+                {' '}Use <Link href="/sold" className="underline">the Sold page</Link> to return it
+                to inventory.
+              </>
+            ) : (
+              ' Only an administrator can return it to inventory.'
+            )}
+          </div>
+        )}
 
         <div className="mt-8 grid gap-8 md:grid-cols-2">
           <section>
@@ -215,10 +237,7 @@ export default async function AssetDetailPage({
                     </div>
                     {costing.orderNumber && (
                       <div className="pt-1 text-xs text-neutral-500">
-                        Sold on{' '}
-                        <Link href={`/orders/${costing.orderId}`} className="underline">
-                          {costing.orderNumber}
-                        </Link>
+                        Sold on {costing.orderNumber}
                       </div>
                     )}
                   </>

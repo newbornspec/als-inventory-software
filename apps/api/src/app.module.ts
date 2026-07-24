@@ -15,6 +15,7 @@ import { ExpectedLineItem } from './batches/expected-line-item.entity';
 import { Product } from './products/product.entity';
 import { Pallet } from './pallets/pallet.entity';
 import { PalletLine } from './pallets/pallet-line.entity';
+import { PalletSoldLine } from './pallets/pallet-sold-line.entity';
 import { StockLine } from './stock/stock-line.entity';
 import { StockMovement } from './stock/stock-movement.entity';
 import { Customer } from './customers/customer.entity';
@@ -54,7 +55,7 @@ import { DevicesModule } from './devices/devices.module';
         username: config.get('database.username'),
         password: config.get('database.password'),
         database: config.get('database.name'),
-        entities: [User, Location, Asset, AssetHistory, AssetAudit, Batch, Lot, ExpectedLineItem, Product, Pallet, PalletLine, StockLine, StockMovement, Customer, SalesOrder, OrderLine, RepairLog, AssetPhoto, ActivityLog, LookupValue],
+        entities: [User, Location, Asset, AssetHistory, AssetAudit, Batch, Lot, ExpectedLineItem, Product, Pallet, PalletLine, PalletSoldLine, StockLine, StockMovement, Customer, SalesOrder, OrderLine, RepairLog, AssetPhoto, ActivityLog, LookupValue],
         // Migrations only — never let the app auto-mutate the schema.
         synchronize: false,
       }),

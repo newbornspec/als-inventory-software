@@ -8,6 +8,7 @@ import {
   deletePalletLine,
   type PalletLine,
 } from '@/lib/actions/pallets';
+import { sellPalletLine } from '@/lib/actions/sold';
 import { money } from '@/lib/money';
 import { CONDITION_GRADES, PALLET_TIERS, formatLabel } from '@/lib/asset-options';
 
@@ -103,6 +104,24 @@ export function PalletLines({
     void run(() => deletePalletLine(palletId, line.id));
   }
 
+  // Sell all or part of this line's quantity — it moves to the Sold page and
+  // the pallet total shrinks. Prompt defaults to the full quantity.
+  async function sell(line: PalletLine) {
+    const raw = window.prompt(
+      `Sell how many of "${line.variant}"? (1–${line.quantity})`,
+      String(line.quantity),
+    );
+    if (raw === null) return;
+    const qty = Math.min(Math.max(1, parseInt(raw, 10) || 0), line.quantity);
+    setError(null);
+    const res = await sellPalletLine(palletId, line.id, qty);
+    if (res.error) {
+      setError(res.error);
+      return;
+    }
+    router.refresh();
+  }
+
   const cols = canManage ? 7 : 6;
 
   return (
@@ -116,7 +135,7 @@ export function PalletLines({
             <th className="w-32 px-3 py-2">Grade</th>
             <th className="w-28 px-3 py-2">Unit cost (£)</th>
             <th className="w-24 px-3 py-2">Line total</th>
-            {canManage && <th className="w-16 px-3 py-2" />}
+            {canManage && <th className="w-24 px-3 py-2" />}
           </tr>
         </thead>
         <tbody>
@@ -204,9 +223,19 @@ export function PalletLines({
               </td>
               {canManage && (
                 <td className="px-3 py-2">
-                  <button onClick={() => remove(l)} className="text-xs text-red-400 hover:underline">
-                    Remove
-                  </button>
+                  <div className="flex items-center gap-2">
+                    {l.quantity > 0 && (
+                      <button
+                        onClick={() => void sell(l)}
+                        className="text-xs text-emerald-400 hover:underline"
+                      >
+                        Sell…
+                      </button>
+                    )}
+                    <button onClick={() => remove(l)} className="text-xs text-red-400 hover:underline">
+                      Remove
+                    </button>
+                  </div>
                 </td>
               )}
             </tr>

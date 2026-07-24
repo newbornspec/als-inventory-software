@@ -12,6 +12,7 @@ import { PalletLines } from './pallet-lines';
 import { PalletSupplier } from './pallet-supplier';
 import { PalletBuyer } from './pallet-buyer';
 import { SpecEditor } from './spec-editor';
+import { SellPalletButton } from './sell-pallet-button';
 
 // 404 (deleted pallet) -> Next's not-found page instead of a server-side crash.
 async function loadPallet(id: string): Promise<Pallet> {
@@ -39,6 +40,7 @@ export default async function PalletDetailPage({ params }: { params: Promise<{ i
       apiFetch<LookupValue[]>('/lookups').catch(() => [] as LookupValue[]),
     ]);
     const initialRows = (pallet.lines ?? []).map((l) => ({
+      lineId: l.id,
       manufacturer: l.product?.manufacturer ?? '',
       model: l.product?.model ?? (l.product ? '' : l.variant),
       chassis: l.product?.chassis ?? '',
@@ -68,6 +70,13 @@ export default async function PalletDetailPage({ params }: { params: Promise<{ i
             <div className="flex items-center gap-2">
               {canManage && (
                 <PalletStatusSelect palletId={pallet.id} status={pallet.status} />
+              )}
+              {canManage && (
+                <SellPalletButton
+                  palletId={pallet.id}
+                  palletNumber={pallet.palletNumber}
+                  totalQuantity={pallet.totalQuantity}
+                />
               )}
               {canManage && (
                 <a
@@ -139,6 +148,13 @@ export default async function PalletDetailPage({ params }: { params: Promise<{ i
             )}
           </div>
           <div className="flex items-center gap-2">
+            {canManage && (
+              <SellPalletButton
+                palletId={pallet.id}
+                palletNumber={pallet.palletNumber}
+                totalQuantity={pallet.totalQuantity}
+              />
+            )}
             {canManage && (
               <a
                 href={`/api/pallets/${pallet.id}/report`}

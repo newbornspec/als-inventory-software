@@ -12,6 +12,9 @@ export const STOCK_STATUSES = [
   'shipped',
   'returned',
   'disposed',
+  // Terminal Sold status. Filtering by it is the only way sold assets appear
+  // in the Assets search (they're excluded from all active views by default).
+  'sold',
 ];
 
 export const CONDITION_GRADES = ['grade_a', 'grade_b', 'grade_c', 'grade_d', 'for_parts', 'scrap'];

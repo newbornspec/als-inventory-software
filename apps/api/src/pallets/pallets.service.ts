@@ -1,9 +1,15 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { FindOptionsWhere, IsNull, Repository } from 'typeorm';
 import * as ExcelJS from 'exceljs';
 import { Pallet, PalletStatus, PalletEntryLayout } from './pallet.entity';
 import { PalletLine } from './pallet-line.entity';
+import { PalletSoldLine } from './pallet-sold-line.entity';
 import { Product, ProductTrackingType } from '../products/product.entity';
 import { CreatePalletDto } from './dto/create-pallet.dto';
 import { UpdatePalletDto } from './dto/update-pallet.dto';
@@ -11,6 +17,7 @@ import { CreatePalletLineDto } from './dto/create-pallet-line.dto';
 import { UpdatePalletLineDto } from './dto/update-pallet-line.dto';
 import { CreatePalletSpecDto, SpecRowDto } from './dto/create-pallet-spec.dto';
 import { LookupsService } from '../lookups/lookups.service';
+import { sanitizeUser } from '../users/sanitize-user';
 
 export interface PalletWithTotals extends Pallet {
   totalQuantity: number;
@@ -22,6 +29,7 @@ export class PalletsService {
   constructor(
     @InjectRepository(Pallet) private pallets: Repository<Pallet>,
     @InjectRepository(PalletLine) private lines: Repository<PalletLine>,
+    @InjectRepository(PalletSoldLine) private soldLines: Repository<PalletSoldLine>,
     @InjectRepository(Product) private products: Repository<Product>,
     private lookupsService: LookupsService,
   ) {}
@@ -84,6 +92,128 @@ export class PalletsService {
     await this.lines.delete({ palletId: id });
     await this.createLinesFromSpec(id, rows ?? []);
     return this.findOne(id);
+  }
+
+  // --- Sold workflow ---
+
+  // Sell all or part of one line's quantity. The sold quantity is archived in
+  // pallet_sold_lines (snapshotting variant/product/pallet number) and the
+  // line shrinks or disappears — pallet totals update automatically because
+  // they're always summed live from the lines.
+  async sellLine(
+    palletId: string,
+    lineId: string,
+    quantity: number | undefined,
+    userId: string,
+  ): Promise<PalletSoldLine> {
+    const pallet = await this.assertPallet(palletId);
+    const line = await this.lines.findOne({ where: { id: lineId, palletId } });
+    if (!line) throw new NotFoundException(`Line ${lineId} not found on this pallet`);
+    if (line.quantity <= 0) throw new ConflictException('This line has no quantity left to sell.');
+
+    const qty = Math.min(Math.max(1, Math.trunc(quantity ?? line.quantity)), line.quantity);
+    const sold = await this.soldLines.save(
+      this.soldLines.create({
+        palletId: pallet.id,
+        palletNumber: pallet.palletNumber,
+        productId: line.productId,
+        variant: line.variant,
+        quantity: qty,
+        soldById: userId,
+      }),
+    );
+    if (qty >= line.quantity) {
+      await this.lines.delete(line.id);
+    } else {
+      await this.lines.update(line.id, { quantity: line.quantity - qty });
+    }
+    return sold;
+  }
+
+  // Sell everything remaining on the pallet in one action; the emptied pallet
+  // is stamped shipped (it has physically left).
+  async sellPallet(palletId: string, userId: string): Promise<{ soldLines: number; soldUnits: number }> {
+    const pallet = await this.assertPallet(palletId);
+    const lines = await this.lines.find({ where: { palletId } });
+    const withQty = lines.filter((l) => l.quantity > 0);
+    if (withQty.length === 0) throw new ConflictException('This pallet has nothing left to sell.');
+
+    let units = 0;
+    for (const line of withQty) {
+      units += line.quantity;
+      await this.soldLines.save(
+        this.soldLines.create({
+          palletId: pallet.id,
+          palletNumber: pallet.palletNumber,
+          productId: line.productId,
+          variant: line.variant,
+          quantity: line.quantity,
+          soldById: userId,
+        }),
+      );
+    }
+    await this.lines.delete({ palletId });
+    await this.pallets.update(palletId, { status: PalletStatus.SHIPPED, shippedAt: new Date() });
+    return { soldLines: withQty.length, soldUnits: units };
+  }
+
+  // The Sold archive for pallet goods — unreturned rows, newest first.
+  async findSoldLines(): Promise<PalletSoldLine[]> {
+    const rows = await this.soldLines.find({
+      where: { returnedAt: IsNull() },
+      relations: { soldBy: true, product: true },
+      order: { soldAt: 'DESC' },
+    });
+    return rows.map((r) => {
+      if (r.soldBy) r.soldBy = sanitizeUser(r.soldBy) as PalletSoldLine['soldBy'];
+      return r;
+    });
+  }
+
+  // Admin-only return: put the quantity back on a pallet (the original by
+  // default). The sold row is stamped returned — kept as audit trail — and
+  // drops off the Sold page.
+  async returnSoldLine(
+    soldId: string,
+    targetPalletId: string | null | undefined,
+    userId: string,
+  ): Promise<PalletSoldLine> {
+    const sold = await this.soldLines.findOne({ where: { id: soldId, returnedAt: IsNull() } });
+    if (!sold) throw new NotFoundException('Sold record not found (or already returned).');
+
+    const palletId = targetPalletId ?? sold.palletId;
+    if (!palletId) {
+      throw new BadRequestException(
+        'The original pallet no longer exists — choose a destination pallet.',
+      );
+    }
+    await this.assertPallet(palletId);
+
+    // Merge into a matching line on the destination if one exists, else
+    // recreate the line from the snapshot.
+    const existing = await this.lines.findOne({
+      where: sold.productId
+        ? { palletId, productId: sold.productId }
+        : { palletId, variant: sold.variant, productId: IsNull() },
+    });
+    if (existing) {
+      await this.lines.update(existing.id, { quantity: existing.quantity + sold.quantity });
+    } else {
+      await this.lines.save(
+        this.lines.create({
+          palletId,
+          productId: sold.productId,
+          variant: sold.variant,
+          quantity: sold.quantity,
+        }),
+      );
+    }
+    await this.soldLines.update(soldId, {
+      returnedAt: new Date(),
+      returnedById: userId,
+      returnedToPalletId: palletId,
+    });
+    return { ...sold, returnedAt: new Date(), returnedById: userId, returnedToPalletId: palletId };
   }
 
   private async createLinesFromSpec(palletId: string, rows: SpecRowDto[]): Promise<void> {
@@ -419,9 +549,10 @@ export class PalletsService {
     return `PALLET-${n}`;
   }
 
-  private async assertPallet(id: string): Promise<void> {
-    const count = await this.pallets.countBy({ id });
-    if (count === 0) throw new NotFoundException(`Pallet ${id} not found`);
+  private async assertPallet(id: string): Promise<Pallet> {
+    const pallet = await this.pallets.findOne({ where: { id } });
+    if (!pallet) throw new NotFoundException(`Pallet ${id} not found`);
+    return pallet;
   }
 }
 

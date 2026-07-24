@@ -121,7 +121,11 @@ export class ReportsService {
     return batches.map((b) => {
       const units = byBatch.get(b.id) ?? [];
       const evenSplit = b.totalCost != null && units.length > 0 ? b.totalCost / units.length : null;
-      const sold = units.filter((a) => a.stockStatus === AssetStockStatus.SHIPPED);
+      const sold = units.filter(
+        (a) =>
+          a.stockStatus === AssetStockStatus.SHIPPED ||
+          a.stockStatus === AssetStockStatus.SOLD,
+      );
       const revenue = sold.reduce((s, a) => s + (saleByAsset.get(a.id) ?? 0), 0);
       const costOfSold = sold.reduce((s, a) => s + (a.purchaseCost ?? evenSplit ?? 0), 0);
       const profit = revenue - costOfSold;

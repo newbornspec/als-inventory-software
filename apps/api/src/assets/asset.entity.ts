@@ -29,6 +29,8 @@ export enum AssetStockStatus {
   SHIPPED = 'shipped',
   RETURNED = 'returned',
   DISPOSED = 'disposed',
+  // Terminal: removed from active inventory and locked (admin-only return).
+  SOLD = 'sold',
 }
 
 // Cosmetic/physical condition grade — independent of stock status.
@@ -113,6 +115,19 @@ export class Asset {
   @ManyToOne(() => User, { nullable: true, onDelete: 'SET NULL' })
   @JoinColumn({ name: 'owner_id' })
   owner: User | null;
+
+  // Set when the asset is marked Sold; cleared on an admin return. batch/lot
+  // links are deliberately KEPT on sale (provenance for the Sold page and the
+  // return path) — sold assets are excluded from active views by status.
+  @Column({ name: 'sold_at', type: 'timestamp', nullable: true })
+  soldAt: Date | null;
+
+  @Column({ name: 'sold_by_id', type: 'uuid', nullable: true })
+  soldById: string | null;
+
+  @ManyToOne(() => User, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'sold_by_id' })
+  soldBy: User | null;
 
   @Column({ name: 'image_url', type: 'varchar', nullable: true })
   imageUrl: string | null;

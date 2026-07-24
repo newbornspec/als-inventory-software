@@ -7,6 +7,7 @@ import {
   Patch,
   Post,
   Put,
+  Req,
   StreamableFile,
   UseGuards,
 } from '@nestjs/common';
@@ -29,6 +30,13 @@ export class PalletsController {
   @Get()
   findAll() {
     return this.pallets.findAll();
+  }
+
+  // Declared before ':id' so 'sold' isn't captured as a pallet id. The Sold
+  // archive for pallet goods (unreturned sold quantities).
+  @Get('sold')
+  findSoldLines() {
+    return this.pallets.findSoldLines();
   }
 
   @Get(':id')
@@ -77,6 +85,37 @@ export class PalletsController {
   @Delete(':id')
   remove(@Param('id') id: string) {
     return this.pallets.remove(id);
+  }
+
+  // --- Sold workflow ---
+
+  // Selling is normal warehouse work — any role may do it.
+  @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.TECHNICIAN)
+  @Post(':id/sell')
+  sellPallet(@Param('id') id: string, @Req() req: any) {
+    return this.pallets.sellPallet(id, req.user.userId);
+  }
+
+  @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.TECHNICIAN)
+  @Post(':id/lines/:lineId/sell')
+  sellLine(
+    @Param('id') id: string,
+    @Param('lineId') lineId: string,
+    @Body() body: { quantity?: number },
+    @Req() req: any,
+  ) {
+    return this.pallets.sellLine(id, lineId, body?.quantity, req.user.userId);
+  }
+
+  // Returning sold goods to inventory is admin-only.
+  @Roles(UserRole.ADMIN)
+  @Post('sold/:soldId/return')
+  returnSoldLine(
+    @Param('soldId') soldId: string,
+    @Body() body: { palletId?: string | null },
+    @Req() req: any,
+  ) {
+    return this.pallets.returnSoldLine(soldId, body?.palletId, req.user.userId);
   }
 
   // --- lines ---

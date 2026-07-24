@@ -102,13 +102,15 @@ export async function savePalletSpec(
     notes?: string;
     rows: SpecRow[];
   },
-): Promise<{ error?: string }> {
+): Promise<{ pallet?: Pallet; error?: string }> {
   const rows = input.rows
     .filter((r) => [r.manufacturer, r.model, r.chassis, r.cpu, r.gen, r.ram, r.storage].some((v) => v?.trim()) || r.quantity > 0)
     .map((r) => ({ ...r, quantity: Math.max(0, Math.trunc(r.quantity) || 0) }));
   const clean = (s?: string) => (s && s.trim() ? s.trim() : null);
   try {
-    await apiFetch(`/pallets/${id}/spec`, {
+    // Returns the fresh pallet (lines + products) so the grid editor can
+    // re-link its rows to the recreated lines after a save.
+    const pallet = await apiFetch<Pallet>(`/pallets/${id}/spec`, {
       method: 'PUT',
       body: JSON.stringify({
         description: clean(input.description),
@@ -121,7 +123,7 @@ export async function savePalletSpec(
     });
     revalidatePath(`/pallets/${id}`);
     revalidatePath('/pallets');
-    return {};
+    return { pallet };
   } catch (err) {
     return { error: err instanceof ApiError ? err.message : 'Failed to save pallet.' };
   }

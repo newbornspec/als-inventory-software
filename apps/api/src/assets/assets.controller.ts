@@ -40,6 +40,13 @@ export class AssetsController {
     return this.assets.findAll(query, req.user);
   }
 
+  // Declared before ':id' so 'sold' isn't captured as an asset id. The Sold
+  // archive of serialized devices.
+  @Get('sold')
+  findSold() {
+    return this.assets.findSold();
+  }
+
   @Get(':id')
   findOne(@Param('id') id: string, @Req() req: any) {
     return this.assets.findOne(id, req.user);
@@ -102,6 +109,24 @@ export class AssetsController {
   @Patch(':id')
   update(@Param('id') id: string, @Body() dto: UpdateAssetDto, @Req() req: any) {
     return this.assets.update(id, dto, req.user);
+  }
+
+  // Selling is normal warehouse work — any role. Locking is what's restricted.
+  @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.TECHNICIAN)
+  @Post(':id/sell')
+  sell(@Param('id') id: string, @Req() req: any) {
+    return this.assets.sell(id, req.user);
+  }
+
+  // Returning a sold item to inventory is admin-only, per the Sold workflow.
+  @Roles(UserRole.ADMIN)
+  @Post(':id/return')
+  returnFromSold(
+    @Param('id') id: string,
+    @Body() body: { batchId?: string | null },
+    @Req() req: any,
+  ) {
+    return this.assets.returnFromSold(id, body?.batchId, req.user);
   }
 
   @Roles(UserRole.ADMIN)

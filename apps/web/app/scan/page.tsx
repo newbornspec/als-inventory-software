@@ -109,7 +109,7 @@ export default function ScanPage() {
   async function refreshReceivedCount(batchId: string) {
     const db = getPowerSyncDb();
     const row = await db.get<{ count: number }>(
-      'SELECT COUNT(*) as count FROM assets WHERE batch_id = ?',
+      "SELECT COUNT(*) as count FROM assets WHERE batch_id = ? AND stock_status != 'sold'",
       [batchId],
     );
     setReceivedCount(row?.count ?? 0);

@@ -1,7 +1,12 @@
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { Asset } from './asset.entity';
+import { Asset, AssetStockStatus } from './asset.entity';
 import { Batch } from '../batches/batch.entity';
 import { AssetEventType, AssetHistory } from './asset-history.entity';
 import { AssetAudit } from './asset-audit.entity';
@@ -49,6 +54,13 @@ export class AssetsService {
       qb.innerJoin('asset.batch', 'ownerBatch').andWhere(managerBatchCondition('ownerBatch'), {
         ownerUid: user!.userId,
       });
+    }
+
+    // Sold assets are out of active inventory: excluded from every list/search
+    // unless the caller explicitly filters by a status (e.g. the Sold archive
+    // asking for stockStatus=sold).
+    if (!query.stockStatus) {
+      qb.andWhere('asset.stockStatus != :soldStatus', { soldStatus: AssetStockStatus.SOLD });
     }
 
     if (query.search) {
@@ -145,6 +157,11 @@ export class AssetsService {
   async update(id: string, dto: UpdateAssetDto, user?: RequestUser): Promise<Asset> {
     // 404s for a scoped manager who doesn't own the asset's current lot.
     const before = await this.findOne(id, user);
+    // A sold asset is locked: no edits or moves except by an admin (who should
+    // normally use the return flow rather than editing in place).
+    if (before.stockStatus === AssetStockStatus.SOLD && user && user.role !== 'admin') {
+      throw new ForbiddenException('This asset is sold and locked. Ask an admin to return it.');
+    }
     // If moving to a different lot, a manager must own the destination too.
     if (dto.batchId !== undefined && dto.batchId !== before.batchId) {
       await this.assertOwnsTargetLot(dto.batchId, user);
@@ -217,6 +234,86 @@ export class AssetsService {
     );
 
     return audit;
+  }
+
+  // The Sold archive: every sold asset, newest first, with the provenance the
+  // Sold page shows (lot, sub-lot, product spec, who sold it and when).
+  async findSold(): Promise<Asset[]> {
+    return this.assets
+      .createQueryBuilder('asset')
+      .leftJoinAndSelect('asset.batch', 'batch')
+      .leftJoinAndSelect('asset.lot', 'lot')
+      .leftJoinAndSelect('asset.product', 'product')
+      .leftJoinAndSelect('asset.soldBy', 'soldBy')
+      .where('asset.stockStatus = :sold', { sold: AssetStockStatus.SOLD })
+      .orderBy('asset.soldAt', 'DESC')
+      .getMany()
+      .then((assets) =>
+        assets.map((a) => {
+          if (a.soldBy) a.soldBy = sanitizeUser(a.soldBy) as Asset['soldBy'];
+          return a;
+        }),
+      );
+  }
+
+  // Mark as Sold: terminal status, out of every active view, locked for
+  // non-admins. The batch/lot links stay for provenance and the return path.
+  async sell(id: string, user: RequestUser): Promise<Asset> {
+    const before = await this.findOne(id, user);
+    if (before.stockStatus === AssetStockStatus.SOLD) {
+      throw new ConflictException('This asset is already sold.');
+    }
+    await this.assets.update(id, {
+      stockStatus: AssetStockStatus.SOLD,
+      soldAt: new Date(),
+      soldById: user.userId,
+    });
+    await this.logEvent(
+      id,
+      AssetEventType.STATUS_CHANGED,
+      user.userId,
+      `${before.stockStatus} -> sold (marked as Sold)`,
+    );
+    await this.activity.record({
+      userId: user.userId,
+      action: 'asset.sold',
+      entityType: 'asset',
+      entityId: id,
+      summary: `Sold ${before.name} (${before.tag})`,
+    });
+    return this.findOne(id);
+  }
+
+  // Admin-only return: back to active inventory, optionally into a different
+  // lot. Clears the sold stamp; history records where it came back from.
+  async returnFromSold(id: string, batchId: string | null | undefined, user: RequestUser): Promise<Asset> {
+    const before = await this.findOne(id);
+    if (before.stockStatus !== AssetStockStatus.SOLD) {
+      throw new ConflictException('This asset is not sold.');
+    }
+    const targetBatch = batchId === undefined ? before.batchId : batchId;
+    const movingLots = targetBatch !== before.batchId;
+    await this.assets.update(id, {
+      stockStatus: AssetStockStatus.IN_STOCK,
+      soldAt: null,
+      soldById: null,
+      batchId: targetBatch,
+      ...(movingLots ? { lotId: null } : {}),
+    });
+    await this.logEvent(
+      id,
+      AssetEventType.STATUS_CHANGED,
+      user.userId,
+      `sold -> in_stock (returned to inventory${movingLots ? ', moved lot' : ''})`,
+    );
+    await this.activity.record({
+      userId: user.userId,
+      action: 'asset.returned',
+      entityType: 'asset',
+      entityId: id,
+      summary: `Returned ${before.name} (${before.tag}) to inventory`,
+    });
+    return this.findOne(id);
   }
 
   async remove(id: string, userId?: string): Promise<void> {
