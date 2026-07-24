@@ -1,6 +1,5 @@
 import { Type } from 'class-transformer';
 import {
-  ArrayMinSize,
   IsArray,
   IsInt,
   IsOptional,
@@ -25,7 +24,9 @@ export class SpecRowDto {
   @IsInt() @Min(0) quantity: number;
 }
 
-// Layout 2 create: pallet metadata + the spec rows, in one request.
+// Layout 2 create/save: pallet metadata + the spec rows, in one request. Rows
+// are optional so picking Layout 2 can create the pallet immediately (empty
+// grid) and the editor can fill it in afterwards.
 export class CreatePalletSpecDto {
   @IsOptional() @IsString() description?: string;
   @IsOptional() @IsString() supplier?: string;
@@ -33,9 +34,9 @@ export class CreatePalletSpecDto {
   @IsOptional() @IsUUID() locationId?: string;
   @IsOptional() @IsString() notes?: string;
 
+  @IsOptional()
   @IsArray()
-  @ArrayMinSize(1)
   @ValidateNested({ each: true })
   @Type(() => SpecRowDto)
-  rows: SpecRowDto[];
+  rows?: SpecRowDto[];
 }

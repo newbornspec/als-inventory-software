@@ -17,6 +17,16 @@ export interface PalletLine {
   unitCost: number | null;
   productId: string | null;
   createdAt: string;
+  // Loaded on the pallet detail endpoint so the Layout 2 grid can rebuild rows.
+  product?: {
+    manufacturer: string | null;
+    model: string | null;
+    chassis: string | null;
+    cpu: string | null;
+    gen: string | null;
+    ramGb: number | null;
+    storage: string | null;
+  } | null;
 }
 
 export interface Pallet {
@@ -29,6 +39,7 @@ export interface Pallet {
   status: PalletStatus;
   notes: string | null;
   shippedAt: string | null;
+  entryLayout?: string; // 'variant' | 'spec' — which New Pallet layout made it
   totalQuantity: number;
   lineCount: number;
   location?: { id: string; name: string } | null;
@@ -64,25 +75,41 @@ export interface SpecRow {
   quantity: number;
 }
 
-// Layout 2: create a pallet + all its lines from the spec table in one call.
-// Returns the new pallet id so the client can navigate (kept as a return, not a
-// redirect, so validation errors can be shown in the grid).
-export async function createPalletFromSpec(input: {
-  description?: string;
-  supplier?: string;
-  buyer?: string;
-  locationId?: string;
-  notes?: string;
-  rows: SpecRow[];
-}): Promise<{ id?: string; error?: string }> {
-  const rows = input.rows
-    .filter((r) => [r.manufacturer, r.model, r.chassis, r.cpu, r.gen, r.ram, r.storage].some((v) => v?.trim()) || r.quantity > 0)
-    .map((r) => ({ ...r, quantity: Math.max(0, Math.trunc(r.quantity) || 0) }));
-  if (rows.length === 0) return { error: 'Add at least one row.' };
-  const clean = (s?: string) => (s && s.trim() ? s.trim() : undefined);
+// Layout 2: picking the layout creates the pallet right away — number
+// generated, empty grid. The pallet page then opens straight into the editor.
+export async function createEmptySpecPallet(): Promise<{ id?: string; error?: string }> {
   try {
     const created = await apiFetch<Pallet>('/pallets/spec', {
       method: 'POST',
+      body: JSON.stringify({}),
+    });
+    revalidatePath('/pallets');
+    return { id: created.id };
+  } catch (err) {
+    return { error: err instanceof ApiError ? err.message : 'Failed to create pallet.' };
+  }
+}
+
+// Layout 2 editor: one save replaces the pallet's metadata + all its rows with
+// what's in the grid. Empty text fields clear the stored value (null).
+export async function savePalletSpec(
+  id: string,
+  input: {
+    description?: string;
+    supplier?: string;
+    buyer?: string;
+    locationId?: string;
+    notes?: string;
+    rows: SpecRow[];
+  },
+): Promise<{ error?: string }> {
+  const rows = input.rows
+    .filter((r) => [r.manufacturer, r.model, r.chassis, r.cpu, r.gen, r.ram, r.storage].some((v) => v?.trim()) || r.quantity > 0)
+    .map((r) => ({ ...r, quantity: Math.max(0, Math.trunc(r.quantity) || 0) }));
+  const clean = (s?: string) => (s && s.trim() ? s.trim() : null);
+  try {
+    await apiFetch(`/pallets/${id}/spec`, {
+      method: 'PUT',
       body: JSON.stringify({
         description: clean(input.description),
         supplier: clean(input.supplier),
@@ -92,10 +119,11 @@ export async function createPalletFromSpec(input: {
         rows,
       }),
     });
+    revalidatePath(`/pallets/${id}`);
     revalidatePath('/pallets');
-    return { id: created.id };
+    return {};
   } catch (err) {
-    return { error: err instanceof ApiError ? err.message : 'Failed to create pallet.' };
+    return { error: err instanceof ApiError ? err.message : 'Failed to save pallet.' };
   }
 }
 

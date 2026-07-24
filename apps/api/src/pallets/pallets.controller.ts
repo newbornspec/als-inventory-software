@@ -6,6 +6,7 @@ import {
   Param,
   Patch,
   Post,
+  Put,
   StreamableFile,
   UseGuards,
 } from '@nestjs/common';
@@ -51,11 +52,19 @@ export class PalletsController {
     return this.pallets.create(dto);
   }
 
-  // Layout 2 (spec table): create a pallet and all its lines from spec rows.
+  // Layout 2 (spec table): create a pallet — empty body creates an empty grid
+  // pallet (number generated immediately), rows fill it at creation if given.
   @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.TECHNICIAN)
   @Post('spec')
   createFromSpec(@Body() dto: CreatePalletSpecDto) {
     return this.pallets.createFromSpec(dto);
+  }
+
+  // Layout 2 editor: one save replaces the pallet's metadata + all spec rows.
+  @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.TECHNICIAN)
+  @Put(':id/spec')
+  replaceSpec(@Param('id') id: string, @Body() dto: CreatePalletSpecDto) {
+    return this.pallets.replaceSpec(id, dto);
   }
 
   @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.TECHNICIAN)

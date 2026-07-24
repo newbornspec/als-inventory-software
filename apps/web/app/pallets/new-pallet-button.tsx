@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { createEmptySpecPallet } from '@/lib/actions/pallets';
 
 // Add future entry methods here (CSV import, audit import…) and they appear in
 // the chooser automatically — nothing else needs to change.
@@ -15,8 +16,9 @@ const LAYOUTS = [
   {
     key: 'spec',
     title: 'Layout 2 – Specification Table',
-    blurb: 'Excel-style grid: manufacturer, model, chassis, CPU, RAM, storage per column.',
-    href: '/pallets/new/spec',
+    blurb:
+      'Excel-style grid: manufacturer, model, chassis, CPU, Gen, RAM, storage per column. Creates the pallet straight away — come back and edit it in the grid any time.',
+    href: null,
   },
 ];
 
@@ -24,10 +26,26 @@ export function NewPalletButton() {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [choice, setChoice] = useState(LAYOUTS[0].key);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  function go() {
+  async function go() {
+    // Layout 2 generates the pallet (number and all) immediately; its page
+    // opens straight into the persistent grid editor.
+    if (choice === 'spec') {
+      setBusy(true);
+      setError(null);
+      const res = await createEmptySpecPallet();
+      setBusy(false);
+      if (res.error || !res.id) {
+        setError(res.error ?? 'Failed to create pallet.');
+        return;
+      }
+      router.push(`/pallets/${res.id}`);
+      return;
+    }
     const layout = LAYOUTS.find((l) => l.key === choice);
-    if (layout) router.push(layout.href);
+    if (layout?.href) router.push(layout.href);
   }
 
   return (
@@ -80,7 +98,8 @@ export function NewPalletButton() {
               ))}
             </div>
 
-            <div className="mt-5 flex justify-end gap-2">
+            <div className="mt-5 flex items-center justify-end gap-2">
+              {error && <span className="mr-auto text-xs text-red-400">{error}</span>}
               <button
                 onClick={() => setOpen(false)}
                 className="rounded-md border border-neutral-700 px-3 py-1.5 text-sm text-neutral-300 hover:bg-neutral-900"
@@ -89,9 +108,10 @@ export function NewPalletButton() {
               </button>
               <button
                 onClick={go}
-                className="rounded-md bg-neutral-100 px-3 py-1.5 text-sm font-medium text-neutral-900"
+                disabled={busy}
+                className="rounded-md bg-neutral-100 px-3 py-1.5 text-sm font-medium text-neutral-900 disabled:opacity-50"
               >
-                Continue
+                {busy ? 'Creating…' : 'Continue'}
               </button>
             </div>
           </div>

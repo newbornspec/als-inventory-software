@@ -2,12 +2,16 @@
 
 import { useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { createPalletFromSpec, type SpecRow } from '@/lib/actions/pallets';
+import { savePalletSpec, type SpecRow } from '@/lib/actions/pallets';
 import type { LookupValue } from '@/lib/actions/lookups';
 import type { Location } from '@/lib/data';
 
 type Field = 'manufacturer' | 'model' | 'chassis' | 'cpu' | 'gen' | 'ram' | 'storage' | 'quantity';
 type Row = Record<Field, string> & { id: number };
+
+// The persistent Layout 2 editor: a spec pallet always opens back into this
+// grid, so it can be edited, saved and re-edited any time. Saving replaces the
+// pallet's lines with the grid contents.
 
 // Column order — also the order pasted Excel/TSV cells fill into.
 const COLUMNS: { key: Field; label: string; list?: string; width: string }[] = [
@@ -26,10 +30,23 @@ const inputCls =
 const cellCls =
   'w-full rounded border border-neutral-700 bg-neutral-900 px-2 py-1.5 text-sm outline-none focus:border-neutral-500';
 
-export function SpecPalletForm({
+export interface SpecEditorMeta {
+  description: string;
+  supplier: string;
+  buyer: string;
+  locationId: string;
+}
+
+export function SpecEditor({
+  palletId,
+  initialMeta,
+  initialRows,
   locations,
   lookups,
 }: {
+  palletId: string;
+  initialMeta: SpecEditorMeta;
+  initialRows: Record<Exclude<Field, never>, string>[];
   locations: Location[];
   lookups: LookupValue[];
 }) {
@@ -47,11 +64,15 @@ export function SpecPalletForm({
     quantity: '',
   });
 
-  const [rows, setRows] = useState<Row[]>(() => [blank(), blank(), blank()]);
-  const [meta, setMeta] = useState({ description: '', supplier: '', buyer: '', locationId: '' });
+  const [rows, setRows] = useState<Row[]>(() => {
+    const initial = initialRows.map((r) => ({ ...r, id: nextId.current++ }));
+    return initial.length > 0 ? initial : [blank(), blank(), blank()];
+  });
+  const [meta, setMeta] = useState(initialMeta);
   const [q, setQ] = useState('');
   const [sort, setSort] = useState<{ col: Field; dir: 'asc' | 'desc' } | null>(null);
   const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const active = useMemo(() => lookups.filter((l) => l.active), [lookups]);
@@ -126,6 +147,7 @@ export function SpecPalletForm({
   async function save() {
     setBusy(true);
     setError(null);
+    setSaved(false);
     const specRows: SpecRow[] = rows.map((r) => ({
       manufacturer: r.manufacturer,
       model: r.model,
@@ -136,13 +158,15 @@ export function SpecPalletForm({
       storage: r.storage,
       quantity: parseInt(r.quantity || '0', 10),
     }));
-    const res = await createPalletFromSpec({ ...meta, rows: specRows });
+    const res = await savePalletSpec(palletId, { ...meta, rows: specRows });
     setBusy(false);
     if (res.error) {
       setError(res.error);
       return;
     }
-    router.push(`/pallets/${res.id}`);
+    setSaved(true);
+    setTimeout(() => setSaved(false), 3000);
+    router.refresh(); // updates the totals/header rendered by the server page
   }
 
   const arrow = (col: Field) => (sort?.col === col ? (sort.dir === 'asc' ? ' ▲' : ' ▼') : '');
@@ -256,13 +280,15 @@ export function SpecPalletForm({
           + Add row
         </button>
         <button onClick={save} disabled={busy} className="rounded-md bg-neutral-100 px-4 py-1.5 text-sm font-medium text-neutral-900 disabled:opacity-50">
-          {busy ? 'Saving…' : 'Save pallet'}
+          {busy ? 'Saving…' : 'Save changes'}
         </button>
+        {saved && <span className="text-xs text-emerald-400">✓ Saved</span>}
         {error && <span className="text-xs text-red-400">{error}</span>}
       </div>
       <p className="mt-2 text-xs text-neutral-600">
         Tip: copy cells from Excel and paste into any cell to fill the grid. Click a column header to
-        sort. New values you type are saved to the dropdown lists when you save.
+        sort. New values you type are saved to the dropdown lists when you save. Saving replaces the
+        pallet&apos;s contents with this grid.
       </p>
     </div>
   );

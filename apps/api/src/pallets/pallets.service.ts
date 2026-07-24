@@ -38,8 +38,11 @@ export class PalletsService {
     const pallet = await this.pallets.findOne({ where: { id }, relations: ['location'] });
     if (!pallet) throw new NotFoundException(`Pallet ${id} not found`);
     const [withTotals] = await this.withTotals([pallet]);
+    // product is included so the Layout 2 grid editor can rebuild its rows
+    // (manufacturer/model/…/gen) from the linked catalogue entries.
     const lines = await this.lines.find({
       where: { palletId: id },
+      relations: { product: true },
       order: { createdAt: 'ASC' },
     });
     return { ...withTotals, lines };
@@ -59,20 +62,43 @@ export class PalletsService {
     const pallet = await this.pallets.save(
       this.pallets.create({ ...meta, palletNumber, entryLayout: PalletEntryLayout.SPEC }),
     );
+    await this.createLinesFromSpec(pallet.id, rows ?? []);
+    return pallet;
+  }
 
+  // Layout 2 editor save: update the pallet's metadata and replace ALL its
+  // lines with the current grid rows — the grid is the source of truth, so a
+  // full replace keeps save semantics simple (edits, deletes and reorders all
+  // fall out of it).
+  async replaceSpec(
+    id: string,
+    dto: CreatePalletSpecDto,
+  ): Promise<PalletWithTotals & { lines: PalletLine[] }> {
+    await this.assertPallet(id);
+    const { rows, ...meta } = dto;
+    const patch: Record<string, unknown> = {};
+    for (const key of ['description', 'supplier', 'buyer', 'locationId', 'notes'] as const) {
+      if (meta[key] !== undefined) patch[key] = meta[key];
+    }
+    if (Object.keys(patch).length > 0) await this.pallets.update(id, patch);
+    await this.lines.delete({ palletId: id });
+    await this.createLinesFromSpec(id, rows ?? []);
+    return this.findOne(id);
+  }
+
+  private async createLinesFromSpec(palletId: string, rows: SpecRowDto[]): Promise<void> {
     for (const row of rows) {
       await this.persistLookups(row);
       const product = await this.findOrCreateProduct(row);
       await this.lines.save(
         this.lines.create({
-          palletId: pallet.id,
+          palletId,
           productId: product.id,
           variant: composeVariant(row) || 'Unspecified',
           quantity: Math.max(0, Math.trunc(row.quantity) || 0),
         }),
       );
     }
-    return pallet;
   }
 
   // Save any new dropdown values a user typed so they appear next time. Model is
