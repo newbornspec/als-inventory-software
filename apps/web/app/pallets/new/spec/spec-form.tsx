@@ -6,7 +6,7 @@ import { createPalletFromSpec, type SpecRow } from '@/lib/actions/pallets';
 import type { LookupValue } from '@/lib/actions/lookups';
 import type { Location } from '@/lib/data';
 
-type Field = 'manufacturer' | 'model' | 'chassis' | 'cpu' | 'ram' | 'storage' | 'quantity';
+type Field = 'manufacturer' | 'model' | 'chassis' | 'cpu' | 'gen' | 'ram' | 'storage' | 'quantity';
 type Row = Record<Field, string> & { id: number };
 
 // Column order — also the order pasted Excel/TSV cells fill into.
@@ -15,6 +15,7 @@ const COLUMNS: { key: Field; label: string; list?: string; width: string }[] = [
   { key: 'model', label: 'Model', width: 'min-w-[11rem]' },
   { key: 'chassis', label: 'Chassis', list: 'dl-chassis', width: 'min-w-[8rem]' },
   { key: 'cpu', label: 'CPU', list: 'dl-cpu', width: 'min-w-[12rem]' },
+  { key: 'gen', label: 'Gen', list: 'dl-gen', width: 'min-w-[6rem]' },
   { key: 'ram', label: 'RAM', list: 'dl-ram', width: 'min-w-[7rem]' },
   { key: 'storage', label: 'Storage', list: 'dl-storage', width: 'min-w-[10rem]' },
   { key: 'quantity', label: 'Quantity', width: 'w-24' },
@@ -40,6 +41,7 @@ export function SpecPalletForm({
     model: '',
     chassis: '',
     cpu: '',
+    gen: '',
     ram: '',
     storage: '',
     quantity: '',
@@ -129,6 +131,7 @@ export function SpecPalletForm({
       model: r.model,
       chassis: r.chassis,
       cpu: r.cpu,
+      gen: r.gen,
       ram: r.ram,
       storage: r.storage,
       quantity: parseInt(r.quantity || '0', 10),
@@ -149,6 +152,7 @@ export function SpecPalletForm({
       <DataList id="dl-manufacturer" values={manufacturers.map((m) => m.value)} />
       <DataList id="dl-chassis" values={optsFor('chassis')} />
       <DataList id="dl-cpu" values={optsFor('cpu')} />
+      <DataList id="dl-gen" values={optsFor('gen')} />
       <DataList id="dl-ram" values={optsFor('ram')} />
       <DataList id="dl-storage" values={optsFor('storage')} />
       {manufacturers.map((m) => (

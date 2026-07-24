@@ -14,6 +14,7 @@ const CATEGORIES: { key: string; label: string }[] = [
   { key: 'model', label: 'Model' },
   { key: 'chassis', label: 'Chassis' },
   { key: 'cpu', label: 'CPU' },
+  { key: 'gen', label: 'Gen' },
   { key: 'ram', label: 'RAM' },
   { key: 'storage', label: 'Storage' },
 ];

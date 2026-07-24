@@ -17,6 +17,7 @@ export const LOOKUP_CATEGORIES = [
   'model',
   'chassis',
   'cpu',
+  'gen',
   'ram',
   'storage',
 ] as const;

@@ -60,6 +60,10 @@ export class Product {
   @Column({ type: 'varchar', nullable: true })
   cpu: string | null;
 
+  // CPU generation ("8th Gen") — its own Layout 2 column, separate from cpu.
+  @Column({ type: 'varchar', nullable: true })
+  gen: string | null;
+
   @Column({ name: 'ram_gb', type: 'int', nullable: true })
   ramGb: number | null;
 

@@ -18,6 +18,7 @@ export class SpecRowDto {
   @IsOptional() @IsString() model?: string;
   @IsOptional() @IsString() chassis?: string;
   @IsOptional() @IsString() cpu?: string;
+  @IsOptional() @IsString() gen?: string;
   @IsOptional() @IsString() ram?: string;
   @IsOptional() @IsString() storage?: string;
 

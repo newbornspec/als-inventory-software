@@ -88,6 +88,7 @@ export class PalletsService {
     for (const [category, value] of [
       ['chassis', row.chassis],
       ['cpu', row.cpu],
+      ['gen', row.gen],
       ['ram', row.ram],
       ['storage', row.storage],
     ] as const) {
@@ -103,6 +104,7 @@ export class PalletsService {
       model: nz(row.model),
       chassis: nz(row.chassis),
       cpu: nz(row.cpu),
+      gen: nz(row.gen),
       ramGb: parseRamGb(row.ram),
       storage: nz(row.storage),
     };
@@ -113,6 +115,7 @@ export class PalletsService {
       model: spec.model ?? IsNull(),
       chassis: spec.chassis ?? IsNull(),
       cpu: spec.cpu ?? IsNull(),
+      gen: spec.gen ?? IsNull(),
       ramGb: spec.ramGb ?? IsNull(),
       storage: spec.storage ?? IsNull(),
     };
@@ -261,13 +264,14 @@ export class PalletsService {
       { width: 22 }, // Model
       { width: 12 }, // Chassis
       { width: 20 }, // CPU
+      { width: 10 }, // Gen
       { width: 10 }, // RAM
       { width: 16 }, // Storage
       { width: 12 }, // Quantity
     ];
 
     const title = (row: number, text: string, size: number) => {
-      ws.mergeCells(`A${row}:G${row}`);
+      ws.mergeCells(`A${row}:H${row}`);
       const cell = ws.getCell(`A${row}`);
       cell.value = text;
       cell.font = { size, bold: true };
@@ -300,6 +304,7 @@ export class PalletsService {
       'Model',
       'Chassis',
       'CPU',
+      'Gen',
       'RAM',
       'Storage',
       'Quantity',
@@ -320,6 +325,7 @@ export class PalletsService {
         s.model,
         s.chassis,
         s.cpu,
+        s.gen,
         s.ram,
         s.storage,
         line.quantity,
@@ -329,7 +335,7 @@ export class PalletsService {
 
     const totalRow = ws.getRow(dataRow + 1);
     totalRow.getCell(1).value = 'Total';
-    totalRow.getCell(7).value = qtyTotal;
+    totalRow.getCell(8).value = qtyTotal;
     totalRow.font = { bold: true };
 
     const buffer = Buffer.from(await wb.xlsx.writeBuffer());
@@ -410,6 +416,7 @@ function specColumns(
   model: string;
   chassis: string;
   cpu: string;
+  gen: string;
   ram: string;
   storage: string;
 } {
@@ -419,11 +426,20 @@ function specColumns(
       model: product.model ?? '',
       chassis: product.chassis ?? '',
       cpu: product.cpu ?? '',
+      gen: product.gen ?? '',
       ram: product.ramGb != null ? `${product.ramGb} GB` : '',
       storage: product.storage ?? '',
     };
   }
-  return { manufacturer: '', model: variant ?? '', chassis: '', cpu: '', ram: '', storage: '' };
+  return {
+    manufacturer: '',
+    model: variant ?? '',
+    chassis: '',
+    cpu: '',
+    gen: '',
+    ram: '',
+    storage: '',
+  };
 }
 
 // "8 GB" / "16GB" -> 8 / 16; null when there's no number.
@@ -439,10 +455,11 @@ function composeVariant(row: {
   model?: string | null;
   chassis?: string | null;
   cpu?: string | null;
+  gen?: string | null;
   ram?: string | null;
   storage?: string | null;
 }): string {
-  return [row.manufacturer, row.model, row.chassis, row.cpu, row.ram, row.storage]
+  return [row.manufacturer, row.model, row.chassis, row.cpu, row.gen, row.ram, row.storage]
     .map((x) => (x ?? '').trim())
     .filter(Boolean)
     .join(' · ');

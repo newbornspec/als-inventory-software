@@ -58,6 +58,7 @@ export interface SpecRow {
   model?: string;
   chassis?: string;
   cpu?: string;
+  gen?: string;
   ram?: string;
   storage?: string;
   quantity: number;
@@ -75,7 +76,7 @@ export async function createPalletFromSpec(input: {
   rows: SpecRow[];
 }): Promise<{ id?: string; error?: string }> {
   const rows = input.rows
-    .filter((r) => [r.manufacturer, r.model, r.chassis, r.cpu, r.ram, r.storage].some((v) => v?.trim()) || r.quantity > 0)
+    .filter((r) => [r.manufacturer, r.model, r.chassis, r.cpu, r.gen, r.ram, r.storage].some((v) => v?.trim()) || r.quantity > 0)
     .map((r) => ({ ...r, quantity: Math.max(0, Math.trunc(r.quantity) || 0) }));
   if (rows.length === 0) return { error: 'Add at least one row.' };
   const clean = (s?: string) => (s && s.trim() ? s.trim() : undefined);
