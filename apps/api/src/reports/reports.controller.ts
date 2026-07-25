@@ -3,12 +3,34 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { Roles } from '../auth/guards/roles.decorator';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { UserRole } from '../users/user.entity';
-import { ReportsService } from './reports.service';
+import { ReportsService, type ReportFilters } from './reports.service';
+
+function parseDate(s?: string): Date | undefined {
+  if (!s) return undefined;
+  const d = new Date(s);
+  return isNaN(d.getTime()) ? undefined : d;
+}
+function buildFilters(q: Record<string, string>): ReportFilters {
+  const clean = (v?: string) => (v && v.trim() ? v.trim() : undefined);
+  return {
+    batchId: clean(q.batchId),
+    supplier: clean(q.supplier),
+    manufacturer: clean(q.manufacturer),
+    category: clean(q.category),
+    grade: clean(q.grade),
+  };
+}
 
 @Controller()
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class ReportsController {
   constructor(private reports: ReportsService) {}
+
+  @Roles(UserRole.ADMIN, UserRole.MANAGER)
+  @Get('reports/filter-options')
+  getFilterOptions(@Req() req: any) {
+    return this.reports.getFilterOptions(req.user);
+  }
 
   // Any authenticated role sees alerts — a technician in the field benefits
   // from knowing an asset they're about to touch is flagged just as much
@@ -36,38 +58,23 @@ export class ReportsController {
   // invalid or missing dates mean "all time".
   @Roles(UserRole.ADMIN, UserRole.MANAGER)
   @Get('reports/overview')
-  getOverview(@Query('from') from: string, @Query('to') to: string, @Req() req: any) {
-    const parse = (s?: string) => {
-      if (!s) return undefined;
-      const d = new Date(s);
-      return isNaN(d.getTime()) ? undefined : d;
-    };
-    return this.reports.getOverview(parse(from), parse(to), req.user);
+  getOverview(@Query() q: Record<string, string>, @Req() req: any) {
+    return this.reports.getOverview(parseDate(q.from), parseDate(q.to), req.user, buildFilters(q));
   }
 
   // Sales & finance analytics. from/to bound the summary + top-lists; the
   // monthly trend is a fixed rolling 12 months.
   @Roles(UserRole.ADMIN, UserRole.MANAGER)
   @Get('reports/sales')
-  getSales(@Query('from') from: string, @Query('to') to: string, @Req() req: any) {
-    const parse = (s?: string) => {
-      if (!s) return undefined;
-      const d = new Date(s);
-      return isNaN(d.getTime()) ? undefined : d;
-    };
-    return this.reports.getSalesAnalytics(parse(from), parse(to), req.user);
+  getSales(@Query() q: Record<string, string>, @Req() req: any) {
+    return this.reports.getSalesAnalytics(parseDate(q.from), parseDate(q.to), req.user, buildFilters(q));
   }
 
   // Batch → sub-lot performance for the drill-down. from/to bound revenue/profit.
   @Roles(UserRole.ADMIN, UserRole.MANAGER)
   @Get('reports/batches')
-  getBatchAnalytics(@Query('from') from: string, @Query('to') to: string, @Req() req: any) {
-    const parse = (s?: string) => {
-      if (!s) return undefined;
-      const d = new Date(s);
-      return isNaN(d.getTime()) ? undefined : d;
-    };
-    return this.reports.getBatchAnalytics(parse(from), parse(to), req.user);
+  getBatchAnalytics(@Query() q: Record<string, string>, @Req() req: any) {
+    return this.reports.getBatchAnalytics(parseDate(q.from), parseDate(q.to), req.user, buildFilters(q));
   }
 
   // Warehouse operations throughput (received/audited/shipped/sold/returned,
@@ -122,13 +129,8 @@ export class ReportsController {
   // Supplier performance (device inventory attributed via batch.source).
   @Roles(UserRole.ADMIN, UserRole.MANAGER)
   @Get('reports/suppliers')
-  getSuppliers(@Query('from') from: string, @Query('to') to: string, @Req() req: any) {
-    const parse = (s?: string) => {
-      if (!s) return undefined;
-      const d = new Date(s);
-      return isNaN(d.getTime()) ? undefined : d;
-    };
-    return this.reports.getSupplierPerformance(parse(from), parse(to), req.user);
+  getSuppliers(@Query() q: Record<string, string>, @Req() req: any) {
+    return this.reports.getSupplierPerformance(parseDate(q.from), parseDate(q.to), req.user, buildFilters(q));
   }
 
   @Roles(UserRole.ADMIN, UserRole.MANAGER)

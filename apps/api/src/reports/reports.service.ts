@@ -100,6 +100,48 @@ function gradeLetter(avg: number): string {
   return avg >= 3.5 ? 'A' : avg >= 2.5 ? 'B' : avg >= 1.5 ? 'C' : 'D';
 }
 
+// Cross-report dimension filters. They describe the serialized-device
+// population, so they apply to the device-based sections (inventory, sales,
+// batch, supplier) — not the event/stock sections.
+export interface ReportFilters {
+  batchId?: string;
+  supplier?: string;
+  manufacturer?: string;
+  category?: string;
+  grade?: string;
+}
+
+export function hasAnyFilter(f: ReportFilters): boolean {
+  return !!(f.batchId || f.supplier || f.manufacturer || f.category || f.grade);
+}
+
+// Predicate over an asset carrying manufacturer/category/conditionGrade/batchId.
+// `batchSource` maps batchId → supplier so the supplier filter can resolve.
+function assetPassesFilters(
+  a: { batchId: string | null; manufacturer?: string | null; category?: string | null; conditionGrade?: string | null },
+  f: ReportFilters,
+  batchSource: Map<string, string | null>,
+): boolean {
+  if (f.batchId && a.batchId !== f.batchId) return false;
+  if (f.supplier) {
+    const src = a.batchId ? batchSource.get(a.batchId) : null;
+    if ((src ?? '') !== f.supplier) return false;
+  }
+  if (f.manufacturer && (a.manufacturer ?? '') !== f.manufacturer) return false;
+  if (f.category && (a.category ?? '') !== f.category) return false;
+  if (f.grade && (a.conditionGrade ?? '') !== f.grade) return false;
+  return true;
+}
+
+// The option lists for the cross-report filter bar (unfiltered, manager-scoped).
+export interface FilterOptions {
+  batches: { id: string; label: string }[];
+  suppliers: string[];
+  manufacturers: string[];
+  categories: string[];
+  grades: { value: string; label: string }[];
+}
+
 // Supplier performance. Suppliers are batch.source (device inventory).
 // Counts/grade are lifetime; revenue/profit/unitsSold respect the range;
 // returnRate is a lifetime quality signal (returned vs sold history events).
@@ -442,7 +484,12 @@ export class ReportsService {
   // The Reports dashboard's single roll-up: KPI cards + inventory breakdowns.
   // Snapshot metrics (stock, value, breakdowns) are current-state; sales
   // metrics (sold/revenue/cost/profit) respect the from/to range on sold_at.
-  async getOverview(from?: Date, to?: Date, user?: RequestUser): Promise<OverviewReport> {
+  async getOverview(
+    from?: Date,
+    to?: Date,
+    user?: RequestUser,
+    filters: ReportFilters = {},
+  ): Promise<OverviewReport> {
     let [assets, batches, lotsCount, activePalletsList, pLines, pSold, stock, usersCount] =
       await Promise.all([
         this.assets
@@ -466,6 +513,13 @@ export class ReportsService {
       batches = batches.filter((b) => owned.has(b.id));
       assets = assets.filter((a) => a.batchId != null && owned.has(a.batchId));
     }
+
+    // Dimension filters restrict the serialized-device population. When any is
+    // active, pallet/consumable KPIs stay global (different inventory types)
+    // but pallet sales/value are excluded from the device revenue/value.
+    const batchSource = new Map(batches.map((b) => [b.id, b.source]));
+    assets = assets.filter((a) => assetPassesFilters(a, filters, batchSource));
+    const anyFilter = hasAnyFilter(filters);
 
     const unitsPerBatch = new Map<string, number>();
     for (const a of assets) {
@@ -494,7 +548,12 @@ export class ReportsService {
     const soldAssetsInRange = assets.filter(
       (a) => a.stockStatus === AssetStockStatus.SOLD && inRange(a.soldAt),
     );
-    const soldRowsInRange = pSold.filter((r) => inRange(r.soldAt));
+    // Pallet sales/stock only join the device totals when no dimension filter
+    // is narrowing to a device population.
+    const soldRowsInRange = anyFilter ? [] : pSold.filter((r) => inRange(r.soldAt));
+    const palletValue = anyFilter
+      ? 0
+      : pLines.reduce((s, l) => s + (l.unitCost != null ? l.unitCost * l.quantity : 0), 0);
 
     const revenue =
       soldAssetsInRange.reduce((s, a) => s + (a.salePrice ?? 0), 0) +
@@ -510,7 +569,7 @@ export class ReportsService {
       active
         .filter((a) => a.stockStatus !== AssetStockStatus.DISPOSED)
         .reduce((s, a) => s + allocated(a), 0) +
-      pLines.reduce((s, l) => s + (l.unitCost != null ? l.unitCost * l.quantity : 0), 0);
+      palletValue;
 
     // Breakdowns cover ACTIVE (unsold) inventory — that's what's on the floor.
     const tally = (key: (a: Asset) => string): Map<string, number> => {
@@ -582,16 +641,45 @@ export class ReportsService {
     };
   }
 
+  // Distinct dimension values for the filter dropdowns.
+  async getFilterOptions(user?: RequestUser): Promise<FilterOptions> {
+    let [batches, assets] = await Promise.all([
+      this.batches.find({ select: { id: true, batchNumber: true, source: true }, order: { batchNumber: 'DESC' } }),
+      this.assets.createQueryBuilder('a').select(['a.batchId', 'a.manufacturer', 'a.category', 'a.conditionGrade']).getMany(),
+    ]);
+    const owned = await this.ownedBatchIds(user);
+    if (owned) {
+      batches = batches.filter((b) => owned.has(b.id));
+      assets = assets.filter((a) => a.batchId != null && owned.has(a.batchId));
+    }
+    const suppliers = [...new Set(batches.map((b) => b.source?.trim()).filter((s): s is string => !!s))].sort();
+    const manufacturers = [...new Set(assets.map((a) => a.manufacturer?.trim()).filter((s): s is string => !!s))].sort();
+    const categories = [...new Set(assets.map((a) => a.category?.trim()).filter((s): s is string => !!s))].sort();
+    const gradesPresent = new Set<string>(
+      assets.map((a) => (a.conditionGrade ? String(a.conditionGrade) : '')).filter((g) => !!g),
+    );
+    return {
+      batches: batches.map((b) => ({ id: b.id, label: b.batchNumber })),
+      suppliers,
+      manufacturers,
+      categories,
+      grades: Object.keys(GRADE_LABELS)
+        .filter((g) => gradesPresent.has(g))
+        .map((g) => ({ value: g, label: GRADE_LABELS[g] })),
+    };
+  }
+
   async getSupplierPerformance(
     from?: Date,
     to?: Date,
     user?: RequestUser,
+    filters: ReportFilters = {},
   ): Promise<SupplierPerformance[]> {
     let [batches, assets, history] = await Promise.all([
       this.batches.find(),
       this.assets
         .createQueryBuilder('a')
-        .select(['a.id', 'a.batchId', 'a.conditionGrade', 'a.purchaseCost', 'a.salePrice', 'a.stockStatus', 'a.soldAt'])
+        .select(['a.id', 'a.batchId', 'a.manufacturer', 'a.category', 'a.conditionGrade', 'a.purchaseCost', 'a.salePrice', 'a.stockStatus', 'a.soldAt'])
         .getMany(),
       this.history.createQueryBuilder('h').select(['h.assetId', 'h.eventType', 'h.notes']).getMany(),
     ]);
@@ -603,6 +691,8 @@ export class ReportsService {
     }
 
     const batchById = new Map(batches.map((b) => [b.id, b]));
+    const batchSource = new Map(batches.map((b) => [b.id, b.source]));
+    assets = assets.filter((a) => assetPassesFilters(a, filters, batchSource));
     const unitsPerBatch = new Map<string, number>();
     for (const a of assets) if (a.batchId) unitsPerBatch.set(a.batchId, (unitsPerBatch.get(a.batchId) ?? 0) + 1);
     const allocated = (a: Asset): number => {
@@ -1093,14 +1183,19 @@ export class ReportsService {
     };
   }
 
-  async getBatchAnalytics(from?: Date, to?: Date, user?: RequestUser): Promise<BatchAnalytics[]> {
+  async getBatchAnalytics(
+    from?: Date,
+    to?: Date,
+    user?: RequestUser,
+    filters: ReportFilters = {},
+  ): Promise<BatchAnalytics[]> {
     let [batches, assets, lots] = await Promise.all([
       this.batches.find({ relations: ['owner', 'createdBy'], order: { createdAt: 'DESC' } }),
       this.assets
         .createQueryBuilder('a')
         .select([
-          'a.id', 'a.batchId', 'a.lotId', 'a.conditionGrade', 'a.auditStatus',
-          'a.purchaseCost', 'a.salePrice', 'a.stockStatus', 'a.soldAt',
+          'a.id', 'a.batchId', 'a.lotId', 'a.manufacturer', 'a.category', 'a.conditionGrade',
+          'a.auditStatus', 'a.purchaseCost', 'a.salePrice', 'a.stockStatus', 'a.soldAt',
         ])
         .getMany(),
       this.lots.find(),
@@ -1111,6 +1206,21 @@ export class ReportsService {
       batches = batches.filter((b) => owned.has(b.id));
       assets = assets.filter((a) => a.batchId != null && owned.has(a.batchId));
       lots = lots.filter((l) => l.batchId != null && owned.has(l.batchId));
+    }
+
+    // Dimension filters: narrow the batch list (batch/supplier) and the asset
+    // population (manufacturer/category/grade). A batch with no matching assets
+    // is dropped so the table only shows relevant lots.
+    if (filters.batchId) batches = batches.filter((b) => b.id === filters.batchId);
+    if (filters.supplier) batches = batches.filter((b) => (b.source ?? '') === filters.supplier);
+    const batchSourceB = new Map(batches.map((b) => [b.id, b.source]));
+    const visibleBatchIds = new Set(batches.map((b) => b.id));
+    assets = assets.filter(
+      (a) => a.batchId != null && visibleBatchIds.has(a.batchId) && assetPassesFilters(a, filters, batchSourceB),
+    );
+    if (hasAnyFilter(filters)) {
+      const withAssets = new Set(assets.map((a) => a.batchId));
+      batches = batches.filter((b) => withAssets.has(b.id));
     }
 
     const batchById = new Map(batches.map((b) => [b.id, b]));
@@ -1217,12 +1327,17 @@ export class ReportsService {
     });
   }
 
-  async getSalesAnalytics(from?: Date, to?: Date, user?: RequestUser): Promise<SalesAnalytics> {
+  async getSalesAnalytics(
+    from?: Date,
+    to?: Date,
+    user?: RequestUser,
+    filters: ReportFilters = {},
+  ): Promise<SalesAnalytics> {
     let [assets, batches, palletSold] = await Promise.all([
       this.assets
         .createQueryBuilder('a')
         .select([
-          'a.id', 'a.batchId', 'a.category', 'a.manufacturer', 'a.model',
+          'a.id', 'a.batchId', 'a.category', 'a.manufacturer', 'a.model', 'a.conditionGrade',
           'a.purchaseCost', 'a.salePrice', 'a.stockStatus', 'a.soldAt',
         ])
         .where('a.stock_status = :sold', { sold: AssetStockStatus.SOLD })
@@ -1236,6 +1351,12 @@ export class ReportsService {
       // Device sales scope to owned lots; pallet goods stay global (shared).
       assets = assets.filter((a) => a.batchId != null && owned.has(a.batchId));
     }
+
+    // Dimension filters narrow the device sales; pallet goods have no device
+    // dimensions, so any active filter excludes them from this section.
+    const batchSource = new Map(batches.map((b) => [b.id, b.source]));
+    assets = assets.filter((a) => assetPassesFilters(a, filters, batchSource));
+    const includePallet = !hasAnyFilter(filters);
 
     // Allocated per-unit cost for a sold device (override ?? even lot split).
     const unitsPerBatch = new Map<string, number>();
@@ -1276,18 +1397,20 @@ export class ReportsService {
         supplier: (a.batchId ? batchById.get(a.batchId)?.source : null) ?? null,
       });
     }
-    for (const r of palletSold) {
-      sales.push({
-        soldAt: new Date(r.soldAt),
-        units: r.quantity,
-        revenue: r.saleTotal ?? 0,
-        cost: r.unitCost != null ? r.unitCost * r.quantity : 0,
-        priced: r.saleTotal != null,
-        manufacturer: r.product?.manufacturer?.trim() || 'Pallet goods',
-        model: r.product?.model?.trim() || r.variant,
-        category: r.product?.category?.trim() || 'Pallet goods',
-        supplier: null, // pallet goods aren't attributed to a supplier
-      });
+    if (includePallet) {
+      for (const r of palletSold) {
+        sales.push({
+          soldAt: new Date(r.soldAt),
+          units: r.quantity,
+          revenue: r.saleTotal ?? 0,
+          cost: r.unitCost != null ? r.unitCost * r.quantity : 0,
+          priced: r.saleTotal != null,
+          manufacturer: r.product?.manufacturer?.trim() || 'Pallet goods',
+          model: r.product?.model?.trim() || r.variant,
+          category: r.product?.category?.trim() || 'Pallet goods',
+          supplier: null, // pallet goods aren't attributed to a supplier
+        });
+      }
     }
 
     const ranged = sales.filter((s) => inRange(s.soldAt));

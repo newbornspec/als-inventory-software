@@ -5,6 +5,7 @@ import { money } from '@/lib/money';
 import { formatLabel } from '@/lib/asset-options';
 import { CategoryDonut, CountBars, DailyBars, MonthlyTrend, type DayPoint, type LabelCount, type MonthPoint } from './overview-charts';
 import { BatchAnalyticsTable, type BatchAnalytics } from './batch-analytics';
+import { FilterBar, type FilterOptions } from './filter-bar';
 
 // Mirrors the API's OverviewReport (reports.service.ts).
 interface OverviewReport {
@@ -184,7 +185,16 @@ const GRADE_ORDER = ['Grade A', 'Grade B', 'Grade C', 'Grade D', 'For Parts', 'S
 export default async function ReportsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ range?: string; from?: string; to?: string }>;
+  searchParams: Promise<{
+    range?: string;
+    from?: string;
+    to?: string;
+    batchId?: string;
+    supplier?: string;
+    manufacturer?: string;
+    category?: string;
+    grade?: string;
+  }>;
 }) {
   const params = await searchParams;
   const range = params.range ?? 'all';
@@ -196,19 +206,28 @@ export default async function ReportsPage({
   if (from) qs.set('from', from.toISOString());
   if (to) qs.set('to', to.toISOString());
 
-  const [overview, profit, sales, batchAnalytics, warehouse, userPerf, consumables, activity, palletAnalytics, suppliers] = await Promise.all([
+  // The device-based sections also take the dimension filters; other sections
+  // just take the date range.
+  const deviceQs = new URLSearchParams(qs);
+  for (const key of ['batchId', 'supplier', 'manufacturer', 'category', 'grade'] as const) {
+    if (params[key]) deviceQs.set(key, params[key]!);
+  }
+  const anyFilter = ['batchId', 'supplier', 'manufacturer', 'category', 'grade'].some((k) => params[k as keyof typeof params]);
+
+  const [overview, profit, sales, batchAnalytics, warehouse, userPerf, consumables, activity, palletAnalytics, suppliers, filterOptions] = await Promise.all([
     canSee
-      ? apiFetch<OverviewReport>(`/reports/overview?${qs.toString()}`).catch(() => null)
+      ? apiFetch<OverviewReport>(`/reports/overview?${deviceQs.toString()}`).catch(() => null)
       : Promise.resolve(null),
     canSee ? apiFetch<LotProfit[]>('/reports/profit').catch(() => [] as LotProfit[]) : Promise.resolve([] as LotProfit[]),
-    canSee ? apiFetch<SalesAnalytics>(`/reports/sales?${qs.toString()}`).catch(() => null) : Promise.resolve(null),
-    canSee ? apiFetch<BatchAnalytics[]>(`/reports/batches?${qs.toString()}`).catch(() => [] as BatchAnalytics[]) : Promise.resolve([] as BatchAnalytics[]),
+    canSee ? apiFetch<SalesAnalytics>(`/reports/sales?${deviceQs.toString()}`).catch(() => null) : Promise.resolve(null),
+    canSee ? apiFetch<BatchAnalytics[]>(`/reports/batches?${deviceQs.toString()}`).catch(() => [] as BatchAnalytics[]) : Promise.resolve([] as BatchAnalytics[]),
     canSee ? apiFetch<WarehouseThroughput>(`/reports/warehouse?${qs.toString()}`).catch(() => null) : Promise.resolve(null),
     canSee ? apiFetch<UserPerformance[]>(`/reports/users?${qs.toString()}`).catch(() => [] as UserPerformance[]) : Promise.resolve([] as UserPerformance[]),
     canSee ? apiFetch<ConsumablesReport>(`/reports/consumables?${qs.toString()}`).catch(() => null) : Promise.resolve(null),
     canSee ? apiFetch<ActivityEntry[]>('/activity?limit=18').catch(() => [] as ActivityEntry[]) : Promise.resolve([] as ActivityEntry[]),
     canSee ? apiFetch<PalletAnalytics>(`/reports/pallets?${qs.toString()}`).catch(() => null) : Promise.resolve(null),
-    canSee ? apiFetch<SupplierPerformance[]>(`/reports/suppliers?${qs.toString()}`).catch(() => [] as SupplierPerformance[]) : Promise.resolve([] as SupplierPerformance[]),
+    canSee ? apiFetch<SupplierPerformance[]>(`/reports/suppliers?${deviceQs.toString()}`).catch(() => [] as SupplierPerformance[]) : Promise.resolve([] as SupplierPerformance[]),
+    canSee ? apiFetch<FilterOptions>('/reports/filter-options').catch(() => null) : Promise.resolve(null),
   ]);
 
   if (!canSee || !overview) {
@@ -289,22 +308,33 @@ export default async function ReportsPage({
 
         {/* Date range — bounds the sales figures (sold / revenue / profit / margin). */}
         <div className="mt-4 flex flex-wrap items-center gap-2">
-          {PRESETS.map((p) => (
-            <Link
-              key={p.key}
-              href={p.key === 'all' ? '/reports' : `/reports?range=${p.key}`}
-              className={
-                'rounded-md px-3 py-1.5 text-xs ' +
-                (range === p.key
-                  ? 'bg-neutral-100 font-medium text-neutral-900'
-                  : 'border border-neutral-700 text-neutral-300 hover:bg-neutral-900')
-              }
-            >
-              {p.label}
-            </Link>
-          ))}
+          {PRESETS.map((p) => {
+            const sp = new URLSearchParams();
+            if (p.key !== 'all') sp.set('range', p.key);
+            for (const k of ['batchId', 'supplier', 'manufacturer', 'category', 'grade'] as const) {
+              if (params[k]) sp.set(k, params[k]!);
+            }
+            const href = sp.toString() ? `/reports?${sp.toString()}` : '/reports';
+            return (
+              <Link
+                key={p.key}
+                href={href}
+                className={
+                  'rounded-md px-3 py-1.5 text-xs ' +
+                  (range === p.key
+                    ? 'bg-neutral-100 font-medium text-neutral-900'
+                    : 'border border-neutral-700 text-neutral-300 hover:bg-neutral-900')
+                }
+              >
+                {p.label}
+              </Link>
+            );
+          })}
           <form action="/reports" className="flex items-center gap-1 text-xs text-neutral-500">
             <input type="hidden" name="range" value="custom" />
+            {(['batchId', 'supplier', 'manufacturer', 'category', 'grade'] as const).map((k) =>
+              params[k] ? <input key={k} type="hidden" name={k} value={params[k]} /> : null,
+            )}
             <input type="date" name="from" defaultValue={params.from ?? ''} className="rounded-md border border-neutral-700 bg-neutral-900 px-2 py-1 text-xs" />
             <span>–</span>
             <input type="date" name="to" defaultValue={params.to ?? ''} className="rounded-md border border-neutral-700 bg-neutral-900 px-2 py-1 text-xs" />
@@ -313,6 +343,15 @@ export default async function ReportsPage({
             </button>
           </form>
         </div>
+
+        {/* Cross-report dimension filters */}
+        {filterOptions && <FilterBar options={filterOptions} />}
+        {anyFilter && (
+          <p className="mt-1 text-xs text-neutral-600">
+            Filters apply to the Inventory, Sales, Batch &amp; lot and Supplier sections. Warehouse,
+            User, Consumables, Pallet and Activity sections show all data.
+          </p>
+        )}
 
         {/* Executive summary */}
         <section className="mt-6">
