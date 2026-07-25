@@ -49,9 +49,12 @@ function revalidateInventory(): void {
   }
 }
 
-export async function sellAsset(id: string): Promise<{ error?: string }> {
+export async function sellAsset(id: string, salePrice?: number): Promise<{ error?: string }> {
   try {
-    await apiFetch(`/assets/${id}/sell`, { method: 'POST', body: JSON.stringify({}) });
+    await apiFetch(`/assets/${id}/sell`, {
+      method: 'POST',
+      body: JSON.stringify(salePrice != null ? { salePrice } : {}),
+    });
   } catch (err) {
     return { error: msg(err, 'Failed to mark as sold.') };
   }
@@ -62,12 +65,15 @@ export async function sellAsset(id: string): Promise<{ error?: string }> {
 
 // Sell a whole lot: every remaining device in it is marked Sold and the lot's
 // status becomes 'sold'.
-export async function sellBatch(id: string): Promise<{ soldCount?: number; error?: string }> {
+export async function sellBatch(
+  id: string,
+  saleTotal?: number,
+): Promise<{ soldCount?: number; error?: string }> {
   let res: { soldCount: number };
   try {
     res = await apiFetch<{ soldCount: number }>(`/batches/${id}/sell`, {
       method: 'POST',
-      body: JSON.stringify({}),
+      body: JSON.stringify(saleTotal != null ? { saleTotal } : {}),
     });
   } catch (err) {
     return { error: msg(err, 'Failed to sell the lot.') };
@@ -98,11 +104,15 @@ export async function sellPalletLine(
   palletId: string,
   lineId: string,
   quantity?: number,
+  salePrice?: number,
 ): Promise<{ error?: string }> {
   try {
     await apiFetch(`/pallets/${palletId}/lines/${lineId}/sell`, {
       method: 'POST',
-      body: JSON.stringify(quantity ? { quantity } : {}),
+      body: JSON.stringify({
+        ...(quantity ? { quantity } : {}),
+        ...(salePrice != null ? { salePrice } : {}),
+      }),
     });
   } catch (err) {
     return { error: msg(err, 'Failed to sell that line.') };
@@ -112,9 +122,15 @@ export async function sellPalletLine(
   return {};
 }
 
-export async function sellWholePallet(palletId: string): Promise<{ error?: string }> {
+export async function sellWholePallet(
+  palletId: string,
+  saleTotal?: number,
+): Promise<{ error?: string }> {
   try {
-    await apiFetch(`/pallets/${palletId}/sell`, { method: 'POST', body: JSON.stringify({}) });
+    await apiFetch(`/pallets/${palletId}/sell`, {
+      method: 'POST',
+      body: JSON.stringify(saleTotal != null ? { saleTotal } : {}),
+    });
   } catch (err) {
     return { error: msg(err, 'Failed to sell the pallet.') };
   }

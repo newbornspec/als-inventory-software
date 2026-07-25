@@ -105,6 +105,7 @@ export class PalletsService {
     lineId: string,
     quantity: number | undefined,
     userId: string,
+    salePrice?: number,
   ): Promise<PalletSoldLine> {
     const pallet = await this.assertPallet(palletId);
     const line = await this.lines.findOne({ where: { id: lineId, palletId } });
@@ -119,6 +120,8 @@ export class PalletsService {
         productId: line.productId,
         variant: line.variant,
         quantity: qty,
+        saleTotal: salePrice != null && salePrice >= 0 ? salePrice : null,
+        unitCost: line.unitCost, // cost snapshot for profit reporting
         soldById: userId,
       }),
     );
@@ -132,15 +135,34 @@ export class PalletsService {
 
   // Sell everything remaining on the pallet in one action; the emptied pallet
   // is stamped shipped (it has physically left).
-  async sellPallet(palletId: string, userId: string): Promise<{ soldLines: number; soldUnits: number }> {
+  async sellPallet(
+    palletId: string,
+    userId: string,
+    saleTotal?: number,
+  ): Promise<{ soldLines: number; soldUnits: number }> {
     const pallet = await this.assertPallet(palletId);
     const lines = await this.lines.find({ where: { palletId } });
     const withQty = lines.filter((l) => l.quantity > 0);
     if (withQty.length === 0) throw new ConflictException('This pallet has nothing left to sell.');
 
+    // Optional pallet sale total, split across rows in proportion to quantity
+    // (remainder on the last row so the stored sum equals what was entered).
+    const totalUnits = withQty.reduce((s, l) => s + l.quantity, 0);
+    const priced = saleTotal != null && saleTotal >= 0;
+    let allocated = 0;
+
     let units = 0;
-    for (const line of withQty) {
+    for (let i = 0; i < withQty.length; i++) {
+      const line = withQty[i];
       units += line.quantity;
+      let rowTotal: number | null = null;
+      if (priced) {
+        rowTotal =
+          i === withQty.length - 1
+            ? Math.round((saleTotal! - allocated) * 100) / 100
+            : Math.round(((saleTotal! * line.quantity) / totalUnits) * 100) / 100;
+        allocated = Math.round((allocated + rowTotal) * 100) / 100;
+      }
       await this.soldLines.save(
         this.soldLines.create({
           palletId: pallet.id,
@@ -148,6 +170,8 @@ export class PalletsService {
           productId: line.productId,
           variant: line.variant,
           quantity: line.quantity,
+          saleTotal: rowTotal,
+          unitCost: line.unitCost,
           soldById: userId,
         }),
       );

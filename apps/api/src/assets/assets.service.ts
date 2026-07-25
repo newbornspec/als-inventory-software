@@ -258,7 +258,7 @@ export class AssetsService {
 
   // Mark as Sold: terminal status, out of every active view, locked for
   // non-admins. The batch/lot links stay for provenance and the return path.
-  async sell(id: string, user: RequestUser): Promise<Asset> {
+  async sell(id: string, user: RequestUser, salePrice?: number): Promise<Asset> {
     const before = await this.findOne(id, user);
     if (before.stockStatus === AssetStockStatus.SOLD) {
       throw new ConflictException('This asset is already sold.');
@@ -267,6 +267,7 @@ export class AssetsService {
       stockStatus: AssetStockStatus.SOLD,
       soldAt: new Date(),
       soldById: user.userId,
+      salePrice: salePrice != null && salePrice >= 0 ? salePrice : null,
     });
     await this.logEvent(
       id,
@@ -297,6 +298,7 @@ export class AssetsService {
       stockStatus: AssetStockStatus.IN_STOCK,
       soldAt: null,
       soldById: null,
+      salePrice: null, // the sale was undone
       batchId: targetBatch,
       ...(movingLots ? { lotId: null } : {}),
     });

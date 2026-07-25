@@ -1,11 +1,17 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { Asset, AssetAuditStatus, AssetStockStatus } from '../assets/asset.entity';
+import { Asset, AssetAuditStatus, AssetConditionGrade, AssetStockStatus } from '../assets/asset.entity';
 import { Batch } from '../batches/batch.entity';
+import { Lot } from '../batches/lot.entity';
 import { OrderLine } from '../sales/order-line.entity';
 import { RepairLog, RepairStatus } from '../repairs/repair-log.entity';
 import { StockLine } from '../stock/stock-line.entity';
+import { Pallet, PalletStatus } from '../pallets/pallet.entity';
+import { PalletLine } from '../pallets/pallet-line.entity';
+import { PalletSoldLine } from '../pallets/pallet-sold-line.entity';
+import { User } from '../users/user.entity';
+import { IsNull } from 'typeorm';
 import { stockStatusFor } from '../stock/stock.service';
 import { accessibleBatchWhere, isScopedManager, type RequestUser } from '../common/ownership';
 
@@ -50,6 +56,43 @@ export interface AssetCosting {
   orderNumber: string | null;
 }
 
+// The Reports dashboard roll-up: KPI cards + active-inventory breakdowns.
+export interface OverviewReport {
+  kpis: {
+    totalAssets: number;
+    activeAssets: number;
+    inStock: number;
+    awaitingAudit: number;
+    readyForSale: number;
+    soldUnits: number; // within range: devices + pallet quantities
+    lots: number;
+    subLots: number;
+    activePallets: number;
+    palletUnits: number;
+    consumableItems: number;
+    consumableUnits: number;
+    warehouseValue: number;
+    revenue: number; // within range
+    costOfSold: number; // within range
+    profit: number; // within range
+    marginPct: number | null;
+    users: number;
+  };
+  byCategory: { label: string; count: number }[];
+  byManufacturer: { label: string; count: number; pct: number; avgGrade: string | null }[];
+  byGrade: { label: string; count: number }[];
+  byAuditStatus: { label: string; count: number }[];
+}
+
+const GRADE_LABELS: Record<string, string> = {
+  grade_a: 'Grade A',
+  grade_b: 'Grade B',
+  grade_c: 'Grade C',
+  grade_d: 'Grade D',
+  for_parts: 'For Parts',
+  scrap: 'Scrap',
+};
+
 // Management dashboard roll-up — a single aggregated snapshot.
 export interface DashboardSummary {
   totalDevices: number;
@@ -72,9 +115,14 @@ export class ReportsService {
   constructor(
     @InjectRepository(Asset) private assets: Repository<Asset>,
     @InjectRepository(Batch) private batches: Repository<Batch>,
+    @InjectRepository(Lot) private lots: Repository<Lot>,
     @InjectRepository(OrderLine) private lines: Repository<OrderLine>,
     @InjectRepository(RepairLog) private repairLogs: Repository<RepairLog>,
     @InjectRepository(StockLine) private stockLines: Repository<StockLine>,
+    @InjectRepository(Pallet) private pallets: Repository<Pallet>,
+    @InjectRepository(PalletLine) private palletLines: Repository<PalletLine>,
+    @InjectRepository(PalletSoldLine) private palletSold: Repository<PalletSoldLine>,
+    @InjectRepository(User) private users: Repository<User>,
   ) {}
 
   // The batch ids a scoped manager owns; null means "no restriction"
@@ -226,6 +274,149 @@ export class ReportsService {
         .join(','),
     );
     return [header.join(','), ...body].join('\n');
+  }
+
+  // The Reports dashboard's single roll-up: KPI cards + inventory breakdowns.
+  // Snapshot metrics (stock, value, breakdowns) are current-state; sales
+  // metrics (sold/revenue/cost/profit) respect the from/to range on sold_at.
+  async getOverview(from?: Date, to?: Date, user?: RequestUser): Promise<OverviewReport> {
+    let [assets, batches, lotsCount, activePalletsList, pLines, pSold, stock, usersCount] =
+      await Promise.all([
+        this.assets
+          .createQueryBuilder('a')
+          .select([
+            'a.id', 'a.batchId', 'a.category', 'a.manufacturer', 'a.purchaseCost', 'a.salePrice',
+            'a.stockStatus', 'a.conditionGrade', 'a.auditStatus', 'a.soldAt',
+          ])
+          .getMany(),
+        this.batches.find(),
+        this.lots.count(),
+        this.pallets.find({ where: {} }),
+        this.palletLines.find(),
+        this.palletSold.find({ where: { returnedAt: IsNull() } }),
+        this.stockLines.find({ select: { id: true, quantity: true } }),
+        this.users.count(),
+      ]);
+
+    const owned = await this.ownedBatchIds(user);
+    if (owned) {
+      batches = batches.filter((b) => owned.has(b.id));
+      assets = assets.filter((a) => a.batchId != null && owned.has(a.batchId));
+    }
+
+    const unitsPerBatch = new Map<string, number>();
+    for (const a of assets) {
+      if (a.batchId) unitsPerBatch.set(a.batchId, (unitsPerBatch.get(a.batchId) ?? 0) + 1);
+    }
+    const batchTotalCost = new Map(batches.map((b) => [b.id, b.totalCost]));
+    const allocated = (a: Asset): number => {
+      if (a.purchaseCost != null) return a.purchaseCost;
+      if (a.batchId) {
+        const tc = batchTotalCost.get(a.batchId);
+        const u = unitsPerBatch.get(a.batchId) ?? 0;
+        if (tc != null && u > 0) return tc / u;
+      }
+      return 0;
+    };
+
+    const inRange = (d: Date | string | null | undefined): boolean => {
+      if (!d) return false;
+      const t = new Date(d).getTime();
+      if (from && t < from.getTime()) return false;
+      if (to && t > to.getTime()) return false;
+      return true;
+    };
+
+    const active = assets.filter((a) => a.stockStatus !== AssetStockStatus.SOLD);
+    const soldAssetsInRange = assets.filter(
+      (a) => a.stockStatus === AssetStockStatus.SOLD && inRange(a.soldAt),
+    );
+    const soldRowsInRange = pSold.filter((r) => inRange(r.soldAt));
+
+    const revenue =
+      soldAssetsInRange.reduce((s, a) => s + (a.salePrice ?? 0), 0) +
+      soldRowsInRange.reduce((s, r) => s + (r.saleTotal ?? 0), 0);
+    const costOfSold =
+      soldAssetsInRange.reduce((s, a) => s + allocated(a), 0) +
+      soldRowsInRange.reduce((s, r) => s + (r.unitCost != null ? r.unitCost * r.quantity : 0), 0);
+    const profit = revenue - costOfSold;
+
+    const activePallets = activePalletsList.filter((p) => p.status !== PalletStatus.SHIPPED);
+    const palletUnits = pLines.reduce((s, l) => s + l.quantity, 0);
+    const warehouseValue =
+      active
+        .filter((a) => a.stockStatus !== AssetStockStatus.DISPOSED)
+        .reduce((s, a) => s + allocated(a), 0) +
+      pLines.reduce((s, l) => s + (l.unitCost != null ? l.unitCost * l.quantity : 0), 0);
+
+    // Breakdowns cover ACTIVE (unsold) inventory — that's what's on the floor.
+    const tally = (key: (a: Asset) => string): Map<string, number> => {
+      const m = new Map<string, number>();
+      for (const a of active) {
+        const k = key(a);
+        m.set(k, (m.get(k) ?? 0) + 1);
+      }
+      return m;
+    };
+    const toRows = (m: Map<string, number>) =>
+      [...m.entries()].map(([label, count]) => ({ label, count })).sort((x, y) => y.count - x.count);
+
+    const gradePoints: Record<string, number> = {
+      [AssetConditionGrade.GRADE_A]: 4,
+      [AssetConditionGrade.GRADE_B]: 3,
+      [AssetConditionGrade.GRADE_C]: 2,
+      [AssetConditionGrade.GRADE_D]: 1,
+    };
+    const gradeLetter = (avg: number): string =>
+      avg >= 3.5 ? 'A' : avg >= 2.5 ? 'B' : avg >= 1.5 ? 'C' : 'D';
+
+    const manMap = new Map<string, { count: number; points: number; graded: number }>();
+    for (const a of active) {
+      const k = a.manufacturer?.trim() || 'Unknown';
+      const e = manMap.get(k) ?? { count: 0, points: 0, graded: 0 };
+      e.count += 1;
+      const p = a.conditionGrade ? gradePoints[a.conditionGrade] : undefined;
+      if (p != null) {
+        e.points += p;
+        e.graded += 1;
+      }
+      manMap.set(k, e);
+    }
+    const byManufacturer = [...manMap.entries()]
+      .map(([label, e]) => ({
+        label,
+        count: e.count,
+        pct: active.length > 0 ? round2((e.count / active.length) * 100) : 0,
+        avgGrade: e.graded > 0 ? gradeLetter(e.points / e.graded) : null,
+      }))
+      .sort((x, y) => y.count - x.count);
+
+    return {
+      kpis: {
+        totalAssets: assets.length,
+        activeAssets: active.length,
+        inStock: active.filter((a) => a.stockStatus === AssetStockStatus.IN_STOCK).length,
+        awaitingAudit: active.filter((a) => a.auditStatus == null).length,
+        readyForSale: active.filter((a) => a.auditStatus === AssetAuditStatus.READY_FOR_SALE).length,
+        soldUnits: soldAssetsInRange.length + soldRowsInRange.reduce((s, r) => s + r.quantity, 0),
+        lots: batches.length,
+        subLots: lotsCount,
+        activePallets: activePallets.length,
+        palletUnits,
+        consumableItems: stock.length,
+        consumableUnits: stock.reduce((s, x) => s + x.quantity, 0),
+        warehouseValue: round2(warehouseValue),
+        revenue: round2(revenue),
+        costOfSold: round2(costOfSold),
+        profit: round2(profit),
+        marginPct: revenue > 0 ? round2((profit / revenue) * 100) : null,
+        users: usersCount,
+      },
+      byCategory: toRows(tally((a) => a.category?.trim() || 'Uncategorised')),
+      byGrade: toRows(tally((a) => GRADE_LABELS[a.conditionGrade ?? ''] ?? 'Ungraded')),
+      byAuditStatus: toRows(tally((a) => a.auditStatus ?? 'not_audited')),
+      byManufacturer,
+    };
   }
 
   async getDashboard(user?: RequestUser): Promise<DashboardSummary> {

@@ -129,6 +129,18 @@ export class Asset {
   @JoinColumn({ name: 'sold_by_id' })
   soldBy: User | null;
 
+  // What the unit actually sold for — optional at sell time, cleared on an
+  // admin return. Feeds the revenue/profit reporting.
+  @Column({
+    name: 'sale_price',
+    type: 'numeric',
+    precision: 12,
+    scale: 2,
+    nullable: true,
+    transformer: numericTransformer,
+  })
+  salePrice: number | null;
+
   @Column({ name: 'image_url', type: 'varchar', nullable: true })
   imageUrl: string | null;
 

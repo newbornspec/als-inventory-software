@@ -32,9 +32,14 @@ export function BatchStatusSelect({ batchId, status }: { batchId: string; status
       if (selectRef.current) selectRef.current.value = status; // revert the picker
       return;
     }
+    const raw = window.prompt(
+      'Total sale price for the lot £ (optional — split evenly per device; leave blank to skip)',
+      '',
+    );
+    const saleTotal = raw && !isNaN(parseFloat(raw)) ? Math.max(0, parseFloat(raw)) : undefined;
     setBusy(true);
     setError(null);
-    const res = await sellBatch(batchId);
+    const res = await sellBatch(batchId, saleTotal);
     setBusy(false);
     if (res.error) {
       setError(res.error);

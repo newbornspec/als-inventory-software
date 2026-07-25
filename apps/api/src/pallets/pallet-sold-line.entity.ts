@@ -9,6 +9,7 @@ import {
 import { Pallet } from './pallet.entity';
 import { Product } from '../products/product.entity';
 import { User } from '../users/user.entity';
+import { numericTransformer } from '../common/numeric.transformer';
 
 // A quantity that was sold off a pallet — the Sold-page archive row for pallet
 // goods. Snapshots the variant/product/pallet number so the record survives
@@ -43,6 +44,29 @@ export class PalletSoldLine {
 
   @Column({ type: 'int' })
   quantity: number;
+
+  // Total sale amount for this row (all `quantity` units) — optional.
+  @Column({
+    name: 'sale_total',
+    type: 'numeric',
+    precision: 12,
+    scale: 2,
+    nullable: true,
+    transformer: numericTransformer,
+  })
+  saleTotal: number | null;
+
+  // The line's per-unit cost at the moment of sale, snapshotted so profit is
+  // computable after the source line is decremented/removed.
+  @Column({
+    name: 'unit_cost',
+    type: 'numeric',
+    precision: 12,
+    scale: 2,
+    nullable: true,
+    transformer: numericTransformer,
+  })
+  unitCost: number | null;
 
   @CreateDateColumn({ name: 'sold_at' })
   soldAt: Date;

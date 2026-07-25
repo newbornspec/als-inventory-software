@@ -113,8 +113,14 @@ export function PalletLines({
     );
     if (raw === null) return;
     const qty = Math.min(Math.max(1, parseInt(raw, 10) || 0), line.quantity);
+    const priceRaw = window.prompt(
+      `Total sale price for the ${qty} unit${qty === 1 ? '' : 's'} £ (optional — leave blank to skip)`,
+      '',
+    );
+    const salePrice =
+      priceRaw && !isNaN(parseFloat(priceRaw)) ? Math.max(0, parseFloat(priceRaw)) : undefined;
     setError(null);
-    const res = await sellPalletLine(palletId, line.id, qty);
+    const res = await sellPalletLine(palletId, line.id, qty, salePrice);
     if (res.error) {
       setError(res.error);
       return;

@@ -120,10 +120,11 @@ export class AssetsController {
   }
 
   // Selling is normal warehouse work — any role. Locking is what's restricted.
+  // salePrice is optional; when given it feeds the revenue/profit reports.
   @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.TECHNICIAN)
   @Post(':id/sell')
-  sell(@Param('id') id: string, @Req() req: any) {
-    return this.assets.sell(id, req.user);
+  sell(@Param('id') id: string, @Body() body: { salePrice?: number }, @Req() req: any) {
+    return this.assets.sell(id, req.user, body?.salePrice);
   }
 
   // Returning a sold item to inventory is admin-only, per the Sold workflow.

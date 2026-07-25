@@ -26,9 +26,14 @@ export function SellPalletButton({
       )
     )
       return;
+    const raw = window.prompt(
+      'Total sale price for the pallet £ (optional — leave blank to skip)',
+      '',
+    );
+    const saleTotal = raw && !isNaN(parseFloat(raw)) ? Math.max(0, parseFloat(raw)) : undefined;
     setBusy(true);
     setError(null);
-    const res = await sellWholePallet(palletId);
+    const res = await sellWholePallet(palletId, saleTotal);
     setBusy(false);
     if (res.error) {
       setError(res.error);

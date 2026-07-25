@@ -79,8 +79,8 @@ export class BatchesController {
   // Selling is normal warehouse work — any role (the lock is what's restricted).
   @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.TECHNICIAN)
   @Post(':id/sell')
-  sellBatch(@Param('id') id: string, @Req() req: any) {
-    return this.batches.sellBatch(id, req.user);
+  sellBatch(@Param('id') id: string, @Body() body: { saleTotal?: number }, @Req() req: any) {
+    return this.batches.sellBatch(id, req.user, body?.saleTotal);
   }
 
   // Reassign a lot to another owner — admin only.

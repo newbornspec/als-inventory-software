@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import * as ExcelJS from 'exceljs';
 import { Batch, BatchStatus } from './batch.entity';
 import { CreateBatchDto } from './dto/create-batch.dto';
@@ -270,13 +270,19 @@ export class BatchesService {
   // — stamped with who/when, written to each asset's history, moved to the
   // Sold archive and locked — and the lot's status becomes 'sold'. Managers
   // can only sell lots they can access (findOne enforces that).
-  async sellBatch(id: string, user: RequestUser): Promise<{ soldCount: number }> {
+  async sellBatch(
+    id: string,
+    user: RequestUser,
+    saleTotal?: number,
+  ): Promise<{ soldCount: number }> {
     const before = await this.findOne(id, user); // 404s if missing, 403 if not owner
 
-    const soldCount = await this.assets
+    const toSell = await this.assets
       .createQueryBuilder('asset')
+      .select(['asset.id'])
       .where(`asset.batch_id = :id AND asset.stock_status != 'sold'`, { id })
-      .getCount();
+      .getMany();
+    const soldCount = toSell.length;
 
     if (soldCount > 0) {
       // Per-device history first (captures each unit's transition), then one
@@ -297,6 +303,20 @@ export class BatchesService {
         })
         .where(`batch_id = :id AND stock_status != 'sold'`, { id })
         .execute();
+
+      // Optional lot sale total, split evenly per device (rounding remainder
+      // lands on one unit so the sum always equals what was entered).
+      if (saleTotal != null && saleTotal >= 0) {
+        const per = Math.floor((saleTotal / soldCount) * 100) / 100;
+        const ids = toSell.map((a) => a.id);
+        await this.assets.update({ id: In(ids) }, { salePrice: per });
+        const remainder = Math.round((saleTotal - per * soldCount) * 100) / 100;
+        if (remainder !== 0) {
+          await this.assets.update(ids[0], {
+            salePrice: Math.round((per + remainder) * 100) / 100,
+          });
+        }
+      }
     }
 
     await this.batches.update(id, { status: BatchStatus.SOLD });

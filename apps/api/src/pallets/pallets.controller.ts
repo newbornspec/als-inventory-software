@@ -92,8 +92,8 @@ export class PalletsController {
   // Selling is normal warehouse work — any role may do it.
   @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.TECHNICIAN)
   @Post(':id/sell')
-  sellPallet(@Param('id') id: string, @Req() req: any) {
-    return this.pallets.sellPallet(id, req.user.userId);
+  sellPallet(@Param('id') id: string, @Body() body: { saleTotal?: number }, @Req() req: any) {
+    return this.pallets.sellPallet(id, req.user.userId, body?.saleTotal);
   }
 
   @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.TECHNICIAN)
@@ -101,10 +101,10 @@ export class PalletsController {
   sellLine(
     @Param('id') id: string,
     @Param('lineId') lineId: string,
-    @Body() body: { quantity?: number },
+    @Body() body: { quantity?: number; salePrice?: number },
     @Req() req: any,
   ) {
-    return this.pallets.sellLine(id, lineId, body?.quantity, req.user.userId);
+    return this.pallets.sellLine(id, lineId, body?.quantity, req.user.userId, body?.salePrice);
   }
 
   // Bulk return from the Sold page — admin only. No palletId -> each row

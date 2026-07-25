@@ -13,9 +13,11 @@ export function SellAssetButton({ assetId, name }: { assetId: string; name: stri
 
   async function sell() {
     if (!confirm(`Mark "${name}" as Sold? It will leave active inventory and lock — only an admin can return it.`)) return;
+    const raw = window.prompt('Sale price £ (optional — leave blank to skip)', '');
+    const salePrice = raw && !isNaN(parseFloat(raw)) ? Math.max(0, parseFloat(raw)) : undefined;
     setBusy(true);
     setError(null);
-    const res = await sellAsset(assetId);
+    const res = await sellAsset(assetId, salePrice);
     setBusy(false);
     if (res.error) {
       setError(res.error);

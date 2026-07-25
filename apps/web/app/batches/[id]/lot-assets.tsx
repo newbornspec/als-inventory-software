@@ -68,9 +68,11 @@ export function LotAssets({
       )
     )
       return;
+    const raw = window.prompt('Sale price £ (optional — leave blank to skip)', '');
+    const salePrice = raw && !isNaN(parseFloat(raw)) ? Math.max(0, parseFloat(raw)) : undefined;
     startTransition(async () => {
       setError(null);
-      const res = await sellAsset(asset.id);
+      const res = await sellAsset(asset.id, salePrice);
       if (res.error) setError(res.error);
       router.refresh();
     });
