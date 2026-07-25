@@ -323,10 +323,15 @@ WIPEEOF
        && blkdiscard -f "$dev" >/dev/null 2>&1; then
       m="Block discard / TRIM (SSD)"
     fi
-    # 3) Overwrite fallback (NIST Clear).
-    if [ -z "$m" ] && command -v shred >/dev/null 2>&1 \
-       && shred -f -n 1 -z "$dev" >/dev/null 2>&1; then
-      m="Overwrite — shred 1 pass + zero (NIST Clear)"
+    # 3) Overwrite fallback (NIST Clear). Streams progress — a full pass on a
+    #    spinning disk takes hours and must not look like a hang.
+    if [ -z "$m" ]; then
+      echo "  overwriting (this can take hours on a large disk) …"
+      if run_overwrite "$dev"; then
+        m="Overwrite — shred 1 pass + zero (NIST Clear)"
+      else
+        echo "  overwrite failed: ${OVR_ERR:-unknown error}"
+      fi
     fi
 
     # Verification — overwrite must read back as zeros; a firmware crypto erase
@@ -337,8 +342,11 @@ WIPEEOF
         verified=1; m="$m — verified (reads as zeros)"
       elif [ "$fw" = "1" ]; then
         verified=1; m="$m — controller-confirmed"
-      elif command -v shred >/dev/null 2>&1 && shred -f -n 1 -z "$dev" >/dev/null 2>&1 && verify_zero "$dev"; then
-        m="Overwrite — shred 1 pass + zero (NIST Clear) — verified (reads as zeros)"; verified=1
+      else
+        echo "  verify failed — falling back to a full overwrite pass …"
+        if run_overwrite "$dev" && verify_zero "$dev"; then
+          m="Overwrite — shred 1 pass + zero (NIST Clear) — verified (reads as zeros)"; verified=1
+        fi
       fi
     fi
 
@@ -367,6 +375,42 @@ WIPEEOF
 # Emits human-readable progress on stdout and a final machine-readable line:
 #   WIPE_RESULT {"status":"wiped|failed","method":"…","device":"/dev/sdX"}
 # Refuses removable/USB devices so the boot stick can never be selected.
+# --- overwrite with LIVE progress and a captured reason on failure -----------
+# A 250GB spinning disk takes hours to overwrite. Running shred silently made the
+# GUI look frozen for that whole time, and discarding its output threw away the
+# reason whenever it failed. This runs shred in the background, streams its
+# progress every few seconds, and keeps the last lines as the failure reason.
+# Sets OVR_ERR. Returns shred's real exit status.
+OVR_ERR=""
+run_overwrite() {
+  local dev="$1" out rc pid line start now el
+  out="/tmp/als-wipe.$$.out"
+  : > "$out"
+  OVR_ERR=""
+  command -v shred >/dev/null 2>&1 || { OVR_ERR="shred is not installed"; return 127; }
+  start=$(date +%s)
+  # -v makes shred report progress; it uses \r, so we translate it to lines.
+  shred -v -f -n 1 -z "$dev" > "$out" 2>&1 &
+  pid=$!
+  while kill -0 "$pid" 2>/dev/null; do
+    sleep 5
+    now=$(date +%s); el=$(( now - start ))
+    line=$(tr '\r' '\n' < "$out" 2>/dev/null | grep -v '^[[:space:]]*$' | tail -n1)
+    # Always emit a heartbeat, even if shred has printed nothing yet, so the
+    # operator can see the wipe is alive and how long it has been going.
+    printf '    [%02d:%02d:%02d] %s\n' $(( el/3600 )) $(( (el%3600)/60 )) $(( el%60 )) \
+           "${line:-overwriting …}"
+  done
+  wait "$pid"; rc=$?
+  # Prefer a real error line over the trailing progress noise.
+  OVR_ERR=$(tr '\r' '\n' < "$out" 2>/dev/null | grep -v '^[[:space:]]*$' \
+            | grep -iE 'error|denied|permission|busy|read-only|no space|invalid|cannot|fail' \
+            | tail -n1)
+  [ -n "$OVR_ERR" ] || OVR_ERR=$(tr '\r' '\n' < "$out" 2>/dev/null | grep -v '^[[:space:]]*$' | tail -n1)
+  rm -f "$out"
+  return "$rc"
+}
+
 gui_wipe_one() {
   local dev="$1" want="${2:-auto}" d rota m verified fw
   if [ -z "$dev" ] || [ ! -b "$dev" ]; then
@@ -382,33 +426,63 @@ gui_wipe_one() {
   export AUDIT_WIPE_METHOD="$want"
   rota=$(cat "/sys/block/$d/queue/rotational" 2>/dev/null)
   m=""; verified=0; fw=0
+  local reason="" sz gb
+  sz=$(blockdev --getsize64 "$dev" 2>/dev/null)
+  case "$sz" in ''|*[!0-9]*) gb="" ;; *) gb=$(( sz / 1000000000 )) ;; esac
   echo "Erasing $dev  (method: $want) …"
+  if [ -n "$gb" ]; then
+    echo "  Capacity: ${gb}GB. Firmware erase is quick; a full overwrite on a"
+    echo "  spinning disk this size can take several hours — progress is shown below."
+  fi
+
   if firmware_erase "$dev" "$d"; then m="$M"; fw=1; fi
-  if [ -z "$m" ] && [ "$rota" = "0" ] && command -v blkdiscard >/dev/null 2>&1 \
-     && blkdiscard -f "$dev" >/dev/null 2>&1; then
-    m="Block discard / TRIM (SSD)"
+
+  if [ -z "$m" ] && [ "$rota" = "0" ] && command -v blkdiscard >/dev/null 2>&1; then
+    local bderr
+    if bderr=$(blkdiscard -f "$dev" 2>&1); then
+      m="Block discard / TRIM (SSD)"
+    else
+      [ -n "$bderr" ] && reason="blkdiscard: $(printf '%s' "$bderr" | head -n1)"
+    fi
   fi
-  if [ -z "$m" ] && command -v shred >/dev/null 2>&1 \
-     && shred -f -n 1 -z "$dev" >/dev/null 2>&1; then
-    m="Overwrite — shred 1 pass + zero (NIST Clear)"
+
+  if [ -z "$m" ]; then
+    echo "  Overwriting (this is the slow path) …"
+    if run_overwrite "$dev"; then
+      m="Overwrite — shred 1 pass + zero (NIST Clear)"
+    else
+      reason="${OVR_ERR:-overwrite failed}"
+      echo "  Overwrite failed: $reason"
+    fi
   fi
+
   if [ -n "$m" ]; then
     echo "Verifying …"
     if verify_zero "$dev"; then
       verified=1; m="$m — verified (reads as zeros)"
     elif [ "$fw" = "1" ]; then
       verified=1; m="$m — controller-confirmed"
-    elif command -v shred >/dev/null 2>&1 && shred -f -n 1 -z "$dev" >/dev/null 2>&1 && verify_zero "$dev"; then
-      m="Overwrite — shred 1 pass + zero (NIST Clear) — verified (reads as zeros)"; verified=1
+    else
+      # Firmware/TRIM claimed success but the disk does not read back as zeros.
+      # Fall back to a full overwrite — announced, because it takes hours.
+      echo "  Verify failed — falling back to a full overwrite pass …"
+      if run_overwrite "$dev" && verify_zero "$dev"; then
+        m="Overwrite — shred 1 pass + zero (NIST Clear) — verified (reads as zeros)"
+        verified=1
+      else
+        reason="${OVR_ERR:-verification failed: device does not read back as zeros}"
+      fi
     fi
   fi
+
   if [ -n "$m" ] && [ "$verified" = "1" ]; then
     echo "✓ $m"
-    echo "WIPE_RESULT {\"status\":\"wiped\",\"method\":\"$m\",\"device\":\"$dev\"}"
+    echo "WIPE_RESULT {\"status\":\"wiped\",\"method\":\"$(esc "$m")\",\"device\":\"$dev\",\"reason\":\"\"}"
     return 0
   fi
-  echo "✗ FAILED on $dev"
-  echo "WIPE_RESULT {\"status\":\"failed\",\"method\":\"${m:-no method succeeded}\",\"device\":\"$dev\"}"
+  [ -n "$reason" ] || reason="no erase method succeeded on this drive"
+  echo "✗ FAILED on $dev — $reason"
+  echo "WIPE_RESULT {\"status\":\"failed\",\"method\":\"$(esc "${m:-none}")\",\"device\":\"$dev\",\"reason\":\"$(esc "$reason")\"}"
   return 1
 }
 

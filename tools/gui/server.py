@@ -23,8 +23,10 @@ Run:  python3 server.py   then open http://127.0.0.1:8800
 import json
 import os
 import re
+import signal
 import subprocess
 import threading
+import time
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
@@ -60,6 +62,7 @@ STATE = {
 }
 # One background job per kind (only one wipe/install runs at a time).
 JOBS = {"wipe": None, "install": None}
+PROCS = {}          # kind -> Popen, so a running job can be cancelled
 LOCK = threading.Lock()
 
 
@@ -324,19 +327,28 @@ def start_job(kind, argv, result_prefix, device="", on_done=None):
     log and parsing the final `<PREFIX> {json}` line into `result`. `on_done`
     (given the parsed result) runs after the process ends and before the job is
     marked finished — used to upload the wipe record."""
+    now = time.time()
     with LOCK:
         cur = JOBS.get(kind)
         if cur and cur.get("running"):
             return False
-        JOBS[kind] = {"running": True, "log": [], "result": None, "error": None, "device": device}
+        JOBS[kind] = {"running": True, "log": [], "result": None, "error": None,
+                      "device": device, "startedAt": now, "updatedAt": now,
+                      "cancelled": False}
     job = JOBS[kind]
 
     def worker():
+        proc = None
         try:
+            # start_new_session puts the engine in its own process group, so a
+            # cancel can take down the whole tree (shred/dd keep running
+            # otherwise) instead of orphaning a process writing to a disk.
             proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                    text=True, bufsize=1)
+                                    text=True, bufsize=1, start_new_session=True)
+            PROCS[kind] = proc
             for line in proc.stdout:
                 line = line.rstrip("\n")
+                job["updatedAt"] = time.time()
                 if line.startswith(result_prefix):
                     try:
                         job["result"] = json.loads(line[len(result_prefix):].strip())
@@ -344,23 +356,62 @@ def start_job(kind, argv, result_prefix, device="", on_done=None):
                         job["error"] = "could not parse result line"
                 elif line:
                     job["log"].append(line)
-                    del job["log"][:-200]
+                    del job["log"][:-400]
             proc.wait()
             if job["result"] is None and job["error"] is None:
-                job["error"] = "the process ended without a result"
+                # The engine died without a verdict. Say so precisely instead of
+                # leaving the UI to guess — this is what used to look like a hang.
+                if job.get("cancelled"):
+                    job["error"] = "Cancelled by the operator."
+                else:
+                    rc = proc.returncode
+                    job["error"] = ("The wipe process ended unexpectedly without a result "
+                                    "(exit code %s). The drive may be failing or was "
+                                    "disconnected." % rc)
         except Exception as exc:  # noqa: BLE001
             job["error"] = str(exc)
-        # Post-step (e.g. upload the wipe record). Its own failures attach to the
-        # result so the UI can show "wiped but not saved" without hiding the wipe.
-        if on_done and job.get("result"):
-            try:
-                on_done(job["result"])
-            except Exception as exc:  # noqa: BLE001
-                job["result"]["recordError"] = str(exc)
-        job["running"] = False
+        finally:
+            # Post-step (e.g. upload the wipe record). Its own failures attach to
+            # the result so the UI can show "wiped but not saved".
+            if on_done and job.get("result"):
+                try:
+                    on_done(job["result"])
+                except Exception as exc:  # noqa: BLE001
+                    job["result"]["recordError"] = str(exc)
+            PROCS.pop(kind, None)
+            # ALWAYS clear the running flag, whatever happened above, so the UI
+            # can never be left waiting on a job that is no longer alive.
+            job["updatedAt"] = time.time()
+            job["running"] = False
 
     threading.Thread(target=worker, daemon=True).start()
     return True
+
+
+def cancel_job(kind):
+    """Stop a running job and everything it spawned. Returns a status message."""
+    job = JOBS.get(kind)
+    proc = PROCS.get(kind)
+    if not job or not job.get("running") or not proc:
+        return False, "Nothing is running."
+    job["cancelled"] = True
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+    except Exception:  # noqa: BLE001
+        try:
+            proc.terminate()
+        except Exception:  # noqa: BLE001
+            return False, "Could not stop the process."
+    # Give it a moment to exit, then insist.
+    def _hard_kill():
+        time.sleep(8)
+        if proc.poll() is None:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except Exception:  # noqa: BLE001
+                pass
+    threading.Thread(target=_hard_kill, daemon=True).start()
+    return True, "Stopping…"
 
 
 # ---------------------------------------------------------------- server ----
@@ -426,8 +477,15 @@ class Handler(BaseHTTPRequestHandler):
             kind = (parse_qs(u.query).get("type") or [""])[0]
             job = JOBS.get(kind)
             if not job:
-                return self._send(200, {"running": False, "log": [], "result": None, "error": None})
-            return self._send(200, job)
+                return self._send(200, {"running": False, "log": [], "result": None,
+                                        "error": None, "elapsed": 0, "idle": 0})
+            # Serialise a snapshot, not the live dict the worker thread mutates.
+            now = time.time()
+            snap = dict(job)
+            snap["log"] = list(job.get("log") or [])
+            snap["elapsed"] = int(now - job.get("startedAt", now))   # seconds running
+            snap["idle"] = int(now - job.get("updatedAt", now))      # seconds since output
+            return self._send(200, snap)
 
         if u.path == "/api/settings":
             c = STATE["conf"]
@@ -464,6 +522,10 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as exc:  # noqa: BLE001
                 return self._send(500, {"message": str(exc)})
 
+        if u.path == "/api/wipe/cancel":
+            ok, msg = cancel_job("wipe")
+            return self._send(200, {"ok": ok, "message": msg})
+
         if u.path == "/api/wipe/start":
             device = body.get("device", "")
             method = body.get("method") or STATE["conf"].get("AUDIT_WIPE_METHOD", "auto")
@@ -489,6 +551,12 @@ class Handler(BaseHTTPRequestHandler):
                     "dataWipeStatus": result.get("status"),
                     "dataWipeMethod": result.get("method"),
                 }
+                # Record WHY a wipe failed, so the audit trail explains itself
+                # instead of just saying "Failed".
+                reason = (result.get("reason") or "").strip()
+                if reason and result.get("status") == "failed":
+                    payload["notes"] = "Wipe failed on %s: %s" % (
+                        result.get("device") or "drive", reason)
                 if lot_id:
                     payload["lotId"] = lot_id
                 if sub_lot_id:

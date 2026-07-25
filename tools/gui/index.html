@@ -206,7 +206,14 @@
               <button class="btn red" id="wStart" onclick="confirmWipe()" disabled>🗑️ START WIPE</button>
               <button class="btn gho" onclick="focusCard('batch')">CANCEL</button>
             </div>
-            <div class="hidden" id="wRun"><div class="bar"><i></i></div><div class="log" id="wLog"></div></div>
+            <div class="hidden" id="wRun">
+              <div class="bar"><i></i></div>
+              <div style="display:flex;align-items:center;gap:10px;margin:10px 0 6px">
+                <div id="wElapsed" style="flex:1;font-size:12px;color:var(--mut)">Starting…</div>
+                <button class="btn gho" style="width:auto;padding:8px 14px;font-size:13px" onclick="cancelWipe()">■ STOP WIPE</button>
+              </div>
+              <div class="log" id="wLog"></div>
+            </div>
           </section>
 
           <!-- 5. AUDIT -->
@@ -395,16 +402,23 @@ function confirmWipe(){
     const res=await jpost('/api/wipe/start',{device:dev,lotId:$('batchSel').value});
     if(!res.ok){toast(res.data.message||'Could not start wipe',false);return;}
     $('wActions').classList.add('hidden'); $('wRun').classList.remove('hidden');
+    $('wElapsed').textContent='Starting…';
     pollJob('wipe','wLog',(r)=>{
+      // Always restore the controls first — whatever the outcome, the screen
+      // must return to a usable state.
       $('wActions').classList.remove('hidden'); $('wRun').classList.add('hidden');
       if(r.status==='wiped'){
         if(r.recorded) toast('Wipe complete & saved to '+(batch||'the lot')+' ✓');
         else if(r.recordError) toast('Wiped, but not saved: '+r.recordError,false);
         else toast('Wipe complete ✓');
       } else {
-        toast('Wipe failed'+(r.recordError?' — '+r.recordError:'')+(r.recorded?' (recorded as failed)':''),false);
+        // Say WHY. The engine reports a reason (I/O error, frozen drive, no
+        // method available); previously all of that was thrown away.
+        const why=r.reason||r.message||r.method||'reason not reported';
+        toast('Wipe failed — '+why+(r.recorded?' (recorded against the lot)':''),false);
+        if($('wLog')) $('wLog').textContent+='\n\n✗ '+why;
       }
-    });
+    },'wElapsed');
   });
 }
 
@@ -421,12 +435,56 @@ function confirmInstall(){
 }
 
 /* ---- job poll ---- */
-function pollJob(kind,logId,onDone){
-  const el=$(logId);
-  const tick=async()=>{const j=await jget('/api/job?type='+kind);el.textContent=(j.log||[]).join('\n');el.scrollTop=el.scrollHeight;
-    if(j.running){setTimeout(tick,1200);return;}
-    if(j.result)onDone(j.result); else onDone({status:'failed',message:j.error||'no result'});};
+function fmtSecs(s){s=Math.max(0,s|0);const h=(s/3600)|0,m=((s%3600)/60)|0,x=s%60;
+  return (h?h+'h ':'')+((h||m)?m+'m ':'')+x+'s';}
+
+/* Poll a running job until it finishes.
+   Hardened deliberately: the old version had no error handling, so a single
+   failed request killed the polling chain and left the progress screen up
+   forever with no way back. Now every request is guarded, transient failures
+   retry with backoff, and the job ALWAYS terminates in onDone exactly once —
+   so the UI can never be stranded. */
+function pollJob(kind,logId,onDone,statusId){
+  const el=$(logId); let fails=0, finished=false;
+  const finish=(r)=>{ if(finished)return; finished=true; try{onDone(r);}catch(e){} };
+  const tick=async()=>{
+    if(finished) return;
+    let j;
+    try{
+      const res=await fetch('/api/job?type='+kind,{cache:'no-store'});
+      if(!res.ok) throw new Error('HTTP '+res.status);
+      j=await res.json();
+      fails=0;
+    }catch(e){
+      fails++;
+      if(fails>=12){                       // ~1 min of failures: give up cleanly
+        finish({status:'failed',reason:'Lost contact with the wipe service. The wipe may still be running on the machine — reboot and check the drive before reusing it.'});
+        return;
+      }
+      setTimeout(tick,Math.min(1000*fails,5000));   // back off, keep trying
+      return;
+    }
+    if(el){ el.textContent=(j.log||[]).join('\n'); el.scrollTop=el.scrollHeight; }
+    if(statusId&&$(statusId)){
+      let t='Running '+fmtSecs(j.elapsed||0);
+      // A long quiet spell is normal on big drives — say so rather than let it
+      // look like a freeze.
+      if((j.idle||0)>120) t+=' · no new output for '+fmtSecs(j.idle)+' (large drives overwrite quietly — still working)';
+      $(statusId).textContent=t;
+    }
+    if(j.running){setTimeout(tick,1500);return;}
+    if(j.result) finish(j.result);
+    else finish({status:'failed',reason:j.error||'The process ended without a result.'});
+  };
   tick();
+}
+
+async function cancelWipe(){
+  openOv('Stop the wipe?','The drive will be left partially erased and must be wiped again before it can be resold.',false,async()=>{
+    closeOv();
+    const r=await jpost('/api/wipe/cancel',{});
+    toast((r.data&&r.data.message)||'Stopping…',false);
+  });
 }
 
 /* ---- settings / standards / modal ---- */
