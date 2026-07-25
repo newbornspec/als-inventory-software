@@ -45,6 +45,19 @@ export class ReportsController {
     return this.reports.getOverview(parse(from), parse(to), req.user);
   }
 
+  // Sales & finance analytics. from/to bound the summary + top-lists; the
+  // monthly trend is a fixed rolling 12 months.
+  @Roles(UserRole.ADMIN, UserRole.MANAGER)
+  @Get('reports/sales')
+  getSales(@Query('from') from: string, @Query('to') to: string, @Req() req: any) {
+    const parse = (s?: string) => {
+      if (!s) return undefined;
+      const d = new Date(s);
+      return isNaN(d.getTime()) ? undefined : d;
+    };
+    return this.reports.getSalesAnalytics(parse(from), parse(to), req.user);
+  }
+
   @Roles(UserRole.ADMIN, UserRole.MANAGER)
   @Get('reports/profit')
   getLotProfitability(@Req() req: any) {

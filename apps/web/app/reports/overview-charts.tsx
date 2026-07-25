@@ -3,7 +3,10 @@
 import {
   Bar,
   BarChart,
+  CartesianGrid,
   Cell,
+  Line,
+  LineChart,
   Pie,
   PieChart,
   ResponsiveContainer,
@@ -103,6 +106,70 @@ export function CategoryDonut({ data }: { data: LabelCount[] }) {
           </li>
         ))}
       </ul>
+    </div>
+  );
+}
+
+export interface MonthPoint {
+  month: string; // 'YYYY-MM'
+  revenue: number;
+  profit: number;
+  units: number;
+}
+
+// Two-series money trend over the rolling 12 months: Revenue (blue) and Profit
+// (aqua). Both are £ on one axis (dataviz: never dual-axis). Legend is always
+// present for two series; 2px lines, recessive grid, crosshair tooltip.
+export function MonthlyTrend({ data }: { data: MonthPoint[] }) {
+  const fmtMonth = (m: string) => {
+    const [y, mo] = m.split('-');
+    return new Date(Number(y), Number(mo) - 1, 1).toLocaleString('en-GB', { month: 'short' });
+  };
+  const gbp = (v: number) => `£${Number(v).toLocaleString('en-GB')}`;
+
+  return (
+    <div>
+      <div className="mb-2 flex items-center gap-4 text-xs text-neutral-400">
+        <span className="flex items-center gap-1.5">
+          <span className="inline-block h-2 w-4 rounded-sm" style={{ backgroundColor: SINGLE_BLUE }} /> Revenue
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span className="inline-block h-2 w-4 rounded-sm" style={{ backgroundColor: SINGLE_AQUA }} /> Profit
+        </span>
+      </div>
+      <div className="h-56">
+        <ResponsiveContainer width="100%" height="100%">
+          <LineChart data={data} margin={{ left: 8, right: 16, top: 4, bottom: 4 }}>
+            <CartesianGrid stroke={GRID} vertical={false} />
+            <XAxis
+              dataKey="month"
+              tickFormatter={fmtMonth}
+              stroke={GRID}
+              tick={{ fill: INK_MUTED, fontSize: 11 }}
+              tickLine={false}
+              axisLine={{ stroke: GRID }}
+            />
+            <YAxis
+              stroke={GRID}
+              tick={{ fill: INK_MUTED, fontSize: 11 }}
+              tickLine={false}
+              axisLine={{ stroke: GRID }}
+              width={54}
+              tickFormatter={(v) => (v >= 1000 ? `£${(v / 1000).toFixed(0)}k` : `£${v}`)}
+            />
+            <Tooltip
+              contentStyle={tooltipStyle}
+              labelFormatter={(m) => {
+                const [y, mo] = String(m).split('-');
+                return new Date(Number(y), Number(mo) - 1, 1).toLocaleString('en-GB', { month: 'long', year: 'numeric' });
+              }}
+              formatter={(v, name) => [gbp(Number(v ?? 0)), name === 'revenue' ? 'Revenue' : 'Profit']}
+            />
+            <Line type="monotone" dataKey="revenue" stroke={SINGLE_BLUE} strokeWidth={2} dot={false} isAnimationActive={false} />
+            <Line type="monotone" dataKey="profit" stroke={SINGLE_AQUA} strokeWidth={2} dot={false} isAnimationActive={false} />
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
     </div>
   );
 }

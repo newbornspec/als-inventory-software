@@ -93,6 +93,28 @@ const GRADE_LABELS: Record<string, string> = {
   scrap: 'Scrap',
 };
 
+// Sales & finance analytics. Summary + top-lists respect the from/to range;
+// the monthly trend is a rolling 12-month window (a trend needs several months
+// to read). Device sales draw sale_price + allocated cost; pallet goods draw
+// sale_total + the snapshotted unit cost.
+export interface SalesAnalytics {
+  summary: {
+    soldUnits: number;
+    revenue: number;
+    cost: number;
+    profit: number;
+    marginPct: number | null;
+    avgSellPrice: number | null; // over priced units only
+    soldToday: number;
+    soldThisMonth: number;
+  };
+  monthly: { month: string; revenue: number; profit: number; units: number }[];
+  topManufacturers: { label: string; units: number; revenue: number }[];
+  topModels: { label: string; units: number; revenue: number }[];
+  topCategories: { label: string; units: number; revenue: number }[];
+  bySupplier: { label: string; units: number; revenue: number; cost: number; profit: number; marginPct: number | null }[];
+}
+
 // Management dashboard roll-up — a single aggregated snapshot.
 export interface DashboardSummary {
   totalDevices: number;
@@ -416,6 +438,182 @@ export class ReportsService {
       byGrade: toRows(tally((a) => GRADE_LABELS[a.conditionGrade ?? ''] ?? 'Ungraded')),
       byAuditStatus: toRows(tally((a) => a.auditStatus ?? 'not_audited')),
       byManufacturer,
+    };
+  }
+
+  async getSalesAnalytics(from?: Date, to?: Date, user?: RequestUser): Promise<SalesAnalytics> {
+    let [assets, batches, palletSold] = await Promise.all([
+      this.assets
+        .createQueryBuilder('a')
+        .select([
+          'a.id', 'a.batchId', 'a.category', 'a.manufacturer', 'a.model',
+          'a.purchaseCost', 'a.salePrice', 'a.stockStatus', 'a.soldAt',
+        ])
+        .where('a.stock_status = :sold', { sold: AssetStockStatus.SOLD })
+        .getMany(),
+      this.batches.find(),
+      this.palletSold.find({ where: { returnedAt: IsNull() }, relations: { product: true } }),
+    ]);
+
+    const owned = await this.ownedBatchIds(user);
+    if (owned) {
+      // Device sales scope to owned lots; pallet goods stay global (shared).
+      assets = assets.filter((a) => a.batchId != null && owned.has(a.batchId));
+    }
+
+    // Allocated per-unit cost for a sold device (override ?? even lot split).
+    const unitsPerBatch = new Map<string, number>();
+    for (const a of assets) if (a.batchId) unitsPerBatch.set(a.batchId, (unitsPerBatch.get(a.batchId) ?? 0) + 1);
+    const batchById = new Map(batches.map((b) => [b.id, b]));
+    const allocated = (a: Asset): number => {
+      if (a.purchaseCost != null) return a.purchaseCost;
+      const b = a.batchId ? batchById.get(a.batchId) : undefined;
+      const u = a.batchId ? unitsPerBatch.get(a.batchId) ?? 0 : 0;
+      return b?.totalCost != null && u > 0 ? b.totalCost / u : 0;
+    };
+
+    const inRange = (d: Date | string | null | undefined): boolean => {
+      if (!d) return false;
+      const t = new Date(d).getTime();
+      if (from && t < from.getTime()) return false;
+      if (to && t > to.getTime()) return false;
+      return true;
+    };
+
+    // Unified sale events across both sources.
+    type Sale = {
+      soldAt: Date; units: number; revenue: number; cost: number; priced: boolean;
+      manufacturer: string; model: string; category: string; supplier: string | null;
+    };
+    const sales: Sale[] = [];
+    for (const a of assets) {
+      if (!a.soldAt) continue;
+      sales.push({
+        soldAt: new Date(a.soldAt),
+        units: 1,
+        revenue: a.salePrice ?? 0,
+        cost: allocated(a),
+        priced: a.salePrice != null,
+        manufacturer: a.manufacturer?.trim() || 'Unknown',
+        model: a.model?.trim() || 'Unknown',
+        category: a.category?.trim() || 'Uncategorised',
+        supplier: (a.batchId ? batchById.get(a.batchId)?.source : null) ?? null,
+      });
+    }
+    for (const r of palletSold) {
+      sales.push({
+        soldAt: new Date(r.soldAt),
+        units: r.quantity,
+        revenue: r.saleTotal ?? 0,
+        cost: r.unitCost != null ? r.unitCost * r.quantity : 0,
+        priced: r.saleTotal != null,
+        manufacturer: r.product?.manufacturer?.trim() || 'Pallet goods',
+        model: r.product?.model?.trim() || r.variant,
+        category: r.product?.category?.trim() || 'Pallet goods',
+        supplier: null, // pallet goods aren't attributed to a supplier
+      });
+    }
+
+    const ranged = sales.filter((s) => inRange(s.soldAt));
+
+    // Summary over the range.
+    let soldUnits = 0, revenue = 0, cost = 0, pricedRevenue = 0, pricedUnits = 0;
+    for (const s of ranged) {
+      soldUnits += s.units;
+      revenue += s.revenue;
+      cost += s.cost;
+      if (s.priced) {
+        pricedRevenue += s.revenue;
+        pricedUnits += s.units;
+      }
+    }
+    const profit = revenue - cost;
+
+    // Fixed windows for the two headline "sold" counts.
+    const now = new Date();
+    const startToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const startMonth = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+    const soldToday = sales.filter((s) => s.soldAt.getTime() >= startToday).reduce((n, s) => n + s.units, 0);
+    const soldThisMonth = sales.filter((s) => s.soldAt.getTime() >= startMonth).reduce((n, s) => n + s.units, 0);
+
+    // Rolling 12 months (trend context, independent of the range).
+    const months: string[] = [];
+    for (let i = 11; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      months.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+    }
+    const monthAgg = new Map(months.map((m) => [m, { revenue: 0, profit: 0, units: 0 }]));
+    for (const s of sales) {
+      const key = `${s.soldAt.getFullYear()}-${String(s.soldAt.getMonth() + 1).padStart(2, '0')}`;
+      const bucket = monthAgg.get(key);
+      if (bucket) {
+        bucket.revenue += s.revenue;
+        bucket.profit += s.revenue - s.cost;
+        bucket.units += s.units;
+      }
+    }
+    const monthly = months.map((m) => ({
+      month: m,
+      revenue: round2(monthAgg.get(m)!.revenue),
+      profit: round2(monthAgg.get(m)!.profit),
+      units: monthAgg.get(m)!.units,
+    }));
+
+    // Top lists (over the range) — units + revenue.
+    const topBy = (key: (s: Sale) => string, limit: number) => {
+      const m = new Map<string, { units: number; revenue: number }>();
+      for (const s of ranged) {
+        const e = m.get(key(s)) ?? { units: 0, revenue: 0 };
+        e.units += s.units;
+        e.revenue += s.revenue;
+        m.set(key(s), e);
+      }
+      return [...m.entries()]
+        .map(([label, e]) => ({ label, units: e.units, revenue: round2(e.revenue) }))
+        .sort((x, y) => y.units - x.units)
+        .slice(0, limit);
+    };
+
+    // Profit by supplier (device sales only — pallet goods have no supplier link).
+    const supMap = new Map<string, { units: number; revenue: number; cost: number }>();
+    for (const s of ranged) {
+      if (!s.supplier) continue;
+      const e = supMap.get(s.supplier) ?? { units: 0, revenue: 0, cost: 0 };
+      e.units += s.units;
+      e.revenue += s.revenue;
+      e.cost += s.cost;
+      supMap.set(s.supplier, e);
+    }
+    const bySupplier = [...supMap.entries()]
+      .map(([label, e]) => {
+        const p = e.revenue - e.cost;
+        return {
+          label,
+          units: e.units,
+          revenue: round2(e.revenue),
+          cost: round2(e.cost),
+          profit: round2(p),
+          marginPct: e.revenue > 0 ? round2((p / e.revenue) * 100) : null,
+        };
+      })
+      .sort((x, y) => y.revenue - x.revenue);
+
+    return {
+      summary: {
+        soldUnits,
+        revenue: round2(revenue),
+        cost: round2(cost),
+        profit: round2(profit),
+        marginPct: revenue > 0 ? round2((profit / revenue) * 100) : null,
+        avgSellPrice: pricedUnits > 0 ? round2(pricedRevenue / pricedUnits) : null,
+        soldToday,
+        soldThisMonth,
+      },
+      monthly,
+      topManufacturers: topBy((s) => s.manufacturer, 8),
+      topModels: topBy((s) => s.model, 8),
+      topCategories: topBy((s) => s.category, 8),
+      bySupplier,
     };
   }
 
