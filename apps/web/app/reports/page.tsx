@@ -47,6 +47,26 @@ interface LotProfit {
   margin: number | null;
 }
 
+interface PalletAnalytics {
+  summary: { totalPallets: number; activePallets: number; shippedPallets: number; unitsOnHand: number; unitsSold: number; revenue: number };
+  pallets: {
+    id: string;
+    palletNumber: string;
+    description: string | null;
+    status: string;
+    location: string | null;
+    supplier: string | null;
+    buyer: string | null;
+    entryLayout: string;
+    createdAt: string;
+    variants: number;
+    unitsOnPallet: number;
+    unitsSold: number;
+    revenue: number;
+    profit: number;
+  }[];
+}
+
 interface ActivityEntry {
   id: string;
   action: string;
@@ -165,7 +185,7 @@ export default async function ReportsPage({
   if (from) qs.set('from', from.toISOString());
   if (to) qs.set('to', to.toISOString());
 
-  const [overview, profit, sales, batchAnalytics, warehouse, userPerf, consumables, activity] = await Promise.all([
+  const [overview, profit, sales, batchAnalytics, warehouse, userPerf, consumables, activity, palletAnalytics] = await Promise.all([
     canSee
       ? apiFetch<OverviewReport>(`/reports/overview?${qs.toString()}`).catch(() => null)
       : Promise.resolve(null),
@@ -176,6 +196,7 @@ export default async function ReportsPage({
     canSee ? apiFetch<UserPerformance[]>(`/reports/users?${qs.toString()}`).catch(() => [] as UserPerformance[]) : Promise.resolve([] as UserPerformance[]),
     canSee ? apiFetch<ConsumablesReport>(`/reports/consumables?${qs.toString()}`).catch(() => null) : Promise.resolve(null),
     canSee ? apiFetch<ActivityEntry[]>('/activity?limit=18').catch(() => [] as ActivityEntry[]) : Promise.resolve([] as ActivityEntry[]),
+    canSee ? apiFetch<PalletAnalytics>(`/reports/pallets?${qs.toString()}`).catch(() => null) : Promise.resolve(null),
   ]);
 
   if (!canSee || !overview) {
@@ -509,6 +530,89 @@ export default async function ReportsPage({
             Pallets are separate containers, not children of a batch, so they aren&apos;t counted here.
           </p>
         </section>
+
+        {/* Pallet analytics — standalone pallet list */}
+        {palletAnalytics && (
+          <section className="mt-8">
+            <h2 className="text-sm font-medium text-neutral-400">
+              Pallet analytics{' '}
+              <span className="text-neutral-600">
+                ({palletAnalytics.summary.activePallets} active ·{' '}
+                {palletAnalytics.summary.shippedPallets} shipped ·{' '}
+                {palletAnalytics.summary.unitsOnHand.toLocaleString('en-GB')} units on hand ·{' '}
+                {palletAnalytics.summary.unitsSold.toLocaleString('en-GB')} sold {rangeLabel})
+              </span>
+            </h2>
+            <div className="mt-3 overflow-x-auto rounded-lg border border-neutral-800">
+              <table className="w-full text-left text-sm">
+                <thead className="bg-neutral-900 text-neutral-400">
+                  <tr>
+                    <th className="px-3 py-2">Pallet</th>
+                    <th className="px-3 py-2">Description</th>
+                    <th className="px-3 py-2">Status</th>
+                    <th className="px-3 py-2">Entry</th>
+                    <th className="px-3 py-2 text-right">Variants</th>
+                    <th className="px-3 py-2 text-right">Units</th>
+                    <th className="px-3 py-2 text-right">Sold</th>
+                    <th className="px-3 py-2 text-right">Revenue</th>
+                    <th className="px-3 py-2">Location</th>
+                    <th className="px-3 py-2">Created</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {palletAnalytics.pallets.map((p) => (
+                    <tr key={p.id} className="border-t border-neutral-800 hover:bg-neutral-900/40">
+                      <td className="px-3 py-2 text-neutral-200">
+                        <Link href={`/pallets/${p.id}`} className="underline">
+                          {p.palletNumber}
+                        </Link>
+                      </td>
+                      <td className="px-3 py-2 text-neutral-400">{p.description ?? '—'}</td>
+                      <td className="px-3 py-2">
+                        <span
+                          className={
+                            'rounded-full px-2 py-0.5 text-xs ' +
+                            (p.status === 'shipped'
+                              ? 'bg-neutral-800 text-neutral-300'
+                              : p.status === 'ready'
+                                ? 'bg-amber-950/50 text-amber-400'
+                                : 'bg-sky-950/50 text-sky-300')
+                          }
+                        >
+                          {formatLabel(p.status)}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2 text-neutral-500">
+                        {p.entryLayout === 'spec' ? 'Spec grid' : 'Variant'}
+                      </td>
+                      <td className="px-3 py-2 text-right tabular-nums text-neutral-400">{p.variants}</td>
+                      <td className="px-3 py-2 text-right tabular-nums text-neutral-300">{p.unitsOnPallet}</td>
+                      <td className="px-3 py-2 text-right tabular-nums text-neutral-400">{p.unitsSold || '—'}</td>
+                      <td className="px-3 py-2 text-right text-neutral-300">
+                        {p.revenue > 0 ? money(p.revenue) : '—'}
+                      </td>
+                      <td className="px-3 py-2 text-neutral-400">{p.location ?? '—'}</td>
+                      <td className="px-3 py-2 whitespace-nowrap text-neutral-500">
+                        {new Date(p.createdAt).toLocaleDateString('en-GB')}
+                      </td>
+                    </tr>
+                  ))}
+                  {palletAnalytics.pallets.length === 0 && (
+                    <tr>
+                      <td colSpan={10} className="px-3 py-6 text-center text-neutral-500">
+                        No pallets yet.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+            <p className="mt-2 text-xs text-neutral-600">
+              Units are current pallet contents; sold/revenue follow the selected range. Pallets are
+              standalone containers, so they have no parent batch/lot or assigned user.
+            </p>
+          </section>
+        )}
 
         {/* Warehouse operations — throughput over the range */}
         {warehouse && (

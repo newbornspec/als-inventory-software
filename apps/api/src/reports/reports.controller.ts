@@ -107,6 +107,18 @@ export class ReportsController {
     return this.reports.getConsumablesReport(parse(from), parse(to));
   }
 
+  // Pallet analytics. Global — pallets aren't lot-scoped.
+  @Roles(UserRole.ADMIN, UserRole.MANAGER)
+  @Get('reports/pallets')
+  getPallets(@Query('from') from: string, @Query('to') to: string) {
+    const parse = (s?: string) => {
+      if (!s) return undefined;
+      const d = new Date(s);
+      return isNaN(d.getTime()) ? undefined : d;
+    };
+    return this.reports.getPalletAnalytics(parse(from), parse(to));
+  }
+
   @Roles(UserRole.ADMIN, UserRole.MANAGER)
   @Get('reports/profit')
   getLotProfitability(@Req() req: any) {

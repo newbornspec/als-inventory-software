@@ -100,6 +100,36 @@ function gradeLetter(avg: number): string {
   return avg >= 3.5 ? 'A' : avg >= 2.5 ? 'B' : avg >= 1.5 ? 'C' : 'D';
 }
 
+// Pallet analytics. Pallets are standalone containers (no batch/lot/assigned
+// user), so this lists each pallet with its live contents plus what's been
+// sold off it. unitsSold/revenue/profit respect the range; contents are current.
+export interface PalletAnalytics {
+  summary: {
+    totalPallets: number;
+    activePallets: number;
+    shippedPallets: number;
+    unitsOnHand: number;
+    unitsSold: number;
+    revenue: number;
+  };
+  pallets: {
+    id: string;
+    palletNumber: string;
+    description: string | null;
+    status: string;
+    location: string | null;
+    supplier: string | null;
+    buyer: string | null;
+    entryLayout: string;
+    createdAt: string;
+    variants: number;
+    unitsOnPallet: number;
+    unitsSold: number;
+    revenue: number;
+    profit: number;
+  }[];
+}
+
 // Consumables (bulk stock) analytics. Stock counts are current snapshots;
 // usage/ordering figures come from the movement log and respect the range,
 // except usedThisMonth (fixed window) and the rolling-12-month trend.
@@ -535,6 +565,82 @@ export class ReportsService {
       byGrade: toRows(tally((a) => GRADE_LABELS[a.conditionGrade ?? ''] ?? 'Ungraded')),
       byAuditStatus: toRows(tally((a) => a.auditStatus ?? 'not_audited')),
       byManufacturer,
+    };
+  }
+
+  // Pallets are standalone (no lot ownership) — global, no manager scoping.
+  async getPalletAnalytics(from?: Date, to?: Date): Promise<PalletAnalytics> {
+    const [pallets, lines, sold] = await Promise.all([
+      this.pallets.find({ relations: ['location'], order: { createdAt: 'DESC' } }),
+      this.palletLines.find(),
+      this.palletSold.find({ where: { returnedAt: IsNull() } }),
+    ]);
+
+    const inRange = (d: Date | string): boolean => {
+      const t = new Date(d).getTime();
+      if (from && t < from.getTime()) return false;
+      if (to && t > to.getTime()) return false;
+      return true;
+    };
+
+    const linesByPallet = new Map<string, PalletLine[]>();
+    for (const l of lines) {
+      const arr = linesByPallet.get(l.palletId) ?? [];
+      arr.push(l);
+      linesByPallet.set(l.palletId, arr);
+    }
+    const soldByPallet = new Map<string, PalletSoldLine[]>();
+    for (const s of sold) {
+      if (!s.palletId || !inRange(s.soldAt)) continue;
+      const arr = soldByPallet.get(s.palletId) ?? [];
+      arr.push(s);
+      soldByPallet.set(s.palletId, arr);
+    }
+
+    let unitsOnHand = 0, unitsSoldTotal = 0, revenueTotal = 0, activePallets = 0, shippedPallets = 0;
+
+    const rows = pallets.map((p) => {
+      const pLines = linesByPallet.get(p.id) ?? [];
+      const unitsOnPallet = pLines.reduce((s, l) => s + l.quantity, 0);
+      const pSold = soldByPallet.get(p.id) ?? [];
+      const unitsSold = pSold.reduce((s, r) => s + r.quantity, 0);
+      const revenue = round2(pSold.reduce((s, r) => s + (r.saleTotal ?? 0), 0));
+      const cost = pSold.reduce((s, r) => s + (r.unitCost != null ? r.unitCost * r.quantity : 0), 0);
+
+      unitsOnHand += unitsOnPallet;
+      unitsSoldTotal += unitsSold;
+      revenueTotal += revenue;
+      if (p.status === PalletStatus.SHIPPED) shippedPallets += 1;
+      else activePallets += 1;
+
+      return {
+        id: p.id,
+        palletNumber: p.palletNumber,
+        description: p.description,
+        status: p.status,
+        location: p.location?.name ?? null,
+        supplier: p.supplier,
+        buyer: p.buyer,
+        entryLayout: p.entryLayout,
+        createdAt: (p.createdAt instanceof Date ? p.createdAt : new Date(p.createdAt)).toISOString(),
+        variants: pLines.length,
+        unitsOnPallet,
+        unitsSold,
+        revenue,
+        profit: round2(revenue - cost),
+      };
+    });
+
+    return {
+      summary: {
+        totalPallets: pallets.length,
+        activePallets,
+        shippedPallets,
+        unitsOnHand,
+        unitsSold: unitsSoldTotal,
+        revenue: round2(revenueTotal),
+      },
+      pallets: rows,
     };
   }
 
