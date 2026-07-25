@@ -773,6 +773,9 @@ export class ReportsService {
           returnRate: a.sold > 0 ? round2((a.returned / a.sold) * 100) : null,
         };
       })
+      // When a dimension filter is active, only show suppliers that still have
+      // matching devices (the seed loop otherwise lists every supplier at zero).
+      .filter((row) => !hasAnyFilter(filters) || row.assets > 0)
       .sort((x, y) => y.assets - x.assets || y.revenue - x.revenue);
   }
 
