@@ -60,6 +60,23 @@ export async function sellAsset(id: string): Promise<{ error?: string }> {
   return {};
 }
 
+// Sell a whole lot: every remaining device in it is marked Sold and the lot's
+// status becomes 'sold'.
+export async function sellBatch(id: string): Promise<{ soldCount?: number; error?: string }> {
+  let res: { soldCount: number };
+  try {
+    res = await apiFetch<{ soldCount: number }>(`/batches/${id}/sell`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
+  } catch (err) {
+    return { error: msg(err, 'Failed to sell the lot.') };
+  }
+  revalidatePath(`/batches/${id}`);
+  revalidateInventory();
+  return { soldCount: res.soldCount };
+}
+
 export async function returnSoldAsset(
   id: string,
   batchId: string | null,

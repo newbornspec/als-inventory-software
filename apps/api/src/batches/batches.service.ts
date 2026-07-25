@@ -2,10 +2,10 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import * as ExcelJS from 'exceljs';
-import { Batch } from './batch.entity';
+import { Batch, BatchStatus } from './batch.entity';
 import { CreateBatchDto } from './dto/create-batch.dto';
 import { UpdateBatchDto } from './dto/update-batch.dto';
-import { Asset } from '../assets/asset.entity';
+import { Asset, AssetStockStatus } from '../assets/asset.entity';
 import { sanitizeUser, type SafeUser } from '../users/sanitize-user';
 import { ActivityService } from '../activity/activity.service';
 import { assertOwnsBatch, accessibleBatchWhere, type RequestUser } from '../common/ownership';
@@ -264,6 +264,50 @@ export class BatchesService {
       summary: `Edited ${before.batchNumber}`,
     });
     return this.findOne(id, user);
+  }
+
+  // Sell the whole lot: every remaining (non-sold) device in it is marked Sold
+  // — stamped with who/when, written to each asset's history, moved to the
+  // Sold archive and locked — and the lot's status becomes 'sold'. Managers
+  // can only sell lots they can access (findOne enforces that).
+  async sellBatch(id: string, user: RequestUser): Promise<{ soldCount: number }> {
+    const before = await this.findOne(id, user); // 404s if missing, 403 if not owner
+
+    const soldCount = await this.assets
+      .createQueryBuilder('asset')
+      .where(`asset.batch_id = :id AND asset.stock_status != 'sold'`, { id })
+      .getCount();
+
+    if (soldCount > 0) {
+      // Per-device history first (captures each unit's transition), then one
+      // bulk update — set-based so a 200-unit lot doesn't need 400 round trips.
+      await this.assets.query(
+        `INSERT INTO "asset_history" ("asset_id", "event_type", "user_id", "notes")
+         SELECT "id", 'status_changed', $2, "stock_status" || ' -> sold (lot sold)'
+         FROM "assets" WHERE "batch_id" = $1 AND "stock_status" != 'sold'`,
+        [id, user.userId],
+      );
+      await this.assets
+        .createQueryBuilder()
+        .update()
+        .set({
+          stockStatus: AssetStockStatus.SOLD,
+          soldAt: () => 'now()',
+          soldById: user.userId,
+        })
+        .where(`batch_id = :id AND stock_status != 'sold'`, { id })
+        .execute();
+    }
+
+    await this.batches.update(id, { status: BatchStatus.SOLD });
+    await this.activity.record({
+      userId: user.userId,
+      action: 'batch.sold',
+      entityType: 'batch',
+      entityId: id,
+      summary: `Sold ${before.batchNumber} (${soldCount} device${soldCount === 1 ? '' : 's'})`,
+    });
+    return { soldCount };
   }
 
   // Admin-only: hand a lot to a different owner. Not owner-guarded (admins are

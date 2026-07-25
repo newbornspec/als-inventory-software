@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import type { Asset } from '@/lib/actions/assets';
 import type { Lot } from '@/lib/actions/batches';
 import { assignSubLot, moveAssetToBatch, deleteAssetFromLot } from '@/lib/actions/batches';
+import { sellAsset } from '@/lib/actions/sold';
 import { formatLabel } from '@/lib/asset-options';
 
 // Level 2 of the hierarchy: the devices that belong to THIS purchase lot only.
@@ -58,6 +59,23 @@ export function LotAssets({
     });
   }
 
+  // Sell straight from the lot table — the device leaves active inventory
+  // (and this table), moves to the Sold page and locks.
+  function onSell(asset: Asset) {
+    if (
+      !confirm(
+        `Mark "${asset.name}" as Sold? It will leave this lot's active inventory and lock — only an admin can return it.`,
+      )
+    )
+      return;
+    startTransition(async () => {
+      setError(null);
+      const res = await sellAsset(asset.id);
+      if (res.error) setError(res.error);
+      router.refresh();
+    });
+  }
+
   function onDelete(asset: Asset) {
     if (!confirm(`Delete "${asset.name}"? This permanently removes the device and its audit history.`))
       return;
@@ -78,7 +96,8 @@ export function LotAssets({
     );
   }
 
-  const actionCols = (canManage ? 1 : 0) + (canDelete ? 1 : 0) + (canManage && subLots.length > 0 ? 1 : 0);
+  const actionCols =
+    (canManage ? 2 : 0) + (canDelete ? 1 : 0) + (canManage && subLots.length > 0 ? 1 : 0);
   const totalCols = 10 + actionCols;
 
   return (
@@ -111,6 +130,7 @@ export function LotAssets({
               <th className="px-3 py-2">Location</th>
               {canManage && subLots.length > 0 && <th className="px-3 py-2">Sub-lot</th>}
               {canManage && otherBatches.length > 0 && <th className="px-3 py-2">Move to</th>}
+              {canManage && <th className="px-3 py-2" />}
               {canDelete && <th className="px-3 py-2" />}
             </tr>
           </thead>
@@ -172,6 +192,18 @@ export function LotAssets({
                         </option>
                       ))}
                     </select>
+                  </td>
+                )}
+
+                {canManage && (
+                  <td className="px-3 py-2">
+                    <button
+                      onClick={() => onSell(a)}
+                      disabled={pending}
+                      className="text-emerald-400 hover:underline"
+                    >
+                      Sell
+                    </button>
                   </td>
                 )}
 

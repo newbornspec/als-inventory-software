@@ -75,6 +75,14 @@ export class BatchesController {
     return this.batches.update(id, dto, req.user);
   }
 
+  // Sell the whole lot: marks every remaining device Sold and the lot 'sold'.
+  // Selling is normal warehouse work — any role (the lock is what's restricted).
+  @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.TECHNICIAN)
+  @Post(':id/sell')
+  sellBatch(@Param('id') id: string, @Req() req: any) {
+    return this.batches.sellBatch(id, req.user);
+  }
+
   // Reassign a lot to another owner — admin only.
   @Roles(UserRole.ADMIN)
   @Patch(':id/owner')

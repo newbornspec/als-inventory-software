@@ -18,6 +18,7 @@ export enum BatchStatus {
   RECEIVING = 'receiving', // actively being scanned in
   CLOSED = 'closed', // receiving finished
   RECONCILED = 'reconciled', // actual count checked against expected, discrepancies resolved
+  SOLD = 'sold', // the whole lot was sold — every device in it marked Sold
 }
 
 // A single intake event — e.g. "50 laptops from Acme Corp decommission,
