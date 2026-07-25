@@ -100,6 +100,20 @@ function gradeLetter(avg: number): string {
   return avg >= 3.5 ? 'A' : avg >= 2.5 ? 'B' : avg >= 1.5 ? 'C' : 'D';
 }
 
+// Supplier performance. Suppliers are batch.source (device inventory).
+// Counts/grade are lifetime; revenue/profit/unitsSold respect the range;
+// returnRate is a lifetime quality signal (returned vs sold history events).
+export interface SupplierPerformance {
+  label: string;
+  batches: number;
+  assets: number;
+  avgGrade: string | null;
+  unitsSold: number;
+  revenue: number;
+  profit: number;
+  returnRate: number | null; // percent
+}
+
 // Pallet analytics. Pallets are standalone containers (no batch/lot/assigned
 // user), so this lists each pallet with its live contents plus what's been
 // sold off it. unitsSold/revenue/profit respect the range; contents are current.
@@ -566,6 +580,110 @@ export class ReportsService {
       byAuditStatus: toRows(tally((a) => a.auditStatus ?? 'not_audited')),
       byManufacturer,
     };
+  }
+
+  async getSupplierPerformance(
+    from?: Date,
+    to?: Date,
+    user?: RequestUser,
+  ): Promise<SupplierPerformance[]> {
+    let [batches, assets, history] = await Promise.all([
+      this.batches.find(),
+      this.assets
+        .createQueryBuilder('a')
+        .select(['a.id', 'a.batchId', 'a.conditionGrade', 'a.purchaseCost', 'a.salePrice', 'a.stockStatus', 'a.soldAt'])
+        .getMany(),
+      this.history.createQueryBuilder('h').select(['h.assetId', 'h.eventType', 'h.notes']).getMany(),
+    ]);
+
+    const owned = await this.ownedBatchIds(user);
+    if (owned) {
+      batches = batches.filter((b) => owned.has(b.id));
+      assets = assets.filter((a) => a.batchId != null && owned.has(a.batchId));
+    }
+
+    const batchById = new Map(batches.map((b) => [b.id, b]));
+    const unitsPerBatch = new Map<string, number>();
+    for (const a of assets) if (a.batchId) unitsPerBatch.set(a.batchId, (unitsPerBatch.get(a.batchId) ?? 0) + 1);
+    const allocated = (a: Asset): number => {
+      if (a.purchaseCost != null) return a.purchaseCost;
+      const b = a.batchId ? batchById.get(a.batchId) : undefined;
+      const u = a.batchId ? unitsPerBatch.get(a.batchId) ?? 0 : 0;
+      return b?.totalCost != null && u > 0 ? b.totalCost / u : 0;
+    };
+    const inRange = (d: Date | string | null | undefined): boolean => {
+      if (!d) return false;
+      const t = new Date(d).getTime();
+      if (from && t < from.getTime()) return false;
+      if (to && t > to.getTime()) return false;
+      return true;
+    };
+
+    // Supplier of each asset via its batch.
+    const supplierOfAsset = new Map<string, string>();
+    for (const a of assets) {
+      const src = a.batchId ? batchById.get(a.batchId)?.source : null;
+      if (src && src.trim()) supplierOfAsset.set(a.id, src.trim());
+    }
+
+    // Sold/returned history events per asset (lifetime) → return rate.
+    const soldEv = new Map<string, number>();
+    const retEv = new Map<string, number>();
+    for (const e of history) {
+      if (e.eventType !== 'status_changed') continue;
+      const n = e.notes ?? '';
+      if (n.includes('returned to inventory')) retEv.set(e.assetId, (retEv.get(e.assetId) ?? 0) + 1);
+      else if (n.includes('-> sold')) soldEv.set(e.assetId, (soldEv.get(e.assetId) ?? 0) + 1);
+    }
+
+    type Agg = { batches: Set<string>; assets: number; points: number; graded: number; revenue: number; cost: number; unitsSold: number; sold: number; returned: number };
+    const bySupplier = new Map<string, Agg>();
+    const ensure = (s: string): Agg => {
+      let a = bySupplier.get(s);
+      if (!a) {
+        a = { batches: new Set(), assets: 0, points: 0, graded: 0, revenue: 0, cost: 0, unitsSold: 0, sold: 0, returned: 0 };
+        bySupplier.set(s, a);
+      }
+      return a;
+    };
+
+    for (const b of batches) {
+      if (b.source && b.source.trim()) ensure(b.source.trim()).batches.add(b.id);
+    }
+    for (const a of assets) {
+      const src = supplierOfAsset.get(a.id);
+      if (!src) continue;
+      const agg = ensure(src);
+      agg.assets += 1;
+      const p = a.conditionGrade ? GRADE_POINTS[a.conditionGrade] : undefined;
+      if (p != null) {
+        agg.points += p;
+        agg.graded += 1;
+      }
+      if (a.stockStatus === AssetStockStatus.SOLD && inRange(a.soldAt)) {
+        agg.revenue += a.salePrice ?? 0;
+        agg.cost += allocated(a);
+        agg.unitsSold += 1;
+      }
+      agg.sold += soldEv.get(a.id) ?? 0;
+      agg.returned += retEv.get(a.id) ?? 0;
+    }
+
+    return [...bySupplier.entries()]
+      .map(([label, a]) => {
+        const profit = a.revenue - a.cost;
+        return {
+          label,
+          batches: a.batches.size,
+          assets: a.assets,
+          avgGrade: a.graded > 0 ? gradeLetter(a.points / a.graded) : null,
+          unitsSold: a.unitsSold,
+          revenue: round2(a.revenue),
+          profit: round2(profit),
+          returnRate: a.sold > 0 ? round2((a.returned / a.sold) * 100) : null,
+        };
+      })
+      .sort((x, y) => y.assets - x.assets || y.revenue - x.revenue);
   }
 
   // Pallets are standalone (no lot ownership) — global, no manager scoping.

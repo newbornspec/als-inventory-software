@@ -47,6 +47,17 @@ interface LotProfit {
   margin: number | null;
 }
 
+interface SupplierPerformance {
+  label: string;
+  batches: number;
+  assets: number;
+  avgGrade: string | null;
+  unitsSold: number;
+  revenue: number;
+  profit: number;
+  returnRate: number | null;
+}
+
 interface PalletAnalytics {
   summary: { totalPallets: number; activePallets: number; shippedPallets: number; unitsOnHand: number; unitsSold: number; revenue: number };
   pallets: {
@@ -185,7 +196,7 @@ export default async function ReportsPage({
   if (from) qs.set('from', from.toISOString());
   if (to) qs.set('to', to.toISOString());
 
-  const [overview, profit, sales, batchAnalytics, warehouse, userPerf, consumables, activity, palletAnalytics] = await Promise.all([
+  const [overview, profit, sales, batchAnalytics, warehouse, userPerf, consumables, activity, palletAnalytics, suppliers] = await Promise.all([
     canSee
       ? apiFetch<OverviewReport>(`/reports/overview?${qs.toString()}`).catch(() => null)
       : Promise.resolve(null),
@@ -197,6 +208,7 @@ export default async function ReportsPage({
     canSee ? apiFetch<ConsumablesReport>(`/reports/consumables?${qs.toString()}`).catch(() => null) : Promise.resolve(null),
     canSee ? apiFetch<ActivityEntry[]>('/activity?limit=18').catch(() => [] as ActivityEntry[]) : Promise.resolve([] as ActivityEntry[]),
     canSee ? apiFetch<PalletAnalytics>(`/reports/pallets?${qs.toString()}`).catch(() => null) : Promise.resolve(null),
+    canSee ? apiFetch<SupplierPerformance[]>(`/reports/suppliers?${qs.toString()}`).catch(() => [] as SupplierPerformance[]) : Promise.resolve([] as SupplierPerformance[]),
   ]);
 
   if (!canSee || !overview) {
@@ -505,6 +517,64 @@ export default async function ReportsPage({
             <p className="mt-2 text-xs text-neutral-600">
               Sold-today/this-month are fixed windows; other figures follow the selected range. Profit
               by supplier covers device sales (pallet goods aren&apos;t attributed to a supplier).
+            </p>
+          </section>
+        )}
+
+        {/* Supplier performance */}
+        {suppliers.length > 0 && (
+          <section className="mt-8">
+            <h2 className="text-sm font-medium text-neutral-400">
+              Supplier performance <span className="text-neutral-600">(revenue/profit: {rangeLabel})</span>
+            </h2>
+            <div className="mt-3 overflow-x-auto rounded-lg border border-neutral-800">
+              <table className="w-full text-left text-sm">
+                <thead className="bg-neutral-900 text-neutral-400">
+                  <tr>
+                    <th className="px-3 py-2">Supplier</th>
+                    <th className="px-3 py-2 text-right">Lots</th>
+                    <th className="px-3 py-2 text-right">Assets</th>
+                    <th className="px-3 py-2 text-right">Avg grade</th>
+                    <th className="px-3 py-2 text-right">Sold</th>
+                    <th className="px-3 py-2 text-right">Revenue</th>
+                    <th className="px-3 py-2 text-right">Profit</th>
+                    <th className="px-3 py-2 text-right">Return rate</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {suppliers.map((s) => (
+                    <tr key={s.label} className="border-t border-neutral-800 hover:bg-neutral-900/40">
+                      <td className="px-3 py-2 text-neutral-200">{s.label}</td>
+                      <td className="px-3 py-2 text-right tabular-nums text-neutral-400">{s.batches}</td>
+                      <td className="px-3 py-2 text-right tabular-nums text-neutral-300">{s.assets}</td>
+                      <td className="px-3 py-2 text-right text-neutral-400">{s.avgGrade ?? '—'}</td>
+                      <td className="px-3 py-2 text-right tabular-nums text-neutral-400">{s.unitsSold || '—'}</td>
+                      <td className="px-3 py-2 text-right text-neutral-300">{s.revenue > 0 ? money(s.revenue) : '—'}</td>
+                      <td
+                        className={
+                          'px-3 py-2 text-right font-medium ' +
+                          (s.profit > 0 ? 'text-emerald-400' : s.profit < 0 ? 'text-red-400' : 'text-neutral-300')
+                        }
+                      >
+                        {s.revenue > 0 ? money(s.profit) : '—'}
+                      </td>
+                      <td
+                        className={
+                          'px-3 py-2 text-right tabular-nums ' +
+                          (s.returnRate == null ? 'text-neutral-500' : s.returnRate > 20 ? 'text-amber-400' : 'text-neutral-400')
+                        }
+                      >
+                        {s.returnRate == null ? '—' : `${s.returnRate.toFixed(0)}%`}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <p className="mt-2 text-xs text-neutral-600">
+              Suppliers are taken from each lot&apos;s source. Lots, assets and average grade are
+              lifetime; revenue and profit follow the range. Return rate is a lifetime quality signal
+              (returned vs sold events for the supplier&apos;s devices).
             </p>
           </section>
         )}

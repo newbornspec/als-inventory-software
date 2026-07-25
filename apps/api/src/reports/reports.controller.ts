@@ -119,6 +119,18 @@ export class ReportsController {
     return this.reports.getPalletAnalytics(parse(from), parse(to));
   }
 
+  // Supplier performance (device inventory attributed via batch.source).
+  @Roles(UserRole.ADMIN, UserRole.MANAGER)
+  @Get('reports/suppliers')
+  getSuppliers(@Query('from') from: string, @Query('to') to: string, @Req() req: any) {
+    const parse = (s?: string) => {
+      if (!s) return undefined;
+      const d = new Date(s);
+      return isNaN(d.getTime()) ? undefined : d;
+    };
+    return this.reports.getSupplierPerformance(parse(from), parse(to), req.user);
+  }
+
   @Roles(UserRole.ADMIN, UserRole.MANAGER)
   @Get('reports/profit')
   getLotProfitability(@Req() req: any) {
