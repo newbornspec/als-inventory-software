@@ -47,6 +47,16 @@ interface LotProfit {
   margin: number | null;
 }
 
+interface ActivityEntry {
+  id: string;
+  action: string;
+  entityType: string | null;
+  entityId: string | null;
+  summary: string;
+  createdAt: string;
+  user: { id: string; name: string } | null;
+}
+
 interface ConsumablesReport {
   summary: { items: number; unitsOnHand: number; outOfStock: number; lowStock: number; usedInRange: number; usedThisMonth: number; avgMonthlyUsage: number };
   monthly: { month: string; used: number; received: number }[];
@@ -155,7 +165,7 @@ export default async function ReportsPage({
   if (from) qs.set('from', from.toISOString());
   if (to) qs.set('to', to.toISOString());
 
-  const [overview, profit, sales, batchAnalytics, warehouse, userPerf, consumables] = await Promise.all([
+  const [overview, profit, sales, batchAnalytics, warehouse, userPerf, consumables, activity] = await Promise.all([
     canSee
       ? apiFetch<OverviewReport>(`/reports/overview?${qs.toString()}`).catch(() => null)
       : Promise.resolve(null),
@@ -165,6 +175,7 @@ export default async function ReportsPage({
     canSee ? apiFetch<WarehouseThroughput>(`/reports/warehouse?${qs.toString()}`).catch(() => null) : Promise.resolve(null),
     canSee ? apiFetch<UserPerformance[]>(`/reports/users?${qs.toString()}`).catch(() => [] as UserPerformance[]) : Promise.resolve([] as UserPerformance[]),
     canSee ? apiFetch<ConsumablesReport>(`/reports/consumables?${qs.toString()}`).catch(() => null) : Promise.resolve(null),
+    canSee ? apiFetch<ActivityEntry[]>('/activity?limit=18').catch(() => [] as ActivityEntry[]) : Promise.resolve([] as ActivityEntry[]),
   ]);
 
   if (!canSee || !overview) {
@@ -690,9 +701,83 @@ export default async function ReportsPage({
             </p>
           </section>
         )}
+
+        {/* Activity timeline — the live feed of recent actions */}
+        {activity.length > 0 && (
+          <section className="mt-8">
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-medium text-neutral-400">Activity timeline</h2>
+              <Link href="/activity" className="text-sm text-neutral-400 hover:text-neutral-200">
+                View all →
+              </Link>
+            </div>
+            <ol className="mt-3 rounded-lg border border-neutral-800 bg-neutral-900 p-4">
+              {activity.map((e, i) => {
+                const href = activityHref(e);
+                return (
+                  <li key={e.id} className="relative flex gap-3 pb-4 last:pb-0">
+                    {/* connector line */}
+                    {i < activity.length - 1 && (
+                      <span className="absolute left-[5px] top-3 h-full w-px bg-neutral-800" aria-hidden />
+                    )}
+                    <span
+                      className="relative mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full"
+                      style={{ backgroundColor: activityColor(e.action) }}
+                    />
+                    <div className="min-w-0 flex-1">
+                      <div className="text-sm text-neutral-200">
+                        {href ? (
+                          <Link href={href} className="hover:underline">
+                            {e.summary}
+                          </Link>
+                        ) : (
+                          e.summary
+                        )}
+                      </div>
+                      <div className="mt-0.5 text-xs text-neutral-500">
+                        {e.user?.name ?? 'System'} · {relativeTime(e.createdAt)}
+                      </div>
+                    </div>
+                  </li>
+                );
+              })}
+            </ol>
+          </section>
+        )}
       </div>
     </main>
   );
+}
+
+// Where an activity entry links (same mapping as the /activity page).
+function activityHref(e: ActivityEntry): string | null {
+  if (!e.entityId) return null;
+  if (e.entityType === 'batch') return `/batches/${e.entityId}`;
+  if (e.entityType === 'asset') return `/assets/${e.entityId}`;
+  return null;
+}
+
+// Timeline dot colour by action category (matches the chart palette).
+function activityColor(action: string): string {
+  if (action.includes('sold')) return '#199e70'; // aqua — money in
+  if (action.includes('returned')) return '#c98500'; // amber
+  if (action.includes('deleted')) return '#e66767'; // red
+  if (action.includes('created')) return '#3987e5'; // blue
+  if (action.includes('moved')) return '#9085e9'; // violet
+  return '#6b6a66'; // neutral (updated/other)
+}
+
+// Compact relative time ("5m ago", "2h ago", "3d ago"); computed at render.
+function relativeTime(iso: string): string {
+  const secs = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 1000));
+  if (secs < 60) return 'just now';
+  const mins = Math.floor(secs / 60);
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  if (days < 30) return `${days}d ago`;
+  return new Date(iso).toLocaleDateString('en-GB');
 }
 
 // A compact ranked list (top models / categories): units + revenue, with a
