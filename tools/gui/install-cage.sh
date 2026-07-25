@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+#
+# Install the Cage kiosk compositor so the ALS Audit GUI boots truly
+# full-screen on ANY monitor (auto native-resolution, no border, no per-screen
+# tweaking). Run this ONCE on a booted stick that has internet — the audit
+# Wi-Fi is enough. After it succeeds, reboot (or re-run start-gui.sh) and the
+# GUI launches under Cage automatically.
+#
+#   bash gui/install-cage.sh
+#
+# ---------------------------------------------------------------------------
+# Making it PERMANENT (survive reboots):
+#   A plain SystemRescue USB runs from a read-only image with a RAM overlay, so
+#   packages installed at runtime vanish on reboot. Pick one:
+#     * Enable SystemRescue write-persistence (a writable overlay partition/file
+#       on the stick) so this install sticks — see the SystemRescue manual,
+#       "Persistent storage". Recommended.
+#     * Or just run this script once per session before the first boot-to-GUI.
+#   Either way, if Cage is ever missing the GUI still boots via the built-in
+#   X + xrandr fallback, so the stick is never dead — Cage only makes the
+#   full-screen behaviour bullet-proof.
+# ---------------------------------------------------------------------------
+
+set -e
+
+if command -v cage >/dev/null 2>&1; then
+  echo "cage is already installed:  $(command -v cage)"
+  echo "Nothing to do — the GUI will use it automatically."
+  exit 0
+fi
+
+if ! command -v pacman >/dev/null 2>&1; then
+  echo "This installer expects an Arch-based live system (SystemRescue) with pacman."
+  echo "On other systems, install the 'cage' package with your package manager."
+  exit 1
+fi
+
+# Confirm we actually have a route to the internet before hammering pacman.
+if ! ping -c1 -W2 archlinux.org >/dev/null 2>&1 && ! ping -c1 -W2 8.8.8.8 >/dev/null 2>&1; then
+  echo "No internet detected. Connect to Wi-Fi/Ethernet first (the audit Wi-Fi works),"
+  echo "then run this again:  bash gui/install-cage.sh"
+  exit 1
+fi
+
+echo "Installing Cage (Wayland kiosk compositor) and its dependencies …"
+pacman -Sy --noconfirm cage
+
+echo
+echo "Installed:  $(command -v cage)"
+echo "Reboot, or run  bash gui/start-gui.sh  — the GUI will now open under Cage,"
+echo "full-screen at the monitor's native resolution on any display."

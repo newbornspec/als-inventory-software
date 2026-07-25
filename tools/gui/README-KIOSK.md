@@ -30,6 +30,7 @@ swapped or added without touching the UI or backend.
 /gui/server.py              kiosk backend
 /gui/index.html             kiosk UI
 /gui/start-gui.sh           starts backend + kiosk browser
+/gui/install-cage.sh        installs the Cage kiosk compositor (full-screen)
 /gui/install-os.sh          OS install driver (Clonezilla restore)
 /images/manifest.json       the Install-OS list (edit to add/remove OSes)
 /images/<dir>/              one Clonezilla image folder per OS
@@ -47,9 +48,35 @@ sync && reboot
 ```
 
 The provided `autorun` launches `gui/start-gui.sh`, which starts the backend and
-opens the UI full-screen (Firefox/Chromium `--kiosk`, starting X itself if
-needed). If no browser/X is present it falls back to the text-mode audit so the
-operator is never stuck.
+opens the UI full-screen. If no browser/X is present it falls back to the
+text-mode audit so the operator is never stuck.
+
+## Full-screen on any monitor (Cage)
+
+The UI is responsive HTML/CSS — it fills whatever viewport it's given. The only
+job of the boot layer is to give it the **whole physical screen at native
+resolution**, on any laptop panel or external display. `start-gui.sh` does this
+in priority order:
+
+1. **Cage** — a Wayland kiosk compositor. It takes over the display on the TTY,
+   detects the monitor's native resolution itself, and runs the browser truly
+   full-screen and borderless. No per-machine tuning. **This is the recommended
+   path.** Install it once (internet required — the audit Wi-Fi is fine):
+
+   ```bash
+   bash /run/archiso/bootmnt/gui/install-cage.sh
+   ```
+
+   See the notes in `install-cage.sh` for making it survive reboots
+   (SystemRescue write-persistence).
+
+2. **X + kiosk browser + xrandr max-mode** — automatic fallback when Cage isn't
+   on the media. It starts a bare X session and forces the connected output to
+   its highest-resolution mode. Works on most hardware, but Cage is more robust
+   across odd panels/aspect ratios.
+
+Override with `ALS_NO_CAGE=1` to force the X fallback, or `ALS_BROWSER=chromium`
+to pick a browser. Chromium is the most reliable kiosk browser under Cage.
 
 ## audit.conf keys used by the GUI
 

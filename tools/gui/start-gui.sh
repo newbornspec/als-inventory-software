@@ -13,9 +13,18 @@
 # Then run:  bash /run/archiso/bootmnt/gui/start-gui.sh
 # (or call this from autorun to boot straight into the GUI).
 #
+# Full-screen strategy (resolution-independent, works on ANY monitor):
+#     1. Cage  — a Wayland kiosk compositor. It owns the display on the TTY,
+#                reads the monitor's native resolution itself, and runs one app
+#                truly full-screen/borderless. Preferred. Install with
+#                `bash gui/install-cage.sh` (or `pacman -Sy --noconfirm cage`).
+#     2. X + kiosk browser + xrandr max-mode  — automatic fallback if Cage is
+#                not on the media, so the stick always boots to the GUI.
+#
 # Useful overrides:
 #     ALS_GUI_PORT=8800     port for the local backend
 #     ALS_BROWSER=firefox   force a particular browser binary
+#     ALS_NO_CAGE=1         skip Cage, use the X fallback (debug)
 #     ALS_NO_X=1            skip the browser, just serve (headless/debug)
 
 PORT="${ALS_GUI_PORT:-8800}"
@@ -67,6 +76,12 @@ for x in xinit startx; do
   command -v "$x" >/dev/null 2>&1 && { XSTART="$x"; break; }
 done
 
+# Cage — the preferred, resolution-independent full-screen path (see header).
+CAGE=""
+if [ "${ALS_NO_CAGE:-0}" != "1" ] && command -v cage >/dev/null 2>&1; then
+  CAGE="cage"
+fi
+
 kiosk_args() {   # per-browser full-screen flags
   case "$1" in
     firefox|firefox-esr)
@@ -92,6 +107,29 @@ PREFS
 start_browser() {  # runs in the foreground of whatever X we are in
   # shellcheck disable=SC2046
   "$BROWSER" $(kiosk_args "$BROWSER") "$URL"
+}
+
+launch_cage() {  # PRIMARY path: Cage owns the display and full-screens us on any monitor
+  # Cage needs a Wayland runtime dir for its socket; create a private one if the
+  # boot environment hasn't set one up.
+  export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp/als-xdg}"
+  mkdir -p "$XDG_RUNTIME_DIR" && chmod 700 "$XDG_RUNTIME_DIR"
+  echo "Launching kiosk under Cage (Wayland — auto full-screen at native resolution) …"
+  case "$BROWSER" in
+    chromium|chromium-browser|google-chrome-stable)
+      # Run Chromium as a native Wayland client so it scales crisply to the panel.
+      cage -- "$BROWSER" --kiosk --ozone-platform=wayland \
+        --no-first-run --no-sandbox --user-data-dir=/tmp/als-cr-profile "$URL"
+      ;;
+    firefox|firefox-esr)
+      # shellcheck disable=SC2046
+      MOZ_ENABLE_WAYLAND=1 cage -- "$BROWSER" $(kiosk_args "$BROWSER") "$URL"
+      ;;
+    *)
+      # shellcheck disable=SC2046
+      cage -- "$BROWSER" $(kiosk_args "$BROWSER") "$URL"
+      ;;
+  esac
 }
 
 # ---------------------------------------------------------------- backend ----
@@ -123,10 +161,15 @@ if [ "${ALS_NO_X:-0}" = "1" ]; then
   BROWSER=""            # explicitly headless
 fi
 
-if [ -n "$BROWSER" ] && [ -n "$DISPLAY" ]; then
+if [ -n "$BROWSER" ] && { [ -n "$DISPLAY" ] || [ -n "$WAYLAND_DISPLAY" ]; }; then
   # Already inside a graphical session — fit the screen, then open the kiosk.
   fit_display
   start_browser
+
+elif [ -n "$BROWSER" ] && [ -n "$CAGE" ]; then
+  # PRIMARY: no session yet — Cage brings up the display itself at native
+  # resolution and runs us full-screen. No xrandr guessing, no border, any panel.
+  launch_cage
 
 elif [ -n "$BROWSER" ] && [ -n "$XSTART" ]; then
   # No session yet — start one just for the kiosk browser. A window manager is
@@ -158,18 +201,28 @@ else
   else
     echo "   browser .......... NOT FOUND (looked for firefox, chromium, …)"
   fi
-  if [ -n "$DISPLAY" ]; then
-    echo "   X session ........ already running (DISPLAY=$DISPLAY)"
+  if [ -n "$CAGE" ]; then
+    echo "   cage (kiosk) ..... available (preferred full-screen path)"
+  else
+    echo "   cage (kiosk) ..... not installed  →  pacman -Sy --noconfirm cage"
+  fi
+  if [ -n "$DISPLAY" ] || [ -n "$WAYLAND_DISPLAY" ]; then
+    echo "   session .......... already running"
   elif [ -n "$XSTART" ]; then
     echo "   X session ........ not running, but '$XSTART' is available"
   else
-    echo "   X session ........ NOT AVAILABLE (no xinit/startx)"
+    echo "   X session ........ NOT AVAILABLE (no cage/xinit/startx)"
   fi
   echo
   if [ -z "$BROWSER" ]; then
     echo " To install Firefox (needs internet — the audit Wi-Fi works):"
     echo "     pacman -Sy --noconfirm firefox"
     echo " then run this script again."
+    echo
+  fi
+  if [ -z "$CAGE" ]; then
+    echo " For rock-solid full-screen on any monitor, install the Cage kiosk:"
+    echo "     bash \"$DIR/install-cage.sh\"      (needs internet)"
     echo
   fi
   echo " Meanwhile the interface is fully usable from any browser on the"
