@@ -95,6 +95,18 @@ export class ReportsController {
     return this.reports.getUserPerformance(parse(from), parse(to), req.user);
   }
 
+  // Consumables (bulk stock) analytics. Global — consumables aren't lot-scoped.
+  @Roles(UserRole.ADMIN, UserRole.MANAGER)
+  @Get('reports/consumables')
+  getConsumables(@Query('from') from: string, @Query('to') to: string) {
+    const parse = (s?: string) => {
+      if (!s) return undefined;
+      const d = new Date(s);
+      return isNaN(d.getTime()) ? undefined : d;
+    };
+    return this.reports.getConsumablesReport(parse(from), parse(to));
+  }
+
   @Roles(UserRole.ADMIN, UserRole.MANAGER)
   @Get('reports/profit')
   getLotProfitability(@Req() req: any) {

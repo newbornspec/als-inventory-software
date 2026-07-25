@@ -8,6 +8,7 @@ import { Lot } from '../batches/lot.entity';
 import { OrderLine } from '../sales/order-line.entity';
 import { RepairLog, RepairStatus } from '../repairs/repair-log.entity';
 import { StockLine } from '../stock/stock-line.entity';
+import { StockMovement, StockMovementReason } from '../stock/stock-movement.entity';
 import { Pallet, PalletStatus } from '../pallets/pallet.entity';
 import { PalletLine } from '../pallets/pallet-line.entity';
 import { PalletSoldLine } from '../pallets/pallet-sold-line.entity';
@@ -97,6 +98,25 @@ const GRADE_LABELS: Record<string, string> = {
 const GRADE_POINTS: Record<string, number> = { grade_a: 4, grade_b: 3, grade_c: 2, grade_d: 1 };
 function gradeLetter(avg: number): string {
   return avg >= 3.5 ? 'A' : avg >= 2.5 ? 'B' : avg >= 1.5 ? 'C' : 'D';
+}
+
+// Consumables (bulk stock) analytics. Stock counts are current snapshots;
+// usage/ordering figures come from the movement log and respect the range,
+// except usedThisMonth (fixed window) and the rolling-12-month trend.
+export interface ConsumablesReport {
+  summary: {
+    items: number;
+    unitsOnHand: number;
+    outOfStock: number;
+    lowStock: number;
+    usedInRange: number;
+    usedThisMonth: number;
+    avgMonthlyUsage: number;
+  };
+  monthly: { month: string; used: number; received: number }[];
+  topUsage: { label: string; qty: number }[];
+  topOrdered: { label: string; qty: number }[];
+  lowOrOut: { id: string; name: string; sku: string | null; quantity: number; status: string }[];
 }
 
 // Per-user activity over the range, for the manager comparison. Counts are
@@ -217,6 +237,7 @@ export class ReportsService {
     @InjectRepository(OrderLine) private lines: Repository<OrderLine>,
     @InjectRepository(RepairLog) private repairLogs: Repository<RepairLog>,
     @InjectRepository(StockLine) private stockLines: Repository<StockLine>,
+    @InjectRepository(StockMovement) private stockMovements: Repository<StockMovement>,
     @InjectRepository(Pallet) private pallets: Repository<Pallet>,
     @InjectRepository(PalletLine) private palletLines: Repository<PalletLine>,
     @InjectRepository(PalletSoldLine) private palletSold: Repository<PalletSoldLine>,
@@ -514,6 +535,103 @@ export class ReportsService {
       byGrade: toRows(tally((a) => GRADE_LABELS[a.conditionGrade ?? ''] ?? 'Ungraded')),
       byAuditStatus: toRows(tally((a) => a.auditStatus ?? 'not_audited')),
       byManufacturer,
+    };
+  }
+
+  // Consumables are a shared/global module (no manager scoping, like the rest
+  // of the stock reporting).
+  async getConsumablesReport(from?: Date, to?: Date): Promise<ConsumablesReport> {
+    const [lines, moves] = await Promise.all([
+      this.stockLines.find({ select: { id: true, name: true, sku: true, quantity: true } }),
+      this.stockMovements
+        .createQueryBuilder('m')
+        .select(['m.stockLineId', 'm.delta', 'm.reason', 'm.createdAt'])
+        .getMany(),
+    ]);
+    const lineById = new Map(lines.map((l) => [l.id, l]));
+
+    const inRange = (d: Date | string): boolean => {
+      const t = new Date(d).getTime();
+      if (from && t < from.getTime()) return false;
+      if (to && t > to.getTime()) return false;
+      return true;
+    };
+
+    let unitsOnHand = 0, outOfStock = 0, lowStock = 0;
+    const lowOrOut: ConsumablesReport['lowOrOut'] = [];
+    for (const l of lines) {
+      unitsOnHand += l.quantity;
+      const status = stockStatusFor(l.quantity);
+      if (status === 'out_of_stock') outOfStock += 1;
+      else if (status === 'low_stock') lowStock += 1;
+      if (status !== 'in_stock') {
+        lowOrOut.push({ id: l.id, name: l.name, sku: l.sku, quantity: l.quantity, status });
+      }
+    }
+    lowOrOut.sort((a, b) => a.quantity - b.quantity);
+
+    // Rolling 12 months.
+    const now = new Date();
+    const startMonth = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+    const months: string[] = [];
+    for (let i = 11; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      months.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+    }
+    const monthAgg = new Map(months.map((m) => [m, { used: 0, received: 0 }]));
+
+    let usedInRange = 0, usedThisMonth = 0;
+    const usageByLine = new Map<string, number>();
+    const orderedByLine = new Map<string, number>();
+
+    for (const m of moves) {
+      const ts = new Date(m.createdAt).getTime();
+      const mKey = (() => {
+        const d = new Date(ts);
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      })();
+      if (m.reason === StockMovementReason.USED) {
+        const q = Math.abs(m.delta); // used movements are negative deltas
+        if (monthAgg.has(mKey)) monthAgg.get(mKey)!.used += q;
+        if (ts >= startMonth) usedThisMonth += q;
+        if (inRange(m.createdAt)) {
+          usedInRange += q;
+          usageByLine.set(m.stockLineId, (usageByLine.get(m.stockLineId) ?? 0) + q);
+        }
+      } else if (m.reason === StockMovementReason.RECEIVED) {
+        const q = Math.abs(m.delta);
+        if (monthAgg.has(mKey)) monthAgg.get(mKey)!.received += q;
+        if (inRange(m.createdAt)) {
+          orderedByLine.set(m.stockLineId, (orderedByLine.get(m.stockLineId) ?? 0) + q);
+        }
+      }
+    }
+
+    const monthly = months.map((m) => ({ month: m, ...monthAgg.get(m)! }));
+    const monthsWithUse = monthly.filter((m) => m.used > 0).length;
+    const totalUsed12 = monthly.reduce((s, m) => s + m.used, 0);
+    const avgMonthlyUsage = monthsWithUse > 0 ? round2(totalUsed12 / monthsWithUse) : 0;
+
+    const topFrom = (map: Map<string, number>) =>
+      [...map.entries()]
+        .map(([id, qty]) => ({ label: lineById.get(id)?.name ?? 'Unknown', qty }))
+        .sort((a, b) => b.qty - a.qty)
+        .slice(0, 8);
+
+    return {
+      summary: {
+        items: lines.length,
+        unitsOnHand,
+        outOfStock,
+        lowStock,
+        usedInRange,
+        usedThisMonth,
+        avgMonthlyUsage,
+      },
+      monthly,
+      topUsage: topFrom(usageByLine),
+      topOrdered: topFrom(orderedByLine),
+      lowOrOut: lowOrOut.slice(0, 12),
     };
   }
 

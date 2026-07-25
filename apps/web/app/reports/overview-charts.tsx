@@ -162,30 +162,47 @@ export function DailyBars({ data }: { data: DayPoint[] }) {
 
 export interface MonthPoint {
   month: string; // 'YYYY-MM'
-  revenue: number;
-  profit: number;
-  units: number;
+  [k: string]: number | string;
 }
 
-// Two-series money trend over the rolling 12 months: Revenue (blue) and Profit
-// (aqua). Both are £ on one axis (dataviz: never dual-axis). Legend is always
-// present for two series; 2px lines, recessive grid, crosshair tooltip.
-export function MonthlyTrend({ data }: { data: MonthPoint[] }) {
+const ACCENT = { blue: SINGLE_BLUE, aqua: SINGLE_AQUA } as const;
+
+// Configurable two-series monthly trend over the rolling 12 months. Both series
+// share one axis (dataviz: never dual-axis, so both must be the same measure —
+// two £ series, or two count series). Legend always present; 2px lines,
+// recessive grid, crosshair tooltip.
+export function MonthlyTrend({
+  data,
+  series,
+  format = 'gbp',
+  unitLabel = '',
+}: {
+  data: MonthPoint[];
+  series: { key: string; label: string; color: 'blue' | 'aqua' }[];
+  format?: 'gbp' | 'count';
+  unitLabel?: string;
+}) {
   const fmtMonth = (m: string) => {
     const [y, mo] = m.split('-');
     return new Date(Number(y), Number(mo) - 1, 1).toLocaleString('en-GB', { month: 'short' });
   };
-  const gbp = (v: number) => `£${Number(v).toLocaleString('en-GB')}`;
+  const fmtVal = (v: number) =>
+    format === 'gbp' ? `£${Number(v).toLocaleString('en-GB')}` : `${Number(v).toLocaleString('en-GB')}${unitLabel ? ' ' + unitLabel : ''}`;
+  const fmtAxis = (v: number) =>
+    format === 'gbp'
+      ? v >= 1000 ? `£${(v / 1000).toFixed(0)}k` : `£${v}`
+      : v >= 1000 ? `${(v / 1000).toFixed(0)}k` : `${v}`;
+  const labelByKey = new Map(series.map((s) => [s.key, s.label]));
 
   return (
     <div>
       <div className="mb-2 flex items-center gap-4 text-xs text-neutral-400">
-        <span className="flex items-center gap-1.5">
-          <span className="inline-block h-2 w-4 rounded-sm" style={{ backgroundColor: SINGLE_BLUE }} /> Revenue
-        </span>
-        <span className="flex items-center gap-1.5">
-          <span className="inline-block h-2 w-4 rounded-sm" style={{ backgroundColor: SINGLE_AQUA }} /> Profit
-        </span>
+        {series.map((s) => (
+          <span key={s.key} className="flex items-center gap-1.5">
+            <span className="inline-block h-2 w-4 rounded-sm" style={{ backgroundColor: ACCENT[s.color] }} />
+            {s.label}
+          </span>
+        ))}
       </div>
       <div className="h-56">
         <ResponsiveContainer width="100%" height="100%">
@@ -205,7 +222,7 @@ export function MonthlyTrend({ data }: { data: MonthPoint[] }) {
               tickLine={false}
               axisLine={{ stroke: GRID }}
               width={54}
-              tickFormatter={(v) => (v >= 1000 ? `£${(v / 1000).toFixed(0)}k` : `£${v}`)}
+              tickFormatter={(v) => fmtAxis(Number(v))}
             />
             <Tooltip
               contentStyle={tooltipStyle}
@@ -213,10 +230,19 @@ export function MonthlyTrend({ data }: { data: MonthPoint[] }) {
                 const [y, mo] = String(m).split('-');
                 return new Date(Number(y), Number(mo) - 1, 1).toLocaleString('en-GB', { month: 'long', year: 'numeric' });
               }}
-              formatter={(v, name) => [gbp(Number(v ?? 0)), name === 'revenue' ? 'Revenue' : 'Profit']}
+              formatter={(v, name) => [fmtVal(Number(v ?? 0)), labelByKey.get(String(name)) ?? String(name)]}
             />
-            <Line type="monotone" dataKey="revenue" stroke={SINGLE_BLUE} strokeWidth={2} dot={false} isAnimationActive={false} />
-            <Line type="monotone" dataKey="profit" stroke={SINGLE_AQUA} strokeWidth={2} dot={false} isAnimationActive={false} />
+            {series.map((s) => (
+              <Line
+                key={s.key}
+                type="monotone"
+                dataKey={s.key}
+                stroke={ACCENT[s.color]}
+                strokeWidth={2}
+                dot={false}
+                isAnimationActive={false}
+              />
+            ))}
           </LineChart>
         </ResponsiveContainer>
       </div>

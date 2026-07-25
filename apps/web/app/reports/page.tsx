@@ -47,6 +47,14 @@ interface LotProfit {
   margin: number | null;
 }
 
+interface ConsumablesReport {
+  summary: { items: number; unitsOnHand: number; outOfStock: number; lowStock: number; usedInRange: number; usedThisMonth: number; avgMonthlyUsage: number };
+  monthly: { month: string; used: number; received: number }[];
+  topUsage: { label: string; qty: number }[];
+  topOrdered: { label: string; qty: number }[];
+  lowOrOut: { id: string; name: string; sku: string | null; quantity: number; status: string }[];
+}
+
 interface UserPerformance {
   userId: string;
   name: string;
@@ -147,7 +155,7 @@ export default async function ReportsPage({
   if (from) qs.set('from', from.toISOString());
   if (to) qs.set('to', to.toISOString());
 
-  const [overview, profit, sales, batchAnalytics, warehouse, userPerf] = await Promise.all([
+  const [overview, profit, sales, batchAnalytics, warehouse, userPerf, consumables] = await Promise.all([
     canSee
       ? apiFetch<OverviewReport>(`/reports/overview?${qs.toString()}`).catch(() => null)
       : Promise.resolve(null),
@@ -156,6 +164,7 @@ export default async function ReportsPage({
     canSee ? apiFetch<BatchAnalytics[]>(`/reports/batches?${qs.toString()}`).catch(() => [] as BatchAnalytics[]) : Promise.resolve([] as BatchAnalytics[]),
     canSee ? apiFetch<WarehouseThroughput>(`/reports/warehouse?${qs.toString()}`).catch(() => null) : Promise.resolve(null),
     canSee ? apiFetch<UserPerformance[]>(`/reports/users?${qs.toString()}`).catch(() => [] as UserPerformance[]) : Promise.resolve([] as UserPerformance[]),
+    canSee ? apiFetch<ConsumablesReport>(`/reports/consumables?${qs.toString()}`).catch(() => null) : Promise.resolve(null),
   ]);
 
   if (!canSee || !overview) {
@@ -387,7 +396,14 @@ export default async function ReportsPage({
                   Revenue &amp; profit <span className="text-neutral-600">(last 12 months)</span>
                 </h3>
                 <div className="mt-3">
-                  <MonthlyTrend data={sales.monthly} />
+                  <MonthlyTrend
+                    data={sales.monthly}
+                    series={[
+                      { key: 'revenue', label: 'Revenue', color: 'blue' },
+                      { key: 'profit', label: 'Profit', color: 'aqua' },
+                    ]}
+                    format="gbp"
+                  />
                 </div>
               </div>
 
@@ -532,6 +548,99 @@ export default async function ReportsPage({
           </section>
         )}
 
+        {/* Consumables — bulk stock usage */}
+        {consumables && (
+          <section className="mt-8">
+            <h2 className="text-sm font-medium text-neutral-400">
+              Consumables <span className="text-neutral-600">({rangeLabel})</span>
+            </h2>
+
+            <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+              {[
+                { label: 'On hand', value: consumables.summary.unitsOnHand.toLocaleString('en-GB'), sub: `${consumables.summary.items} items` },
+                { label: 'Used', value: consumables.summary.usedInRange.toLocaleString('en-GB'), sub: rangeLabel },
+                { label: 'Used this month', value: consumables.summary.usedThisMonth.toLocaleString('en-GB') },
+                { label: 'Avg monthly use', value: consumables.summary.avgMonthlyUsage.toLocaleString('en-GB') },
+                { label: 'Low stock', value: String(consumables.summary.lowStock) },
+                { label: 'Out of stock', value: String(consumables.summary.outOfStock) },
+              ].map((c) => (
+                <div key={c.label} className="rounded-lg border border-neutral-800 bg-neutral-900/60 p-3">
+                  <div className="text-xs uppercase tracking-wide text-neutral-500">{c.label}</div>
+                  <div className="mt-1 text-xl font-semibold tabular-nums">{c.value}</div>
+                  {c.sub && <div className="mt-0.5 text-[10px] text-neutral-600">{c.sub}</div>}
+                </div>
+              ))}
+            </div>
+
+            <div className="mt-4 grid gap-4 lg:grid-cols-3">
+              <div className="rounded-lg border border-neutral-800 bg-neutral-900 p-4 lg:col-span-2">
+                <h3 className="text-sm font-medium text-neutral-300">
+                  Consumption &amp; replenishment <span className="text-neutral-600">(last 12 months)</span>
+                </h3>
+                <div className="mt-3">
+                  <MonthlyTrend
+                    data={consumables.monthly}
+                    series={[
+                      { key: 'used', label: 'Used', color: 'blue' },
+                      { key: 'received', label: 'Received', color: 'aqua' },
+                    ]}
+                    format="count"
+                    unitLabel="units"
+                  />
+                </div>
+              </div>
+
+              <div className="rounded-lg border border-neutral-800 bg-neutral-900 p-4">
+                <h3 className="text-sm font-medium text-neutral-300">Highest usage</h3>
+                <div className="mt-3">
+                  {consumables.topUsage.length > 0 ? (
+                    <CountBars data={consumables.topUsage.map((u) => ({ label: u.label, count: u.qty }))} color="blue" max={6} />
+                  ) : (
+                    <p className="py-8 text-center text-sm text-neutral-500">No usage in this range.</p>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {(consumables.topOrdered.length > 0 || consumables.lowOrOut.length > 0) && (
+              <div className="mt-4 grid gap-4 lg:grid-cols-2">
+                <TopTable title="Most ordered (received)" rows={consumables.topOrdered.map((o) => ({ label: o.label, units: o.qty, revenue: 0 }))} hideRevenue />
+                <div className="rounded-lg border border-neutral-800 bg-neutral-900 p-4">
+                  <h3 className="text-sm font-medium text-neutral-300">Low / out of stock</h3>
+                  {consumables.lowOrOut.length > 0 ? (
+                    <ul className="mt-3 space-y-1.5 text-sm">
+                      {consumables.lowOrOut.map((l) => (
+                        <li key={l.id} className="flex items-center gap-2">
+                          <span className="flex-1 truncate text-neutral-300">
+                            {l.name}
+                            {l.sku && <span className="ml-1 text-xs text-neutral-600">{l.sku}</span>}
+                          </span>
+                          <span
+                            className={
+                              'rounded-full px-2 py-0.5 text-xs ' +
+                              (l.status === 'out_of_stock'
+                                ? 'bg-red-950/60 text-red-400'
+                                : 'bg-amber-950/50 text-amber-400')
+                            }
+                          >
+                            {l.quantity} left
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="py-6 text-center text-sm text-neutral-500">Everything is well stocked.</p>
+                  )}
+                </div>
+              </div>
+            )}
+            <p className="mt-2 text-xs text-neutral-600">
+              Usage/ordering come from the stock movement log (used vs received). Stock levels are
+              current; used-this-month and the trend are fixed windows.
+            </p>
+          </section>
+        )}
+
         {/* User performance — comparison table */}
         {userPerf.length > 0 && (
           <section className="mt-8">
@@ -591,9 +700,11 @@ export default async function ReportsPage({
 function TopTable({
   title,
   rows,
+  hideRevenue = false,
 }: {
   title: string;
   rows: { label: string; units: number; revenue: number }[];
+  hideRevenue?: boolean;
 }) {
   const max = Math.max(1, ...rows.map((r) => r.units));
   return (
@@ -611,7 +722,9 @@ function TopTable({
                 />
               </span>
               <span className="w-10 text-right tabular-nums text-neutral-400">{r.units}</span>
-              <span className="w-16 text-right tabular-nums text-neutral-500">{money(r.revenue)}</span>
+              {!hideRevenue && (
+                <span className="w-16 text-right tabular-nums text-neutral-500">{money(r.revenue)}</span>
+              )}
             </li>
           ))}
         </ul>

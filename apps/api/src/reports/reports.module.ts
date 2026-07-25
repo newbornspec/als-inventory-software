@@ -7,6 +7,7 @@ import { Lot } from '../batches/lot.entity';
 import { OrderLine } from '../sales/order-line.entity';
 import { RepairLog } from '../repairs/repair-log.entity';
 import { StockLine } from '../stock/stock-line.entity';
+import { StockMovement } from '../stock/stock-movement.entity';
 import { Pallet } from '../pallets/pallet.entity';
 import { PalletLine } from '../pallets/pallet-line.entity';
 import { PalletSoldLine } from '../pallets/pallet-sold-line.entity';
@@ -24,6 +25,7 @@ import { ReportsService } from './reports.service';
       OrderLine,
       RepairLog,
       StockLine,
+      StockMovement,
       Pallet,
       PalletLine,
       PalletSoldLine,
