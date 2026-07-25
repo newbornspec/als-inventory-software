@@ -235,6 +235,7 @@
     <div class="bi"><span style="font-size:16px">🗄️</span><div><div class="k">Batch</div><div class="v" id="ftBatch">—</div></div></div>
     <div class="bi"><span style="font-size:16px">💽</span><div><div class="k">OS Selected</div><div class="v" id="ftOs">—</div></div></div>
     <div class="bi"><span class="cdot" id="ftDot"></span><div><div class="k">Connection</div><div class="v" id="ftConn">…</div></div></div>
+    <div class="bi"><span style="font-size:16px">🖥️</span><div><div class="k">Display</div><div class="v" id="ftDisp">—</div></div></div>
     <div class="bi" style="margin-left:auto"><span style="font-size:16px">🕐</span><div><div class="k" id="ftDate">—</div><div class="v" id="ftClock">—</div></div></div>
   </div>
 </div>
@@ -281,6 +282,15 @@ let BOOT={}, LOTS=[], SELOS=null, SELOSNAME='', OSCHOSEN=null;
 function toast(m,ok=true){const t=$('toast');t.textContent=m;t.className='toast '+(ok?'ok':'err');t.style.display='block';setTimeout(()=>t.style.display='none',3200);}
 function clock(){const n=new Date();$('ftClock').textContent=n.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});$('ftDate').textContent=n.toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'});}
 setInterval(clock,1000);clock();
+
+/* Display readout — diagnoses full-screen issues: vp = what the page fills,
+   scr = the screen it reports, × = pixel scale. */
+function disp(){
+  const vw=window.innerWidth, vh=window.innerHeight;
+  const sw=(screen&&screen.width)||0, sh=(screen&&screen.height)||0, dpr=window.devicePixelRatio||1;
+  $('ftDisp').textContent='vp '+vw+'×'+vh+' · scr '+sw+'×'+sh+' · ×'+dpr.toFixed(2);
+}
+window.addEventListener('resize',disp); disp();
 
 async function jget(u){const r=await fetch(u);return r.json();}
 async function jpost(u,b){const r=await fetch(u,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b||{})});return{ok:r.ok,status:r.status,data:await r.json().catch(()=>({}))};}
