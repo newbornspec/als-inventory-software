@@ -82,6 +82,84 @@ connect_wifi() {
   return 1
 }
 
+# --- Ethernet ---------------------------------------------------------------
+# Nothing else in the boot path requests a DHCP lease, so plugging in a cable
+# does nothing on its own. Bring wired links up and lease an address ourselves.
+# Ethernet is tried BEFORE Wi-Fi: no credentials, and it is what an operator
+# reaches for when Wi-Fi fails.
+has_cmd() { command -v "$1" >/dev/null 2>&1; }
+
+iface_ip() { ip -4 addr show "$1" 2>/dev/null | grep -o 'inet [0-9.]*' | head -n1 | cut -d' ' -f2; }
+
+wired_ifaces() {
+  for n in /sys/class/net/*; do
+    [ -e "$n" ] || continue
+    i=$(basename "$n")
+    case "$i" in lo|veth*|docker*|br-*|virbr*|tun*|tap*|bond*|dummy*) continue ;; esac
+    [ -e "$n/wireless" ] && continue        # that one is the Wi-Fi adapter
+    echo "$i"
+  done
+}
+
+# Try each DHCP client this live image might ship, checking for an address after
+# each one rather than trusting exit codes (they vary between clients).
+dhcp_lease() {
+  has_cmd nmcli    && nmcli device connect "$1" >/dev/null 2>&1
+  [ -n "$(iface_ip "$1")" ] && return 0
+  has_cmd dhcpcd   && dhcpcd -w -t 12 "$1" >/dev/null 2>&1
+  [ -n "$(iface_ip "$1")" ] && return 0
+  has_cmd dhclient && dhclient -1 "$1" >/dev/null 2>&1
+  [ -n "$(iface_ip "$1")" ] && return 0
+  has_cmd udhcpc   && udhcpc -i "$1" -n -q -t 4 >/dev/null 2>&1
+  [ -n "$(iface_ip "$1")" ]
+}
+
+connect_wired() {
+  for i in $(wired_ifaces); do ip link set "$i" up 2>/dev/null; done
+  sleep 2                                   # let the link/carrier settle
+  for i in $(wired_ifaces); do
+    [ "$(cat "/sys/class/net/$i/carrier" 2>/dev/null)" = "1" ] || continue
+    echo "Ethernet $i: cable detected — requesting an address…"
+    [ -n "$(iface_ip "$i")" ] || dhcp_lease "$i"
+    for _ in 1 2 3 4 5 6 7 8; do
+      online && { echo "Connected via Ethernet ($i, $(iface_ip "$i"))."; return 0; }
+      sleep 2
+    done
+  done
+  return 1
+}
+
+# Say what is actually wrong instead of always blaming Wi-Fi. The GUI shows the
+# last two lines, so the summary goes last.
+net_diagnose() {
+  eth_state="no cable detected"
+  for i in $(wired_ifaces); do
+    if [ "$(cat "/sys/class/net/$i/carrier" 2>/dev/null)" = "1" ]; then
+      ipa=$(iface_ip "$i")
+      if [ -n "$ipa" ]; then eth_state="$i has IP $ipa but the server is unreachable"
+      else eth_state="$i cable is in, but no IP address (DHCP gave none)"; fi
+      break
+    fi
+  done
+  host=$(printf '%s' "$API" | sed -e 's#^https\?://##' -e 's#/.*##')
+  if has_cmd getent; then
+    dns="ok"; getent hosts "$host" >/dev/null 2>&1 || dns="FAILED to resolve $host"
+  else
+    dns="not checked"
+  fi
+  echo "Network check — Ethernet: $eth_state. DNS: $dns."
+  echo "Could not reach $API. Plug in a working Ethernet cable, or set this site's Wi-Fi in Settings, then Retry."
+}
+
+# Bring up whatever is available: already-online → Ethernet → Wi-Fi.
+connect_network() {
+  online && return 0
+  connect_wired && return 0
+  connect_wifi && online && return 0
+  net_diagnose
+  return 1
+}
+
 # --- ensure the read tools exist (SystemRescue/Ubuntu ship most already) ---
 ensure_tools() {
   command -v curl >/dev/null 2>&1 && command -v dmidecode >/dev/null 2>&1 \
@@ -341,15 +419,16 @@ if [ "${1:-}" = "--wipe-drive" ]; then
 fi
 
 # The GUI captures the hardware profile with AUDIT_DEBUG=1, which skips the
-# Wi-Fi step below — so the backend brings the network up itself by calling
-# this entrypoint before it talks to the server.
-if [ "${1:-}" = "--connect-wifi" ]; then
-  connect_wifi
+# network step below — so the backend brings the network up itself by calling
+# this entrypoint before it talks to the server. Handles Ethernet AND Wi-Fi.
+# (--connect-wifi is kept as the original name the GUI backend calls.)
+if [ "${1:-}" = "--connect-wifi" ] || [ "${1:-}" = "--connect-net" ]; then
+  connect_network
   exit $?
 fi
 
 if [ "${AUDIT_DEBUG:-0}" != "1" ]; then
-  connect_wifi || exit 1
+  connect_network || exit 1
 fi
 ensure_tools
 

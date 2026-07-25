@@ -178,10 +178,16 @@ def connect_network():
     if not SCRIPT:
         return ""
     try:
+        # Generous timeout: the engine tries Ethernet (fast) and then Wi-Fi
+        # (association + DHCP + retries). Cutting it short would throw away the
+        # diagnostic message that tells the operator what is actually wrong.
         proc = subprocess.run(["bash", SCRIPT, "--connect-wifi"],
-                              capture_output=True, text=True, timeout=90)
+                              capture_output=True, text=True, timeout=180)
         lines = [l for l in (proc.stdout or "").splitlines() if l.strip()]
         return " ".join(lines[-2:]) if lines else ""
+    except subprocess.TimeoutExpired:
+        return ("Network setup timed out. Check that the Ethernet cable is in a live port, "
+                "or set this site's Wi-Fi in Settings.")
     except Exception:  # noqa: BLE001
         return ""
 
