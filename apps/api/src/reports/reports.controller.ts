@@ -83,6 +83,18 @@ export class ReportsController {
     return this.reports.getWarehouseThroughput(parse(from), parse(to), req.user);
   }
 
+  // Per-user performance for the manager comparison. from/to bound the counts.
+  @Roles(UserRole.ADMIN, UserRole.MANAGER)
+  @Get('reports/users')
+  getUserPerformance(@Query('from') from: string, @Query('to') to: string, @Req() req: any) {
+    const parse = (s?: string) => {
+      if (!s) return undefined;
+      const d = new Date(s);
+      return isNaN(d.getTime()) ? undefined : d;
+    };
+    return this.reports.getUserPerformance(parse(from), parse(to), req.user);
+  }
+
   @Roles(UserRole.ADMIN, UserRole.MANAGER)
   @Get('reports/profit')
   getLotProfitability(@Req() req: any) {

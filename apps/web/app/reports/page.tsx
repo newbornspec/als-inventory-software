@@ -47,6 +47,19 @@ interface LotProfit {
   margin: number | null;
 }
 
+interface UserPerformance {
+  userId: string;
+  name: string;
+  role: string;
+  batchesCreated: number;
+  assetsAdded: number;
+  assetsAudited: number;
+  itemsSold: number;
+  itemsReturned: number;
+  avgProcessingDays: number | null;
+  lastActivity: string | null;
+}
+
 interface WarehouseThroughput {
   metrics: { received: number; scanned: number; audited: number; shipped: number; sold: number; returned: number };
   processedAssets: number;
@@ -134,7 +147,7 @@ export default async function ReportsPage({
   if (from) qs.set('from', from.toISOString());
   if (to) qs.set('to', to.toISOString());
 
-  const [overview, profit, sales, batchAnalytics, warehouse] = await Promise.all([
+  const [overview, profit, sales, batchAnalytics, warehouse, userPerf] = await Promise.all([
     canSee
       ? apiFetch<OverviewReport>(`/reports/overview?${qs.toString()}`).catch(() => null)
       : Promise.resolve(null),
@@ -142,6 +155,7 @@ export default async function ReportsPage({
     canSee ? apiFetch<SalesAnalytics>(`/reports/sales?${qs.toString()}`).catch(() => null) : Promise.resolve(null),
     canSee ? apiFetch<BatchAnalytics[]>(`/reports/batches?${qs.toString()}`).catch(() => [] as BatchAnalytics[]) : Promise.resolve([] as BatchAnalytics[]),
     canSee ? apiFetch<WarehouseThroughput>(`/reports/warehouse?${qs.toString()}`).catch(() => null) : Promise.resolve(null),
+    canSee ? apiFetch<UserPerformance[]>(`/reports/users?${qs.toString()}`).catch(() => [] as UserPerformance[]) : Promise.resolve([] as UserPerformance[]),
   ]);
 
   if (!canSee || !overview) {
@@ -514,6 +528,56 @@ export default async function ReportsPage({
               Counts are warehouse events in the range (received, scanned, audited, shipped, sold,
               returned). Average processing time is the mean days from a device&apos;s intake to its
               first audit, over devices audited in the range.
+            </p>
+          </section>
+        )}
+
+        {/* User performance — comparison table */}
+        {userPerf.length > 0 && (
+          <section className="mt-8">
+            <h2 className="text-sm font-medium text-neutral-400">
+              User performance <span className="text-neutral-600">({rangeLabel})</span>
+            </h2>
+            <div className="mt-3 overflow-x-auto rounded-lg border border-neutral-800">
+              <table className="w-full text-left text-sm">
+                <thead className="bg-neutral-900 text-neutral-400">
+                  <tr>
+                    <th className="px-3 py-2">User</th>
+                    <th className="px-3 py-2">Role</th>
+                    <th className="px-3 py-2 text-right">Lots created</th>
+                    <th className="px-3 py-2 text-right">Assets added</th>
+                    <th className="px-3 py-2 text-right">Audited</th>
+                    <th className="px-3 py-2 text-right">Items sold</th>
+                    <th className="px-3 py-2 text-right">Returned</th>
+                    <th className="px-3 py-2 text-right">Avg processing</th>
+                    <th className="px-3 py-2">Last activity</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {userPerf.map((u) => (
+                    <tr key={u.userId} className="border-t border-neutral-800 hover:bg-neutral-900/40">
+                      <td className="px-3 py-2 text-neutral-200">{u.name}</td>
+                      <td className="px-3 py-2 text-neutral-400">{formatLabel(u.role)}</td>
+                      <td className="px-3 py-2 text-right tabular-nums text-neutral-400">{u.batchesCreated}</td>
+                      <td className="px-3 py-2 text-right tabular-nums text-neutral-400">{u.assetsAdded}</td>
+                      <td className="px-3 py-2 text-right tabular-nums text-neutral-300">{u.assetsAudited}</td>
+                      <td className="px-3 py-2 text-right tabular-nums text-neutral-300">{u.itemsSold}</td>
+                      <td className="px-3 py-2 text-right tabular-nums text-neutral-400">{u.itemsReturned}</td>
+                      <td className="px-3 py-2 text-right tabular-nums text-neutral-400">
+                        {u.avgProcessingDays == null ? '—' : `${u.avgProcessingDays.toFixed(1)}d`}
+                      </td>
+                      <td className="px-3 py-2 text-neutral-500">
+                        {u.lastActivity ? new Date(u.lastActivity).toLocaleString('en-GB') : '—'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <p className="mt-2 text-xs text-neutral-600">
+              Actions attributed to the acting user within the range; last activity is their most
+              recent action of any kind. Assets added counts API/manual creations (bulk scan‑ins
+              carry no user). Managers see only their own row.
             </p>
           </section>
         )}

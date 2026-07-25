@@ -99,6 +99,24 @@ function gradeLetter(avg: number): string {
   return avg >= 3.5 ? 'A' : avg >= 2.5 ? 'B' : avg >= 1.5 ? 'C' : 'D';
 }
 
+// Per-user activity over the range, for the manager comparison. Counts are
+// attributed by the acting user (history user_id, batch created_by, pallet
+// sold_by/returned_by). lastActivity is the most recent action of any kind,
+// regardless of the range. (Pallets have no creator column, so "pallets
+// created" can't be attributed and is omitted.)
+export interface UserPerformance {
+  userId: string;
+  name: string;
+  role: string;
+  batchesCreated: number;
+  assetsAdded: number; // API-created; scan-created events carry no user
+  assetsAudited: number;
+  itemsSold: number; // devices + pallet quantities
+  itemsReturned: number;
+  avgProcessingDays: number | null; // intake → this user's first audit
+  lastActivity: string | null;
+}
+
 // Warehouse operations throughput over the range. Counts are of history
 // events (a device can be received once, audited, then sold — each is one
 // event). avgProcessingDays is intake→first-audit, over assets audited in the
@@ -497,6 +515,125 @@ export class ReportsService {
       byAuditStatus: toRows(tally((a) => a.auditStatus ?? 'not_audited')),
       byManufacturer,
     };
+  }
+
+  async getUserPerformance(from?: Date, to?: Date, user?: RequestUser): Promise<UserPerformance[]> {
+    // A scoped manager only ever sees their own row (ownership model); admins
+    // see everyone for the comparison.
+    const selfOnly = isScopedManager(user) ? user!.userId : null;
+
+    let [users, batches, history, palletSold] = await Promise.all([
+      this.users.find(),
+      this.batches.find({ select: { id: true, createdById: true, createdAt: true } }),
+      this.history
+        .createQueryBuilder('h')
+        .select(['h.assetId', 'h.eventType', 'h.userId', 'h.notes', 'h.createdAt'])
+        .getMany(),
+      this.palletSold.find(),
+    ]);
+    if (selfOnly) users = users.filter((u) => u.id === selfOnly);
+
+    const inRange = (d: Date | string | null | undefined): boolean => {
+      if (!d) return false;
+      const t = new Date(d).getTime();
+      if (from && t < from.getTime()) return false;
+      if (to && t > to.getTime()) return false;
+      return true;
+    };
+
+    type Acc = {
+      batchesCreated: number;
+      assetsAdded: number;
+      assetsAudited: number;
+      itemsSold: number;
+      itemsReturned: number;
+      spans: number[];
+      lastActivity: number | null;
+    };
+    const acc = new Map<string, Acc>();
+    for (const u of users) {
+      acc.set(u.id, { batchesCreated: 0, assetsAdded: 0, assetsAudited: 0, itemsSold: 0, itemsReturned: 0, spans: [], lastActivity: null });
+    }
+    const touch = (uid: string | null, ts: number) => {
+      if (!uid) return;
+      const a = acc.get(uid);
+      if (a && (a.lastActivity == null || ts > a.lastActivity)) a.lastActivity = ts;
+    };
+
+    for (const b of batches) {
+      if (b.createdById && acc.has(b.createdById)) {
+        touch(b.createdById, new Date(b.createdAt).getTime());
+        if (inRange(b.createdAt)) acc.get(b.createdById)!.batchesCreated += 1;
+      }
+    }
+
+    // First created + first audit per asset (for processing time).
+    const firstCreated = new Map<string, number>();
+    const firstAudit = new Map<string, { ts: number; userId: string | null }>();
+    for (const e of history) {
+      const ts = new Date(e.createdAt).getTime();
+      if (e.eventType === 'created') {
+        const cur = firstCreated.get(e.assetId);
+        if (cur == null || ts < cur) firstCreated.set(e.assetId, ts);
+      } else if (e.eventType === 'audited') {
+        const cur = firstAudit.get(e.assetId);
+        if (cur == null || ts < cur.ts) firstAudit.set(e.assetId, { ts, userId: e.userId });
+      }
+    }
+
+    for (const e of history) {
+      const ts = new Date(e.createdAt).getTime();
+      touch(e.userId, ts);
+      if (!e.userId || !acc.has(e.userId) || !inRange(e.createdAt)) continue;
+      const a = acc.get(e.userId)!;
+      if (e.eventType === 'created') a.assetsAdded += 1;
+      else if (e.eventType === 'audited') a.assetsAudited += 1;
+      else if (e.eventType === 'status_changed') {
+        const n = e.notes ?? '';
+        if (n.includes('returned to inventory')) a.itemsReturned += 1;
+        else if (n.includes('-> sold')) a.itemsSold += 1;
+      }
+    }
+
+    // Processing spans attributed to the first-auditing user, in range.
+    for (const [assetId, fa] of firstAudit) {
+      if (!fa.userId || !acc.has(fa.userId) || !inRange(new Date(fa.ts))) continue;
+      const c = firstCreated.get(assetId);
+      if (c != null && fa.ts >= c) acc.get(fa.userId)!.spans.push((fa.ts - c) / 86_400_000);
+    }
+
+    for (const r of palletSold) {
+      if (r.soldById && acc.has(r.soldById)) {
+        touch(r.soldById, new Date(r.soldAt).getTime());
+        if (inRange(r.soldAt)) acc.get(r.soldById)!.itemsSold += r.quantity;
+      }
+      if (r.returnedById && r.returnedAt && acc.has(r.returnedById)) {
+        touch(r.returnedById, new Date(r.returnedAt).getTime());
+        if (inRange(r.returnedAt)) acc.get(r.returnedById)!.itemsReturned += r.quantity;
+      }
+    }
+
+    return users
+      .map((u) => {
+        const a = acc.get(u.id)!;
+        return {
+          userId: u.id,
+          name: u.name,
+          role: u.role,
+          batchesCreated: a.batchesCreated,
+          assetsAdded: a.assetsAdded,
+          assetsAudited: a.assetsAudited,
+          itemsSold: a.itemsSold,
+          itemsReturned: a.itemsReturned,
+          avgProcessingDays: a.spans.length > 0 ? round2(a.spans.reduce((s, d) => s + d, 0) / a.spans.length) : null,
+          lastActivity: a.lastActivity != null ? new Date(a.lastActivity).toISOString() : null,
+        };
+      })
+      .sort(
+        (x, y) =>
+          y.assetsAudited + y.assetsAdded + y.itemsSold + y.batchesCreated -
+          (x.assetsAudited + x.assetsAdded + x.itemsSold + x.batchesCreated),
+      );
   }
 
   async getWarehouseThroughput(
