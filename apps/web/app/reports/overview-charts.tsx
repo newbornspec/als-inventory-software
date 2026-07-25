@@ -110,6 +110,56 @@ export function CategoryDonut({ data }: { data: LabelCount[] }) {
   );
 }
 
+export interface DayPoint {
+  date: string; // 'YYYY-MM-DD'
+  count: number;
+}
+
+// Vertical bars, one per day — the warehouse throughput pulse. Single blue
+// series (magnitude only), thin bars with a rounded top, recessive grid.
+// Only every Nth date is labelled so a 30-day axis stays legible.
+export function DailyBars({ data }: { data: DayPoint[] }) {
+  const step = Math.max(1, Math.ceil(data.length / 8));
+  const fmt = (d: string, i: number) => {
+    if (i % step !== 0) return '';
+    const [, mo, day] = d.split('-');
+    return `${day}/${mo}`;
+  };
+  return (
+    <div className="h-48">
+      <ResponsiveContainer width="100%" height="100%">
+        <BarChart data={data} margin={{ left: 4, right: 8, top: 4, bottom: 4 }}>
+          <CartesianGrid stroke={GRID} vertical={false} />
+          <XAxis
+            dataKey="date"
+            tickFormatter={fmt}
+            interval={0}
+            stroke={GRID}
+            tick={{ fill: INK_MUTED, fontSize: 10 }}
+            tickLine={false}
+            axisLine={{ stroke: GRID }}
+          />
+          <YAxis
+            stroke={GRID}
+            tick={{ fill: INK_MUTED, fontSize: 11 }}
+            tickLine={false}
+            axisLine={{ stroke: GRID }}
+            width={28}
+            allowDecimals={false}
+          />
+          <Tooltip
+            contentStyle={tooltipStyle}
+            cursor={{ fill: 'rgba(255,255,255,0.04)' }}
+            labelFormatter={(d) => new Date(String(d)).toLocaleDateString('en-GB')}
+            formatter={(v) => [String(v ?? 0), 'events']}
+          />
+          <Bar dataKey="count" fill={SINGLE_BLUE} radius={[3, 3, 0, 0]} isAnimationActive={false} />
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
 export interface MonthPoint {
   month: string; // 'YYYY-MM'
   revenue: number;

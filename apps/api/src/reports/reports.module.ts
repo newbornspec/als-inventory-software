@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { Asset } from '../assets/asset.entity';
+import { AssetHistory } from '../assets/asset-history.entity';
 import { Batch } from '../batches/batch.entity';
 import { Lot } from '../batches/lot.entity';
 import { OrderLine } from '../sales/order-line.entity';
@@ -17,6 +18,7 @@ import { ReportsService } from './reports.service';
   imports: [
     TypeOrmModule.forFeature([
       Asset,
+      AssetHistory,
       Batch,
       Lot,
       OrderLine,

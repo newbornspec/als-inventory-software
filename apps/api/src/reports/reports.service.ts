@@ -2,6 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Asset, AssetAuditStatus, AssetConditionGrade, AssetStockStatus } from '../assets/asset.entity';
+import { AssetHistory } from '../assets/asset-history.entity';
 import { Batch } from '../batches/batch.entity';
 import { Lot } from '../batches/lot.entity';
 import { OrderLine } from '../sales/order-line.entity';
@@ -98,6 +99,25 @@ function gradeLetter(avg: number): string {
   return avg >= 3.5 ? 'A' : avg >= 2.5 ? 'B' : avg >= 1.5 ? 'C' : 'D';
 }
 
+// Warehouse operations throughput over the range. Counts are of history
+// events (a device can be received once, audited, then sold — each is one
+// event). avgProcessingDays is intake→first-audit, over assets audited in the
+// range, so it measures how fast stock is being worked.
+export interface WarehouseThroughput {
+  metrics: {
+    received: number;
+    scanned: number;
+    audited: number;
+    shipped: number;
+    sold: number;
+    returned: number;
+  };
+  processedAssets: number; // distinct assets audited in range
+  avgProcessingDays: number | null;
+  daily: { date: string; count: number }[]; // throughput events per day over the window
+  windowLabel: string;
+}
+
 // Batch → sub-lot performance for the Reports drill-down. Counts/cost are
 // lifetime snapshots; revenue/profit/unitsSold respect the from/to range.
 // (Pallets aren't children of batches in this data model — the hierarchy is
@@ -173,6 +193,7 @@ export interface DashboardSummary {
 export class ReportsService {
   constructor(
     @InjectRepository(Asset) private assets: Repository<Asset>,
+    @InjectRepository(AssetHistory) private history: Repository<AssetHistory>,
     @InjectRepository(Batch) private batches: Repository<Batch>,
     @InjectRepository(Lot) private lots: Repository<Lot>,
     @InjectRepository(OrderLine) private lines: Repository<OrderLine>,
@@ -475,6 +496,121 @@ export class ReportsService {
       byGrade: toRows(tally((a) => GRADE_LABELS[a.conditionGrade ?? ''] ?? 'Ungraded')),
       byAuditStatus: toRows(tally((a) => a.auditStatus ?? 'not_audited')),
       byManufacturer,
+    };
+  }
+
+  async getWarehouseThroughput(
+    from?: Date,
+    to?: Date,
+    user?: RequestUser,
+  ): Promise<WarehouseThroughput> {
+    // Manager scoping: only events for assets in lots they own.
+    let ownedAssetIds: Set<string> | null = null;
+    const owned = await this.ownedBatchIds(user);
+    if (owned) {
+      if (owned.size === 0) ownedAssetIds = new Set();
+      else {
+        const rows = await this.assets
+          .createQueryBuilder('a')
+          .select(['a.id'])
+          .where('a.batch_id IN (:...ids)', { ids: [...owned] })
+          .getMany();
+        ownedAssetIds = new Set(rows.map((r) => r.id));
+      }
+    }
+
+    // Full history (assetId/eventType/notes/createdAt only). Fine at current
+    // scale; a large deployment would push the bucketing into SQL.
+    let events = await this.history
+      .createQueryBuilder('h')
+      .select(['h.assetId', 'h.eventType', 'h.notes', 'h.createdAt'])
+      .getMany();
+    if (ownedAssetIds) events = events.filter((e) => ownedAssetIds!.has(e.assetId));
+
+    const inRange = (d: Date | string): boolean => {
+      const t = new Date(d).getTime();
+      if (from && t < from.getTime()) return false;
+      if (to && t > to.getTime()) return false;
+      return true;
+    };
+    const notes = (e: AssetHistory) => e.notes ?? '';
+
+    let received = 0, scanned = 0, audited = 0, shipped = 0, sold = 0, returned = 0;
+    const auditedAssets = new Set<string>();
+    for (const e of events) {
+      if (!inRange(e.createdAt)) continue;
+      if (e.eventType === 'created') received += 1;
+      else if (e.eventType === 'scanned') scanned += 1;
+      else if (e.eventType === 'audited') {
+        audited += 1;
+        auditedAssets.add(e.assetId);
+      } else if (e.eventType === 'status_changed') {
+        const n = notes(e);
+        if (n.includes('returned to inventory')) returned += 1;
+        else if (n.includes('-> shipped')) shipped += 1;
+        else if (n.includes('-> sold')) sold += 1;
+      }
+    }
+
+    // Avg intake→first-audit, over assets audited in the range. Needs each
+    // asset's created + earliest audit events across all time.
+    const firstCreated = new Map<string, number>();
+    const firstAudit = new Map<string, number>();
+    for (const e of events) {
+      const t = new Date(e.createdAt).getTime();
+      if (e.eventType === 'created') {
+        const cur = firstCreated.get(e.assetId);
+        if (cur == null || t < cur) firstCreated.set(e.assetId, t);
+      } else if (e.eventType === 'audited') {
+        const cur = firstAudit.get(e.assetId);
+        if (cur == null || t < cur) firstAudit.set(e.assetId, t);
+      }
+    }
+    const spans: number[] = [];
+    for (const id of auditedAssets) {
+      const c = firstCreated.get(id);
+      const a = firstAudit.get(id);
+      if (c != null && a != null && a >= c) spans.push((a - c) / 86_400_000);
+    }
+    const avgProcessingDays =
+      spans.length > 0 ? round2(spans.reduce((s, d) => s + d, 0) / spans.length) : null;
+
+    // Daily throughput pulse over the effective window (range, or last 30 days).
+    const dayEnd = to ?? new Date();
+    const dayStart = from ?? new Date(dayEnd.getTime() - 29 * 86_400_000);
+    const dayKey = (t: number) => {
+      const d = new Date(t);
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    };
+    const days: string[] = [];
+    for (let t = new Date(dayStart.getFullYear(), dayStart.getMonth(), dayStart.getDate()).getTime(); t <= dayEnd.getTime(); t += 86_400_000) {
+      days.push(dayKey(t));
+    }
+    const dayAgg = new Map(days.map((d) => [d, 0]));
+    const isThroughput = (e: AssetHistory) =>
+      e.eventType === 'created' ||
+      e.eventType === 'scanned' ||
+      e.eventType === 'audited' ||
+      (e.eventType === 'status_changed' &&
+        (notes(e).includes('-> sold') || notes(e).includes('-> shipped') || notes(e).includes('returned to inventory')));
+    for (const e of events) {
+      if (!isThroughput(e)) continue;
+      const key = dayKey(new Date(e.createdAt).getTime());
+      if (dayAgg.has(key)) dayAgg.set(key, dayAgg.get(key)! + 1);
+    }
+    const daily = days.map((d) => ({ date: d, count: dayAgg.get(d)! }));
+
+    const windowLabel =
+      from || to
+        ? 'selected range'
+        : 'last 30 days';
+
+    return {
+      metrics: { received, scanned, audited, shipped, sold, returned },
+      processedAssets: auditedAssets.size,
+      avgProcessingDays,
+      daily,
+      windowLabel,
     };
   }
 

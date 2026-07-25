@@ -70,6 +70,19 @@ export class ReportsController {
     return this.reports.getBatchAnalytics(parse(from), parse(to), req.user);
   }
 
+  // Warehouse operations throughput (received/audited/shipped/sold/returned,
+  // avg processing time, daily pulse). from/to bound the window.
+  @Roles(UserRole.ADMIN, UserRole.MANAGER)
+  @Get('reports/warehouse')
+  getWarehouse(@Query('from') from: string, @Query('to') to: string, @Req() req: any) {
+    const parse = (s?: string) => {
+      if (!s) return undefined;
+      const d = new Date(s);
+      return isNaN(d.getTime()) ? undefined : d;
+    };
+    return this.reports.getWarehouseThroughput(parse(from), parse(to), req.user);
+  }
+
   @Roles(UserRole.ADMIN, UserRole.MANAGER)
   @Get('reports/profit')
   getLotProfitability(@Req() req: any) {

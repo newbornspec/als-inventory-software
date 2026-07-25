@@ -3,7 +3,7 @@ import { apiFetch, getSessionUser } from '@/lib/api-server';
 import { Nav } from '@/app/components/nav';
 import { money } from '@/lib/money';
 import { formatLabel } from '@/lib/asset-options';
-import { CategoryDonut, CountBars, MonthlyTrend, type LabelCount, type MonthPoint } from './overview-charts';
+import { CategoryDonut, CountBars, DailyBars, MonthlyTrend, type DayPoint, type LabelCount, type MonthPoint } from './overview-charts';
 import { BatchAnalyticsTable, type BatchAnalytics } from './batch-analytics';
 
 // Mirrors the API's OverviewReport (reports.service.ts).
@@ -45,6 +45,14 @@ interface LotProfit {
   costOfSold: number;
   profit: number;
   margin: number | null;
+}
+
+interface WarehouseThroughput {
+  metrics: { received: number; scanned: number; audited: number; shipped: number; sold: number; returned: number };
+  processedAssets: number;
+  avgProcessingDays: number | null;
+  daily: DayPoint[];
+  windowLabel: string;
 }
 
 interface SalesAnalytics {
@@ -126,13 +134,14 @@ export default async function ReportsPage({
   if (from) qs.set('from', from.toISOString());
   if (to) qs.set('to', to.toISOString());
 
-  const [overview, profit, sales, batchAnalytics] = await Promise.all([
+  const [overview, profit, sales, batchAnalytics, warehouse] = await Promise.all([
     canSee
       ? apiFetch<OverviewReport>(`/reports/overview?${qs.toString()}`).catch(() => null)
       : Promise.resolve(null),
     canSee ? apiFetch<LotProfit[]>('/reports/profit').catch(() => [] as LotProfit[]) : Promise.resolve([] as LotProfit[]),
     canSee ? apiFetch<SalesAnalytics>(`/reports/sales?${qs.toString()}`).catch(() => null) : Promise.resolve(null),
     canSee ? apiFetch<BatchAnalytics[]>(`/reports/batches?${qs.toString()}`).catch(() => [] as BatchAnalytics[]) : Promise.resolve([] as BatchAnalytics[]),
+    canSee ? apiFetch<WarehouseThroughput>(`/reports/warehouse?${qs.toString()}`).catch(() => null) : Promise.resolve(null),
   ]);
 
   if (!canSee || !overview) {
@@ -459,6 +468,55 @@ export default async function ReportsPage({
             Pallets are separate containers, not children of a batch, so they aren&apos;t counted here.
           </p>
         </section>
+
+        {/* Warehouse operations — throughput over the range */}
+        {warehouse && (
+          <section className="mt-8">
+            <h2 className="text-sm font-medium text-neutral-400">
+              Warehouse operations <span className="text-neutral-600">({rangeLabel})</span>
+            </h2>
+
+            <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-7">
+              {[
+                { label: 'Received', value: warehouse.metrics.received },
+                { label: 'Scanned', value: warehouse.metrics.scanned },
+                { label: 'Audited', value: warehouse.metrics.audited },
+                { label: 'Shipped', value: warehouse.metrics.shipped },
+                { label: 'Sold', value: warehouse.metrics.sold },
+                { label: 'Returned', value: warehouse.metrics.returned },
+              ].map((c) => (
+                <div key={c.label} className="rounded-lg border border-neutral-800 bg-neutral-900/60 p-3">
+                  <div className="text-xs uppercase tracking-wide text-neutral-500">{c.label}</div>
+                  <div className="mt-1 text-xl font-semibold tabular-nums">{c.value}</div>
+                </div>
+              ))}
+              <div className="rounded-lg border border-neutral-800 bg-neutral-900/60 p-3">
+                <div className="text-xs uppercase tracking-wide text-neutral-500">Avg processing</div>
+                <div className="mt-1 text-xl font-semibold tabular-nums">
+                  {warehouse.avgProcessingDays == null
+                    ? '—'
+                    : `${warehouse.avgProcessingDays.toFixed(1)}d`}
+                </div>
+                <div className="mt-0.5 text-[10px] text-neutral-600">intake → audit</div>
+              </div>
+            </div>
+
+            <div className="mt-4 rounded-lg border border-neutral-800 bg-neutral-900 p-4">
+              <h3 className="text-sm font-medium text-neutral-300">
+                Throughput per day{' '}
+                <span className="text-neutral-600">({warehouse.windowLabel})</span>
+              </h3>
+              <div className="mt-3">
+                <DailyBars data={warehouse.daily} />
+              </div>
+            </div>
+            <p className="mt-2 text-xs text-neutral-600">
+              Counts are warehouse events in the range (received, scanned, audited, shipped, sold,
+              returned). Average processing time is the mean days from a device&apos;s intake to its
+              first audit, over devices audited in the range.
+            </p>
+          </section>
+        )}
       </div>
     </main>
   );
