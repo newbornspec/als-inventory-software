@@ -1,9 +1,10 @@
-import { Controller, Get, Header, Param, Query, Req, UseGuards } from '@nestjs/common';
+import { Controller, Get, Header, Param, Query, Req, StreamableFile, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { Roles } from '../auth/guards/roles.decorator';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { UserRole } from '../users/user.entity';
 import { ReportsService, type ReportFilters } from './reports.service';
+import { ReportsExportService } from './reports-export.service';
 
 function parseDate(s?: string): Date | undefined {
   if (!s) return undefined;
@@ -24,12 +25,41 @@ function buildFilters(q: Record<string, string>): ReportFilters {
 @Controller()
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class ReportsController {
-  constructor(private reports: ReportsService) {}
+  constructor(
+    private reports: ReportsService,
+    private exports: ReportsExportService,
+  ) {}
 
   @Roles(UserRole.ADMIN, UserRole.MANAGER)
   @Get('reports/filter-options')
   getFilterOptions(@Req() req: any) {
     return this.reports.getFilterOptions(req.user);
+  }
+
+  // Full dashboard as a multi-sheet workbook, respecting date range + filters.
+  @Roles(UserRole.ADMIN, UserRole.MANAGER)
+  @Get('reports/export.xlsx')
+  async exportXlsx(@Query() q: Record<string, string>, @Req() req: any): Promise<StreamableFile> {
+    const { buffer, filename } = await this.exports.dashboardXlsx(
+      parseDate(q.from), parseDate(q.to), buildFilters(q), req.user,
+    );
+    return new StreamableFile(buffer, {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      disposition: `attachment; filename="${filename}"`,
+    });
+  }
+
+  // Executive summary as a PDF, respecting date range + filters.
+  @Roles(UserRole.ADMIN, UserRole.MANAGER)
+  @Get('reports/export.pdf')
+  async exportPdf(@Query() q: Record<string, string>, @Req() req: any): Promise<StreamableFile> {
+    const { buffer, filename } = await this.exports.dashboardPdf(
+      parseDate(q.from), parseDate(q.to), buildFilters(q), req.user,
+    );
+    return new StreamableFile(buffer, {
+      type: 'application/pdf',
+      disposition: `attachment; filename="${filename}"`,
+    });
   }
 
   // Any authenticated role sees alerts — a technician in the field benefits

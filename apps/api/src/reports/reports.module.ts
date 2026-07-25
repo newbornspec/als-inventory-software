@@ -14,6 +14,7 @@ import { PalletSoldLine } from '../pallets/pallet-sold-line.entity';
 import { User } from '../users/user.entity';
 import { ReportsController } from './reports.controller';
 import { ReportsService } from './reports.service';
+import { ReportsExportService } from './reports-export.service';
 
 @Module({
   imports: [
@@ -33,6 +34,6 @@ import { ReportsService } from './reports.service';
     ]),
   ],
   controllers: [ReportsController],
-  providers: [ReportsService],
+  providers: [ReportsService, ReportsExportService],
 })
 export class ReportsModule {}

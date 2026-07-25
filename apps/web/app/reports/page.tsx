@@ -296,12 +296,21 @@ export default async function ReportsPage({
       <div className="p-8">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h1 className="text-2xl font-semibold">Reports</h1>
-          <div className="flex items-center gap-3 text-sm">
-            <a href="/api/reports/assets-csv" className="text-neutral-300 underline">
-              Export assets CSV
+          <div className="flex flex-wrap items-center gap-3 text-sm">
+            <a
+              href={`/api/reports/export-xlsx?${deviceQs.toString()}`}
+              className="rounded-md bg-neutral-100 px-3 py-1.5 font-medium text-neutral-900"
+            >
+              Export Excel
             </a>
-            <a href="/api/reports/profit-csv" className="text-neutral-300 underline">
-              Export profit CSV
+            <a
+              href={`/api/reports/export-pdf?${deviceQs.toString()}`}
+              className="rounded-md border border-neutral-700 px-3 py-1.5 text-neutral-200 hover:bg-neutral-900"
+            >
+              Export PDF
+            </a>
+            <a href="/api/reports/assets-csv" className="text-neutral-400 underline">
+              Assets CSV
             </a>
           </div>
         </div>
