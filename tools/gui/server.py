@@ -210,6 +210,17 @@ def refresh(do_login=True):
             STATE["capturing"] = False
 
 
+def launch_info():
+    """Which display path start-gui.sh actually used (cage / xinit / session),
+    written to /tmp/als-launch by the launcher. Shown in the UI's Display box so
+    full-screen problems can be diagnosed from a screenshot."""
+    try:
+        with open("/tmp/als-launch", "r") as fh:
+            return fh.read().strip()
+    except OSError:
+        return ""
+
+
 def ident():
     p = STATE["profile"] or {}
     i = p.get("identification", {}) or {}
@@ -388,6 +399,7 @@ class Handler(BaseHTTPRequestHandler):
                 "server": STATE["conf"].get("AUDIT_URL", ""),
                 "currentUser": STATE["conf"].get("AUDIT_EMAIL", "") or "Operator",
                 "adminPinSet": bool(STATE["conf"].get("AUDIT_ADMIN_PIN", "")),
+                "launch": launch_info(),
             })
 
         if u.path == "/api/drives":

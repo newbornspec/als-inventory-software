@@ -285,10 +285,11 @@ setInterval(clock,1000);clock();
 
 /* Display readout — diagnoses full-screen issues: vp = what the page fills,
    scr = the screen it reports, × = pixel scale. */
+let LAUNCH='';
 function disp(){
   const vw=window.innerWidth, vh=window.innerHeight;
   const sw=(screen&&screen.width)||0, sh=(screen&&screen.height)||0, dpr=window.devicePixelRatio||1;
-  $('ftDisp').textContent='vp '+vw+'×'+vh+' · scr '+sw+'×'+sh+' · ×'+dpr.toFixed(2);
+  $('ftDisp').textContent=(LAUNCH?LAUNCH+' · ':'')+'vp '+vw+'×'+vh+' · scr '+sw+'×'+sh+' · ×'+dpr.toFixed(2);
 }
 window.addEventListener('resize',disp); disp();
 
@@ -304,6 +305,7 @@ function focusCard(name){
 
 async function bootstrap(){
   const b=await jget('/api/bootstrap'); BOOT=b; LOTS=b.lots||[];
+  if(b.launch){ LAUNCH=b.launch; disp(); }
   // connection + user
   const bad=!!b.error||!b.server;
   $('ftDot').className='cdot'+(bad?' bad':''); $('ftConn').textContent=bad?'Not connected':'Connected';

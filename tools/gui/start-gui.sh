@@ -128,6 +128,7 @@ launch_cage() {  # PRIMARY path: Cage owns the display and full-screens us on an
   # boot environment hasn't set one up.
   export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp/als-xdg}"
   mkdir -p "$XDG_RUNTIME_DIR" && chmod 700 "$XDG_RUNTIME_DIR"
+  echo "cage · $BROWSER" > /tmp/als-launch
   echo "Launching kiosk under Cage (Wayland — auto full-screen at native resolution) …"
   case "$BROWSER" in
     chromium|chromium-browser|google-chrome-stable)
@@ -177,6 +178,7 @@ fi
 
 if [ -n "$BROWSER" ] && { [ -n "$DISPLAY" ] || [ -n "$WAYLAND_DISPLAY" ]; }; then
   # Already inside a graphical session — fit the screen, then open the kiosk.
+  echo "session · $BROWSER" > /tmp/als-launch
   fit_display
   start_browser
 
@@ -188,6 +190,7 @@ elif [ -n "$BROWSER" ] && [ -n "$CAGE" ]; then
 elif [ -n "$BROWSER" ] && [ -n "$XSTART" ]; then
   # No session yet — start one just for the kiosk browser. A window manager is
   # not required: the browser is the only client and takes the whole screen.
+  echo "xinit(X) · $BROWSER" > /tmp/als-launch
   RC="/tmp/als-xinitrc"
   cat > "$RC" <<RCEOF
 #!/bin/sh
