@@ -83,6 +83,15 @@ if [ "${ALS_NO_CAGE:-0}" != "1" ] && command -v cage >/dev/null 2>&1; then
   CAGE="cage"
 fi
 
+# For the X fallback: Firefox/Chromium can only go TRUE full-screen if a window
+# manager is present to honour _NET_WM_STATE_FULLSCREEN. In a bare `xinit`
+# session with no WM, the browser opens at ~90% and leaves a border. So pick the
+# first lightweight, EWMH-capable WM we can find and run it before the browser.
+WM=""
+for w in ${ALS_WM:-} openbox matchbox-window-manager jwm fluxbox icewm marco xfwm4; do
+  [ -n "$w" ] && command -v "$w" >/dev/null 2>&1 && { WM="$w"; break; }
+done
+
 # If Cage isn't on the media yet, try a one-time best-effort install so the
 # operator doesn't have to touch a terminal. Needs internet (Ethernet is up at
 # boot; audit Wi-Fi may not be yet). Never blocks boot — on no-internet or any
@@ -190,12 +199,23 @@ elif [ -n "$BROWSER" ] && [ -n "$CAGE" ]; then
 elif [ -n "$BROWSER" ] && [ -n "$XSTART" ]; then
   # No session yet — start one just for the kiosk browser. A window manager is
   # not required: the browser is the only client and takes the whole screen.
-  echo "xinit(X) · $BROWSER" > /tmp/als-launch
+  echo "xinit(X) · $BROWSER${WM:+ +$WM}" > /tmp/als-launch
   RC="/tmp/als-xinitrc"
   cat > "$RC" <<RCEOF
 #!/bin/sh
 xset s off -dpms 2>/dev/null
 bash "$SELF" --fit-display
+${WM:+$WM & sleep 1}
+# Belt-and-braces full-screen: if there is no WM (or it didn't fullscreen us),
+# directly size the kiosk window to the whole screen by its title. Harmless if
+# it is already full. Needs xdotool; skipped silently if absent.
+if command -v xdotool >/dev/null 2>&1; then
+  ( for _ in 1 2 3 4 5 6; do
+      sleep 2
+      W=\$(xdotool search --name "ALS Audit" 2>/dev/null | head -n1)
+      [ -n "\$W" ] && xdotool windowsize "\$W" 100% 100% 2>/dev/null && xdotool windowmove "\$W" 0 0 2>/dev/null && break
+    done ) &
+fi
 exec $BROWSER $(kiosk_args "$BROWSER") '$URL'
 RCEOF
   chmod +x "$RC"
