@@ -4,6 +4,7 @@ import { Nav } from '@/app/components/nav';
 import { money } from '@/lib/money';
 import { formatLabel } from '@/lib/asset-options';
 import { CategoryDonut, CountBars, MonthlyTrend, type LabelCount, type MonthPoint } from './overview-charts';
+import { BatchAnalyticsTable, type BatchAnalytics } from './batch-analytics';
 
 // Mirrors the API's OverviewReport (reports.service.ts).
 interface OverviewReport {
@@ -125,12 +126,13 @@ export default async function ReportsPage({
   if (from) qs.set('from', from.toISOString());
   if (to) qs.set('to', to.toISOString());
 
-  const [overview, profit, sales] = await Promise.all([
+  const [overview, profit, sales, batchAnalytics] = await Promise.all([
     canSee
       ? apiFetch<OverviewReport>(`/reports/overview?${qs.toString()}`).catch(() => null)
       : Promise.resolve(null),
     canSee ? apiFetch<LotProfit[]>('/reports/profit').catch(() => [] as LotProfit[]) : Promise.resolve([] as LotProfit[]),
     canSee ? apiFetch<SalesAnalytics>(`/reports/sales?${qs.toString()}`).catch(() => null) : Promise.resolve(null),
+    canSee ? apiFetch<BatchAnalytics[]>(`/reports/batches?${qs.toString()}`).catch(() => [] as BatchAnalytics[]) : Promise.resolve([] as BatchAnalytics[]),
   ]);
 
   if (!canSee || !overview) {
@@ -436,92 +438,25 @@ export default async function ReportsPage({
           </section>
         )}
 
-        {/* Finance — profit by purchase lot (device sales) */}
+        {/* Batch & lot performance — expandable Batch → Sub-lot drill-down */}
         <section className="mt-8">
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <h2 className="text-sm font-medium text-neutral-400">Profit by purchase lot</h2>
+            <h2 className="text-sm font-medium text-neutral-400">
+              Batch &amp; lot performance{' '}
+              <span className="text-neutral-600">
+                (revenue/profit: {rangeLabel} · totals:{' '}
+                {money(profitTotals.revenue)} rev / {money(profitTotals.profit)} profit)
+              </span>
+            </h2>
             <a href="/api/reports/profit-csv" className="text-sm text-neutral-300 underline">
               Export profit CSV
             </a>
           </div>
-
-          <div className="mt-3 overflow-x-auto rounded-lg border border-neutral-800">
-            <table className="w-full text-left text-sm">
-              <thead className="bg-neutral-900 text-neutral-400">
-                <tr>
-                  <th className="px-3 py-2">Lot</th>
-                  <th className="px-3 py-2">Supplier</th>
-                  <th className="px-3 py-2 text-right">Lot cost</th>
-                  <th className="px-3 py-2 text-right">Sold / units</th>
-                  <th className="px-3 py-2 text-right">Revenue</th>
-                  <th className="px-3 py-2 text-right">Cost of sold</th>
-                  <th className="px-3 py-2 text-right">Profit</th>
-                  <th className="px-3 py-2 text-right">Margin</th>
-                </tr>
-              </thead>
-              <tbody>
-                {profit.map((r) => (
-                  <tr key={r.batchId} className="border-t border-neutral-800">
-                    <td className="px-3 py-2 text-neutral-200">
-                      <Link href={`/batches/${r.batchId}`} className="underline">
-                        {r.batchNumber}
-                      </Link>
-                    </td>
-                    <td className="px-3 py-2 text-neutral-400">{r.source ?? '—'}</td>
-                    <td className="px-3 py-2 text-right text-neutral-400">
-                      {r.totalCost != null ? money(r.totalCost) : '—'}
-                    </td>
-                    <td className="px-3 py-2 text-right text-neutral-400">
-                      {r.unitsSold} / {r.units}
-                    </td>
-                    <td className="px-3 py-2 text-right text-neutral-300">{money(r.revenue)}</td>
-                    <td className="px-3 py-2 text-right text-neutral-400">{money(r.costOfSold)}</td>
-                    <td
-                      className={
-                        'px-3 py-2 text-right font-medium ' +
-                        (r.profit > 0 ? 'text-emerald-400' : r.profit < 0 ? 'text-red-400' : 'text-neutral-300')
-                      }
-                    >
-                      {money(r.profit)}
-                    </td>
-                    <td className="px-3 py-2 text-right text-neutral-400">
-                      {r.margin == null ? '—' : `${(r.margin * 100).toFixed(1)}%`}
-                    </td>
-                  </tr>
-                ))}
-                {profit.length === 0 && (
-                  <tr>
-                    <td colSpan={8} className="px-3 py-6 text-center text-neutral-500">
-                      No purchase lots yet.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-              {profit.length > 0 && (
-                <tfoot>
-                  <tr className="border-t border-neutral-700 bg-neutral-900/60 font-medium">
-                    <td className="px-3 py-2" colSpan={4}>
-                      Total
-                    </td>
-                    <td className="px-3 py-2 text-right">{money(profitTotals.revenue)}</td>
-                    <td className="px-3 py-2 text-right text-neutral-400">{money(profitTotals.costOfSold)}</td>
-                    <td
-                      className={
-                        'px-3 py-2 text-right ' +
-                        (profitTotals.profit >= 0 ? 'text-emerald-400' : 'text-red-400')
-                      }
-                    >
-                      {money(profitTotals.profit)}
-                    </td>
-                    <td className="px-3 py-2" />
-                  </tr>
-                </tfoot>
-              )}
-            </table>
-          </div>
+          <BatchAnalyticsTable rows={batchAnalytics} />
           <p className="mt-2 text-xs text-neutral-600">
-            Device sales only — pallet-goods revenue is included in the Revenue/Profit cards above.
-            Sale prices are captured when items are marked Sold; unpriced sales count as £0 revenue.
+            Expand a lot to see its sub-lots (assets, sold, avg grade, % audited, cost, revenue).
+            Revenue/profit follow the selected range; asset counts and cost are current totals.
+            Pallets are separate containers, not children of a batch, so they aren&apos;t counted here.
           </p>
         </section>
       </div>

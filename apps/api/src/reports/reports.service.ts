@@ -93,6 +93,43 @@ const GRADE_LABELS: Record<string, string> = {
   scrap: 'Scrap',
 };
 
+const GRADE_POINTS: Record<string, number> = { grade_a: 4, grade_b: 3, grade_c: 2, grade_d: 1 };
+function gradeLetter(avg: number): string {
+  return avg >= 3.5 ? 'A' : avg >= 2.5 ? 'B' : avg >= 1.5 ? 'C' : 'D';
+}
+
+// Batch → sub-lot performance for the Reports drill-down. Counts/cost are
+// lifetime snapshots; revenue/profit/unitsSold respect the from/to range.
+// (Pallets aren't children of batches in this data model — the hierarchy is
+// Batch → Sub-lot → Assets — so there's no per-batch pallet count.)
+export interface BatchAnalytics {
+  batchId: string;
+  batchNumber: string;
+  owner: string | null; // assigned owner
+  createdBy: string | null;
+  source: string | null; // supplier
+  createdAt: string;
+  status: string;
+  totalSubLots: number;
+  totalAssets: number;
+  unitsSold: number;
+  totalCost: number | null;
+  revenue: number;
+  profit: number;
+  marginPct: number | null;
+  subLots: {
+    lotId: string | null;
+    lotNumber: string;
+    description: string | null;
+    assets: number;
+    sold: number;
+    cost: number;
+    revenue: number;
+    avgGrade: string | null;
+    completionPct: number; // audited / total
+  }[];
+}
+
 // Sales & finance analytics. Summary + top-lists respect the from/to range;
 // the monthly trend is a rolling 12-month window (a trend needs several months
 // to read). Device sales draw sale_price + allocated cost; pallet goods draw
@@ -439,6 +476,130 @@ export class ReportsService {
       byAuditStatus: toRows(tally((a) => a.auditStatus ?? 'not_audited')),
       byManufacturer,
     };
+  }
+
+  async getBatchAnalytics(from?: Date, to?: Date, user?: RequestUser): Promise<BatchAnalytics[]> {
+    let [batches, assets, lots] = await Promise.all([
+      this.batches.find({ relations: ['owner', 'createdBy'], order: { createdAt: 'DESC' } }),
+      this.assets
+        .createQueryBuilder('a')
+        .select([
+          'a.id', 'a.batchId', 'a.lotId', 'a.conditionGrade', 'a.auditStatus',
+          'a.purchaseCost', 'a.salePrice', 'a.stockStatus', 'a.soldAt',
+        ])
+        .getMany(),
+      this.lots.find(),
+    ]);
+
+    const owned = await this.ownedBatchIds(user);
+    if (owned) {
+      batches = batches.filter((b) => owned.has(b.id));
+      assets = assets.filter((a) => a.batchId != null && owned.has(a.batchId));
+      lots = lots.filter((l) => l.batchId != null && owned.has(l.batchId));
+    }
+
+    const batchById = new Map(batches.map((b) => [b.id, b]));
+    const unitsPerBatch = new Map<string, number>();
+    for (const a of assets) if (a.batchId) unitsPerBatch.set(a.batchId, (unitsPerBatch.get(a.batchId) ?? 0) + 1);
+    const allocated = (a: Asset): number => {
+      if (a.purchaseCost != null) return a.purchaseCost;
+      const b = a.batchId ? batchById.get(a.batchId) : undefined;
+      const u = a.batchId ? unitsPerBatch.get(a.batchId) ?? 0 : 0;
+      return b?.totalCost != null && u > 0 ? b.totalCost / u : 0;
+    };
+    const inRange = (d: Date | string | null | undefined): boolean => {
+      if (!d) return false;
+      const t = new Date(d).getTime();
+      if (from && t < from.getTime()) return false;
+      if (to && t > to.getTime()) return false;
+      return true;
+    };
+
+    const assetsByBatch = new Map<string, Asset[]>();
+    for (const a of assets) {
+      if (!a.batchId) continue;
+      const arr = assetsByBatch.get(a.batchId) ?? [];
+      arr.push(a);
+      assetsByBatch.set(a.batchId, arr);
+    }
+    const lotsByBatch = new Map<string, Lot[]>();
+    for (const l of lots) {
+      if (!l.batchId) continue;
+      const arr = lotsByBatch.get(l.batchId) ?? [];
+      arr.push(l);
+      lotsByBatch.set(l.batchId, arr);
+    }
+
+    // Roll a set of assets up into the sub-lot's stats.
+    const summarise = (items: Asset[]) => {
+      const sold = items.filter((a) => a.stockStatus === AssetStockStatus.SOLD && inRange(a.soldAt));
+      let points = 0;
+      let graded = 0;
+      let audited = 0;
+      for (const a of items) {
+        const p = a.conditionGrade ? GRADE_POINTS[a.conditionGrade] : undefined;
+        if (p != null) {
+          points += p;
+          graded += 1;
+        }
+        if (a.auditStatus != null) audited += 1;
+      }
+      return {
+        assets: items.length,
+        sold: sold.length,
+        cost: round2(items.reduce((s, a) => s + allocated(a), 0)),
+        revenue: round2(sold.reduce((s, a) => s + (a.salePrice ?? 0), 0)),
+        avgGrade: graded > 0 ? gradeLetter(points / graded) : null,
+        completionPct: items.length > 0 ? round2((audited / items.length) * 100) : 0,
+      };
+    };
+
+    return batches.map((b) => {
+      const bAssets = assetsByBatch.get(b.id) ?? [];
+      const bLots = (lotsByBatch.get(b.id) ?? []).sort((x, y) => x.lotNumber.localeCompare(y.lotNumber));
+      const soldInRange = bAssets.filter((a) => a.stockStatus === AssetStockStatus.SOLD && inRange(a.soldAt));
+      const revenue = round2(soldInRange.reduce((s, a) => s + (a.salePrice ?? 0), 0));
+      const cost = round2(soldInRange.reduce((s, a) => s + allocated(a), 0));
+      const profit = round2(revenue - cost);
+
+      const subLots: BatchAnalytics['subLots'] = bLots.map((l) => {
+        const lAssets = bAssets.filter((a) => a.lotId === l.id);
+        return {
+          lotId: l.id as string | null,
+          lotNumber: l.lotNumber,
+          description: l.description,
+          ...summarise(lAssets),
+        };
+      });
+      // Assets sitting directly in the batch (no sub-lot) as a synthetic group.
+      const direct = bAssets.filter((a) => a.lotId == null);
+      if (direct.length > 0) {
+        subLots.push({
+          lotId: null,
+          lotNumber: 'No sub-lot',
+          description: null,
+          ...summarise(direct),
+        });
+      }
+
+      return {
+        batchId: b.id,
+        batchNumber: b.batchNumber,
+        owner: b.owner?.name ?? null,
+        createdBy: b.createdBy?.name ?? null,
+        source: b.source,
+        createdAt: (b.createdAt instanceof Date ? b.createdAt : new Date(b.createdAt)).toISOString(),
+        status: b.status,
+        totalSubLots: bLots.length,
+        totalAssets: bAssets.length,
+        unitsSold: soldInRange.length,
+        totalCost: b.totalCost,
+        revenue,
+        profit,
+        marginPct: revenue > 0 ? round2((profit / revenue) * 100) : null,
+        subLots,
+      };
+    });
   }
 
   async getSalesAnalytics(from?: Date, to?: Date, user?: RequestUser): Promise<SalesAnalytics> {
