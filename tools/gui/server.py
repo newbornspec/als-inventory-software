@@ -356,6 +356,7 @@ class Handler(BaseHTTPRequestHandler):
                 "wipeEnabled": STATE["conf"].get("AUDIT_WIPE", "0") == "1",
                 "wipeMethod": STATE["conf"].get("AUDIT_WIPE_METHOD", "auto"),
                 "server": STATE["conf"].get("AUDIT_URL", ""),
+                "currentUser": STATE["conf"].get("AUDIT_EMAIL", "") or "Operator",
                 "adminPinSet": bool(STATE["conf"].get("AUDIT_ADMIN_PIN", "")),
             })
 
