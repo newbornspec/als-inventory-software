@@ -25,6 +25,7 @@
 #     ALS_GUI_PORT=8800     port for the local backend
 #     ALS_BROWSER=firefox   force a particular browser binary
 #     ALS_NO_CAGE=1         skip Cage, use the X fallback (debug)
+#     ALS_AUTO_CAGE=0       don't auto-install Cage at boot (default: try if online)
 #     ALS_NO_X=1            skip the browser, just serve (headless/debug)
 
 PORT="${ALS_GUI_PORT:-8800}"
@@ -80,6 +81,19 @@ done
 CAGE=""
 if [ "${ALS_NO_CAGE:-0}" != "1" ] && command -v cage >/dev/null 2>&1; then
   CAGE="cage"
+fi
+
+# If Cage isn't on the media yet, try a one-time best-effort install so the
+# operator doesn't have to touch a terminal. Needs internet (Ethernet is up at
+# boot; audit Wi-Fi may not be yet). Never blocks boot — on no-internet or any
+# failure we simply fall through to the X full-screen path below.
+if [ -z "$CAGE" ] && [ "${ALS_NO_CAGE:-0}" != "1" ] && [ "${ALS_AUTO_CAGE:-1}" = "1" ] \
+   && command -v pacman >/dev/null 2>&1; then
+  if ping -c1 -W2 archlinux.org >/dev/null 2>&1 || ping -c1 -W2 8.8.8.8 >/dev/null 2>&1; then
+    echo "Cage not installed — attempting a one-time install for full-screen …"
+    pacman -Sy --noconfirm cage >/dev/null 2>&1 || true
+    command -v cage >/dev/null 2>&1 && CAGE="cage"
+  fi
 fi
 
 kiosk_args() {   # per-browser full-screen flags
