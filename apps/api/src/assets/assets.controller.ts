@@ -47,6 +47,14 @@ export class AssetsController {
     return this.assets.findSold();
   }
 
+  // Bulk return from the Sold page — admin only, like single returns.
+  // No batchId -> each asset returns to its own original lot.
+  @Roles(UserRole.ADMIN)
+  @Post('sold/return-bulk')
+  bulkReturn(@Body() body: { assetIds: string[]; batchId?: string }, @Req() req: any) {
+    return this.assets.bulkReturnFromSold(body?.assetIds ?? [], body?.batchId, req.user);
+  }
+
   @Get(':id')
   findOne(@Param('id') id: string, @Req() req: any) {
     return this.assets.findOne(id, req.user);

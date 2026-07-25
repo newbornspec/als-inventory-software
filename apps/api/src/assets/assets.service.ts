@@ -316,6 +316,27 @@ export class AssetsService {
     return this.findOne(id);
   }
 
+  // Bulk return for the Sold page: batchId omitted -> each asset goes back to
+  // its own original lot; batchId given -> all go to that lot. Per-item
+  // failures (e.g. already returned in another tab) are skipped, not fatal.
+  async bulkReturnFromSold(
+    assetIds: string[],
+    batchId: string | undefined,
+    user: RequestUser,
+  ): Promise<{ returned: number; skipped: number }> {
+    let returned = 0;
+    let skipped = 0;
+    for (const id of assetIds) {
+      try {
+        await this.returnFromSold(id, batchId, user);
+        returned += 1;
+      } catch {
+        skipped += 1;
+      }
+    }
+    return { returned, skipped };
+  }
+
   async remove(id: string, userId?: string): Promise<void> {
     const before = await this.findOne(id); // 404s if the asset doesn't exist
     await this.assets.delete(id);

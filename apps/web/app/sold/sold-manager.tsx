@@ -1,0 +1,585 @@
+'use client';
+
+import { useMemo, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import {
+  bulkReturnSoldAssets,
+  bulkReturnSoldPalletLines,
+  type SoldAsset,
+  type SoldPalletLine,
+} from '@/lib/actions/sold';
+
+// The Sold page as a structured module, not a flat archive: sold devices are
+// grouped Batch → Sub-lot (mirroring the app's hierarchy), pallet goods by
+// pallet; groups expand/collapse; rows are checkbox-selectable for bulk
+// actions — admin returns (to the original location by default, or a chosen
+// destination) and CSV export.
+
+interface Dest {
+  id: string;
+  label: string;
+}
+
+const cellCls = 'px-3 py-2';
+const filterCls =
+  'rounded-md border border-neutral-700 bg-neutral-900 px-2 py-1.5 text-sm outline-none focus:border-neutral-500';
+
+export function SoldManager({
+  assets,
+  palletLines,
+  batchDests,
+  palletDests,
+  isAdmin,
+}: {
+  assets: SoldAsset[];
+  palletLines: SoldPalletLine[];
+  batchDests: Dest[];
+  palletDests: Dest[];
+  isAdmin: boolean;
+}) {
+  const router = useRouter();
+
+  // --- filters (client-side; the data is already loaded) ---
+  const [q, setQ] = useState('');
+  const [fBatch, setFBatch] = useState('');
+  const [fMan, setFMan] = useState('');
+  const [fSoldBy, setFSoldBy] = useState('');
+  const [fPallet, setFPallet] = useState('');
+  const [from, setFrom] = useState('');
+  const [to, setTo] = useState('');
+
+  // --- selection + tree state ---
+  const [selA, setSelA] = useState<Set<string>>(new Set());
+  const [selP, setSelP] = useState<Set<string>>(new Set());
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [destBatch, setDestBatch] = useState('');
+  const [destPallet, setDestPallet] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const man = (a: SoldAsset) => a.manufacturer ?? a.product?.manufacturer ?? '';
+  const mod = (a: SoldAsset) => a.model ?? a.product?.model ?? '';
+  const date = (d: string | null | undefined) => (d ? new Date(d).toLocaleString('en-GB') : '—');
+
+  const inDates = (d: string | null | undefined) => {
+    if (!from && !to) return true;
+    if (!d) return false;
+    const t = new Date(d).getTime();
+    if (from && t < new Date(from).getTime()) return false;
+    if (to && t > new Date(`${to}T23:59:59`).getTime()) return false;
+    return true;
+  };
+
+  const filteredAssets = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    return assets.filter((a) => {
+      if (fBatch && (a.batch?.id ?? 'none') !== fBatch) return false;
+      if (fMan && man(a) !== fMan) return false;
+      if (fSoldBy && (a.soldBy?.name ?? '') !== fSoldBy) return false;
+      if (!inDates(a.soldAt)) return false;
+      if (!needle) return true;
+      return [a.name, a.tag, a.serialNumber, man(a), mod(a), a.batch?.batchNumber, a.lot?.lotNumber]
+        .some((v) => (v ?? '').toLowerCase().includes(needle));
+    });
+  }, [assets, q, fBatch, fMan, fSoldBy, from, to]);
+
+  const filteredPallet = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    return palletLines.filter((l) => {
+      if (fPallet && (l.palletId ?? l.palletNumber) !== fPallet) return false;
+      if (fSoldBy && (l.soldBy?.name ?? '') !== fSoldBy) return false;
+      if (!inDates(l.soldAt)) return false;
+      if (!needle) return true;
+      return [l.variant, l.palletNumber].some((v) => (v ?? '').toLowerCase().includes(needle));
+    });
+  }, [palletLines, q, fPallet, fSoldBy, from, to]);
+
+  // --- grouping: Batch → Sub-lot → devices ---
+  const assetGroups = useMemo(() => {
+    const byBatch = new Map<string, { label: string; lots: Map<string, { label: string; items: SoldAsset[] }> }>();
+    for (const a of filteredAssets) {
+      const bKey = a.batch?.id ?? 'none';
+      const bLabel = a.batch?.batchNumber ?? 'No lot';
+      if (!byBatch.has(bKey)) byBatch.set(bKey, { label: bLabel, lots: new Map() });
+      const g = byBatch.get(bKey)!;
+      const lKey = a.lot?.id ?? 'none';
+      const lLabel = a.lot?.lotNumber ?? 'No sub-lot';
+      if (!g.lots.has(lKey)) g.lots.set(lKey, { label: lLabel, items: [] });
+      g.lots.get(lKey)!.items.push(a);
+    }
+    return [...byBatch.entries()]
+      .map(([key, g]) => ({
+        key,
+        label: g.label,
+        count: [...g.lots.values()].reduce((s, l) => s + l.items.length, 0),
+        lots: [...g.lots.entries()]
+          .map(([lk, l]) => ({ key: `${key}|${lk}`, label: l.label, items: l.items }))
+          .sort((x, y) => x.label.localeCompare(y.label)),
+      }))
+      .sort((x, y) => y.label.localeCompare(x.label));
+  }, [filteredAssets]);
+
+  const palletGroups = useMemo(() => {
+    const byPallet = new Map<string, { label: string; items: SoldPalletLine[] }>();
+    for (const l of filteredPallet) {
+      const key = l.palletId ?? l.palletNumber;
+      const label = l.palletNumber + (l.palletId ? '' : ' (pallet deleted)');
+      if (!byPallet.has(key)) byPallet.set(key, { label, items: [] });
+      byPallet.get(key)!.items.push(l);
+    }
+    return [...byPallet.entries()]
+      .map(([key, g]) => ({
+        key: `p:${key}`,
+        label: g.label,
+        units: g.items.reduce((s, x) => s + x.quantity, 0),
+        items: g.items,
+      }))
+      .sort((x, y) => y.label.localeCompare(x.label));
+  }, [filteredPallet]);
+
+  // Filter dropdown options come from the full (unfiltered) data.
+  const batchOptions = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const a of assets) m.set(a.batch?.id ?? 'none', a.batch?.batchNumber ?? 'No lot');
+    return [...m.entries()].sort((x, y) => y[1].localeCompare(x[1]));
+  }, [assets]);
+  const manOptions = useMemo(
+    () => [...new Set(assets.map(man).filter(Boolean))].sort(),
+    [assets],
+  );
+  const soldByOptions = useMemo(
+    () =>
+      [...new Set([...assets, ...palletLines].map((x) => x.soldBy?.name ?? '').filter(Boolean))].sort(),
+    [assets, palletLines],
+  );
+  const palletOptions = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const l of palletLines) m.set(l.palletId ?? l.palletNumber, l.palletNumber);
+    return [...m.entries()].sort((x, y) => y[1].localeCompare(x[1]));
+  }, [palletLines]);
+
+  const hasFilters = q || fBatch || fMan || fSoldBy || fPallet || from || to;
+
+  // --- selection helpers ---
+  const toggleIn = (set: Set<string>, ids: string[], on: boolean) => {
+    const next = new Set(set);
+    for (const id of ids) (on ? next.add(id) : next.delete(id));
+    return next;
+  };
+  const allIn = (set: Set<string>, ids: string[]) => ids.length > 0 && ids.every((id) => set.has(id));
+
+  function toggleCollapse(key: string) {
+    setCollapsed((c) => {
+      const next = new Set(c);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+
+  // --- bulk actions ---
+  async function doReturnAssets(batchId?: string) {
+    const ids = [...selA];
+    const where = batchId
+      ? batchDests.find((d) => d.id === batchId)?.label ?? 'the selected lot'
+      : 'their original lots';
+    if (!confirm(`Return ${ids.length} device${ids.length === 1 ? '' : 's'} to ${where}?`)) return;
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    const res = await bulkReturnSoldAssets(ids, batchId);
+    setBusy(false);
+    if (res.error) {
+      setError(res.error);
+      return;
+    }
+    setNotice(`Returned ${res.returned} device${res.returned === 1 ? '' : 's'}${res.skipped ? ` (${res.skipped} skipped)` : ''}.`);
+    setSelA(new Set());
+    router.refresh();
+  }
+
+  async function doReturnPallet(palletId?: string) {
+    const ids = [...selP];
+    const where = palletId
+      ? palletDests.find((d) => d.id === palletId)?.label ?? 'the selected pallet'
+      : 'their original pallets';
+    if (!confirm(`Return ${ids.length} sold quantit${ids.length === 1 ? 'y' : 'ies'} to ${where}?`)) return;
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    const res = await bulkReturnSoldPalletLines(ids, palletId);
+    setBusy(false);
+    if (res.error) {
+      setError(res.error);
+      return;
+    }
+    setNotice(`Returned ${res.returned} quantit${res.returned === 1 ? 'y' : 'ies'}${res.skipped ? ` (${res.skipped} skipped)` : ''}.`);
+    setSelP(new Set());
+    router.refresh();
+  }
+
+  function downloadCsv(filename: string, header: string[], lines: string[][]) {
+    const esc = (v: string) => (/[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v);
+    const csv = [header, ...lines].map((row) => row.map(esc).join(',')).join('\n');
+    const a = document.createElement('a');
+    a.href = `data:text/csv;charset=utf-8,${encodeURIComponent(csv)}`;
+    a.download = filename;
+    a.click();
+  }
+
+  function exportAssets() {
+    const rows = filteredAssets.filter((a) => selA.has(a.id));
+    downloadCsv(
+      'sold-devices.csv',
+      ['Name', 'Manufacturer', 'Model', 'Serial', 'Tag', 'Lot', 'Sub-lot', 'Date sold', 'Sold by'],
+      rows.map((a) => [
+        a.name, man(a), mod(a), a.serialNumber ?? '', a.tag,
+        a.batch?.batchNumber ?? '', a.lot?.lotNumber ?? '', date(a.soldAt), a.soldBy?.name ?? '',
+      ]),
+    );
+  }
+
+  function exportPallet() {
+    const rows = filteredPallet.filter((l) => selP.has(l.id));
+    downloadCsv(
+      'sold-pallet-goods.csv',
+      ['Item', 'Quantity', 'Pallet', 'Date sold', 'Sold by'],
+      rows.map((l) => [l.variant, String(l.quantity), l.palletNumber, date(l.soldAt), l.soldBy?.name ?? '']),
+    );
+  }
+
+  const chk = 'h-4 w-4 accent-emerald-600';
+  const btn =
+    'rounded-md border border-neutral-600 px-2.5 py-1 text-xs text-neutral-200 hover:bg-neutral-800 disabled:opacity-50';
+
+  function BulkBar({
+    count,
+    dests,
+    dest,
+    setDest,
+    onOriginal,
+    onChosen,
+    onExport,
+    onClear,
+  }: {
+    count: number;
+    dests: Dest[];
+    dest: string;
+    setDest: (v: string) => void;
+    onOriginal: () => void;
+    onChosen: () => void;
+    onExport: () => void;
+    onClear: () => void;
+  }) {
+    if (count === 0) return null;
+    return (
+      <div className="mt-2 flex flex-wrap items-center gap-2 rounded-md border border-neutral-700 bg-neutral-900/70 px-3 py-2">
+        <span className="text-xs font-medium text-neutral-200">{count} selected</span>
+        {isAdmin && (
+          <>
+            <button onClick={onOriginal} disabled={busy} className={btn}>
+              {busy ? 'Working…' : 'Return to original location'}
+            </button>
+            <span className="flex items-center gap-1">
+              <select value={dest} onChange={(e) => setDest(e.target.value)} className={filterCls + ' py-1 text-xs'}>
+                <option value="">— other destination —</option>
+                {dests.map((d) => (
+                  <option key={d.id} value={d.id}>{d.label}</option>
+                ))}
+              </select>
+              <button onClick={onChosen} disabled={busy || !dest} className={btn}>
+                Return there
+              </button>
+            </span>
+          </>
+        )}
+        <button onClick={onExport} disabled={busy} className={btn}>
+          Export selected (CSV)
+        </button>
+        <button onClick={onClear} disabled={busy} className="text-xs text-neutral-500 hover:text-neutral-300">
+          Clear
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-6">
+      {/* Filters */}
+      <div className="flex flex-wrap items-center gap-2">
+        <input
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder="Search tag, serial, name, make, model, lot…"
+          className={filterCls + ' min-w-[16rem] flex-1'}
+        />
+        <select value={fBatch} onChange={(e) => setFBatch(e.target.value)} className={filterCls}>
+          <option value="">All lots</option>
+          {batchOptions.map(([id, label]) => (
+            <option key={id} value={id}>{label}</option>
+          ))}
+        </select>
+        <select value={fPallet} onChange={(e) => setFPallet(e.target.value)} className={filterCls}>
+          <option value="">All pallets</option>
+          {palletOptions.map(([id, label]) => (
+            <option key={id} value={id}>{label}</option>
+          ))}
+        </select>
+        <select value={fMan} onChange={(e) => setFMan(e.target.value)} className={filterCls}>
+          <option value="">All manufacturers</option>
+          {manOptions.map((m) => (
+            <option key={m} value={m}>{m}</option>
+          ))}
+        </select>
+        <select value={fSoldBy} onChange={(e) => setFSoldBy(e.target.value)} className={filterCls}>
+          <option value="">Sold by anyone</option>
+          {soldByOptions.map((s) => (
+            <option key={s} value={s}>{s}</option>
+          ))}
+        </select>
+        <label className="flex items-center gap-1 text-xs text-neutral-500">
+          from <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} className={filterCls} />
+        </label>
+        <label className="flex items-center gap-1 text-xs text-neutral-500">
+          to <input type="date" value={to} onChange={(e) => setTo(e.target.value)} className={filterCls} />
+        </label>
+        {hasFilters && (
+          <button
+            onClick={() => { setQ(''); setFBatch(''); setFMan(''); setFSoldBy(''); setFPallet(''); setFrom(''); setTo(''); }}
+            className="text-xs text-neutral-500 hover:text-neutral-300"
+          >
+            Clear filters
+          </button>
+        )}
+      </div>
+
+      {(notice || error) && (
+        <p className={`mt-3 text-sm ${error ? 'text-red-400' : 'text-emerald-400'}`}>{error ?? notice}</p>
+      )}
+
+      {/* ============ Serialized devices: Batch → Sub-lot → device ============ */}
+      <section className="mt-6">
+        <div className="flex items-center gap-3">
+          <label className="flex items-center gap-2 text-sm font-medium text-neutral-300">
+            <input
+              type="checkbox"
+              className={chk}
+              checked={allIn(selA, filteredAssets.map((a) => a.id))}
+              onChange={(e) => setSelA(toggleIn(selA, filteredAssets.map((a) => a.id), e.target.checked))}
+              aria-label="Select all devices"
+            />
+            Serialized devices
+          </label>
+          <span className="text-sm text-neutral-500">
+            {filteredAssets.length}{hasFilters ? ` of ${assets.length}` : ''} sold
+          </span>
+        </div>
+
+        <BulkBar
+          count={selA.size}
+          dests={batchDests}
+          dest={destBatch}
+          setDest={setDestBatch}
+          onOriginal={() => void doReturnAssets()}
+          onChosen={() => void doReturnAssets(destBatch)}
+          onExport={exportAssets}
+          onClear={() => setSelA(new Set())}
+        />
+
+        <div className="mt-3 space-y-3">
+          {assetGroups.map((g) => {
+            const gIds = g.lots.flatMap((l) => l.items.map((a) => a.id));
+            const open = !collapsed.has(g.key);
+            return (
+              <div key={g.key} className="rounded-lg border border-neutral-800">
+                <div className="flex items-center gap-2 bg-neutral-900 px-3 py-2">
+                  <button onClick={() => toggleCollapse(g.key)} className="w-5 text-neutral-400 hover:text-neutral-200" aria-label={open ? 'Collapse' : 'Expand'}>
+                    {open ? '▾' : '▸'}
+                  </button>
+                  <input
+                    type="checkbox"
+                    className={chk}
+                    checked={allIn(selA, gIds)}
+                    onChange={(e) => setSelA(toggleIn(selA, gIds, e.target.checked))}
+                    aria-label={`Select all in ${g.label}`}
+                  />
+                  <span className="font-medium text-neutral-100">{g.label}</span>
+                  <span className="text-xs text-neutral-500">
+                    {g.count} item{g.count === 1 ? '' : 's'} sold
+                  </span>
+                </div>
+
+                {open &&
+                  g.lots.map((l) => {
+                    const lIds = l.items.map((a) => a.id);
+                    const lOpen = !collapsed.has(l.key);
+                    return (
+                      <div key={l.key} className="border-t border-neutral-800">
+                        <div className="flex items-center gap-2 px-3 py-1.5 pl-8">
+                          <button onClick={() => toggleCollapse(l.key)} className="w-5 text-neutral-500 hover:text-neutral-300" aria-label={lOpen ? 'Collapse' : 'Expand'}>
+                            {lOpen ? '▾' : '▸'}
+                          </button>
+                          <input
+                            type="checkbox"
+                            className={chk}
+                            checked={allIn(selA, lIds)}
+                            onChange={(e) => setSelA(toggleIn(selA, lIds, e.target.checked))}
+                            aria-label={`Select all in ${l.label}`}
+                          />
+                          <span className="text-sm text-neutral-300">{l.label}</span>
+                          <span className="text-xs text-neutral-600">{l.items.length} item{l.items.length === 1 ? '' : 's'}</span>
+                        </div>
+                        {lOpen && (
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-left text-xs">
+                              <thead className="text-neutral-500">
+                                <tr>
+                                  <th className="w-10 px-3 py-1.5" />
+                                  <th className={cellCls}>Name</th>
+                                  <th className={cellCls}>Manufacturer</th>
+                                  <th className={cellCls}>Model</th>
+                                  <th className={cellCls}>Serial</th>
+                                  <th className={cellCls}>Tag</th>
+                                  <th className={cellCls}>Date sold</th>
+                                  <th className={cellCls}>Sold by</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {l.items.map((a) => (
+                                  <tr key={a.id} className="border-t border-neutral-800/60 hover:bg-neutral-900/40">
+                                    <td className="px-3 py-1.5 pl-12">
+                                      <input
+                                        type="checkbox"
+                                        className={chk}
+                                        checked={selA.has(a.id)}
+                                        onChange={(e) => setSelA(toggleIn(selA, [a.id], e.target.checked))}
+                                        aria-label={`Select ${a.name}`}
+                                      />
+                                    </td>
+                                    <td className={`${cellCls} text-neutral-100`}>{a.name}</td>
+                                    <td className={`${cellCls} text-neutral-400`}>{man(a) || '—'}</td>
+                                    <td className={`${cellCls} text-neutral-400`}>{mod(a) || '—'}</td>
+                                    <td className={`${cellCls} text-neutral-400`}>{a.serialNumber ?? '—'}</td>
+                                    <td className={`${cellCls} text-neutral-400`}>{a.tag}</td>
+                                    <td className={`${cellCls} text-neutral-400`}>{date(a.soldAt)}</td>
+                                    <td className={`${cellCls} text-neutral-400`}>{a.soldBy?.name ?? '—'}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+              </div>
+            );
+          })}
+          {assetGroups.length === 0 && (
+            <p className="rounded-lg border border-neutral-800 px-4 py-6 text-center text-sm text-neutral-500">
+              {hasFilters ? 'No sold devices match the filters.' : 'No sold devices yet.'}
+            </p>
+          )}
+        </div>
+      </section>
+
+      {/* ============ Pallet goods: grouped by pallet ============ */}
+      <section className="mt-8">
+        <div className="flex items-center gap-3">
+          <label className="flex items-center gap-2 text-sm font-medium text-neutral-300">
+            <input
+              type="checkbox"
+              className={chk}
+              checked={allIn(selP, filteredPallet.map((l) => l.id))}
+              onChange={(e) => setSelP(toggleIn(selP, filteredPallet.map((l) => l.id), e.target.checked))}
+              aria-label="Select all pallet goods"
+            />
+            Pallet goods
+          </label>
+          <span className="text-sm text-neutral-500">
+            {filteredPallet.reduce((s, l) => s + l.quantity, 0)} units
+            {hasFilters ? ` shown of ${palletLines.reduce((s, l) => s + l.quantity, 0)}` : ''}
+          </span>
+        </div>
+
+        <BulkBar
+          count={selP.size}
+          dests={palletDests}
+          dest={destPallet}
+          setDest={setDestPallet}
+          onOriginal={() => void doReturnPallet()}
+          onChosen={() => void doReturnPallet(destPallet)}
+          onExport={exportPallet}
+          onClear={() => setSelP(new Set())}
+        />
+
+        <div className="mt-3 space-y-3">
+          {palletGroups.map((g) => {
+            const gIds = g.items.map((x) => x.id);
+            const open = !collapsed.has(g.key);
+            return (
+              <div key={g.key} className="rounded-lg border border-neutral-800">
+                <div className="flex items-center gap-2 bg-neutral-900 px-3 py-2">
+                  <button onClick={() => toggleCollapse(g.key)} className="w-5 text-neutral-400 hover:text-neutral-200" aria-label={open ? 'Collapse' : 'Expand'}>
+                    {open ? '▾' : '▸'}
+                  </button>
+                  <input
+                    type="checkbox"
+                    className={chk}
+                    checked={allIn(selP, gIds)}
+                    onChange={(e) => setSelP(toggleIn(selP, gIds, e.target.checked))}
+                    aria-label={`Select all from ${g.label}`}
+                  />
+                  <span className="font-medium text-neutral-100">{g.label}</span>
+                  <span className="text-xs text-neutral-500">
+                    {g.units} unit{g.units === 1 ? '' : 's'} · {g.items.length} row{g.items.length === 1 ? '' : 's'}
+                  </span>
+                </div>
+                {open && (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs">
+                      <thead className="text-neutral-500">
+                        <tr>
+                          <th className="w-10 px-3 py-1.5" />
+                          <th className={cellCls}>Item</th>
+                          <th className={cellCls}>Qty</th>
+                          <th className={cellCls}>Date sold</th>
+                          <th className={cellCls}>Sold by</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {g.items.map((l) => (
+                          <tr key={l.id} className="border-t border-neutral-800/60 hover:bg-neutral-900/40">
+                            <td className="px-3 py-1.5 pl-8">
+                              <input
+                                type="checkbox"
+                                className={chk}
+                                checked={selP.has(l.id)}
+                                onChange={(e) => setSelP(toggleIn(selP, [l.id], e.target.checked))}
+                                aria-label={`Select ${l.variant}`}
+                              />
+                            </td>
+                            <td className={`${cellCls} text-neutral-100`}>{l.variant}</td>
+                            <td className={`${cellCls} font-medium tabular-nums`}>{l.quantity}</td>
+                            <td className={`${cellCls} text-neutral-400`}>{date(l.soldAt)}</td>
+                            <td className={`${cellCls} text-neutral-400`}>{l.soldBy?.name ?? '—'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+          {palletGroups.length === 0 && (
+            <p className="rounded-lg border border-neutral-800 px-4 py-6 text-center text-sm text-neutral-500">
+              {hasFilters ? 'No sold pallet goods match the filters.' : 'No sold pallet goods yet.'}
+            </p>
+          )}
+        </div>
+      </section>
+    </div>
+  );
+}

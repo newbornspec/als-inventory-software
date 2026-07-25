@@ -107,6 +107,14 @@ export class PalletsController {
     return this.pallets.sellLine(id, lineId, body?.quantity, req.user.userId);
   }
 
+  // Bulk return from the Sold page — admin only. No palletId -> each row
+  // returns to its own original pallet.
+  @Roles(UserRole.ADMIN)
+  @Post('sold/return-bulk')
+  bulkReturnSoldLines(@Body() body: { soldIds: string[]; palletId?: string }, @Req() req: any) {
+    return this.pallets.bulkReturnSoldLines(body?.soldIds ?? [], body?.palletId, req.user.userId);
+  }
+
   // Returning sold goods to inventory is admin-only.
   @Roles(UserRole.ADMIN)
   @Post('sold/:soldId/return')

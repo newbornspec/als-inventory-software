@@ -123,6 +123,44 @@ export async function sellWholePallet(palletId: string): Promise<{ error?: strin
   return {};
 }
 
+// Bulk return of sold assets. batchId omitted -> each returns to its own
+// original lot; set -> all go to that lot.
+export async function bulkReturnSoldAssets(
+  assetIds: string[],
+  batchId?: string,
+): Promise<{ returned?: number; skipped?: number; error?: string }> {
+  let res: { returned: number; skipped: number };
+  try {
+    res = await apiFetch<{ returned: number; skipped: number }>('/assets/sold/return-bulk', {
+      method: 'POST',
+      body: JSON.stringify({ assetIds, ...(batchId ? { batchId } : {}) }),
+    });
+  } catch (err) {
+    return { error: msg(err, 'Failed to return the selected items.') };
+  }
+  revalidateInventory();
+  return res;
+}
+
+// Bulk return of sold pallet quantities. palletId omitted -> each returns to
+// its own original pallet.
+export async function bulkReturnSoldPalletLines(
+  soldIds: string[],
+  palletId?: string,
+): Promise<{ returned?: number; skipped?: number; error?: string }> {
+  let res: { returned: number; skipped: number };
+  try {
+    res = await apiFetch<{ returned: number; skipped: number }>('/pallets/sold/return-bulk', {
+      method: 'POST',
+      body: JSON.stringify({ soldIds, ...(palletId ? { palletId } : {}) }),
+    });
+  } catch (err) {
+    return { error: msg(err, 'Failed to return the selected items.') };
+  }
+  revalidateInventory();
+  return res;
+}
+
 export async function returnSoldPalletLine(
   soldId: string,
   palletId: string | null,

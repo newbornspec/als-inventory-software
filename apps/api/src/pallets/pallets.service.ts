@@ -216,6 +216,27 @@ export class PalletsService {
     return { ...sold, returnedAt: new Date(), returnedById: userId, returnedToPalletId: palletId };
   }
 
+  // Bulk return for the Sold page: palletId omitted -> each row goes back to
+  // its own original pallet; given -> all merge into that pallet. Per-row
+  // failures (already returned / original pallet gone) are skipped.
+  async bulkReturnSoldLines(
+    soldIds: string[],
+    palletId: string | undefined,
+    userId: string,
+  ): Promise<{ returned: number; skipped: number }> {
+    let returned = 0;
+    let skipped = 0;
+    for (const id of soldIds) {
+      try {
+        await this.returnSoldLine(id, palletId, userId);
+        returned += 1;
+      } catch {
+        skipped += 1;
+      }
+    }
+    return { returned, skipped };
+  }
+
   private async createLinesFromSpec(palletId: string, rows: SpecRowDto[]): Promise<void> {
     for (const row of rows) {
       await this.persistLookups(row);
