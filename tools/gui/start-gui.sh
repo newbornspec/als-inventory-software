@@ -14,18 +14,18 @@
 # (or call this from autorun to boot straight into the GUI).
 #
 # Full-screen strategy (resolution-independent, works on ANY monitor):
-#     1. Cage  — a Wayland kiosk compositor. It owns the display on the TTY,
-#                reads the monitor's native resolution itself, and runs one app
-#                truly full-screen/borderless. Preferred. Install with
-#                `bash gui/install-cage.sh` (or `pacman -Sy --noconfirm cage`).
-#     2. X + kiosk browser + xrandr max-mode  — automatic fallback if Cage is
-#                not on the media, so the stick always boots to the GUI.
+#     Firefox --kiosk hides the toolbar but opens the window at ~90% and never
+#     truly fullscreens, and no window manager auto-fills it. So in the X path we
+#     start a bare (undecorated) kiosk browser and resize its window to the exact
+#     screen geometry with xdotool — a borderless, full-screen fit on any panel.
+#     xdotool is installed at boot if missing (Wi-Fi is brought up first). If a
+#     Cage kiosk compositor happens to be present, that is used instead.
 #
 # Useful overrides:
 #     ALS_GUI_PORT=8800     port for the local backend
 #     ALS_BROWSER=firefox   force a particular browser binary
-#     ALS_NO_CAGE=1         skip Cage, use the X fallback (debug)
-#     ALS_AUTO_CAGE=0       don't auto-install Cage at boot (default: try if online)
+#     ALS_NO_CAGE=1         ignore Cage even if present
+#     ALS_NO_AUTOSETUP=1    don't auto-install xdotool at boot
 #     ALS_NO_X=1            skip the browser, just serve (headless/debug)
 
 PORT="${ALS_GUI_PORT:-8800}"
@@ -62,6 +62,12 @@ done
 [ -n "$DIR" ] || { echo "server.py not found on the boot media."; exit 1; }
 SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"   # absolute path, for the xinit RC
 
+# The audit engine (for bringing Wi-Fi up early, before we install kiosk tools).
+ENGINE=""
+for e in "$DIR/../hardware-audit.sh" /run/archiso/bootmnt/hardware-audit.sh /cdrom/hardware-audit.sh /mnt/usb/hardware-audit.sh; do
+  [ -f "$e" ] && ENGINE="$e" && break
+done
+
 command -v python3 >/dev/null 2>&1 || { echo "python3 is required but not installed."; exit 1; }
 
 # ------------------------------------------------------------ what we have ---
@@ -83,27 +89,34 @@ if [ "${ALS_NO_CAGE:-0}" != "1" ] && command -v cage >/dev/null 2>&1; then
   CAGE="cage"
 fi
 
-# For the X fallback: Firefox/Chromium can only go TRUE full-screen if a window
-# manager is present to honour _NET_WM_STATE_FULLSCREEN. In a bare `xinit`
-# session with no WM, the browser opens at ~90% and leaves a border. So pick the
-# first lightweight, EWMH-capable WM we can find and run it before the browser.
+# Lightweight WM, only used as a last-resort fallback if xdotool is unavailable.
 WM=""
 for w in ${ALS_WM:-} openbox matchbox-window-manager jwm fluxbox icewm marco xfwm4; do
   [ -n "$w" ] && command -v "$w" >/dev/null 2>&1 && { WM="$w"; break; }
 done
 
-# If Cage isn't on the media yet, try a one-time best-effort install so the
-# operator doesn't have to touch a terminal. Needs internet (Ethernet is up at
-# boot; audit Wi-Fi may not be yet). Never blocks boot — on no-internet or any
-# failure we simply fall through to the X full-screen path below.
-if [ -z "$CAGE" ] && [ "${ALS_NO_CAGE:-0}" != "1" ] && [ "${ALS_AUTO_CAGE:-1}" = "1" ] \
-   && command -v pacman >/dev/null 2>&1; then
-  if ping -c1 -W2 archlinux.org >/dev/null 2>&1 || ping -c1 -W2 8.8.8.8 >/dev/null 2>&1; then
-    echo "Cage not installed — attempting a one-time install for full-screen …"
-    pacman -Sy --noconfirm cage >/dev/null 2>&1 || true
-    command -v cage >/dev/null 2>&1 && CAGE="cage"
+# ------------------------------------------------------- ensure kiosk tools ---
+# The definitive full-screen fix. Firefox --kiosk hides the toolbar but opens at
+# ~90% and never requests true fullscreen, and no WM auto-fills it — so we resize
+# the window to the exact screen ourselves with xdotool. If xdotool (or cage)
+# isn't on the live media yet, bring Wi-Fi up (the stick needs it for audits
+# anyway) and install them. Fully gated + best-effort; never blocks boot.
+online() { ping -c1 -W2 archlinux.org >/dev/null 2>&1 || ping -c1 -W2 8.8.8.8 >/dev/null 2>&1; }
+if [ "${ALS_NO_AUTOSETUP:-0}" != "1" ] && command -v pacman >/dev/null 2>&1 \
+   && ! command -v xdotool >/dev/null 2>&1; then
+  if ! online && [ -n "$ENGINE" ]; then
+    echo "Bringing Wi-Fi up for one-time full-screen setup …"
+    bash "$ENGINE" --connect-wifi >/dev/null 2>&1 || true
+  fi
+  if online; then
+    echo "Installing kiosk full-screen support (xdotool) …"
+    pacman -Sy --noconfirm xdotool >/dev/null 2>&1 || true
   fi
 fi
+
+# xdotool is the linchpin of the X-fallback full-screen fix; note if we have it.
+XTOOL=""
+command -v xdotool >/dev/null 2>&1 && XTOOL="xdotool"
 
 kiosk_args() {   # per-browser full-screen flags
   case "$1" in
@@ -199,22 +212,34 @@ elif [ -n "$BROWSER" ] && [ -n "$CAGE" ]; then
 elif [ -n "$BROWSER" ] && [ -n "$XSTART" ]; then
   # No session yet — start one just for the kiosk browser. A window manager is
   # not required: the browser is the only client and takes the whole screen.
-  echo "xinit(X) · $BROWSER${WM:+ +$WM}" > /tmp/als-launch
+  if [ -n "$XTOOL" ]; then
+    echo "xinit(X) · $BROWSER +xdotool" > /tmp/als-launch
+  else
+    echo "xinit(X) · $BROWSER${WM:+ +$WM}" > /tmp/als-launch
+  fi
   RC="/tmp/als-xinitrc"
   cat > "$RC" <<RCEOF
 #!/bin/sh
 xset s off -dpms 2>/dev/null
 bash "$SELF" --fit-display
-${WM:+$WM & sleep 1}
-# Belt-and-braces full-screen: if there is no WM (or it didn't fullscreen us),
-# directly size the kiosk window to the whole screen by its title. Harmless if
-# it is already full. Needs xdotool; skipped silently if absent.
 if command -v xdotool >/dev/null 2>&1; then
-  ( for _ in 1 2 3 4 5 6; do
+  # No WM: the --kiosk window is undecorated, so sizing it to the exact display
+  # geometry gives a borderless, full-screen fit. Deterministic — this is the
+  # fix. Loops because Firefox settles its window a moment after it loads.
+  ( sleep 2
+    G=\$(xdotool getdisplaygeometry 2>/dev/null); SW=\${G% *}; SH=\${G#* }
+    [ -n "\$SW" ] || SW=1366; [ -n "\$SH" ] || SH=768
+    for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
+      WID=\$(xdotool search --name "ALS Audit" 2>/dev/null | head -n1)
+      if [ -n "\$WID" ]; then
+        xdotool windowmove "\$WID" 0 0 2>/dev/null
+        xdotool windowsize "\$WID" "\$SW" "\$SH" 2>/dev/null
+      fi
       sleep 2
-      W=\$(xdotool search --name "ALS Audit" 2>/dev/null | head -n1)
-      [ -n "\$W" ] && xdotool windowsize "\$W" 100% 100% 2>/dev/null && xdotool windowmove "\$W" 0 0 2>/dev/null && break
     done ) &
+else
+  # No xdotool available — at least run a WM so a fullscreen request is honoured.
+  ${WM:+$WM &}
 fi
 exec $BROWSER $(kiosk_args "$BROWSER") '$URL'
 RCEOF
