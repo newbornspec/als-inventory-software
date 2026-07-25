@@ -340,6 +340,14 @@ if [ "${1:-}" = "--wipe-drive" ]; then
   exit $?
 fi
 
+# The GUI captures the hardware profile with AUDIT_DEBUG=1, which skips the
+# Wi-Fi step below — so the backend brings the network up itself by calling
+# this entrypoint before it talks to the server.
+if [ "${1:-}" = "--connect-wifi" ]; then
+  connect_wifi
+  exit $?
+fi
+
 if [ "${AUDIT_DEBUG:-0}" != "1" ]; then
   connect_wifi || exit 1
 fi

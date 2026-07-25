@@ -141,6 +141,15 @@
     <main>
       <div class="colwrap">
 
+        <!-- connection error banner -->
+        <section class="cardp hidden" id="errBanner" style="border-color:var(--red);background:var(--redbg)">
+          <div class="hd" style="color:var(--red)">⚠ NOT CONNECTED TO THE SERVER</div>
+          <p id="errMsg" style="color:var(--soft);font-size:14px;margin:8px 0 4px">—</p>
+          <p style="color:var(--faint);font-size:13px;margin:0 0 14px">Batches load from the server, so Audit needs a connection. Check the Wi-Fi in Settings, then retry.</p>
+          <div class="btnrow"><button class="btn sel" style="width:auto" onclick="retry()">Retry connection</button>
+          <button class="btn gho" style="width:auto" onclick="openSettings()">Open settings</button></div>
+        </section>
+
         <!-- 1. SELECT BATCH -->
         <section class="cardp" id="card-batch">
           <div class="hd"><span class="n">1.</span> SELECT BATCH</div>
@@ -288,6 +297,8 @@ async function bootstrap(){
   $('ftDot').className='cdot'+(bad?' bad':''); $('ftConn').textContent=bad?'Not connected':'Connected';
   $('ftConn').style.color=bad?'var(--red)':'var(--green)';
   $('ftUser').textContent=b.currentUser||'Operator';
+  if(b.error){ $('errBanner').classList.remove('hidden'); $('errMsg').textContent=b.error; }
+  else { $('errBanner').classList.add('hidden'); }
   // batches
   const sel=$('batchSel'); sel.innerHTML='';
   if(!LOTS.length){ sel.innerHTML='<option>No lots available</option>'; }
@@ -403,6 +414,7 @@ function saveSettings(){
   jpost('/api/settings',body).then(res=>{toast(res.ok?'Settings saved ✓':(res.data.message||'Save failed'),res.ok);if(res.ok)closeSet();});
 }
 function openStd(){$('ovStd').style.display='flex';} function closeStd(){$('ovStd').style.display='none';}
+async function retry(){ toast('Reconnecting…'); await jpost('/api/rescan',{}); setTimeout(bootstrap,3500); }
 
 let ovCb=null;
 function openOv(t,m,pin,cb){$('ovTitle').textContent=t;$('ovMsg').textContent=m;$('ovPinWrap').style.display=pin?'block':'none';ovCb=cb;$('ov').style.display='flex';}

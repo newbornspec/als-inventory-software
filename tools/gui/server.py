@@ -170,6 +170,22 @@ def capture():
     return profile, "\n".join(summary).strip()
 
 
+def connect_network():
+    """Bring the network up via the engine. The GUI captures the profile with
+    AUDIT_DEBUG=1, which skips the engine's own Wi-Fi step, so we trigger it
+    here before hitting the server. Best-effort; login surfaces any remaining
+    problem. Returns the engine's last message (useful for the UI)."""
+    if not SCRIPT:
+        return ""
+    try:
+        proc = subprocess.run(["bash", SCRIPT, "--connect-wifi"],
+                              capture_output=True, text=True, timeout=90)
+        lines = [l for l in (proc.stdout or "").splitlines() if l.strip()]
+        return " ".join(lines[-2:]) if lines else ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def refresh(do_login=True):
     with LOCK:
         STATE["capturing"] = True
@@ -179,8 +195,14 @@ def refresh(do_login=True):
         prof, summ = capture()
         STATE["profile"], STATE["summary"] = prof, summ
         if do_login:
-            ensure_token()
-            STATE["lots"] = api("/devices/lots", token=STATE["token"]) or []
+            wifi_msg = connect_network()
+            try:
+                ensure_token()
+                STATE["lots"] = api("/devices/lots", token=STATE["token"]) or []
+            except Exception as exc:  # noqa: BLE001
+                # Prefer the Wi-Fi hint if the network never came up.
+                hint = wifi_msg if wifi_msg and "connected" not in wifi_msg.lower() else ""
+                raise RuntimeError(hint or str(exc))
     except Exception as exc:  # noqa: BLE001
         STATE["error"] = str(exc)
     finally:
