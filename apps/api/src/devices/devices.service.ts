@@ -39,8 +39,32 @@ export class DevicesService {
   // Compact lot list for the capture tool's on-device lot picker — id + number
   // only, so the bash script can parse it without a JSON library.
   async listLots() {
-    const batches = await this.batches.find({ order: { batchNumber: 'ASC' } });
-    return batches.map((b) => ({ id: b.id, batchNumber: b.batchNumber }));
+    const batches = await this.batches.find({
+      order: { batchNumber: 'ASC' },
+      relations: { createdBy: true },
+    });
+    // Live count of assets per batch (matches the web app's "actual units"):
+    // sold assets keep their batch link for provenance but are out of stock.
+    const counts = new Map<string, number>();
+    if (batches.length) {
+      const rows = await this.assets
+        .createQueryBuilder('asset')
+        .select('asset.batchId', 'batchId')
+        .addSelect('COUNT(*)', 'total')
+        .where('asset.batchId IN (:...ids)', { ids: batches.map((b) => b.id) })
+        .andWhere(`asset.stock_status != 'sold'`)
+        .groupBy('asset.batchId')
+        .getRawMany<{ batchId: string; total: string }>();
+      for (const r of rows) counts.set(r.batchId, parseInt(r.total, 10));
+    }
+    return batches.map((b) => ({
+      id: b.id,
+      batchNumber: b.batchNumber,
+      createdAt: b.createdAt,
+      createdByName: b.createdBy?.name ?? null,
+      actualUnitCount: counts.get(b.id) ?? 0,
+      expectedUnitCount: b.expectedUnitCount,
+    }));
   }
 
   // Collect a hardware audit INTO a lot. Deliberately no verification/matching

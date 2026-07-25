@@ -21,11 +21,36 @@
 PORT="${ALS_GUI_PORT:-8800}"
 URL="http://127.0.0.1:${PORT}"
 
+# --- display fit ------------------------------------------------------------
+# Force the active output to its HIGHEST-resolution mode so the kiosk fills the
+# whole panel on any machine, instead of sitting inside a lower-res border.
+# `xrandr --auto` only picks the "preferred" mode, which some panels report
+# smaller than native — so we choose the largest mode by pixel area explicitly.
+fit_display() {
+  command -v xrandr >/dev/null 2>&1 || { echo "fit_display: xrandr not present — skipping"; return 0; }
+  out=$(xrandr 2>/dev/null | awk '/ connected/{print $1; exit}')
+  [ -n "$out" ] || { echo "fit_display: no connected output"; return 0; }
+  mode=$(xrandr 2>/dev/null | awk -v o="$out" '
+      $0 ~ "^"o" " {g=1; next}                     # start of our output block
+      /^[^ ]/       {g=0}                            # a new output header ends it
+      g && $1 ~ /^[0-9]+x[0-9]+$/ {print $1}         # collect its mode names
+    ' | awk -Fx '{print ($1*$2)"\t"$0}' | sort -n | tail -1 | cut -f2)
+  if [ -n "$mode" ] && xrandr --output "$out" --mode "$mode" 2>/dev/null; then
+    echo "fit_display: $out set to $mode"
+  else
+    xrandr --output "$out" --auto 2>/dev/null && echo "fit_display: $out set to auto (preferred)"
+  fi
+}
+
+# Let the xinit RC reuse this exact logic:  bash start-gui.sh --fit-display
+if [ "${1:-}" = "--fit-display" ]; then fit_display; exit 0; fi
+
 DIR=""
 for d in /run/archiso/bootmnt/gui /cdrom/gui /mnt/usb/gui "$(cd "$(dirname "$0")" && pwd)"; do
   [ -f "$d/server.py" ] && DIR="$d" && break
 done
 [ -n "$DIR" ] || { echo "server.py not found on the boot media."; exit 1; }
+SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"   # absolute path, for the xinit RC
 
 command -v python3 >/dev/null 2>&1 || { echo "python3 is required but not installed."; exit 1; }
 
@@ -99,22 +124,20 @@ if [ "${ALS_NO_X:-0}" = "1" ]; then
 fi
 
 if [ -n "$BROWSER" ] && [ -n "$DISPLAY" ]; then
-  # Already inside a graphical session.
+  # Already inside a graphical session — fit the screen, then open the kiosk.
+  fit_display
   start_browser
 
 elif [ -n "$BROWSER" ] && [ -n "$XSTART" ]; then
   # No session yet — start one just for the kiosk browser. A window manager is
   # not required: the browser is the only client and takes the whole screen.
   RC="/tmp/als-xinitrc"
-  {
-    echo "#!/bin/sh"
-    echo "xset s off -dpms 2>/dev/null"     # never blank the screen mid-wipe
-    # Force the connected output to its preferred (native) mode so the kiosk
-    # fills the panel instead of sitting inside a lower-res border.
-    echo 'OUT=$(xrandr 2>/dev/null | awk "/ connected/{print \$1; exit}")'
-    echo '[ -n "$OUT" ] && xrandr --output "$OUT" --auto 2>/dev/null'
-    echo "exec $BROWSER $(kiosk_args "$BROWSER") '$URL'"
-  } > "$RC"
+  cat > "$RC" <<RCEOF
+#!/bin/sh
+xset s off -dpms 2>/dev/null
+bash "$SELF" --fit-display
+exec $BROWSER $(kiosk_args "$BROWSER") '$URL'
+RCEOF
   chmod +x "$RC"
   if [ "$XSTART" = "startx" ]; then
     startx "$RC" -- :0 vt1
