@@ -135,6 +135,8 @@
       <button class="navi" id="nav-audit" onclick="focusCard('audit')"><span class="ni">🔎</span>Start Audit<small>Collect system information</small></button>
       <div class="grp">⚙️ OTHER</div>
       <button class="navi" id="nav-settings" onclick="openSettings()"><span class="ni">⚙️</span>Settings<small>System and network settings</small></button>
+      <button class="navi" onclick="power('restart')"><span class="ni">🔁</span>Restart<small>Reboot this machine</small></button>
+      <button class="navi" onclick="power('shutdown')"><span class="ni">⏻</span>Shut Down<small>Power off this machine</small></button>
     </aside>
 
     <!-- ===== main ===== -->
@@ -375,12 +377,22 @@ async function startAudit(){
 /* ---- wipe ---- */
 function confirmWipe(){
   const dev=$('wDrive').value, opt=$('wDrive').selectedOptions[0];
-  openOv('Erase '+dev+'?', 'This permanently destroys all data on '+(opt?opt.textContent:dev)+'. This cannot be undone.', false, async ()=>{
+  const batch=$('ftBatch').textContent;
+  openOv('Erase '+dev+'?', 'This permanently destroys all data on '+(opt?opt.textContent:dev)+' and records the wipe against '+(batch&&batch!=='—'?batch:'the active lot')+'. This cannot be undone.', false, async ()=>{
     closeOv();
-    const res=await jpost('/api/wipe/start',{device:dev});
+    const res=await jpost('/api/wipe/start',{device:dev,lotId:$('batchSel').value});
     if(!res.ok){toast(res.data.message||'Could not start wipe',false);return;}
     $('wActions').classList.add('hidden'); $('wRun').classList.remove('hidden');
-    pollJob('wipe','wLog',(r)=>{ $('wActions').classList.remove('hidden'); $('wRun').classList.add('hidden'); toast(r.status==='wiped'?'Wipe complete ✓':'Wipe failed',r.status==='wiped'); });
+    pollJob('wipe','wLog',(r)=>{
+      $('wActions').classList.remove('hidden'); $('wRun').classList.add('hidden');
+      if(r.status==='wiped'){
+        if(r.recorded) toast('Wipe complete & saved to '+(batch||'the lot')+' ✓');
+        else if(r.recordError) toast('Wiped, but not saved: '+r.recordError,false);
+        else toast('Wipe complete ✓');
+      } else {
+        toast('Wipe failed'+(r.recordError?' — '+r.recordError:'')+(r.recorded?' (recorded as failed)':''),false);
+      }
+    });
   });
 }
 
@@ -415,6 +427,24 @@ function saveSettings(){
 }
 function openStd(){$('ovStd').style.display='flex';} function closeStd(){$('ovStd').style.display='none';}
 async function retry(){ toast('Reconnecting…'); await jpost('/api/rescan',{}); setTimeout(bootstrap,3500); }
+
+/* shut down / restart */
+function power(action){
+  openOv(action==='shutdown'?'Shut down this machine?':'Restart this machine?',
+    'The machine will '+action+' now. Make sure any audit or wipe has finished first.',
+    BOOT.adminPinSet, async ()=>{
+      const b={action}; if(BOOT.adminPinSet) b.pin=$('ovPin').value; closeOv();
+      const res=await jpost('/api/power',b);
+      if(res.ok) toast(action==='shutdown'?'Shutting down…':'Restarting…'); else toast(res.data.message||'Failed',false);
+    });
+}
+
+/* belt-and-braces fullscreen: the first tap forces true fullscreen even if the
+   kiosk browser opened windowed, covering any border. */
+document.addEventListener('click',()=>{
+  const el=document.documentElement;
+  if(!document.fullscreenElement && el.requestFullscreen) el.requestFullscreen().catch(()=>{});
+},{once:true});
 
 let ovCb=null;
 function openOv(t,m,pin,cb){$('ovTitle').textContent=t;$('ovMsg').textContent=m;$('ovPinWrap').style.display=pin?'block':'none';ovCb=cb;$('ov').style.display='flex';}

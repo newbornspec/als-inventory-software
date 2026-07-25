@@ -302,9 +302,11 @@ def list_os_images():
 
 
 # ------------------------------------------------------------- job runner ----
-def start_job(kind, argv, result_prefix, device=""):
+def start_job(kind, argv, result_prefix, device="", on_done=None):
     """Run a long command in the background, streaming its stdout into a rolling
-    log and parsing the final `<PREFIX> {json}` line into `result`."""
+    log and parsing the final `<PREFIX> {json}` line into `result`. `on_done`
+    (given the parsed result) runs after the process ends and before the job is
+    marked finished — used to upload the wipe record."""
     with LOCK:
         cur = JOBS.get(kind)
         if cur and cur.get("running"):
@@ -331,8 +333,14 @@ def start_job(kind, argv, result_prefix, device=""):
                 job["error"] = "the process ended without a result"
         except Exception as exc:  # noqa: BLE001
             job["error"] = str(exc)
-        finally:
-            job["running"] = False
+        # Post-step (e.g. upload the wipe record). Its own failures attach to the
+        # result so the UI can show "wiped but not saved" without hiding the wipe.
+        if on_done and job.get("result"):
+            try:
+                on_done(job["result"])
+            except Exception as exc:  # noqa: BLE001
+                job["result"]["recordError"] = str(exc)
+        job["running"] = False
 
     threading.Thread(target=worker, daemon=True).start()
     return True
@@ -441,12 +449,39 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/api/wipe/start":
             device = body.get("device", "")
             method = body.get("method") or STATE["conf"].get("AUDIT_WIPE_METHOD", "auto")
+            lot_id = body.get("lotId")
+            sub_lot_id = body.get("subLotId")
             if not SCRIPT:
                 return self._send(500, {"message": "engine not found"})
             if not re.match(r"^/dev/[A-Za-z0-9]+$", device):
                 return self._send(400, {"message": "invalid device"})
+
+            # After the erase, record it against the device/batch: upload the
+            # captured profile + the wipe status/method, the same shape the
+            # text-mode engine uses. This creates/updates the device record and
+            # produces the erasure certificate.
+            def record_wipe(result):
+                if result.get("status") not in ("wiped", "failed"):
+                    return
+                if not STATE["profile"]:
+                    result["recordError"] = "no hardware profile captured — run once from the menu first"
+                    return
+                payload = {
+                    "profile": STATE["profile"],
+                    "dataWipeStatus": result.get("status"),
+                    "dataWipeMethod": result.get("method"),
+                }
+                if lot_id:
+                    payload["lotId"] = lot_id
+                if sub_lot_id:
+                    payload["subLotId"] = sub_lot_id
+                out = api("/devices/hardware-audit", "POST", payload, ensure_token())
+                result["recorded"] = bool(out and out.get("assetId"))
+                result["recordName"] = (out or {}).get("name")
+                result["recordTag"] = (out or {}).get("tag")
+
             started = start_job("wipe", ["bash", SCRIPT, "--wipe-drive", device, method],
-                                "WIPE_RESULT ", device)
+                                "WIPE_RESULT ", device, on_done=record_wipe)
             if not started:
                 return self._send(409, {"message": "a wipe is already running"})
             return self._send(200, {"started": True})

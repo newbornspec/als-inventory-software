@@ -42,6 +42,19 @@ IMPORTANT:
    autorun script stays on the stick permanently.
 
 
+
+===================================================================
+
+mount -o remount,rw /run/archiso/bootmnt
+
+cd /run/archiso/bootmnt
+mv autorun x
+mkdir autorun
+mv x autorun/autorun
+cat autorun/autorun
+sync
+reboot
+==================================================================
 ---------------------------------------------------------------------
   B) RUN IT BY HAND   (if autorun ever doesn't fire)
 ---------------------------------------------------------------------
