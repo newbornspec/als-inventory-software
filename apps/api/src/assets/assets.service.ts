@@ -7,7 +7,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Asset, AssetStockStatus } from './asset.entity';
-import { Batch } from '../batches/batch.entity';
+import { Batch, BatchStatus } from '../batches/batch.entity';
 import { AssetEventType, AssetHistory } from './asset-history.entity';
 import { AssetAudit } from './asset-audit.entity';
 import { CreateAssetDto } from './dto/create-asset.dto';
@@ -300,6 +300,14 @@ export class AssetsService {
       batchId: targetBatch,
       ...(movingLots ? { lotId: null } : {}),
     });
+    // Mirror of the pallet rule: a lot that was sold wholesale but just got a
+    // device back holds active inventory again — reopen it.
+    if (targetBatch) {
+      const destBatch = await this.batches.findOne({ where: { id: targetBatch } });
+      if (destBatch?.status === BatchStatus.SOLD) {
+        await this.batches.update(targetBatch, { status: BatchStatus.OPEN });
+      }
+    }
     await this.logEvent(
       id,
       AssetEventType.STATUS_CHANGED,

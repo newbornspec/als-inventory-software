@@ -187,7 +187,7 @@ export class PalletsService {
         'The original pallet no longer exists — choose a destination pallet.',
       );
     }
-    await this.assertPallet(palletId);
+    const target = await this.assertPallet(palletId);
 
     // Merge into a matching line on the destination if one exists, else
     // recreate the line from the snapshot.
@@ -207,6 +207,11 @@ export class PalletsService {
           quantity: sold.quantity,
         }),
       );
+    }
+    // A shipped pallet that just received returned stock is physically back on
+    // the floor — reactivate it so it shows under Active again.
+    if (target.status === PalletStatus.SHIPPED) {
+      await this.pallets.update(palletId, { status: PalletStatus.OPEN, shippedAt: null });
     }
     await this.soldLines.update(soldId, {
       returnedAt: new Date(),
