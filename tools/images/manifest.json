@@ -1,0 +1,29 @@
+{
+  "_comment": "ALS Audit Station — installable OS images. Copy this folder to the USB root as /images. Each entry's `dir` is a Clonezilla image folder under /images. Add or remove entries here to change the Install-OS list — no code changes needed.",
+  "images": [
+    {
+      "id": "win11pro",
+      "name": "Windows 11 Pro",
+      "version": "23H2 64-bit",
+      "type": "clonezilla",
+      "dir": "win11pro",
+      "icon": "windows"
+    },
+    {
+      "id": "win10pro",
+      "name": "Windows 10 Pro",
+      "version": "22H2 64-bit",
+      "type": "clonezilla",
+      "dir": "win10pro",
+      "icon": "windows"
+    },
+    {
+      "id": "ubuntu2404",
+      "name": "Ubuntu LTS",
+      "version": "24.04 64-bit",
+      "type": "clonezilla",
+      "dir": "ubuntu2404",
+      "icon": "linux"
+    }
+  ]
+}

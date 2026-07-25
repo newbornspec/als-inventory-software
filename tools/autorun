@@ -1,19 +1,30 @@
 #!/usr/bin/env bash
-# SystemRescue AUTORUN entry — runs the hardware audit automatically at boot.
+# SystemRescue AUTORUN entry — boots straight into the ALS Audit Station GUI.
 #
-# Put this file (named exactly "autorun", no extension) in the ROOT of the USB
-# stick, next to hardware-audit.sh and audit.conf. SystemRescue executes autorun
-# scripts it finds on the boot device, so the audit starts on its own — the
-# operator only picks the lot and confirms. No command to type.
+# Put this file (named exactly "autorun", no extension) inside an "autorun"
+# FOLDER in the USB root, i.e. /run/archiso/bootmnt/autorun/autorun, next to
+# hardware-audit.sh, audit.conf and the gui/ folder. SystemRescue runs it at
+# boot, so the machine comes up in the full-screen kiosk with no typing.
+#
+# It launches gui/start-gui.sh (backend + kiosk browser). If the GUI can't
+# start (no browser/X), it falls back to the original text-mode audit so the
+# operator is never stuck.
 #
 # See: https://www.system-rescue.org/manual/Run_your_own_scripts_with_autorun/
 
-for d in /run/archiso/bootmnt /cdrom /mnt/usb "$(dirname "$0")"; do
+for d in /run/archiso/bootmnt /cdrom /mnt/usb "$(dirname "$0")/.."; do
+  if [ -f "$d/gui/start-gui.sh" ]; then
+    exec bash "$d/gui/start-gui.sh"
+  fi
+done
+
+# Fallback: no GUI found — run the text-mode audit engine directly.
+for d in /run/archiso/bootmnt /cdrom /mnt/usb "$(dirname "$0")/.."; do
   if [ -f "$d/hardware-audit.sh" ]; then
     exec bash "$d/hardware-audit.sh"
   fi
 done
 
-echo "hardware-audit.sh was not found on the boot media."
-echo "Make sure autorun, hardware-audit.sh and audit.conf are all in the USB root."
+echo "ALS Audit Station files were not found on the boot media."
+echo "Make sure hardware-audit.sh, audit.conf and the gui/ folder are in the USB root."
 read -rp "Press Enter to continue…" _

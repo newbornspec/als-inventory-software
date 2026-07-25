@@ -282,6 +282,64 @@ WIPEEOF
   echo "======================================================"
 }
 
+# ---- GUI single-drive wipe entrypoint --------------------------------------
+# Called as:  hardware-audit.sh --wipe-drive /dev/sdX [auto|crypto|secure|overwrite]
+# Wipes ONE explicitly named internal drive, reusing the same tested erase
+# helpers as the batch flow (firmware_erase / TRIM / shred + verify_zero).
+# Emits human-readable progress on stdout and a final machine-readable line:
+#   WIPE_RESULT {"status":"wiped|failed","method":"…","device":"/dev/sdX"}
+# Refuses removable/USB devices so the boot stick can never be selected.
+gui_wipe_one() {
+  local dev="$1" want="${2:-auto}" d rota m verified fw
+  if [ -z "$dev" ] || [ ! -b "$dev" ]; then
+    echo "WIPE_RESULT {\"status\":\"failed\",\"method\":\"no such device\",\"device\":\"$dev\"}"
+    return 1
+  fi
+  d="${dev#/dev/}"
+  if [ "$(cat "/sys/block/$d/removable" 2>/dev/null)" = "1" ]; then
+    echo "Refusing: $dev is removable — the boot media is never wiped."
+    echo "WIPE_RESULT {\"status\":\"failed\",\"method\":\"removable device refused\",\"device\":\"$dev\"}"
+    return 1
+  fi
+  export AUDIT_WIPE_METHOD="$want"
+  rota=$(cat "/sys/block/$d/queue/rotational" 2>/dev/null)
+  m=""; verified=0; fw=0
+  echo "Erasing $dev  (method: $want) …"
+  if firmware_erase "$dev" "$d"; then m="$M"; fw=1; fi
+  if [ -z "$m" ] && [ "$rota" = "0" ] && command -v blkdiscard >/dev/null 2>&1 \
+     && blkdiscard -f "$dev" >/dev/null 2>&1; then
+    m="Block discard / TRIM (SSD)"
+  fi
+  if [ -z "$m" ] && command -v shred >/dev/null 2>&1 \
+     && shred -f -n 1 -z "$dev" >/dev/null 2>&1; then
+    m="Overwrite — shred 1 pass + zero (NIST Clear)"
+  fi
+  if [ -n "$m" ]; then
+    echo "Verifying …"
+    if verify_zero "$dev"; then
+      verified=1; m="$m — verified (reads as zeros)"
+    elif [ "$fw" = "1" ]; then
+      verified=1; m="$m — controller-confirmed"
+    elif command -v shred >/dev/null 2>&1 && shred -f -n 1 -z "$dev" >/dev/null 2>&1 && verify_zero "$dev"; then
+      m="Overwrite — shred 1 pass + zero (NIST Clear) — verified (reads as zeros)"; verified=1
+    fi
+  fi
+  if [ -n "$m" ] && [ "$verified" = "1" ]; then
+    echo "✓ $m"
+    echo "WIPE_RESULT {\"status\":\"wiped\",\"method\":\"$m\",\"device\":\"$dev\"}"
+    return 0
+  fi
+  echo "✗ FAILED on $dev"
+  echo "WIPE_RESULT {\"status\":\"failed\",\"method\":\"${m:-no method succeeded}\",\"device\":\"$dev\"}"
+  return 1
+}
+
+# GUI entrypoints run before the interactive audit flow and exit on their own.
+if [ "${1:-}" = "--wipe-drive" ]; then
+  gui_wipe_one "$2" "$3"
+  exit $?
+fi
+
 if [ "${AUDIT_DEBUG:-0}" != "1" ]; then
   connect_wifi || exit 1
 fi

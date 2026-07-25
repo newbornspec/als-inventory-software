@@ -1,14 +1,23 @@
 #!/usr/bin/env python3
 """
-ALS Inventory — Audit & Wipe GUI backend.
+ALS Audit Station — kiosk GUI backend.
 
-A small, stdlib-only HTTP server that:
-  * runs the existing hardware-audit.sh engine to capture the machine's profile
-    (the script already emits JSON with AUDIT_DEBUG=1 — no duplicate logic),
-  * talks to the ALS Inventory API (login, lots, sub-lots, upload),
-  * serves the kiosk UI (single self-contained index.html).
+A small, stdlib-only HTTP server that drives the three core warehouse workflows
+from one full-screen interface, so an operator never touches a terminal:
 
-The bash script stays the engine; this is only a frontend driver.
+  * AUDIT   — runs hardware-audit.sh to capture the machine's profile (the
+              script emits JSON with AUDIT_DEBUG=1) and uploads it to the ALS
+              Inventory API.
+  * WIPE    — runs `hardware-audit.sh --wipe-drive <dev>` per selected drive
+              (the tested erase engine), streaming progress; the boot stick is
+              excluded by the engine.
+  * INSTALL — restores a Clonezilla OS image to a target drive via the
+              pluggable install-os.sh driver (dynamic list from images/manifest).
+
+The bash scripts stay the engines; this is only the frontend driver + a thin
+job runner. Long jobs (wipe/install) run in the background and report progress
+by polling /api/job.
+
 Run:  python3 server.py   then open http://127.0.0.1:8800
 """
 import json
@@ -16,7 +25,6 @@ import os
 import re
 import subprocess
 import threading
-import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
@@ -24,42 +32,44 @@ from urllib.parse import urlparse, parse_qs
 HERE = os.path.dirname(os.path.abspath(__file__))
 PORT = int(os.environ.get("ALS_GUI_PORT", "8800"))
 
-# Where the engine + config live (USB root first, then alongside this file).
-SEARCH_DIRS = ["/run/archiso/bootmnt", "/cdrom", "/mnt/usb",
-               os.path.dirname(HERE), HERE]
+# Where the engine + config + images live (USB root first, then dev checkout).
+SEARCH_DIRS = ["/run/archiso/bootmnt", "/cdrom", "/mnt/usb", os.path.dirname(HERE), HERE]
 
 
 def _find(name):
     for d in SEARCH_DIRS:
         p = os.path.join(d, name)
-        if os.path.isfile(p):
+        if os.path.exists(p):
             return p
     return None
 
 
 SCRIPT = _find("hardware-audit.sh")
-CONF = _find("audit.conf")
+CONF_PATH = _find("audit.conf")
+INSTALL_SH = os.path.join(HERE, "install-os.sh")
+IMAGES_ROOT = _find("images")
 
 STATE = {
-    "profile": None,     # captured hardware profile (dict)
-    "summary": "",       # human-readable capture summary from the script
+    "profile": None,
+    "summary": "",
     "token": None,
     "conf": {},
     "lots": [],
     "error": None,
     "capturing": False,
 }
+# One background job per kind (only one wipe/install runs at a time).
+JOBS = {"wipe": None, "install": None}
 LOCK = threading.Lock()
 
 
 # ---------------------------------------------------------------- config ----
 def load_conf():
-    """Parse the KEY="value" lines out of audit.conf (tolerates CRLF)."""
     conf = {}
-    if not CONF:
+    if not CONF_PATH:
         return conf
     try:
-        with open(CONF, "r", errors="replace") as fh:
+        with open(CONF_PATH, "r", errors="replace") as fh:
             for line in fh:
                 line = line.strip().lstrip("﻿")
                 if not line or line.startswith("#"):
@@ -70,6 +80,40 @@ def load_conf():
     except OSError as exc:
         STATE["error"] = "Could not read audit.conf: %s" % exc
     return conf
+
+
+def save_conf(updates):
+    """Rewrite the given KEY="value" lines in audit.conf, preserving the rest.
+    The USB usually mounts read-only, so this returns a clear error if it can't
+    write (the operator can remount rw, or set values from the admin console)."""
+    if not CONF_PATH:
+        return "audit.conf not found on the boot media."
+    try:
+        with open(CONF_PATH, "r", errors="replace") as fh:
+            lines = fh.readlines()
+    except OSError as exc:
+        return "Could not read audit.conf: %s" % exc
+
+    remaining = dict(updates)
+    out = []
+    for line in lines:
+        m = re.match(r'^([A-Za-z_][A-Za-z0-9_]*)\s*=', line.strip().lstrip("﻿"))
+        key = m.group(1) if m else None
+        if key and key in remaining:
+            out.append('%s="%s"\n' % (key, remaining.pop(key)))
+        else:
+            out.append(line if line.endswith("\n") else line + "\n")
+    for key, val in remaining.items():  # new keys appended
+        out.append('%s="%s"\n' % (key, val))
+
+    try:
+        with open(CONF_PATH, "w") as fh:
+            fh.writelines(out)
+    except OSError as exc:
+        return ("Could not write audit.conf (%s). The USB may be read-only — "
+                "remount it read-write and try again." % exc)
+    STATE["conf"] = load_conf()
+    return None
 
 
 # ------------------------------------------------------------------- API ----
@@ -106,12 +150,10 @@ def ensure_token():
 
 # --------------------------------------------------------------- capture ----
 def capture():
-    """Run the engine in debug mode: prints a summary, then the JSON profile."""
     if not SCRIPT:
         raise RuntimeError("hardware-audit.sh not found on the boot media.")
     env = dict(os.environ, AUDIT_DEBUG="1")
-    proc = subprocess.run(["bash", SCRIPT], env=env, capture_output=True,
-                          text=True, timeout=300)
+    proc = subprocess.run(["bash", SCRIPT], env=env, capture_output=True, text=True, timeout=300)
     out = proc.stdout or ""
     profile, summary = None, []
     for line in out.splitlines():
@@ -139,7 +181,7 @@ def refresh(do_login=True):
         if do_login:
             ensure_token()
             STATE["lots"] = api("/devices/lots", token=STATE["token"]) or []
-    except Exception as exc:                              # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
         STATE["error"] = str(exc)
     finally:
         with LOCK:
@@ -158,16 +200,125 @@ def ident():
         "serial": i.get("serialNumber", ""),
         "cpu": cpu,
         "ramGb": mem,
-        "storage": ", ".join(
-            " ".join(x for x in [d.get("capacity"), d.get("type")] if x) for d in st),
+        "storage": ", ".join(" ".join(x for x in [d.get("capacity"), d.get("type")] if x) for d in st),
         "drives": st,
         "battery": (p.get("battery") or {}).get("health", ""),
     }
 
 
+# --------------------------------------------------------------- drives ----
+def lsblk_field(line, key):
+    m = re.search(r'%s="([^"]*)"' % key, line)
+    return m.group(1) if m else ""
+
+
+def list_drives():
+    """Internal (non-removable, non-USB) whole disks that can be wiped/imaged,
+    each with a friendly auto-selected method label for display."""
+    drives = []
+    try:
+        out = subprocess.run(
+            ["lsblk", "-dP", "-o", "NAME,SIZE,MODEL,TRAN,RM,ROTA"],
+            capture_output=True, text=True, timeout=15).stdout
+    except Exception:
+        return drives
+    for line in out.splitlines():
+        name = lsblk_field(line, "NAME")
+        if not name:
+            continue
+        tran = lsblk_field(line, "TRAN")
+        rm = lsblk_field(line, "RM")
+        rota = lsblk_field(line, "ROTA")
+        if tran == "usb" or rm == "1":
+            continue
+        try:
+            if open("/sys/block/%s/removable" % name).read().strip() == "1":
+                continue
+        except OSError:
+            pass
+        if name.startswith("nvme"):
+            method = "NVMe firmware erase (crypto/secure)"
+        elif rota == "1":
+            method = "ATA secure erase / overwrite (HDD)"
+        else:
+            method = "TRIM / secure erase (SSD)"
+        drives.append({
+            "device": "/dev/" + name,
+            "name": name,
+            "size": lsblk_field(line, "SIZE"),
+            "model": lsblk_field(line, "MODEL") or "Unknown model",
+            "method": method,
+        })
+    return drives
+
+
+# ----------------------------------------------------------------- OS list ----
+def list_os_images():
+    if not IMAGES_ROOT:
+        return []
+    manifest = os.path.join(IMAGES_ROOT, "manifest.json")
+    if not os.path.isfile(manifest):
+        return []
+    try:
+        with open(manifest, "r", errors="replace") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return []
+    imgs = []
+    for it in data.get("images", []):
+        d = it.get("dir") or it.get("id")
+        present = bool(d) and os.path.isdir(os.path.join(IMAGES_ROOT, d))
+        imgs.append({
+            "id": it.get("id"),
+            "name": it.get("name", it.get("id")),
+            "version": it.get("version", ""),
+            "icon": it.get("icon", ""),
+            "dir": d,
+            "present": present,  # false = listed but image files not on the stick yet
+        })
+    return imgs
+
+
+# ------------------------------------------------------------- job runner ----
+def start_job(kind, argv, result_prefix, device=""):
+    """Run a long command in the background, streaming its stdout into a rolling
+    log and parsing the final `<PREFIX> {json}` line into `result`."""
+    with LOCK:
+        cur = JOBS.get(kind)
+        if cur and cur.get("running"):
+            return False
+        JOBS[kind] = {"running": True, "log": [], "result": None, "error": None, "device": device}
+    job = JOBS[kind]
+
+    def worker():
+        try:
+            proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                    text=True, bufsize=1)
+            for line in proc.stdout:
+                line = line.rstrip("\n")
+                if line.startswith(result_prefix):
+                    try:
+                        job["result"] = json.loads(line[len(result_prefix):].strip())
+                    except ValueError:
+                        job["error"] = "could not parse result line"
+                elif line:
+                    job["log"].append(line)
+                    del job["log"][:-200]
+            proc.wait()
+            if job["result"] is None and job["error"] is None:
+                job["error"] = "the process ended without a result"
+        except Exception as exc:  # noqa: BLE001
+            job["error"] = str(exc)
+        finally:
+            job["running"] = False
+
+    threading.Thread(target=worker, daemon=True).start()
+    return True
+
+
 # ---------------------------------------------------------------- server ----
 class Handler(BaseHTTPRequestHandler):
-    def log_message(self, *_args):        # keep the console quiet
+    def log_message(self, *_args):
         pass
 
     def _send(self, code, payload, ctype="application/json"):
@@ -179,7 +330,11 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def do_GET(self):                      # noqa: N802
+    def _admin_ok(self, pin):
+        want = STATE["conf"].get("AUDIT_ADMIN_PIN", "")
+        return not want or (pin is not None and str(pin) == str(want))
+
+    def do_GET(self):  # noqa: N802
         u = urlparse(self.path)
         if u.path in ("/", "/index.html"):
             try:
@@ -196,25 +351,53 @@ class Handler(BaseHTTPRequestHandler):
                 "device": ident() if STATE["profile"] else None,
                 "summary": STATE["summary"],
                 "lots": STATE["lots"],
+                "drives": list_drives(),
+                "osImages": list_os_images(),
                 "wipeEnabled": STATE["conf"].get("AUDIT_WIPE", "0") == "1",
                 "wipeMethod": STATE["conf"].get("AUDIT_WIPE_METHOD", "auto"),
                 "server": STATE["conf"].get("AUDIT_URL", ""),
+                "adminPinSet": bool(STATE["conf"].get("AUDIT_ADMIN_PIN", "")),
             })
+
+        if u.path == "/api/drives":
+            return self._send(200, list_drives())
+
+        if u.path == "/api/os/list":
+            return self._send(200, list_os_images())
 
         if u.path == "/api/sublots":
             batch = (parse_qs(u.query).get("batchId") or [""])[0]
             try:
                 subs = api("/lots?batchId=" + batch, token=ensure_token()) or []
                 return self._send(200, subs)
-            except Exception as exc:                       # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001
                 return self._send(500, {"message": str(exc)})
+
+        if u.path == "/api/job":
+            kind = (parse_qs(u.query).get("type") or [""])[0]
+            job = JOBS.get(kind)
+            if not job:
+                return self._send(200, {"running": False, "log": [], "result": None, "error": None})
+            return self._send(200, job)
+
+        if u.path == "/api/settings":
+            c = STATE["conf"]
+            return self._send(200, {
+                "wifiSsid": c.get("WIFI_SSID", ""),
+                "serverUrl": c.get("AUDIT_URL", ""),
+                "wipeEnabled": c.get("AUDIT_WIPE", "0") == "1",
+                "wipeMethod": c.get("AUDIT_WIPE_METHOD", "auto"),
+            })
 
         return self._send(404, {"message": "not found"})
 
-    def do_POST(self):                     # noqa: N802
+    def do_POST(self):  # noqa: N802
         u = urlparse(self.path)
         length = int(self.headers.get("Content-Length") or 0)
-        body = json.loads(self.rfile.read(length) or b"{}") if length else {}
+        try:
+            body = json.loads(self.rfile.read(length) or b"{}") if length else {}
+        except ValueError:
+            body = {}
 
         if u.path == "/api/rescan":
             threading.Thread(target=refresh, daemon=True).start()
@@ -229,8 +412,67 @@ class Handler(BaseHTTPRequestHandler):
                     payload["notes"] = body["notes"]
                 out = api("/devices/hardware-audit", "POST", payload, ensure_token())
                 return self._send(200, out or {})
-            except Exception as exc:                       # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001
                 return self._send(500, {"message": str(exc)})
+
+        if u.path == "/api/wipe/start":
+            device = body.get("device", "")
+            method = body.get("method") or STATE["conf"].get("AUDIT_WIPE_METHOD", "auto")
+            if not SCRIPT:
+                return self._send(500, {"message": "engine not found"})
+            if not re.match(r"^/dev/[A-Za-z0-9]+$", device):
+                return self._send(400, {"message": "invalid device"})
+            started = start_job("wipe", ["bash", SCRIPT, "--wipe-drive", device, method],
+                                "WIPE_RESULT ", device)
+            if not started:
+                return self._send(409, {"message": "a wipe is already running"})
+            return self._send(200, {"started": True})
+
+        if u.path == "/api/os/install":
+            device = body.get("device", "")
+            image = body.get("imageId", "")
+            if not re.match(r"^/dev/[A-Za-z0-9]+$", device):
+                return self._send(400, {"message": "invalid device"})
+            if not re.match(r"^[A-Za-z0-9_.-]+$", image or ""):
+                return self._send(400, {"message": "invalid image"})
+            env_root = IMAGES_ROOT or ""
+            started = start_job("install", ["bash", INSTALL_SH, image, device],
+                                "INSTALL_RESULT ", device)
+            if not started:
+                return self._send(409, {"message": "an install is already running"})
+            # install-os.sh reads ALS_IMAGES_ROOT from its own search if unset;
+            # pass ours explicitly for the dev checkout case.
+            os.environ["ALS_IMAGES_ROOT"] = env_root
+            return self._send(200, {"started": True})
+
+        if u.path == "/api/settings":
+            if not self._admin_ok(body.get("pin")):
+                return self._send(403, {"message": "Admin PIN required."})
+            updates = {}
+            if "wifiSsid" in body:
+                updates["WIFI_SSID"] = body["wifiSsid"]
+            if body.get("wifiPassword"):
+                updates["WIFI_PASSWORD"] = body["wifiPassword"]
+            if "serverUrl" in body and body["serverUrl"]:
+                updates["AUDIT_URL"] = body["serverUrl"]
+            if "wipeEnabled" in body:
+                updates["AUDIT_WIPE"] = "1" if body["wipeEnabled"] else "0"
+            if body.get("wipeMethod"):
+                updates["AUDIT_WIPE_METHOD"] = body["wipeMethod"]
+            err = save_conf(updates)
+            if err:
+                return self._send(500, {"message": err})
+            return self._send(200, {"saved": True})
+
+        if u.path == "/api/power":
+            if not self._admin_ok(body.get("pin")):
+                return self._send(403, {"message": "Admin PIN required."})
+            action = body.get("action")
+            cmd = {"shutdown": ["poweroff"], "restart": ["reboot"]}.get(action)
+            if not cmd:
+                return self._send(400, {"message": "unknown action"})
+            threading.Thread(target=lambda: subprocess.run(cmd), daemon=True).start()
+            return self._send(200, {"ok": True})
 
         return self._send(404, {"message": "not found"})
 
@@ -239,7 +481,7 @@ def main():
     STATE["conf"] = load_conf()
     threading.Thread(target=refresh, daemon=True).start()
     srv = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
-    print("ALS audit GUI on http://127.0.0.1:%d  (engine: %s)" % (PORT, SCRIPT))
+    print("ALS Audit Station GUI on http://127.0.0.1:%d  (engine: %s)" % (PORT, SCRIPT))
     srv.serve_forever()
 
 
