@@ -49,7 +49,8 @@ def _find(name):
 SCRIPT = _find("hardware-audit.sh")
 CONF_PATH = _find("audit.conf")
 INSTALL_SH = os.path.join(HERE, "install-os.sh")
-IMAGES_ROOT = _find("images")
+IMAGES_LOCAL = _find("images")      # image folder carried on the stick itself
+IMAGE_MOUNT = "/mnt/als-images"     # where a shared image library is mounted
 
 STATE = {
     "profile": None,
@@ -606,10 +607,66 @@ def has_optical():
 
 
 # ----------------------------------------------------------------- OS list ----
+# ------------------------------------------------------- shared image library --
+# Windows images are 8-15GB each. Carrying them on every stick means big media
+# and re-copying on every update, so the library can live on one server on the
+# warehouse LAN and each station mounts it read-only. If the server is not
+# configured or not reachable we fall back to the stick, so imaging still works
+# with no network.
+IMAGE_STATE = {"root": None, "source": "usb", "error": "", "checked": 0.0}
+
+
+def image_mounted():
+    return os.path.ismount(IMAGE_MOUNT)
+
+
+def mount_image_server(force=False):
+    """Mount the configured share and return (root, source, error)."""
+    spec = (STATE["conf"].get("IMAGE_SERVER") or "").strip()
+    now = time.time()
+    if not spec:
+        IMAGE_STATE.update(root=IMAGES_LOCAL, source="usb", error="", checked=now)
+        return IMAGES_LOCAL, "usb", ""
+    if not force and image_mounted() and now - IMAGE_STATE["checked"] < 30:
+        return IMAGE_STATE["root"], IMAGE_STATE["source"], IMAGE_STATE["error"]
+
+    if image_mounted():
+        IMAGE_STATE.update(root=IMAGE_MOUNT, source="server", error="", checked=now)
+        return IMAGE_MOUNT, "server", ""
+
+    os.makedirs(IMAGE_MOUNT, exist_ok=True)
+    # //host/share is SMB, host:/path is NFS. Read-only and soft-mounted so an
+    # unreachable server can never hang the station.
+    if spec.startswith("//"):
+        cmd = ["mount", "-t", "cifs", "-o", "ro,guest,vers=3.0", spec, IMAGE_MOUNT]
+    else:
+        cmd = ["mount", "-t", "nfs", "-o", "ro,soft,timeo=50,retrans=2,nolock",
+               spec, IMAGE_MOUNT]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        ok = r.returncode == 0
+        err = "" if ok else (r.stderr or r.stdout or "").strip().split("\n")[-1]
+    except Exception as exc:  # noqa: BLE001
+        ok, err = False, str(exc)
+
+    if ok and image_mounted():
+        IMAGE_STATE.update(root=IMAGE_MOUNT, source="server", error="", checked=now)
+        return IMAGE_MOUNT, "server", ""
+    IMAGE_STATE.update(root=IMAGES_LOCAL, source="usb", checked=now,
+                       error="Image server %s unavailable (%s) — using the images "
+                             "on this stick." % (spec, err or "mount failed"))
+    return IMAGES_LOCAL, "usb", IMAGE_STATE["error"]
+
+
+def images_root():
+    return mount_image_server()[0]
+
+
 def list_os_images():
-    if not IMAGES_ROOT:
+    root = images_root()
+    if not root:
         return []
-    manifest = os.path.join(IMAGES_ROOT, "manifest.json")
+    manifest = os.path.join(root, "manifest.json")
     if not os.path.isfile(manifest):
         return []
     try:
@@ -620,7 +677,7 @@ def list_os_images():
     imgs = []
     for it in data.get("images", []):
         d = it.get("dir") or it.get("id")
-        present = bool(d) and os.path.isdir(os.path.join(IMAGES_ROOT, d))
+        present = bool(d) and os.path.isdir(os.path.join(root, d))
         imgs.append({
             "id": it.get("id"),
             "name": it.get("name", it.get("id")),
@@ -771,6 +828,8 @@ class Handler(BaseHTTPRequestHandler):
                 "adminPinSet": bool(STATE["conf"].get("AUDIT_ADMIN_PIN", "")),
                 "launch": launch_info(),
                 "waiting": queue_count(),   # records held offline, retrying
+                "imageSource": IMAGE_STATE["source"],   # "server" | "usb"
+                "imageError": IMAGE_STATE["error"],
             })
 
         if u.path == "/api/drives":
@@ -825,6 +884,7 @@ class Handler(BaseHTTPRequestHandler):
                 "serverUrl": c.get("AUDIT_URL", ""),
                 "wipeEnabled": c.get("AUDIT_WIPE", "0") == "1",
                 "wipeMethod": c.get("AUDIT_WIPE_METHOD", "auto"),
+                "imageServer": c.get("IMAGE_SERVER", ""),
             })
 
         return self._send(404, {"message": "not found"})
@@ -934,15 +994,19 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(400, {"message": "invalid device"})
             if not re.match(r"^[A-Za-z0-9_.-]+$", image or ""):
                 return self._send(400, {"message": "invalid image"})
-            env_root = IMAGES_ROOT or ""
+            # Point the driver at whichever library is active (server share or
+            # the stick). This MUST be set before the job starts — it was
+            # previously assigned afterwards, so the child never saw it.
+            root, source, img_err = mount_image_server()
+            if not root:
+                return self._send(400, {"message": "no image library available"})
+            os.environ["ALS_IMAGES_ROOT"] = root
             started = start_job("install", ["bash", INSTALL_SH, image, device],
                                 "INSTALL_RESULT ", device)
             if not started:
                 return self._send(409, {"message": "an install is already running"})
-            # install-os.sh reads ALS_IMAGES_ROOT from its own search if unset;
-            # pass ours explicitly for the dev checkout case.
-            os.environ["ALS_IMAGES_ROOT"] = env_root
-            return self._send(200, {"started": True})
+            return self._send(200, {"started": True, "imageSource": source,
+                                    "imageWarning": img_err})
 
         if u.path == "/api/settings":
             if not self._admin_ok(body.get("pin")):
@@ -958,6 +1022,9 @@ class Handler(BaseHTTPRequestHandler):
                 updates["AUDIT_WIPE"] = "1" if body["wipeEnabled"] else "0"
             if body.get("wipeMethod"):
                 updates["AUDIT_WIPE_METHOD"] = body["wipeMethod"]
+            if "imageServer" in body:
+                updates["IMAGE_SERVER"] = body["imageServer"].strip()
+                IMAGE_STATE["checked"] = 0.0        # re-evaluate on next use
             err = save_conf(updates)
             if err:
                 return self._send(500, {"message": err})

@@ -31,7 +31,7 @@ result_fail() {
 
 # Locate the images root (USB boot mount first, then ../images next to gui/).
 if [ -z "$IMAGES_ROOT" ]; then
-  for d in /run/archiso/bootmnt/images /cdrom/images /mnt/usb/images \
+  for d in /mnt/als-images /run/archiso/bootmnt/images /cdrom/images /mnt/usb/images \
            "$(cd "$(dirname "$0")/.." 2>/dev/null && pwd)/images"; do
     [ -d "$d" ] && IMAGES_ROOT="$d" && break
   done

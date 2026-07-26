@@ -321,6 +321,7 @@
             <span class="ri"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
               stroke-width="2" stroke-linecap="round"><path d="M6 9l6 6 6-6"/></svg></span>
           </div>
+          <div class="health hidden" id="iSource"></div>
           <div id="iActions">
             <button class="btn" id="iStart" onclick="confirmInstall()">
               <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
@@ -394,6 +395,8 @@
     <label class="fld"><span>Server URL</span><input id="setUrl" /></label>
     <label class="fld"><span>Default wipe method</span>
       <input id="setMethod" placeholder="auto / crypto / secure / overwrite" /></label>
+    <label class="fld"><span>Image server (blank = use images on this stick)</span>
+      <input id="setImgSrv" placeholder="192.168.1.50:/srv/als-images" /></label>
     <div id="setPinWrap" style="display:none"><label class="fld"><span>Admin PIN</span>
       <input id="setPin" type="password" inputmode="numeric" /></label></div>
     <div class="diag" id="setDiag"></div>
@@ -455,7 +458,7 @@ async function bootstrap(){
   if(b.error){$('errBanner').classList.remove('hidden');$('errMsg').textContent=b.error;}
   else $('errBanner').classList.add('hidden');
 
-  fillBatches(); fillDrives(); fillImages(); fillHardware();
+  fillBatches(); fillDrives(); fillImages(); fillHardware(); renderImageSource();
 
   $('aStart').disabled=!(b.device&&$('batchSel').value);
   $('wStart').disabled=!$('wDrive').value;
@@ -519,6 +522,26 @@ function selectedWipeDrives(){
   return Array.from(document.querySelectorAll('.wchk')).filter(c=>c.checked).map(c=>c.value);
 }
 function devKey(d){return d.replace(/[^A-Za-z0-9]/g,'_');}
+/* Where OS images are being read from — the shared library on the server, or
+   the copy on this stick. Shown because a silent fallback would mean imaging
+   from a stale local copy without anyone noticing. */
+function renderImageSource(){
+  const el=$('iSource'); if(!el) return;
+  if(BOOT.imageError){
+    el.className='health warn';
+    el.innerHTML='<span class="hd"></span><span><b>Image server unreachable</b> — '+
+                 BOOT.imageError+'</span>';
+    return;
+  }
+  if(BOOT.imageSource==='server'){
+    el.className='health ok';
+    el.innerHTML='<span class="hd"></span><span><b>Images: shared server library</b></span>';
+    return;
+  }
+  el.className='health na';
+  el.innerHTML='<span class="hd"></span><span>Images: this stick (no image server set)</span>';
+}
+
 function fillImages(){
   const im=BOOT.osImages||[];
   $('iImage').innerHTML=im.length
@@ -761,6 +784,7 @@ async function openSettings(){
     const s=await jget('/api/settings');
     $('setSsid').value=s.wifiSsid||''; $('setUrl').value=s.serverUrl||'';
     $('setMethod').value=s.wipeMethod||'auto';
+    $('setImgSrv').value=s.imageServer||'';
   }catch(e){}
   $('setPinWrap').style.display=BOOT.adminPinSet?'block':'none';
   $('setDiag').textContent='Display: '+(BOOT.launch||'—')+' · '+innerWidth+'×'+innerHeight+
@@ -769,7 +793,8 @@ async function openSettings(){
 }
 function closeSet(){$('ovSet').style.display='none';}
 async function saveSettings(){
-  const body={wifiSsid:$('setSsid').value,serverUrl:$('setUrl').value,wipeMethod:$('setMethod').value};
+  const body={wifiSsid:$('setSsid').value,serverUrl:$('setUrl').value,
+    wipeMethod:$('setMethod').value,imageServer:$('setImgSrv').value};
   if($('setPass').value)body.wifiPassword=$('setPass').value;
   if(BOOT.adminPinSet)body.pin=$('setPin').value;
   const res=await jpost('/api/settings',body);
