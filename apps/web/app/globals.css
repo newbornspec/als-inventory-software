@@ -1,8 +1,21 @@
 @import "tailwindcss";
 
+/* Light theme, committed to deliberately.
+   The app previously flipped its background with the viewer's OS theme while
+   every component hard-coded dark colours — on a light-mode machine that gave
+   white-on-white text. The palette below is fixed, so what we design is what
+   everyone sees. */
 :root {
   --background: #ffffff;
-  --foreground: #171717;
+  --foreground: #0a0a0a;
+
+  /* semantic tokens used by the redesigned surfaces */
+  --surface: #ffffff;        /* cards            */
+  --surface-2: #f8fafc;      /* subtle fills     */
+  --line: #e5e5e5;           /* borders          */
+  --ink: #0a0a0a;            /* primary text     */
+  --ink-muted: #737373;      /* secondary text   */
+  --brand: #2b7fff;          /* actions, active  */
 }
 
 @theme inline {
@@ -12,15 +25,8 @@
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
-
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-geist-sans), system-ui, -apple-system, "Segoe UI", sans-serif;
 }
