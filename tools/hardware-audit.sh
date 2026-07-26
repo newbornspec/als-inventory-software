@@ -256,7 +256,7 @@ nvme_sanitize() {
 firmware_erase() {
   local dev="$1" d="$2" want="${AUDIT_WIPE_METHOD:-auto}"
   M=""
-  [ "$want" = "overwrite" ] && return 1
+  case "$want" in overwrite|zero) return 1 ;; esac
   case "$d" in
     nvme*)
       command -v nvme >/dev/null 2>&1 || return 1
@@ -383,14 +383,18 @@ WIPEEOF
 # Sets OVR_ERR. Returns shred's real exit status.
 OVR_ERR=""
 run_overwrite() {
-  local dev="$1" out rc pid line start now el
+  # $2 = passes: 2 (default) = random pass + zero pass;
+  #              1           = zero pass only (NIST 800-88 Clear, half the time)
+  local dev="$1" passes="${2:-2}" out rc pid line start now el n
   out="/tmp/als-wipe.$$.out"
   : > "$out"
   OVR_ERR=""
   command -v shred >/dev/null 2>&1 || { OVR_ERR="shred is not installed"; return 127; }
+  # shred -n N = N random passes; -z appends the final zero pass.
+  [ "$passes" = "1" ] && n=0 || n=1
   start=$(date +%s)
   # -v makes shred report progress; it uses \r, so we translate it to lines.
-  shred -v -f -n 1 -z "$dev" > "$out" 2>&1 &
+  shred -v -f -n "$n" -z "$dev" > "$out" 2>&1 &
   pid=$!
   while kill -0 "$pid" 2>/dev/null; do
     sleep 5
@@ -435,7 +439,7 @@ gui_wipe_one() {
   export AUDIT_WIPE_METHOD="$want"
   rota=$(cat "/sys/block/$d/queue/rotational" 2>/dev/null)
   m=""; verified=0; fw=0
-  local reason="" sz gb
+  local reason="" sz gb p
   sz=$(blockdev --getsize64 "$dev" 2>/dev/null)
   case "$sz" in ''|*[!0-9]*) gb="" ;; *) gb=$(( sz / 1000000000 )) ;; esac
   echo "Erasing $dev  (method: $want) …"
@@ -456,12 +460,22 @@ gui_wipe_one() {
   fi
 
   if [ -z "$m" ]; then
-    echo "  Overwriting (this is the slow path) …"
-    if run_overwrite "$dev"; then
-      m="Overwrite — shred 1 pass + zero (NIST Clear)"
+    if [ "$want" = "zero" ]; then
+      echo "  Overwriting — single zero pass (NIST 800-88 Clear) …"
+      if run_overwrite "$dev" 1; then
+        m="Overwrite — single zero pass (NIST Clear)"
+      else
+        reason="${OVR_ERR:-overwrite failed}"
+        echo "  Overwrite failed: $reason"
+      fi
     else
-      reason="${OVR_ERR:-overwrite failed}"
-      echo "  Overwrite failed: $reason"
+      echo "  Overwriting (this is the slow path) …"
+      if run_overwrite "$dev"; then
+        m="Overwrite — shred 1 pass + zero (NIST Clear)"
+      else
+        reason="${OVR_ERR:-overwrite failed}"
+        echo "  Overwrite failed: $reason"
+      fi
     fi
   fi
 
@@ -475,8 +489,9 @@ gui_wipe_one() {
       # Firmware/TRIM claimed success but the disk does not read back as zeros.
       # Fall back to a full overwrite — announced, because it takes hours.
       echo "  Verify failed — falling back to a full overwrite pass …"
-      if run_overwrite "$dev" && verify_zero "$dev"; then
-        m="Overwrite — shred 1 pass + zero (NIST Clear) — verified (reads as zeros)"
+      if [ "$want" = "zero" ]; then p=1; else p=2; fi
+      if run_overwrite "$dev" "$p" && verify_zero "$dev"; then
+        m="Overwrite — $([ "$p" = "1" ] && echo "single zero pass" || echo "shred 1 pass + zero") (NIST Clear) — verified (reads as zeros)"
         verified=1
       else
         reason="${OVR_ERR:-verification failed: device does not read back as zeros}"

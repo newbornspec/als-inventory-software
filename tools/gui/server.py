@@ -66,6 +66,10 @@ JOBS = {"wipe": None, "install": None}
 PROCS = {}          # kind -> Popen, so a running job can be cancelled
 LOCK = threading.Lock()
 
+# Drives are wiped concurrently, so each gets its own job keyed by device.
+def wipe_kind(device):
+    return "wipe:" + device
+
 
 # ---------------------------------------------------------------- config ----
 def load_conf():
@@ -314,9 +318,19 @@ def lsblk_field(line, key):
     return m.group(1) if m else ""
 
 
-def list_drives():
+DRIVES_CACHE = {"ts": 0.0, "data": []}
+
+
+def list_drives(force=False):
     """Internal (non-removable, non-USB) whole disks that can be wiped/imaged,
-    each with a friendly auto-selected method label for display."""
+    each with a friendly auto-selected method label for display.
+
+    Cached briefly: the UI polls bootstrap every 1.5s while hardware is being
+    detected, and this is called more than once per request — without the cache
+    that is several lsblk/smartctl spawns a second on slow hardware."""
+    now = time.time()
+    if not force and DRIVES_CACHE["data"] and now - DRIVES_CACHE["ts"] < 5:
+        return DRIVES_CACHE["data"]
     drives = []
     try:
         # -b gives SIZE in bytes, so the UI can estimate how long a wipe takes.
@@ -369,6 +383,7 @@ def list_drives():
             "method": method,
             "health": smart_health("/dev/" + name),
         })
+    DRIVES_CACHE["ts"], DRIVES_CACHE["data"] = now, drives
     return drives
 
 
@@ -446,14 +461,21 @@ def smart_health(dev):
     return health
 
 
+OPTICAL_CACHE = []   # single-item cache; hardware cannot change mid-session
+
+
 def has_optical():
     """True if this machine has an optical drive (lsblk type 'rom')."""
+    if OPTICAL_CACHE:
+        return OPTICAL_CACHE[0]
     try:
         out = subprocess.run(["lsblk", "-dno", "TYPE"], capture_output=True,
                              text=True, timeout=10).stdout
-        return "rom" in out.split()
+        found = "rom" in out.split()
     except Exception:  # noqa: BLE001
-        return False
+        found = False
+    OPTICAL_CACHE.append(found)
+    return found
 
 
 # ----------------------------------------------------------------- OS list ----
@@ -496,7 +518,7 @@ def start_job(kind, argv, result_prefix, device="", on_done=None):
             return False
         JOBS[kind] = {"running": True, "log": [], "result": None, "error": None,
                       "device": device, "startedAt": now, "updatedAt": now,
-                      "cancelled": False}
+                      "cancelled": False, "seq": 0}
     job = JOBS[kind]
 
     def worker():
@@ -518,7 +540,8 @@ def start_job(kind, argv, result_prefix, device="", on_done=None):
                         job["error"] = "could not parse result line"
                 elif line:
                     job["log"].append(line)
-                    del job["log"][:-400]
+                    job["seq"] += 1          # total lines ever produced
+                    del job["log"][:-400]    # keep only the tail in memory
             proc.wait()
             if job["result"] is None and job["error"] is None:
                 # The engine died without a verdict. Say so precisely instead of
@@ -637,15 +660,32 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(500, {"message": str(exc)})
 
         if u.path == "/api/job":
-            kind = (parse_qs(u.query).get("type") or [""])[0]
+            q = parse_qs(u.query)
+            kind = (q.get("type") or [""])[0]
             job = JOBS.get(kind)
             if not job:
                 return self._send(200, {"running": False, "log": [], "result": None,
-                                        "error": None, "elapsed": 0, "idle": 0})
+                                        "error": None, "elapsed": 0, "idle": 0,
+                                        "seq": 0, "logFrom": 0})
             # Serialise a snapshot, not the live dict the worker thread mutates.
             now = time.time()
             snap = dict(job)
-            snap["log"] = list(job.get("log") or [])
+            log = list(job.get("log") or [])
+            seq = job.get("seq", len(log))
+            first = seq - len(log)          # index of the oldest retained line
+            # Incremental: a multi-hour wipe is polled thousands of times, so send
+            # only lines the client has not seen instead of the whole log each time.
+            try:
+                since = int((q.get("since") or ["-1"])[0])
+            except ValueError:
+                since = -1
+            if 0 <= since <= seq and since >= first:
+                snap["log"] = log[since - first:]
+                snap["logFrom"] = since
+            else:
+                snap["log"] = log
+                snap["logFrom"] = first
+            snap["seq"] = seq
             snap["elapsed"] = int(now - job.get("startedAt", now))   # seconds running
             snap["idle"] = int(now - job.get("updatedAt", now))      # seconds since output
             return self._send(200, snap)
@@ -670,6 +710,9 @@ class Handler(BaseHTTPRequestHandler):
             body = {}
 
         if u.path == "/api/rescan":
+            DRIVES_CACHE["ts"] = 0.0        # a rescan must re-read the hardware
+            SMART_CACHE.clear()
+            del OPTICAL_CACHE[:]
             threading.Thread(target=refresh, daemon=True).start()
             return self._send(200, {"started": True})
 
@@ -686,18 +729,25 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(500, {"message": str(exc)})
 
         if u.path == "/api/wipe/cancel":
-            ok, msg = cancel_job("wipe")
+            dev = body.get("device", "")
+            ok, msg = cancel_job(wipe_kind(dev) if dev else "wipe")
             return self._send(200, {"ok": ok, "message": msg})
 
         if u.path == "/api/wipe/start":
-            device = body.get("device", "")
+            # One or many drives: several disks in the same machine are wiped
+            # concurrently, so a dual-disk unit takes as long as its slowest
+            # drive instead of the sum of both.
+            devices = body.get("devices") or ([body.get("device")] if body.get("device") else [])
             method = body.get("method") or STATE["conf"].get("AUDIT_WIPE_METHOD", "auto")
             lot_id = body.get("lotId")
             sub_lot_id = body.get("subLotId")
             if not SCRIPT:
                 return self._send(500, {"message": "engine not found"})
-            if not re.match(r"^/dev/[A-Za-z0-9]+$", device):
-                return self._send(400, {"message": "invalid device"})
+            if not devices:
+                return self._send(400, {"message": "no drive selected"})
+            for d in devices:
+                if not re.match(r"^/dev/[A-Za-z0-9]+$", d or ""):
+                    return self._send(400, {"message": "invalid device: %s" % d})
 
             # After the erase, record it against the device/batch: upload the
             # captured profile + the wipe status/method, the same shape the
@@ -729,11 +779,15 @@ class Handler(BaseHTTPRequestHandler):
                 result["recordName"] = (out or {}).get("name")
                 result["recordTag"] = (out or {}).get("tag")
 
-            started = start_job("wipe", ["bash", SCRIPT, "--wipe-drive", device, method],
-                                "WIPE_RESULT ", device, on_done=record_wipe)
+            started, busy = [], []
+            for d in devices:
+                ok = start_job(wipe_kind(d), ["bash", SCRIPT, "--wipe-drive", d, method],
+                               "WIPE_RESULT ", d, on_done=record_wipe)
+                (started if ok else busy).append(d)
             if not started:
-                return self._send(409, {"message": "a wipe is already running"})
-            return self._send(200, {"started": True})
+                return self._send(409, {"message": "a wipe is already running on %s"
+                                                   % ", ".join(busy)})
+            return self._send(200, {"started": started, "busy": busy})
 
         if u.path == "/api/os/install":
             device = body.get("device", "")

@@ -113,6 +113,21 @@
   .health.bad{background:#fef2f2;color:#b91c1c} .health.bad .hd{background:var(--red)}
   .health.na{background:#f8fafc;color:var(--mut)} .health.na .hd{background:var(--mut2)}
 
+  /* multi-drive picker (only shown when the machine has more than one disk) */
+  .dchk{display:flex;align-items:center;gap:10px;border:1px solid var(--line);border-radius:10px;
+        padding:10px 13px;margin-bottom:8px;cursor:pointer;font-size:14px}
+  .dchk input{width:17px;height:17px;accent-color:var(--blue);flex:none}
+  .dchk .dn{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .dchk .dh{font-size:11px;padding:2px 8px;border-radius:99px;flex:none}
+  .dchk .dh.ok{background:#f0fdf4;color:#15803d}
+  .dchk .dh.warn{background:#fffbeb;color:var(--amber)}
+  .dchk .dh.bad{background:#fef2f2;color:#b91c1c}
+  .dchk .dh.na{background:#f1f5f9;color:var(--mut)}
+  /* one progress block per drive being wiped, since they run concurrently */
+  .wjob{border-top:1px solid var(--line2);padding-top:11px;margin-top:11px}
+  .wjob:first-child{border-top:0;padding-top:0;margin-top:0}
+  .wjob .wd{font-size:12px;color:var(--ink);font-weight:600}
+
   /* alerts */
   .alert{border:1px solid #fecaca;background:#fef2f2;border-radius:12px;padding:14px 16px;
          margin-bottom:18px}
@@ -319,13 +334,7 @@
         <div class="card">
           <div class="lbl" style="margin-bottom:14px">Wipe drive</div>
           <p class="sublbl">Select drive</p>
-          <div class="sel" style="margin-bottom:14px">
-            <span class="li"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-              stroke-width="2"><rect x="2" y="7" width="20" height="10" rx="2"/><path d="M6 12h.01M10 12h6"/></svg></span>
-            <select id="wDrive" onchange="estimate()"></select>
-            <span class="ri"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-              stroke-width="2" stroke-linecap="round"><path d="M6 9l6 6 6-6"/></svg></span>
-          </div>
+          <div id="wDriveBox" style="margin-bottom:14px"></div>
           <div class="health hidden" id="wHealth"></div>
           <p class="sublbl">Wipe method</p>
           <div class="sel" style="margin-bottom:14px">
@@ -336,6 +345,7 @@
               <option value="crypto">NIST 800-88 Purge · cryptographic erase</option>
               <option value="secure">NIST 800-88 Purge · secure erase</option>
               <option value="overwrite">NIST 800-88 Clear · overwrite + verify</option>
+              <option value="zero">NIST 800-88 Clear · single zero pass (fastest)</option>
             </select>
             <span class="ri"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
               stroke-width="2" stroke-linecap="round"><path d="M6 9l6 6 6-6"/></svg></span>
@@ -351,16 +361,7 @@
                 stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg>
               Wipe</button>
           </div>
-          <div class="hidden" id="wRun">
-            <div class="prow"><span id="wStat">Starting…</span><b id="wPct">0%</b></div>
-            <div class="pr" id="wBar"><i></i></div>
-            <div style="display:flex;align-items:center;gap:12px;margin-top:9px">
-              <button class="lnk" onclick="toggleLog('wLog',this)">Show details</button>
-              <span style="flex:1"></span>
-              <button class="btn gho sm" onclick="cancelWipe()">■ Stop wipe</button>
-            </div>
-            <div class="log hidden" id="wLog"></div>
-          </div>
+          <div class="hidden" id="wRun"><div id="wRuns"></div></div>
         </div>
 
       </div>
@@ -475,11 +476,40 @@ function driveOpts(){return DRIVES.map(d=>'<option value="'+d.device+'" data-byt
   '" data-rota="'+(d.rotational?1:0)+'">'+d.device+' — '+(d.size||'?')+
   (d.model&&d.model!=='Unknown model'?' · '+d.model:'')+'</option>').join('');}
 function fillDrives(){
-  const o=DRIVES.length?driveOpts():'<option value="">No internal drive detected</option>';
-  $('wDrive').innerHTML=o; $('iDrive').innerHTML=o;
+  $('iDrive').innerHTML=DRIVES.length?driveOpts():'<option value="">No internal drive detected</option>';
+  fillWipeDrives();
   if(BOOT.wipeMethod)$('wMethod').value=BOOT.wipeMethod;
   estimate();
 }
+
+/* One disk → a plain selector (the common case, unchanged). Two or more →
+   checkboxes, because multiple drives are wiped concurrently. */
+function fillWipeDrives(){
+  const box=$('wDriveBox');
+  if(DRIVES.length>1){
+    box.innerHTML=DRIVES.map(d=>{
+      const h=d.health, cls=!h||h.status==='unknown'?'na':(h.status==='failing'?'bad':
+              (h.status==='caution'?'warn':'ok'));
+      const lab=!h||h.status==='unknown'?'no SMART':h.status;
+      return '<label class="dchk"><input type="checkbox" class="wchk" value="'+d.device+
+        '" onchange="estimate()" checked><span class="dn">'+d.device+' — '+(d.size||'?')+
+        (d.model&&d.model!=='Unknown model'?' · '+d.model:'')+
+        '</span><span class="dh '+cls+'">'+lab+'</span></label>';}).join('');
+  }else{
+    box.innerHTML='<div class="sel"><span class="li"><svg width="16" height="16" viewBox="0 0 24 24" '+
+      'fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="20" height="10" rx="2"/>'+
+      '<path d="M6 12h.01M10 12h6"/></svg></span><select id="wDrive" onchange="estimate()">'+
+      (DRIVES.length?driveOpts():'<option value="">No internal drive detected</option>')+
+      '</select><span class="ri"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" '+
+      'stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 9l6 6 6-6"/></svg></span></div>';
+  }
+}
+function selectedWipeDrives(){
+  const sel=$('wDrive');
+  if(sel)return sel.value?[sel.value]:[];
+  return Array.from(document.querySelectorAll('.wchk')).filter(c=>c.checked).map(c=>c.value);
+}
+function devKey(d){return d.replace(/[^A-Za-z0-9]/g,'_');}
 function fillImages(){
   const im=BOOT.osImages||[];
   $('iImage').innerHTML=im.length
@@ -503,26 +533,36 @@ function healthText(h){
   return['ok','Drive health: good',extra.join(' · ')];
 }
 function renderHealth(){
-  const el=$('wHealth'), h=healthOf($('wDrive').value);
-  if(!$('wDrive').value){el.classList.add('hidden');return;}
+  const el=$('wHealth'), picked=selectedWipeDrives();
+  // With several drives the per-row badges carry the health, so only show the
+  // banner in the single-drive case (or when a selected drive is in trouble).
+  const bad=picked.map(healthOf).filter(h=>h&&(h.status==='failing'||h.status==='caution'));
+  const h=(DRIVES.length>1?bad[0]:healthOf(picked[0]));
+  if(!picked.length||!h&&DRIVES.length>1){el.classList.add('hidden');return;}
   const [cls,title,detail]=healthText(h);
   el.className='health '+cls;
   el.innerHTML='<span class="hd"></span><span><b>'+title+'</b>'+(detail?' — '+detail:'')+'</span>';
 }
 
-/* estimated wipe time — honest maths from drive size + method */
+/* estimated wipe time — honest maths from drive size + method.
+   Drives run concurrently, so the estimate is the slowest one, not the sum. */
 function estimate(){
   renderHealth();
-  const o=$('wDrive').selectedOptions[0];
-  if(!o||!o.dataset){$('wEst').textContent='—';return;}
-  const bytes=+(o.dataset.bytes||0), rota=o.dataset.rota==='1', m=$('wMethod').value;
-  $('wStart').disabled=!$('wDrive').value;
-  if(!bytes){$('wEst').textContent='—';return;}
+  const picked=selectedWipeDrives(), m=$('wMethod').value;
+  $('wStart').disabled=!picked.length;
+  if(!picked.length){$('wEst').textContent='—';return;}
   if(m==='crypto'||m==='secure'){$('wEst').textContent='≈ 1–3 min';return;}
-  if(m==='auto'&&!rota){$('wEst').textContent='≈ 1–5 min (firmware erase)';return;}
-  // overwrite: shred writes the whole disk twice (1 random pass + zero pass)
-  const rate=rota?100e6:400e6;                 // bytes/sec, conservative
-  $('wEst').textContent='≈ '+fmtEta((bytes*2)/rate);
+  let worst=0, anyBytes=false;
+  for(const dev of picked){
+    const d=DRIVES.find(x=>x.device===dev); if(!d||!d.bytes)continue;
+    anyBytes=true;
+    if(m==='auto'&&!d.rotational){worst=Math.max(worst,300);continue;} // firmware erase
+    const rate=d.rotational?100e6:400e6;          // bytes/sec, conservative
+    const passes=(m==='zero')?1:2;                // zero-only vs random+zero
+    worst=Math.max(worst,(d.bytes*passes)/rate);
+  }
+  if(!anyBytes){$('wEst').textContent='—';return;}
+  $('wEst').textContent='≈ '+fmtEta(worst)+(picked.length>1?' (drives run in parallel)':'');
 }
 
 const HWDEF=[
@@ -565,20 +605,28 @@ function pctFrom(log){
   return null;
 }
 function pollJob(kind,o){
-  let fails=0,finished=false;
+  let fails=0,finished=false,have=0,lines=[];
   const finish=(r)=>{if(finished)return;finished=true;try{o.onDone(r);}catch(e){}};
   const tick=async()=>{
     if(finished)return;
     let j;
     try{
-      const res=await fetch('/api/job?type='+kind,{cache:'no-store'});
+      // Ask only for log lines we have not seen: a multi-hour wipe is polled
+      // thousands of times, and resending the whole log each time is wasteful.
+      const res=await fetch('/api/job?type='+encodeURIComponent(kind)+'&since='+have,
+                            {cache:'no-store'});
       if(!res.ok)throw new Error('HTTP '+res.status);
       j=await res.json(); fails=0;
     }catch(e){
       if(++fails>=12){finish({status:'failed',reason:'Lost contact with the service. The operation may still be running on this machine — reboot and re-check the drive before reusing it.'});return;}
       setTimeout(tick,Math.min(1000*fails,5000)); return;
     }
-    const log=j.log||[];
+    const chunk=j.log||[], from=j.logFrom||0;
+    if(from>have) lines=chunk.slice();                       // older lines dropped
+    else if(chunk.length) lines=lines.concat(chunk.slice(have-from));
+    if(lines.length>400) lines=lines.slice(-400);
+    have=(j.seq!==undefined)?j.seq:have+chunk.length;
+    const log=lines;
     if(o.logId&&$(o.logId)){const el=$(o.logId);el.textContent=log.join('\n');el.scrollTop=el.scrollHeight;}
     const p=pctFrom(log);
     if(o.barId&&$(o.barId)){const bar=$(o.barId);
@@ -596,50 +644,70 @@ function pollJob(kind,o){
 }
 
 /* -------------------------------------------------------------- wipe --- */
+let RUNNING=0;                       // drives still being wiped
 function confirmWipe(){
-  const dev=$('wDrive').value, o=$('wDrive').selectedOptions[0];
+  const devs=selectedWipeDrives();
+  if(!devs.length){toast('No drive selected.',false);return;}
   const batch=$('batchSel').selectedOptions[0];
-  const h=healthOf(dev);
-  let warn='';
-  if(h&&h.status==='failing')
-    warn=' ⚠ SMART reports this drive is FAILING ('+(h.reasons||[]).join(', ')+
-         ') — the wipe may stall or never finish.';
-  else if(h&&h.status==='caution')
-    warn=' ⚠ This drive reports faults ('+(h.reasons||[]).join(', ')+') and may wipe slowly or fail.';
-  openOv('Erase '+dev+'?','This permanently destroys all data on '+(o?o.textContent:dev)+
-    ' and records the wipe against '+(batch?batch.textContent:'the selected batch')+'. This cannot be undone.'+warn,
-    false, async()=>{
+  const warns=[];
+  for(const d of devs){
+    const h=healthOf(d);
+    if(h&&h.status==='failing')warns.push(d+' is FAILING ('+(h.reasons||[]).join(', ')+')');
+    else if(h&&h.status==='caution')warns.push(d+' reports faults ('+(h.reasons||[]).join(', ')+')');
+  }
+  const warn=warns.length?' ⚠ '+warns.join('; ')+' — the wipe may stall or fail.':'';
+  const what=devs.length>1?(devs.length+' drives ('+devs.join(', ')+')'):devs[0];
+  openOv('Erase '+what+'?','This permanently destroys all data on '+what+
+    ' and records the wipe against '+(batch?batch.textContent:'the selected batch')+
+    '. This cannot be undone.'+warn, false, async()=>{
     closeOv();
     let res;
-    try{ res=await jpost('/api/wipe/start',{device:dev,lotId:$('batchSel').value,
+    try{ res=await jpost('/api/wipe/start',{devices:devs,lotId:$('batchSel').value,
                                            method:$('wMethod').value}); }
     catch(e){ toast('Could not start the wipe.',false); return; }
     if(!res.ok){toast(res.data.message||'Could not start wipe',false);return;}
+    const started=(res.data&&res.data.started)||devs;
     $('wActions').classList.add('hidden'); $('wRun').classList.remove('hidden');
-    $('wStat').textContent='Starting…'; $('wPct').textContent='0%';
-    $('wBar').classList.add('ind'); $('wBar').firstElementChild.style.width='0%';
-    pollJob('wipe',{logId:'wLog',barId:'wBar',pctId:'wPct',statId:'wStat',label:'Wiping',
-      onDone:(r)=>{
-        $('wActions').classList.remove('hidden'); $('wRun').classList.add('hidden');
-        if(r.status==='wiped'){
-          if(r.recorded)
-            // A recorded wipe makes the Certificate of Data Erasure issuable in
-            // Als Inventory, so tell the operator it is ready.
-            toast('Wipe complete — saved as '+(r.recordTag||'a new asset')+' in '+
-                  (batch?batch.textContent:'the batch')+'. Erasure certificate now available ✓');
-          else if(r.recordError)toast('Wiped, but not saved: '+r.recordError,false);
-          else toast('Wipe complete ✓');
-        }else{
-          const why=r.reason||r.message||r.method||'reason not reported';
-          toast('Wipe failed — '+why+(r.recorded?' (recorded against the batch)':''),false);
-        }
-      }});
-  },'Erase drive');
+    // One progress block per drive — they erase concurrently.
+    $('wRuns').innerHTML=started.map(d=>{const k=devKey(d);return (
+      '<div class="wjob" id="wj_'+k+'">'+
+        (started.length>1?'<div class="wd">'+d+'</div>':'')+
+        '<div class="prow"><span id="wst_'+k+'">Starting…</span><b id="wpc_'+k+'">0%</b></div>'+
+        '<div class="pr ind" id="wbar_'+k+'"><i></i></div>'+
+        '<div style="display:flex;align-items:center;gap:12px;margin-top:9px">'+
+          '<button class="lnk" onclick="toggleLog(\'wlog_'+k+'\',this)">Show details</button>'+
+          '<span style="flex:1"></span>'+
+          '<button class="btn gho sm" onclick="cancelWipe(\''+d+'\')">■ Stop</button></div>'+
+        '<div class="log hidden" id="wlog_'+k+'"></div></div>');}).join('');
+    RUNNING=started.length;
+    for(const d of started){
+      const k=devKey(d);
+      pollJob('wipe:'+d,{logId:'wlog_'+k,barId:'wbar_'+k,pctId:'wpc_'+k,statId:'wst_'+k,
+        label:'Wiping',
+        onDone:(r)=>{
+          const name=started.length>1?(d+': '):'';
+          if(r.status==='wiped'){
+            if(r.recorded)
+              // A recorded wipe makes the Certificate of Data Erasure issuable.
+              toast(name+'Wipe complete — saved as '+(r.recordTag||'a new asset')+' in '+
+                    (batch?batch.textContent:'the batch')+'. Erasure certificate now available ✓');
+            else if(r.recordError)toast(name+'Wiped, but not saved: '+r.recordError,false);
+            else toast(name+'Wipe complete ✓');
+          }else{
+            const why=r.reason||r.message||r.method||'reason not reported';
+            toast(name+'Wipe failed — '+why+(r.recorded?' (recorded against the batch)':''),false);
+          }
+          // Restore the controls only once every drive has finished.
+          if(--RUNNING<=0){$('wActions').classList.remove('hidden');$('wRun').classList.add('hidden');}
+        }});
+    }
+  },'Erase drive'+(devs.length>1?'s':''));
 }
-async function cancelWipe(){
-  openOv('Stop the wipe?','The drive will be left partially erased and must be wiped again before it can be resold.',
+async function cancelWipe(dev){
+  openOv('Stop the wipe on '+dev+'?',
+    'The drive will be left partially erased and must be wiped again before it can be resold.',
     false, async()=>{ closeOv();
-      const r=await jpost('/api/wipe/cancel',{});
+      const r=await jpost('/api/wipe/cancel',{device:dev});
       toast((r.data&&r.data.message)||'Stopping…',false); },'Stop wipe');
 }
 
