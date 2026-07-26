@@ -59,6 +59,7 @@ STATE = {
     "lots": [],
     "error": None,
     "capturing": False,
+    "userName": "",
 }
 # One background job per kind (only one wipe/install runs at a time).
 JOBS = {"wipe": None, "install": None}
@@ -144,6 +145,8 @@ def login():
     if not tok:
         raise RuntimeError("Sign-in failed — check AUDIT_EMAIL / AUDIT_PASSWORD.")
     STATE["token"] = tok
+    # Show the operator's real name in the header rather than the login address.
+    STATE["userName"] = ((out or {}).get("user") or {}).get("name") or ""
     return tok
 
 
@@ -236,6 +239,20 @@ def ident():
     cpu = (p.get("cpu") or {}).get("model", "")
     mem = (p.get("memory") or {}).get("totalGb")
     st = p.get("storage") or []
+    c = p.get("cpu") or {}
+    mm = p.get("memory") or {}
+    dsp = p.get("display") or {}
+    net = p.get("network") or {}
+    bat = p.get("battery") or {}
+    sec = p.get("security") or {}
+
+    def joins(parts, sep=" · "):
+        return sep.join(str(x) for x in parts if x)
+
+    # The hardware card shows one line per component; each is assembled here so
+    # the UI stays presentation-only.
+    cores = joins(["%sC" % c["cores"] if c.get("cores") else "",
+                   "%sT" % c["threads"] if c.get("threads") else ""], "/")
     return {
         "name": " ".join(x for x in [i.get("manufacturer"), i.get("model")] if x) or "Unknown device",
         "deviceType": i.get("deviceType", ""),
@@ -244,7 +261,23 @@ def ident():
         "ramGb": mem,
         "storage": ", ".join(" ".join(x for x in [d.get("capacity"), d.get("type")] if x) for d in st),
         "drives": st,
-        "battery": (p.get("battery") or {}).get("health", ""),
+        "battery": bat.get("health", ""),
+        # --- lines for the hardware panel -------------------------------------
+        "hw": {
+            "processor": joins([c.get("model"), cores, c.get("maxClock")]),
+            "memory": joins([("%s GB" % mm["totalGb"]) if mm.get("totalGb") else "",
+                             mm.get("type"), mm.get("speed")]),
+            "storage": joins([joins([d.get("capacity"), d.get("type")], " ")
+                              for d in st], ", ") or "",
+            "display": joins([dsp.get("size"), dsp.get("resolution")]),
+            "optical": "Present" if has_optical() else "Not present",
+            "network": joins([net.get("wifi"), net.get("bluetooth"), net.get("ethernet")]),
+            "batteryLine": joins([bat.get("fullChargeCapacity") or bat.get("designCapacity"),
+                                  ("Health %s" % bat["health"]) if bat.get("health") else "",
+                                  bat.get("status")]),
+            "tpm": joins([sec.get("tpm"),
+                          ("Secure Boot %s" % sec["secureBoot"]) if sec.get("secureBoot") else ""]),
+        },
     }
 
 
@@ -259,8 +292,9 @@ def list_drives():
     each with a friendly auto-selected method label for display."""
     drives = []
     try:
+        # -b gives SIZE in bytes, so the UI can estimate how long a wipe takes.
         out = subprocess.run(
-            ["lsblk", "-dP", "-o", "NAME,SIZE,MODEL,TRAN,RM,ROTA"],
+            ["lsblk", "-dPb", "-o", "NAME,SIZE,MODEL,TRAN,RM,ROTA"],
             capture_output=True, text=True, timeout=15).stdout
     except Exception:
         return drives
@@ -284,14 +318,41 @@ def list_drives():
             method = "ATA secure erase / overwrite (HDD)"
         else:
             method = "TRIM / secure erase (SSD)"
+        raw = lsblk_field(line, "SIZE")
+        try:
+            nbytes = int(raw)
+        except (TypeError, ValueError):
+            nbytes = 0
         drives.append({
             "device": "/dev/" + name,
             "name": name,
-            "size": lsblk_field(line, "SIZE"),
+            "size": human_size(nbytes),
+            "bytes": nbytes,
+            "rotational": rota == "1",
             "model": lsblk_field(line, "MODEL") or "Unknown model",
             "method": method,
         })
     return drives
+
+
+def human_size(n):
+    """512110190592 -> '512 GB' (decimal, matching how drives are sold)."""
+    if not n:
+        return ""
+    if n >= 1_000_000_000_000:
+        v = n / 1_000_000_000_000.0
+        return ("%.1f" % v).rstrip("0").rstrip(".") + " TB"
+    return "%d GB" % round(n / 1_000_000_000.0)
+
+
+def has_optical():
+    """True if this machine has an optical drive (lsblk type 'rom')."""
+    try:
+        out = subprocess.run(["lsblk", "-dno", "TYPE"], capture_output=True,
+                             text=True, timeout=10).stdout
+        return "rom" in out.split()
+    except Exception:  # noqa: BLE001
+        return False
 
 
 # ----------------------------------------------------------------- OS list ----
@@ -454,7 +515,8 @@ class Handler(BaseHTTPRequestHandler):
                 "wipeEnabled": STATE["conf"].get("AUDIT_WIPE", "0") == "1",
                 "wipeMethod": STATE["conf"].get("AUDIT_WIPE_METHOD", "auto"),
                 "server": STATE["conf"].get("AUDIT_URL", ""),
-                "currentUser": STATE["conf"].get("AUDIT_EMAIL", "") or "Operator",
+                "currentUser": (STATE.get("userName")
+                                or STATE["conf"].get("AUDIT_EMAIL", "") or "Operator"),
                 "adminPinSet": bool(STATE["conf"].get("AUDIT_ADMIN_PIN", "")),
                 "launch": launch_info(),
             })

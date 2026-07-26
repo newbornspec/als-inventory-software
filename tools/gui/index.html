@@ -6,277 +6,339 @@
 <title>ALS Audit Software</title>
 <style>
   :root{
-    --bg:#eef1f6; --card:#ffffff; --line:#e6eaf1; --line2:#eef1f6;
-    --ink:#1e293b; --mut:#64748b; --mut2:#94a3b8;
-    --navy:#16326b; --blue:#2563eb; --blue2:#1e40af;
-    --green:#16a34a; --greenbg:#ecfdf5; --greenln:#bbf7d0;
-    --red:#dc2626; --redbg:#fef2f2;
-    --purple:#7c3aed; --purplebg:#f5f3ff; --purpleln:#ddd6fe;
-    --infobg:#eff6ff; --infoln:#bfdbfe;
+    --bg:#f7f9fc; --card:#ffffff; --line:#e8ecf3; --line2:#f1f4f8;
+    --ink:#0f172a; --mut:#64748b; --mut2:#94a3b8;
+    --blue:#2563eb; --blueh:#1d4ed8; --blsoft:#eff4ff;
+    --green:#16a34a; --red:#dc2626; --amber:#b45309;
   }
   *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
   html,body{margin:0;height:100%}
-  body{background:var(--bg);color:var(--ink);font:15px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif;overflow:hidden}
+  body{background:var(--bg);color:var(--ink);overflow:hidden;
+       font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
   .app{height:100vh;display:flex;flex-direction:column}
 
-  /* top bar */
-  .top{display:flex;align-items:center;justify-content:space-between;background:var(--card);border-bottom:1px solid var(--line);padding:16px 26px}
-  .brand{display:flex;align-items:center;gap:14px}
-  .logo{width:46px;height:46px;border-radius:12px;background:var(--navy);display:grid;place-items:center;color:#fff;font-size:22px}
-  .brand h1{margin:0;font-size:22px;font-weight:800;letter-spacing:.5px;color:var(--navy)}
-  .brand p{margin:0;font-size:12px;color:var(--mut)}
-  .standards{display:flex;align-items:center;gap:8px;border:1px solid var(--line);border-radius:10px;padding:10px 16px;background:#fff;color:var(--navy);font-weight:600;font-size:13px;cursor:pointer}
+  /* ---------------------------------------------------------- header --- */
+  .top{display:flex;align-items:center;justify-content:space-between;gap:16px;
+       background:var(--card);border-bottom:1px solid var(--line);padding:14px 22px;flex:none}
+  .brand{display:flex;align-items:center;gap:12px;min-width:0}
+  .logo{width:38px;height:38px;border-radius:10px;background:var(--blsoft);
+        display:grid;place-items:center;color:var(--blue);flex:none}
+  .brand h1{margin:0;font-size:19px;font-weight:700;letter-spacing:-.2px}
+  .brand p{margin:0;font-size:12.5px;color:var(--mut2)}
+  .hmeta{display:flex;align-items:center;gap:18px;flex:none}
+  .chip{display:inline-flex;align-items:center;gap:7px;font-size:13.5px;color:var(--mut);white-space:nowrap}
+  .chip.act{cursor:pointer}
+  .dot{width:9px;height:9px;border-radius:50%;background:var(--green);flex:none}
+  .dot.bad{background:var(--red)}
+  .iconbtn{width:36px;height:36px;border-radius:9px;border:1px solid var(--line);background:#fff;
+           color:var(--mut);display:grid;place-items:center;cursor:pointer}
+  .iconbtn:hover{background:var(--line2);color:var(--ink)}
 
-  /* body: sidebar + main */
-  .body{flex:1;display:flex;min-height:0}
-  .side{width:250px;flex-shrink:0;background:var(--card);border-right:1px solid var(--line);padding:22px 16px;overflow:auto}
-  .side .grp{font-size:12px;font-weight:700;letter-spacing:.6px;color:var(--blue);display:flex;align-items:center;gap:8px;margin:18px 8px 10px}
-  .side .grp:first-child{margin-top:0}
-  .navi{display:flex;align-items:center;gap:12px;width:100%;text-align:left;border:0;background:transparent;color:var(--ink);
-        border-radius:10px;padding:13px 14px;font-size:14px;font-weight:600;cursor:pointer}
-  .navi .ni{width:30px;height:30px;display:grid;place-items:center;color:var(--navy)}
-  .navi small{display:block;font-weight:400;color:var(--mut);font-size:11px}
-  .navi:hover{background:var(--line2)}
-  .navi.on{background:var(--navy);color:#fff}
-  .navi.on .ni,.navi.on small{color:#cdd8ef}
+  /* ------------------------------------------------------------ body --- */
+  .scroll{flex:1;overflow:auto;padding:18px}
+  .grid{display:grid;grid-template-columns:minmax(0,1.12fr) minmax(0,1fr);gap:18px;
+        align-items:start;max-width:1580px;margin:0 auto}
+  @media(max-width:1080px){.grid{grid-template-columns:1fr}}
+  .col{display:flex;flex-direction:column;gap:16px;min-width:0}
 
-  main{flex:1;overflow:auto;padding:22px}
-  .colwrap{max-width:1180px;margin:0 auto;display:flex;flex-direction:column;gap:18px}
-  .two{display:grid;grid-template-columns:1fr 1fr;gap:18px}
-  @media(max-width:900px){.two{grid-template-columns:1fr}.side{display:none}}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:17px 20px}
+  .lbl{font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:#8b97a8;font-weight:700}
+  .sublbl{font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--mut2);
+          font-weight:700;margin:0 0 7px}
 
-  .cardp{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:22px}
-  .hd{font-size:13px;font-weight:800;letter-spacing:.4px;color:var(--navy)}
-  .hd .n{color:var(--blue)}
-  .hsub{font-size:12px;color:var(--mut);margin:2px 0 16px}
+  /* selects */
+  .sel{position:relative}
+  .sel select{width:100%;appearance:none;-webkit-appearance:none;background:#fff;
+    border:1px solid var(--line);border-radius:10px;color:var(--ink);font-size:14.5px;
+    padding:13px 38px 13px 42px;outline:none;cursor:pointer}
+  .sel select:focus{border-color:var(--blue)}
+  .sel .li{position:absolute;left:13px;top:50%;transform:translateY(-50%);color:var(--mut2);pointer-events:none}
+  .sel .ri{position:absolute;right:13px;top:50%;transform:translateY(-50%);color:var(--mut2);pointer-events:none}
+  .fld{display:block;margin-bottom:13px}
+  .fld span{display:block;font-size:12.5px;color:var(--mut);margin-bottom:6px}
+  .fld input{width:100%;background:#fff;border:1px solid var(--line);border-radius:10px;
+             padding:12px 13px;font-size:14.5px;color:var(--ink);outline:none}
+  .fld input:focus{border-color:var(--blue)}
 
-  select,input{width:100%;background:#fff;border:1px solid var(--line);color:var(--ink);border-radius:10px;padding:13px 14px;font-size:15px;outline:none}
-  select:focus,input:focus{border-color:var(--blue)}
-  .selrow{display:flex;align-items:center;gap:10px;border:1px solid var(--line);border-radius:10px;padding:13px 14px;background:#fff}
+  /* buttons */
+  .btn{width:100%;border:0;border-radius:10px;background:var(--blue);color:#fff;font-weight:600;
+       font-size:15px;padding:14px;display:inline-flex;align-items:center;justify-content:center;
+       gap:9px;cursor:pointer}
+  .btn:hover{background:var(--blueh)}
+  .btn:disabled{opacity:.45;cursor:not-allowed}
+  .btn.gho{background:#fff;border:1px solid var(--line);color:var(--ink);font-weight:600}
+  .btn.gho:hover{background:var(--line2)}
+  .btn.dan{background:var(--red)} .btn.dan:hover{background:#b91c1c}
+  .btn.sm{width:auto;padding:9px 14px;font-size:13.5px}
+  .lnk{background:none;border:0;color:var(--blue);font-size:13px;cursor:pointer;padding:4px 0}
 
-  .meta{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:14px}
-  .meta .m{border:1px solid var(--line);border-radius:10px;padding:14px;display:flex;gap:12px;align-items:center}
-  .meta .mi{color:var(--navy);font-size:18px}
-  .meta .mk{font-size:11px;color:var(--mut2);text-transform:uppercase;letter-spacing:.4px}
-  .meta .mv{font-weight:700}
+  /* batch card */
+  .brow{display:flex;align-items:center;gap:22px;flex-wrap:wrap}
+  .brow .sel{flex:1;min-width:240px}
+  .bmeta{display:flex;gap:26px;flex:none}
+  .bmeta .k{font-size:11px;color:var(--mut2);letter-spacing:.04em}
+  .bmeta .v{font-size:14px;font-weight:600}
 
-  table.os{width:100%;border-collapse:collapse;margin-top:12px;font-size:14px}
-  table.os th{text-align:left;color:var(--mut);font-weight:600;font-size:12px;padding:8px 10px;border-bottom:1px solid var(--line)}
-  table.os td{padding:11px 10px;border-bottom:1px solid var(--line2)}
-  table.os tr.sel td{background:#f1f6ff}
-  table.os td.r{text-align:right;color:var(--mut)}
+  /* hardware */
+  .hw{display:grid;grid-template-columns:1fr 1fr;gap:0 26px}
+  @media(max-width:700px){.hw{grid-template-columns:1fr}}
+  .hwi{display:flex;gap:12px;align-items:flex-start;padding:13px 0;border-bottom:1px solid var(--line2)}
+  .hwic{width:34px;height:34px;border-radius:9px;background:#f4f7fb;display:grid;place-items:center;
+        color:#7c8ba1;flex:none}
+  .hwk{font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--mut2);font-weight:700}
+  .hwv{font-size:14px;font-weight:500;word-break:break-word}
 
-  .btn{border:0;border-radius:10px;padding:14px 18px;font-size:15px;font-weight:700;cursor:pointer;color:#fff;width:100%;display:inline-flex;align-items:center;justify-content:center;gap:9px}
-  .btn:disabled{opacity:.5;cursor:not-allowed}
-  .btn.sel{background:var(--blue2)} .btn.green{background:var(--green)} .btn.red{background:var(--red)} .btn.purple{background:var(--purple)}
-  .btn.gho{background:#fff;color:var(--ink);border:1px solid var(--line)}
-  .btn.sm{padding:11px 14px;font-size:14px}
+  /* progress */
+  .prow{display:flex;align-items:center;justify-content:space-between;font-size:12.5px;
+        color:var(--mut);margin:14px 0 7px}
+  .pr{height:6px;border-radius:99px;background:#e9eef6;overflow:hidden}
+  .pr i{display:block;height:100%;width:0;background:var(--blue);border-radius:99px;
+        transition:width .5s ease}
+  .pr.ind i{width:35%;animation:sl 1.5s ease-in-out infinite}
+  @keyframes sl{0%{margin-left:-35%}100%{margin-left:100%}}
+  .log{background:#0f172a;color:#cbd5e1;border-radius:10px;padding:12px 13px;margin-top:11px;
+       font:12px/1.55 ui-monospace,Menlo,Consolas,monospace;height:190px;overflow:auto;
+       white-space:pre-wrap}
+  .est{display:flex;align-items:center;justify-content:space-between;border:1px solid var(--line);
+       border-radius:10px;padding:12px 14px;color:var(--mut);font-size:13.5px}
+  .est b{color:var(--ink);font-weight:600}
 
-  .info{border-radius:10px;padding:16px;margin-bottom:14px;display:flex;gap:12px}
-  .info .ti{font-size:20px}
-  .info b{display:block;margin-bottom:2px}
-  .info span{font-size:13px;color:var(--mut)}
-  .info.blue{background:var(--infobg);border:1px solid var(--infoln)}
-  .info.blue .ti{color:var(--blue)}
-  .info.green{background:var(--greenbg);border:1px solid var(--greenln)} .info.green .ti{color:var(--green)} .info.green b{color:var(--green)}
-  .info.purple{background:var(--purplebg);border:1px solid var(--purpleln)} .info.purple .ti{color:var(--purple)}
+  /* alerts */
+  .alert{border:1px solid #fecaca;background:#fef2f2;border-radius:12px;padding:14px 16px;
+         margin-bottom:18px}
+  .alert h4{margin:0 0 4px;font-size:14px;color:#b91c1c}
+  .alert p{margin:0 0 10px;font-size:13px;color:#7f1d1d}
+  .hidden{display:none !important}
 
-  .stack{display:flex;flex-direction:column;gap:10px}
-  .fld{margin-bottom:12px} .fld span{display:block;font-size:12px;color:var(--mut);margin-bottom:6px}
-
-  .bar{height:12px;border-radius:999px;background:#eef2f8;overflow:hidden;border:1px solid var(--line)}
-  .bar>i{display:block;height:100%;width:100%;background:var(--blue);
-    background-image:linear-gradient(90deg,rgba(255,255,255,.35) 25%,transparent 25%,transparent 50%,rgba(255,255,255,.35) 50%,rgba(255,255,255,.35) 75%,transparent 75%);
-    background-size:28px 28px;animation:mv 1s linear infinite}
-  @keyframes mv{to{background-position:28px 0}}
-  .log{margin-top:12px;background:#0e1526;color:#a9c2ee;border-radius:8px;padding:11px 13px;font:12px/1.5 ui-monospace,Consolas,monospace;height:150px;overflow:auto;white-space:pre-wrap}
-
-  /* bottom bar */
-  .bot{background:var(--card);border-top:1px solid var(--line);padding:12px 26px;display:flex;align-items:center;gap:34px;font-size:13px;color:var(--mut);flex-wrap:wrap}
-  .bot .bi{display:flex;align-items:center;gap:9px}
-  .bot .bi .k{color:var(--mut2);font-size:11px;text-transform:uppercase;letter-spacing:.4px}
-  .bot .bi .v{color:var(--ink);font-weight:600}
-  .cdot{width:9px;height:9px;border-radius:50%;background:var(--green);display:inline-block}
-  .cdot.bad{background:var(--red)}
-
-  .hidden{display:none!important}
-
-  .toast{position:fixed;bottom:74px;left:50%;transform:translateX(-50%);padding:13px 22px;border-radius:11px;font-weight:700;color:#fff;box-shadow:0 12px 34px rgba(2,8,23,.28);display:none;z-index:60}
-  .toast.ok{background:var(--green)} .toast.err{background:var(--red)}
-  .overlay{position:fixed;inset:0;background:rgba(15,23,42,.5);display:none;align-items:center;justify-content:center;z-index:50;padding:24px}
-  .modal{background:#fff;border-radius:16px;padding:26px;max-width:480px;width:100%;box-shadow:0 24px 60px rgba(2,8,23,.35)}
-  .modal h3{margin:0 0 8px;color:var(--navy)} .modal p{color:var(--mut);margin:0 0 18px}
-  .modal .row{display:flex;gap:10px;justify-content:flex-end}
-  .modal .row .btn{width:auto}
+  /* modal + toast */
+  .ov{position:fixed;inset:0;background:rgba(15,23,42,.5);display:none;align-items:center;
+      justify-content:center;padding:20px;z-index:60}
+  .modal{background:#fff;border-radius:14px;padding:24px;width:min(520px,100%);max-height:88vh;overflow:auto}
+  .modal h3{margin:0 0 6px;font-size:18px}
+  .modal p{margin:0 0 16px;color:var(--mut);font-size:14px}
+  .mrow{display:flex;gap:10px;margin-top:18px}
+  .toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%);background:#0f172a;color:#fff;
+         padding:13px 20px;border-radius:11px;font-size:14px;max-width:80vw;text-align:center;
+         opacity:0;pointer-events:none;transition:opacity .25s;z-index:70}
+  .toast.on{opacity:1}
+  .toast.bad{background:var(--red)}
+  .foot{display:flex;gap:10px;align-items:center}
+  .diag{font-size:11px;color:var(--mut2);margin-top:14px}
 </style>
 </head>
-<body>
-<div class="app">
 
-  <!-- ===== top bar ===== -->
+<div class="app">
+  <!-- ============================ header ============================ -->
   <div class="top">
     <div class="brand">
-      <div class="logo">🛡️</div>
-      <div><h1>AUDIT SOFTWARE</h1><p>ALS Inventory Audit System</p></div>
+      <div class="logo">
+        <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+      </div>
+      <div>
+        <h1>Audit Software</h1>
+        <p>ALS inventory audit console</p>
+      </div>
     </div>
-    <button class="standards" onclick="openStd()">📄 STANDARDS</button>
+    <div class="hmeta">
+      <span class="chip"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+        stroke-width="2" stroke-linecap="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg>
+        <span id="hUser">—</span></span>
+      <span class="chip"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+        stroke-width="2" stroke-linecap="round"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M8 3v4M16 3v4M3 11h18"/></svg>
+        <span id="hDate">—</span></span>
+      <span class="chip act" id="hConnWrap" onclick="connClick()"><span class="dot" id="hDot"></span>
+        <span id="hConn">Checking…</span></span>
+      <button class="iconbtn" title="Settings" onclick="openSettings()">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+          stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1A1.7 1.7 0 0 0 9 19.4a1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+      </button>
+      <button class="iconbtn" title="Restart this machine" onclick="power('restart')">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+          stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 3v6h-6"/></svg>
+      </button>
+    </div>
   </div>
 
-  <div class="body">
-    <!-- ===== sidebar ===== -->
-    <aside class="side">
-      <div class="grp">📋 ACTIONS</div>
-      <button class="navi on" id="nav-batch" onclick="focusCard('batch')"><span class="ni">🗂️</span>Select Batch</button>
-      <button class="navi" id="nav-os" onclick="focusCard('os')"><span class="ni">🖥️</span>Select OS to Install</button>
-      <button class="navi" id="nav-install" onclick="focusCard('install')"><span class="ni">⬇️</span>Install OS</button>
-      <div class="grp">🗑️ WIPE</div>
-      <button class="navi" id="nav-wipe" onclick="focusCard('wipe')"><span class="ni">🧽</span>Wipe Drive<small>Securely erase the selected drive</small></button>
-      <div class="grp">〽️ AUDIT</div>
-      <button class="navi" id="nav-audit" onclick="focusCard('audit')"><span class="ni">🔎</span>Start Audit<small>Collect system information</small></button>
-      <div class="grp">⚙️ OTHER</div>
-      <button class="navi" id="nav-settings" onclick="openSettings()"><span class="ni">⚙️</span>Settings<small>System and network settings</small></button>
-      <button class="navi" onclick="power('restart')"><span class="ni">🔁</span>Restart<small>Reboot this machine</small></button>
-      <button class="navi" onclick="power('shutdown')"><span class="ni">⏻</span>Shut Down<small>Power off this machine</small></button>
-    </aside>
+  <div class="scroll">
+    <!-- connection problem -->
+    <div class="alert hidden" id="errBanner">
+      <h4>⚠ Not connected to the server</h4>
+      <p id="errMsg"></p>
+      <div class="foot">
+        <button class="btn sm" onclick="retry()">Retry connection</button>
+        <button class="btn gho sm" onclick="openSettings()">Open settings</button>
+      </div>
+    </div>
 
-    <!-- ===== main ===== -->
-    <main>
-      <div class="colwrap">
+    <div class="grid">
+      <!-- ======================= LEFT COLUMN ======================= -->
+      <div class="col">
 
-        <!-- connection error banner -->
-        <section class="cardp hidden" id="errBanner" style="border-color:var(--red);background:var(--redbg)">
-          <div class="hd" style="color:var(--red)">⚠ NOT CONNECTED TO THE SERVER</div>
-          <p id="errMsg" style="color:var(--soft);font-size:14px;margin:8px 0 4px">—</p>
-          <p style="color:var(--faint);font-size:13px;margin:0 0 14px">Batches load from the server, so Audit needs a connection. Check the Wi-Fi in Settings, then retry.</p>
-          <div class="btnrow"><button class="btn sel" style="width:auto" onclick="retry()">Retry connection</button>
-          <button class="btn gho" style="width:auto" onclick="openSettings()">Open settings</button></div>
-        </section>
-
-        <!-- 1. SELECT BATCH -->
-        <section class="cardp" id="card-batch">
-          <div class="hd"><span class="n">1.</span> SELECT BATCH</div>
-          <div class="hsub">Choose the batch you want to work with</div>
-          <select id="batchSel" onchange="onBatch()"></select>
-          <div class="meta">
-            <div class="m"><div class="mi">👤</div><div><div class="mk">Created By</div><div class="mv" id="bBy">—</div></div></div>
-            <div class="m"><div class="mi">📅</div><div><div class="mk">Created Date</div><div class="mv" id="bDate">—</div></div></div>
-            <div class="m"><div class="mi">🗄️</div><div><div class="mk">Total Units</div><div class="mv" id="bUnits">—</div></div></div>
-          </div>
-        </section>
-
-        <div class="two">
-          <!-- 2. SELECT OS -->
-          <section class="cardp" id="card-os">
-            <div class="hd"><span class="n">2.</span> SELECT OS TO INSTALL</div>
-            <div class="hsub">Choose an operating system</div>
-            <table class="os"><thead><tr><th>Operating System</th><th class="r">Version</th></tr></thead>
-              <tbody id="osBody"><tr><td colspan="2" style="color:var(--mut)">No OS images on this USB.</td></tr></tbody>
-            </table>
-            <div style="margin-top:12px"><button class="btn sel" id="osSelectBtn" onclick="chooseOs()" disabled>SELECT</button></div>
-          </section>
-
-          <!-- 3. INSTALL OS -->
-          <section class="cardp" id="card-install">
-            <div class="hd"><span class="n">3.</span> INSTALL OPERATING SYSTEM</div>
-            <div class="hsub">Install the selected operating system</div>
-            <div class="info blue"><div class="ti">ℹ️</div><div>
-              <b>Ready to install</b>
-              <span>OS: <b id="iOs" style="display:inline">—</b><br>Batch: <b id="iBatch" style="display:inline">—</b></span>
-            </div></div>
-            <label class="fld"><span>Target drive</span><select id="iDrive"></select></label>
-            <div class="stack" id="iActions">
-              <button class="btn green" id="iStart" onclick="confirmInstall()" disabled>▶ START INSTALL</button>
-              <button class="btn gho" onclick="focusCard('os')">CANCEL</button>
+        <!-- select batch -->
+        <div class="card">
+          <div class="lbl" style="margin-bottom:12px">Select batch</div>
+          <div class="brow">
+            <div class="sel">
+              <span class="li"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                stroke-width="2"><ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg></span>
+              <select id="batchSel" onchange="onBatch()"><option>Loading…</option></select>
+              <span class="ri"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                stroke-width="2" stroke-linecap="round"><path d="M6 9l6 6 6-6"/></svg></span>
             </div>
-            <div class="hidden" id="iRun"><div class="bar"><i></i></div><div class="log" id="iLog"></div></div>
-          </section>
+            <div class="bmeta">
+              <div><div class="k">Units</div><div class="v" id="bUnits">—</div></div>
+              <div><div class="k">Created</div><div class="v" id="bDate">—</div></div>
+              <div><div class="k">Owner</div><div class="v" id="bBy">—</div></div>
+            </div>
+          </div>
         </div>
 
-        <div class="two">
-          <!-- 4. WIPE -->
-          <section class="cardp" id="card-wipe">
-            <div class="hd"><span class="n">4.</span> WIPE DRIVE</div>
-            <div class="hsub">Securely erase the selected drive</div>
-            <div class="info green"><div class="ti">✅</div><div>
-              <b>Recommended Method</b>
-              <span id="wMethod">Select a drive — the best available method will be used based on the drive type and condition.</span>
-            </div></div>
-            <label class="fld"><span>Target drive</span><select id="wDrive" onchange="onWipeDrive()"></select></label>
-            <div class="stack" id="wActions">
-              <button class="btn red" id="wStart" onclick="confirmWipe()" disabled>🗑️ START WIPE</button>
-              <button class="btn gho" onclick="focusCard('batch')">CANCEL</button>
-            </div>
-            <div class="hidden" id="wRun">
-              <div class="bar"><i></i></div>
-              <div style="display:flex;align-items:center;gap:10px;margin:10px 0 6px">
-                <div id="wElapsed" style="flex:1;font-size:12px;color:var(--mut)">Starting…</div>
-                <button class="btn gho" style="width:auto;padding:8px 14px;font-size:13px" onclick="cancelWipe()">■ STOP WIPE</button>
-              </div>
-              <div class="log" id="wLog"></div>
-            </div>
-          </section>
+        <!-- audit -->
+        <div class="card">
+          <div class="lbl" style="margin-bottom:12px">Audit</div>
+          <div style="display:flex;align-items:center;gap:18px;flex-wrap:wrap">
+            <div style="flex:1;min-width:230px;color:var(--mut);font-size:14.5px" id="aReady">
+              Collect hardware and system information for the current unit.</div>
+            <button class="btn" style="width:auto;padding:13px 22px" id="aStart" onclick="startAudit()" disabled>
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg>
+              Start audit</button>
+          </div>
+          <div class="hidden" id="aRun">
+            <div class="pr ind" style="margin-top:14px"><i></i></div>
+            <div style="font-size:12.5px;color:var(--mut);margin-top:8px">Uploading audit…</div>
+          </div>
+        </div>
 
-          <!-- 5. AUDIT -->
-          <section class="cardp" id="card-audit">
-            <div class="hd"><span class="n">5.</span> START AUDIT</div>
-            <div class="hsub">Collect hardware and system information</div>
-            <div class="info purple"><div class="ti">〽️</div><div>
-              <b>Ready to audit</b>
-              <span id="aReady">System information will be collected and saved to the selected batch.</span>
-            </div></div>
-            <div class="stack" id="aActions">
-              <button class="btn purple" id="aStart" onclick="startAudit()" disabled>〽️ START AUDIT</button>
-              <button class="btn gho" onclick="focusCard('batch')">CANCEL</button>
+        <!-- hardware -->
+        <div class="card">
+          <div class="lbl" style="margin-bottom:6px">Display all system hardware information</div>
+          <div class="hw" id="hwGrid"></div>
+        </div>
+
+        <div class="foot">
+          <button class="btn gho sm" onclick="power('shutdown')">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+              stroke-linecap="round"><path d="M12 3v9"/><path d="M6.5 7a8 8 0 1 0 11 0"/></svg>
+            Shutdown</button>
+          <span class="diag" id="ftDisp"></span>
+        </div>
+      </div>
+
+      <!-- ======================= RIGHT COLUMN ======================= -->
+      <div class="col">
+
+        <!-- load OS image -->
+        <div class="card">
+          <div class="lbl" style="margin-bottom:14px">Load OS image</div>
+          <p class="sublbl">Select drive</p>
+          <div class="sel" style="margin-bottom:14px">
+            <span class="li"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+              stroke-width="2"><rect x="2" y="7" width="20" height="10" rx="2"/><path d="M6 12h.01M10 12h6"/></svg></span>
+            <select id="iDrive"></select>
+            <span class="ri"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+              stroke-width="2" stroke-linecap="round"><path d="M6 9l6 6 6-6"/></svg></span>
+          </div>
+          <p class="sublbl">Select OS image</p>
+          <div class="sel" style="margin-bottom:16px">
+            <span class="li"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+              stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg></span>
+            <select id="iImage"></select>
+            <span class="ri"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+              stroke-width="2" stroke-linecap="round"><path d="M6 9l6 6 6-6"/></svg></span>
+          </div>
+          <div id="iActions">
+            <button class="btn" id="iStart" onclick="confirmInstall()">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 21h16"/></svg>
+              Load OS Image</button>
+          </div>
+          <div class="hidden" id="iRun">
+            <div class="prow"><span id="iStat">Writing image</span><b id="iPct">0%</b></div>
+            <div class="pr" id="iBar"><i></i></div>
+            <div style="margin-top:9px"><button class="lnk" onclick="toggleLog('iLog',this)">Show details</button></div>
+            <div class="log hidden" id="iLog"></div>
+          </div>
+        </div>
+
+        <!-- wipe drive -->
+        <div class="card">
+          <div class="lbl" style="margin-bottom:14px">Wipe drive</div>
+          <p class="sublbl">Select drive</p>
+          <div class="sel" style="margin-bottom:14px">
+            <span class="li"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+              stroke-width="2"><rect x="2" y="7" width="20" height="10" rx="2"/><path d="M6 12h.01M10 12h6"/></svg></span>
+            <select id="wDrive" onchange="estimate()"></select>
+            <span class="ri"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+              stroke-width="2" stroke-linecap="round"><path d="M6 9l6 6 6-6"/></svg></span>
+          </div>
+          <p class="sublbl">Wipe method</p>
+          <div class="sel" style="margin-bottom:14px">
+            <span class="li"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+              stroke-width="2"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3"/></svg></span>
+            <select id="wMethod" onchange="estimate()">
+              <option value="auto">Automatic · best for this drive</option>
+              <option value="crypto">NIST 800-88 Purge · cryptographic erase</option>
+              <option value="secure">NIST 800-88 Purge · secure erase</option>
+              <option value="overwrite">NIST 800-88 Clear · overwrite + verify</option>
+            </select>
+            <span class="ri"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+              stroke-width="2" stroke-linecap="round"><path d="M6 9l6 6 6-6"/></svg></span>
+          </div>
+          <div class="est" style="margin-bottom:14px">
+            <span><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+              stroke-linecap="round" style="vertical-align:-2px;margin-right:7px"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>Estimated time</span>
+            <b id="wEst">—</b>
+          </div>
+          <div id="wActions">
+            <button class="btn" id="wStart" onclick="confirmWipe()" disabled>
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg>
+              Wipe</button>
+          </div>
+          <div class="hidden" id="wRun">
+            <div class="prow"><span id="wStat">Starting…</span><b id="wPct">0%</b></div>
+            <div class="pr" id="wBar"><i></i></div>
+            <div style="display:flex;align-items:center;gap:12px;margin-top:9px">
+              <button class="lnk" onclick="toggleLog('wLog',this)">Show details</button>
+              <span style="flex:1"></span>
+              <button class="btn gho sm" onclick="cancelWipe()">■ Stop wipe</button>
             </div>
-            <div class="hidden" id="aRun"><div class="bar"><i></i></div><p class="hsub" style="margin-top:10px">Uploading audit…</p></div>
-          </section>
+            <div class="log hidden" id="wLog"></div>
+          </div>
         </div>
 
       </div>
-    </main>
-  </div>
-
-  <!-- ===== bottom bar ===== -->
-  <div class="bot">
-    <div class="bi"><span style="font-size:16px">👤</span><div><div class="k">Current User</div><div class="v" id="ftUser">—</div></div></div>
-    <div class="bi"><span style="font-size:16px">🗄️</span><div><div class="k">Batch</div><div class="v" id="ftBatch">—</div></div></div>
-    <div class="bi"><span style="font-size:16px">💽</span><div><div class="k">OS Selected</div><div class="v" id="ftOs">—</div></div></div>
-    <div class="bi"><span class="cdot" id="ftDot"></span><div><div class="k">Connection</div><div class="v" id="ftConn">…</div></div></div>
-    <div class="bi"><span style="font-size:16px">🖥️</span><div><div class="k">Display</div><div class="v" id="ftDisp">—</div></div></div>
-    <div class="bi" style="margin-left:auto"><span style="font-size:16px">🕐</span><div><div class="k" id="ftDate">—</div><div class="v" id="ftClock">—</div></div></div>
+    </div>
   </div>
 </div>
 
-<!-- modals -->
-<div class="overlay" id="ov">
+<!-- ============================== modals ============================== -->
+<div class="ov" id="ov">
   <div class="modal">
     <h3 id="ovTitle">Confirm</h3><p id="ovMsg"></p>
-    <label class="fld" id="ovPinWrap" style="display:none"><span>Admin PIN</span><input id="ovPin" type="password" /></label>
-    <div class="row"><button class="btn gho sm" onclick="closeOv()">Cancel</button><button class="btn red sm" id="ovYes">Confirm</button></div>
+    <div id="ovPinWrap" style="display:none"><label class="fld"><span>Admin PIN</span>
+      <input id="ovPin" type="password" inputmode="numeric" /></label></div>
+    <div class="mrow"><button class="btn gho" onclick="closeOv()">Cancel</button>
+      <button class="btn dan" id="ovGo" onclick="ovGo()">Confirm</button></div>
   </div>
 </div>
-<div class="overlay" id="ovSet">
+
+<div class="ov" id="ovSet">
   <div class="modal">
     <h3>Settings</h3><p>Network and server configuration.</p>
     <label class="fld"><span>Wi-Fi network (SSID)</span><input id="setSsid" /></label>
-    <label class="fld"><span>Wi-Fi password (leave blank to keep)</span><input id="setPass" type="password" placeholder="••••••••" /></label>
+    <label class="fld"><span>Wi-Fi password (leave blank to keep)</span>
+      <input id="setPass" type="password" placeholder="••••••••" /></label>
     <label class="fld"><span>Server URL</span><input id="setUrl" /></label>
-    <label class="fld"><span>Wipe method</span>
-      <select id="setMethod"><option value="auto">Automatic (recommended)</option><option value="crypto">Cryptographic erase</option><option value="secure">Firmware secure erase</option><option value="overwrite">Overwrite (shred)</option></select></label>
-    <div class="row"><button class="btn gho sm" onclick="closeSet()">Cancel</button><button class="btn sel sm" onclick="saveSettings()">Save</button></div>
-  </div>
-</div>
-<div class="overlay" id="ovStd">
-  <div class="modal">
-    <h3>Wipe standards</h3>
-    <p>Each drive is erased with the strongest method it supports and the result is verified:</p>
-    <div style="font-size:14px;color:var(--ink);line-height:1.7">
-      • <b>NVMe</b> — firmware cryptographic / block erase (NIST Purge).<br>
-      • <b>SATA SSD</b> — ATA secure erase or TRIM discard.<br>
-      • <b>HDD</b> — single-pass overwrite + zero (NIST Clear), verified.<br>
-      The boot USB is never listed and can never be wiped.
-    </div>
-    <div class="row" style="margin-top:18px"><button class="btn sel sm" onclick="closeStd()">Close</button></div>
+    <label class="fld"><span>Default wipe method</span>
+      <input id="setMethod" placeholder="auto / crypto / secure / overwrite" /></label>
+    <div id="setPinWrap" style="display:none"><label class="fld"><span>Admin PIN</span>
+      <input id="setPin" type="password" inputmode="numeric" /></label></div>
+    <div class="diag" id="setDiag"></div>
+    <div class="mrow"><button class="btn gho" onclick="closeSet()">Cancel</button>
+      <button class="btn" onclick="saveSettings()">Save</button></div>
   </div>
 </div>
 
@@ -284,244 +346,284 @@
 
 <script>
 const $=(id)=>document.getElementById(id);
-let BOOT={}, LOTS=[], SELOS=null, SELOSNAME='', OSCHOSEN=null;
+let BOOT={}, LOTS=[], DRIVES=[];
 
-function toast(m,ok=true){const t=$('toast');t.textContent=m;t.className='toast '+(ok?'ok':'err');t.style.display='block';setTimeout(()=>t.style.display='none',3200);}
-function clock(){const n=new Date();$('ftClock').textContent=n.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});$('ftDate').textContent=n.toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'});}
-setInterval(clock,1000);clock();
+async function jget(u){const r=await fetch(u,{cache:'no-store'});return r.json();}
+async function jpost(u,b){const r=await fetch(u,{method:'POST',headers:{'Content-Type':'application/json'},
+  body:JSON.stringify(b||{})});return{ok:r.ok,status:r.status,data:await r.json().catch(()=>({}))};}
 
-/* Display readout — diagnoses full-screen issues: vp = what the page fills,
-   scr = the screen it reports, × = pixel scale. */
-let LAUNCH='';
-function disp(){
-  const vw=window.innerWidth, vh=window.innerHeight;
-  const sw=(screen&&screen.width)||0, sh=(screen&&screen.height)||0, dpr=window.devicePixelRatio||1;
-  $('ftDisp').textContent=(LAUNCH?LAUNCH+' · ':'')+'vp '+vw+'×'+vh+' · scr '+sw+'×'+sh+' · ×'+dpr.toFixed(2);
-}
-window.addEventListener('resize',disp); disp();
+let tmr;
+function toast(m,good=true){const t=$('toast');t.textContent=m;t.className='toast on'+(good?'':' bad');
+  clearTimeout(tmr);tmr=setTimeout(()=>t.className='toast',4200);}
 
-async function jget(u){const r=await fetch(u);return r.json();}
-async function jpost(u,b){const r=await fetch(u,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b||{})});return{ok:r.ok,status:r.status,data:await r.json().catch(()=>({}))};}
+function fmtSecs(s){s=Math.max(0,s|0);const h=(s/3600)|0,m=((s%3600)/60)|0,x=s%60;
+  return (h?h+'h ':'')+((h||m)?m+'m ':'')+(h?'':x+'s');}
+/* Estimates never need seconds. */
+function fmtEta(s){s=Math.round(s);const h=(s/3600)|0,m=Math.round((s%3600)/60);
+  return h?(h+'h '+m+'m'):(m?m+'m':'< 1m');}
+function toggleLog(id,btn){const el=$(id);const hid=el.classList.toggle('hidden');
+  btn.textContent=hid?'Show details':'Hide details';}
 
-function focusCard(name){
-  document.querySelectorAll('.navi').forEach(n=>n.classList.remove('on'));
-  const map={batch:'nav-batch',os:'nav-os',install:'nav-install',wipe:'nav-wipe',audit:'nav-audit'};
-  if(map[name])$(map[name]).classList.add('on');
-  const c=$('card-'+name); if(c) c.scrollIntoView({behavior:'smooth',block:'center'});
-}
+/* ------------------------------------------------------------ header --- */
+function clock(){$('hDate').textContent=new Date().toLocaleDateString('en-GB',
+  {day:'2-digit',month:'short',year:'numeric'});}
+setInterval(clock,30000);clock();
 
+function disp(){const vw=innerWidth,vh=innerHeight,sw=screen.width||0,sh=screen.height||0;
+  $('ftDisp').textContent=(BOOT.launch?BOOT.launch+' · ':'')+'vp '+vw+'×'+vh+' · scr '+sw+'×'+sh;}
+addEventListener('resize',disp);
+
+function connClick(){ if(BOOT.error) openSettings(); }
+
+/* --------------------------------------------------------- bootstrap --- */
 async function bootstrap(){
-  const b=await jget('/api/bootstrap'); BOOT=b; LOTS=b.lots||[];
-  if(b.launch){ LAUNCH=b.launch; disp(); }
-  // connection + user
+  let b;
+  try{ b=await jget('/api/bootstrap'); }
+  catch(e){ setTimeout(bootstrap,3000); return; }
+  BOOT=b; LOTS=b.lots||[]; DRIVES=b.drives||[];
+  disp();
+
   const bad=!!b.error||!b.server;
-  $('ftDot').className='cdot'+(bad?' bad':''); $('ftConn').textContent=bad?'Not connected':'Connected';
-  $('ftConn').style.color=bad?'var(--red)':'var(--green)';
-  $('ftUser').textContent=b.currentUser||'Operator';
-  if(b.error){ $('errBanner').classList.remove('hidden'); $('errMsg').textContent=b.error; }
-  else { $('errBanner').classList.add('hidden'); }
-  // batches
-  const sel=$('batchSel'); sel.innerHTML='';
-  if(!LOTS.length){ sel.innerHTML='<option>No lots available</option>'; }
-  LOTS.forEach(l=>{const o=document.createElement('option');o.value=l.id;o.textContent=(l.batchNumber||l.id)+(l.source?'  ('+l.source+')':'');sel.appendChild(o);});
-  onBatch();
-  // OS table
-  renderOs(b.osImages||[]);
-  // drives
-  fillDrives(b.drives||[]);
-  refreshReady();
+  $('hDot').className='dot'+(bad?' bad':'');
+  $('hConn').textContent=bad?'Not connected':'Connected';
+  $('hConn').style.color=bad?'var(--red)':'var(--green)';
+  $('hUser').textContent=b.currentUser||'Operator';
+  if(b.error){$('errBanner').classList.remove('hidden');$('errMsg').textContent=b.error;}
+  else $('errBanner').classList.add('hidden');
+
+  fillBatches(); fillDrives(); fillImages(); fillHardware();
+
+  $('aStart').disabled=!(b.device&&$('batchSel').value);
+  $('wStart').disabled=!$('wDrive').value;
+  $('aReady').textContent=b.device
+    ? 'Detected '+b.device.name+'. The audit is saved to the selected batch.'
+    : (b.capturing?'Detecting hardware…':'Collect hardware and system information for the current unit.');
   if(b.capturing) setTimeout(bootstrap,1500);
 }
 
-function curLot(){ return LOTS.find(l=>l.id===$('batchSel').value); }
+function fillBatches(){
+  const s=$('batchSel');
+  if(!LOTS.length){s.innerHTML='<option value="">No batches available</option>';onBatch();return;}
+  s.innerHTML=LOTS.map(l=>'<option value="'+l.id+'">'+(l.batchNumber||l.id)+'</option>').join('');
+  onBatch();
+}
 function onBatch(){
-  const l=curLot();
-  $('bBy').textContent=(l&&(l.createdBy&&l.createdBy.name||l.createdByName||l.owner&&l.owner.name))||'—';
-  $('bDate').textContent=(l&&l.createdAt)?new Date(l.createdAt).toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}):'—';
-  $('bUnits').textContent=(l&&(l.actualUnitCount??l.totalUnits??l.expectedUnitCount))??'—';
-  $('ftBatch').textContent=l?(l.batchNumber||l.id):'—';
-  $('iBatch').textContent=l?(l.batchNumber||l.id):'—';
-  refreshReady();
+  const l=LOTS.find(x=>x.id===$('batchSel').value);
+  $('bUnits').textContent=l?((l.actualUnitCount!=null?l.actualUnitCount:'—')
+    +(l.expectedUnitCount?' / '+l.expectedUnitCount:'')):'—';
+  $('bDate').textContent=(l&&l.createdAt)
+    ? new Date(l.createdAt).toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}):'—';
+  $('bBy').textContent=(l&&(l.createdByName||l.ownerName))||'—';
+  $('aStart').disabled=!(BOOT.device&&$('batchSel').value);
 }
 
-/* ---- OS table ---- */
-function renderOs(imgs){
-  const tb=$('osBody'); tb.innerHTML='';
-  if(!imgs.length){ tb.innerHTML='<tr><td colspan="2" style="color:var(--mut)">No OS images on this USB.</td></tr>'; $('osSelectBtn').disabled=true; return; }
-  imgs.forEach(im=>{
-    const tr=document.createElement('tr'); tr.dataset.id=im.id;
-    tr.innerHTML='<td><label style="display:flex;gap:10px;align-items:center;cursor:pointer"><input type="radio" name="os" '+(im.present?'':'disabled')+'> <span>'+im.name+(im.present?'':' <span style="color:#d97706;font-size:12px">(image missing)</span>')+'</span></label></td><td class="r">'+(im.version||'')+'</td>';
-    tr.querySelector('input').onchange=()=>{ document.querySelectorAll('#osBody tr').forEach(x=>x.classList.remove('sel')); tr.classList.add('sel'); SELOS=im.id; SELOSNAME=im.name; $('osSelectBtn').disabled=false; };
-    tb.appendChild(tr);
-  });
+function driveOpts(){return DRIVES.map(d=>'<option value="'+d.device+'" data-bytes="'+(d.bytes||0)+
+  '" data-rota="'+(d.rotational?1:0)+'">'+d.device+' — '+(d.size||'?')+
+  (d.model&&d.model!=='Unknown model'?' · '+d.model:'')+'</option>').join('');}
+function fillDrives(){
+  const o=DRIVES.length?driveOpts():'<option value="">No internal drive detected</option>';
+  $('wDrive').innerHTML=o; $('iDrive').innerHTML=o;
+  if(BOOT.wipeMethod)$('wMethod').value=BOOT.wipeMethod;
+  estimate();
 }
-function chooseOs(){
-  if(!SELOS) return;
-  OSCHOSEN=SELOS; $('iOs').textContent=SELOSNAME; $('ftOs').textContent=SELOSNAME;
-  refreshReady(); focusCard('install'); toast('OS selected: '+SELOSNAME);
-}
-
-/* ---- drives ---- */
-function fillDrives(ds){
-  ['wDrive','iDrive'].forEach(id=>{
-    const s=$(id); s.innerHTML='';
-    if(!ds.length){ s.innerHTML='<option value="">No internal drive</option>'; return; }
-    ds.forEach(d=>{const o=document.createElement('option');o.value=d.device;o.textContent=d.model+'  ('+d.size+')';o.dataset.method=d.method;s.appendChild(o);});
-  });
-  onWipeDrive(); refreshReady();
-}
-function onWipeDrive(){
-  const opt=$('wDrive').selectedOptions[0];
-  $('wMethod').textContent=opt&&opt.dataset.method?('Automatic — '+opt.dataset.method+'. Best available method for this drive.'):'No drive selected.';
-  refreshReady();
-}
-function refreshReady(){
-  const haveDrive=!!($('wDrive').value);
-  const haveLot=!!($('batchSel').value)&&LOTS.length>0;
-  $('wStart').disabled=!haveDrive;
-  $('iStart').disabled=!(OSCHOSEN&&$('iDrive').value);
-  $('aStart').disabled=!(BOOT.device&&haveLot);
-  $('aReady').textContent=BOOT.device?('Device: '+BOOT.device.name+'. Saved to the selected batch.'):'Waiting for hardware detection…';
+function fillImages(){
+  const im=BOOT.osImages||[];
+  $('iImage').innerHTML=im.length
+    ? im.map(i=>'<option value="'+i.id+'"'+(i.present?'':' disabled')+'>'+i.name+
+        (i.version?' · '+i.version:'')+(i.present?'':' (image missing)')+'</option>').join('')
+    : '<option value="">No OS images on this stick</option>';
 }
 
-/* ---- audit ---- */
+/* estimated wipe time — honest maths from drive size + method */
+function estimate(){
+  const o=$('wDrive').selectedOptions[0];
+  if(!o||!o.dataset){$('wEst').textContent='—';return;}
+  const bytes=+(o.dataset.bytes||0), rota=o.dataset.rota==='1', m=$('wMethod').value;
+  $('wStart').disabled=!$('wDrive').value;
+  if(!bytes){$('wEst').textContent='—';return;}
+  if(m==='crypto'||m==='secure'){$('wEst').textContent='≈ 1–3 min';return;}
+  if(m==='auto'&&!rota){$('wEst').textContent='≈ 1–5 min (firmware erase)';return;}
+  // overwrite: shred writes the whole disk twice (1 random pass + zero pass)
+  const rate=rota?100e6:400e6;                 // bytes/sec, conservative
+  $('wEst').textContent='≈ '+fmtEta((bytes*2)/rate);
+}
+
+const HWDEF=[
+  ['processor','Processor','<path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/><rect x="5" y="5" width="14" height="14" rx="2"/>'],
+  ['memory','Memory','<rect x="2" y="7" width="20" height="10" rx="2"/><path d="M6 17v3M10 17v3M14 17v3M18 17v3"/>'],
+  ['storage','Storage','<rect x="2" y="7" width="20" height="10" rx="2"/><path d="M6 12h.01M10 12h6"/>'],
+  ['display','Display','<rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/>'],
+  ['optical','Optical','<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="2.5"/>'],
+  ['network','Network','<path d="M5 12.5a10 10 0 0 1 14 0M8.5 16a5.5 5.5 0 0 1 7 0M12 20h.01"/>'],
+  ['batteryLine','Battery','<rect x="2" y="7" width="18" height="10" rx="2"/><path d="M22 11v2"/>'],
+  ['tpm','TPM','<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>']
+];
+function fillHardware(){
+  const hw=(BOOT.device&&BOOT.device.hw)||{};
+  $('hwGrid').innerHTML=HWDEF.map(([k,label,path])=>
+    '<div class="hwi"><div class="hwic"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" '+
+    'stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">'+path+
+    '</svg></div><div><div class="hwk">'+label+'</div><div class="hwv">'+
+    (hw[k]||(BOOT.device?'Not detected':'—'))+'</div></div></div>').join('');
+}
+
+/* ------------------------------------------------------------- audit --- */
 async function startAudit(){
   if(!BOOT.device){toast('Hardware not detected yet.',false);return;}
-  $('aActions').classList.add('hidden'); $('aRun').classList.remove('hidden');
-  const res=await jpost('/api/audit',{lotId:$('batchSel').value});
-  $('aActions').classList.remove('hidden'); $('aRun').classList.add('hidden');
+  $('aStart').disabled=true; $('aRun').classList.remove('hidden');
+  let res;
+  try{ res=await jpost('/api/audit',{lotId:$('batchSel').value}); }
+  catch(e){ res={ok:false,data:{message:'Could not reach the audit service.'}}; }
+  $('aRun').classList.add('hidden'); $('aStart').disabled=false;
   toast(res.ok?'Audit saved ✓':(res.data.message||'Audit failed'),res.ok);
 }
 
-/* ---- wipe ---- */
-function confirmWipe(){
-  const dev=$('wDrive').value, opt=$('wDrive').selectedOptions[0];
-  const batch=$('ftBatch').textContent;
-  openOv('Erase '+dev+'?', 'This permanently destroys all data on '+(opt?opt.textContent:dev)+' and records the wipe against '+(batch&&batch!=='—'?batch:'the active lot')+'. This cannot be undone.', false, async ()=>{
-    closeOv();
-    const res=await jpost('/api/wipe/start',{device:dev,lotId:$('batchSel').value});
-    if(!res.ok){toast(res.data.message||'Could not start wipe',false);return;}
-    $('wActions').classList.add('hidden'); $('wRun').classList.remove('hidden');
-    $('wElapsed').textContent='Starting…';
-    pollJob('wipe','wLog',(r)=>{
-      // Always restore the controls first — whatever the outcome, the screen
-      // must return to a usable state.
-      $('wActions').classList.remove('hidden'); $('wRun').classList.add('hidden');
-      if(r.status==='wiped'){
-        if(r.recorded) toast('Wipe complete & saved to '+(batch||'the lot')+' ✓');
-        else if(r.recordError) toast('Wiped, but not saved: '+r.recordError,false);
-        else toast('Wipe complete ✓');
-      } else {
-        // Say WHY. The engine reports a reason (I/O error, frozen drive, no
-        // method available); previously all of that was thrown away.
-        const why=r.reason||r.message||r.method||'reason not reported';
-        toast('Wipe failed — '+why+(r.recorded?' (recorded against the lot)':''),false);
-        if($('wLog')) $('wLog').textContent+='\n\n✗ '+why;
-      }
-    },'wElapsed');
-  });
+/* -------------------------------------------------- job polling (hard) --
+   Every request is guarded: a transient failure retries with backoff and the
+   job ALWAYS ends in onDone exactly once, so the screen can never be stranded
+   on a progress panel with the controls hidden. */
+function pctFrom(log){
+  for(let i=log.length-1;i>=0;i--){const m=/(\d{1,3})\s*%/.exec(log[i]);
+    if(m){const v=+m[1];if(v>=0&&v<=100)return v;}}
+  return null;
 }
-
-/* ---- install ---- */
-function confirmInstall(){
-  const dev=$('iDrive').value;
-  openOv('Install '+SELOSNAME+'?', 'This erases '+dev+' and writes '+SELOSNAME+' to it. All existing data on that drive is lost.', false, async ()=>{
-    closeOv();
-    const res=await jpost('/api/os/install',{imageId:OSCHOSEN,device:dev});
-    if(!res.ok){toast(res.data.message||'Could not start install',false);return;}
-    $('iActions').classList.add('hidden'); $('iRun').classList.remove('hidden');
-    pollJob('install','iLog',(r)=>{ $('iActions').classList.remove('hidden'); $('iRun').classList.add('hidden'); toast(r.status==='installed'?'Install complete ✓':'Install failed: '+(r.message||''),r.status==='installed'); });
-  });
-}
-
-/* ---- job poll ---- */
-function fmtSecs(s){s=Math.max(0,s|0);const h=(s/3600)|0,m=((s%3600)/60)|0,x=s%60;
-  return (h?h+'h ':'')+((h||m)?m+'m ':'')+x+'s';}
-
-/* Poll a running job until it finishes.
-   Hardened deliberately: the old version had no error handling, so a single
-   failed request killed the polling chain and left the progress screen up
-   forever with no way back. Now every request is guarded, transient failures
-   retry with backoff, and the job ALWAYS terminates in onDone exactly once —
-   so the UI can never be stranded. */
-function pollJob(kind,logId,onDone,statusId){
-  const el=$(logId); let fails=0, finished=false;
-  const finish=(r)=>{ if(finished)return; finished=true; try{onDone(r);}catch(e){} };
+function pollJob(kind,o){
+  let fails=0,finished=false;
+  const finish=(r)=>{if(finished)return;finished=true;try{o.onDone(r);}catch(e){}};
   const tick=async()=>{
-    if(finished) return;
+    if(finished)return;
     let j;
     try{
       const res=await fetch('/api/job?type='+kind,{cache:'no-store'});
-      if(!res.ok) throw new Error('HTTP '+res.status);
-      j=await res.json();
-      fails=0;
+      if(!res.ok)throw new Error('HTTP '+res.status);
+      j=await res.json(); fails=0;
     }catch(e){
-      fails++;
-      if(fails>=12){                       // ~1 min of failures: give up cleanly
-        finish({status:'failed',reason:'Lost contact with the wipe service. The wipe may still be running on the machine — reboot and check the drive before reusing it.'});
-        return;
-      }
-      setTimeout(tick,Math.min(1000*fails,5000));   // back off, keep trying
-      return;
+      if(++fails>=12){finish({status:'failed',reason:'Lost contact with the service. The operation may still be running on this machine — reboot and re-check the drive before reusing it.'});return;}
+      setTimeout(tick,Math.min(1000*fails,5000)); return;
     }
-    if(el){ el.textContent=(j.log||[]).join('\n'); el.scrollTop=el.scrollHeight; }
-    if(statusId&&$(statusId)){
-      let t='Running '+fmtSecs(j.elapsed||0);
-      // A long quiet spell is normal on big drives — say so rather than let it
-      // look like a freeze.
-      if((j.idle||0)>120) t+=' · no new output for '+fmtSecs(j.idle)+' (large drives overwrite quietly — still working)';
-      $(statusId).textContent=t;
-    }
+    const log=j.log||[];
+    if(o.logId&&$(o.logId)){const el=$(o.logId);el.textContent=log.join('\n');el.scrollTop=el.scrollHeight;}
+    const p=pctFrom(log);
+    if(o.barId&&$(o.barId)){const bar=$(o.barId);
+      if(p==null){bar.classList.add('ind');}else{bar.classList.remove('ind');
+        bar.firstElementChild.style.width=p+'%';}}
+    if(o.pctId&&$(o.pctId))$(o.pctId).textContent=(p==null?'—':p+'%');
+    if(o.statId&&$(o.statId)){let t=(o.label||'Running')+' · '+fmtSecs(j.elapsed||0);
+      if((j.idle||0)>120)t+=' · no new output for '+fmtSecs(j.idle)+' (large drives work quietly)';
+      $(o.statId).textContent=t;}
     if(j.running){setTimeout(tick,1500);return;}
-    if(j.result) finish(j.result);
+    if(j.result)finish(j.result);
     else finish({status:'failed',reason:j.error||'The process ended without a result.'});
   };
   tick();
 }
 
-async function cancelWipe(){
-  openOv('Stop the wipe?','The drive will be left partially erased and must be wiped again before it can be resold.',false,async()=>{
+/* -------------------------------------------------------------- wipe --- */
+function confirmWipe(){
+  const dev=$('wDrive').value, o=$('wDrive').selectedOptions[0];
+  const batch=$('batchSel').selectedOptions[0];
+  openOv('Erase '+dev+'?','This permanently destroys all data on '+(o?o.textContent:dev)+
+    ' and records the wipe against '+(batch?batch.textContent:'the selected batch')+'. This cannot be undone.',
+    false, async()=>{
     closeOv();
-    const r=await jpost('/api/wipe/cancel',{});
-    toast((r.data&&r.data.message)||'Stopping…',false);
-  });
+    let res;
+    try{ res=await jpost('/api/wipe/start',{device:dev,lotId:$('batchSel').value,
+                                           method:$('wMethod').value}); }
+    catch(e){ toast('Could not start the wipe.',false); return; }
+    if(!res.ok){toast(res.data.message||'Could not start wipe',false);return;}
+    $('wActions').classList.add('hidden'); $('wRun').classList.remove('hidden');
+    $('wStat').textContent='Starting…'; $('wPct').textContent='0%';
+    $('wBar').classList.add('ind'); $('wBar').firstElementChild.style.width='0%';
+    pollJob('wipe',{logId:'wLog',barId:'wBar',pctId:'wPct',statId:'wStat',label:'Wiping',
+      onDone:(r)=>{
+        $('wActions').classList.remove('hidden'); $('wRun').classList.add('hidden');
+        if(r.status==='wiped'){
+          if(r.recorded)toast('Wipe complete & saved to '+(batch?batch.textContent:'the batch')+' ✓');
+          else if(r.recordError)toast('Wiped, but not saved: '+r.recordError,false);
+          else toast('Wipe complete ✓');
+        }else{
+          const why=r.reason||r.message||r.method||'reason not reported';
+          toast('Wipe failed — '+why+(r.recorded?' (recorded against the batch)':''),false);
+        }
+      }});
+  },'Erase drive');
+}
+async function cancelWipe(){
+  openOv('Stop the wipe?','The drive will be left partially erased and must be wiped again before it can be resold.',
+    false, async()=>{ closeOv();
+      const r=await jpost('/api/wipe/cancel',{});
+      toast((r.data&&r.data.message)||'Stopping…',false); },'Stop wipe');
 }
 
-/* ---- settings / standards / modal ---- */
-async function openSettings(){const s=await jget('/api/settings');$('setSsid').value=s.wifiSsid||'';$('setUrl').value=s.serverUrl||'';$('setMethod').value=s.wipeMethod||'auto';$('ovSet').style.display='flex';}
+/* ----------------------------------------------------------- install --- */
+function confirmInstall(){
+  const img=$('iImage').value, dev=$('iDrive').value;
+  if(!img){toast('No OS image selected.',false);return;}
+  if(!dev){toast('No target drive.',false);return;}
+  const io=$('iImage').selectedOptions[0], dobj=$('iDrive').selectedOptions[0];
+  openOv('Install '+(io?io.textContent:img)+'?','This erases '+(dobj?dobj.textContent:dev)+
+    ' and writes the OS image to it. This cannot be undone.', false, async()=>{
+    closeOv();
+    let res;
+    try{ res=await jpost('/api/os/install',{imageId:img,device:dev}); }
+    catch(e){ toast('Could not start the install.',false); return; }
+    if(!res.ok){toast(res.data.message||'Could not start install',false);return;}
+    $('iActions').classList.add('hidden'); $('iRun').classList.remove('hidden');
+    $('iStat').textContent='Writing image'; $('iPct').textContent='0%';
+    $('iBar').classList.add('ind'); $('iBar').firstElementChild.style.width='0%';
+    pollJob('install',{logId:'iLog',barId:'iBar',pctId:'iPct',statId:'iStat',label:'Writing image',
+      onDone:(r)=>{
+        $('iActions').classList.remove('hidden'); $('iRun').classList.add('hidden');
+        const ok=r.status==='installed';
+        toast(ok?'OS image loaded ✓':('Install failed — '+(r.reason||r.message||'reason not reported')),ok);
+      }});
+  },'Install');
+}
+
+/* -------------------------------------------------------- settings --- */
+async function openSettings(){
+  try{
+    const s=await jget('/api/settings');
+    $('setSsid').value=s.wifiSsid||''; $('setUrl').value=s.serverUrl||'';
+    $('setMethod').value=s.wipeMethod||'auto';
+  }catch(e){}
+  $('setPinWrap').style.display=BOOT.adminPinSet?'block':'none';
+  $('setDiag').textContent='Display: '+(BOOT.launch||'—')+' · '+innerWidth+'×'+innerHeight+
+    ' · screen '+screen.width+'×'+screen.height;
+  $('ovSet').style.display='flex';
+}
 function closeSet(){$('ovSet').style.display='none';}
-function saveSettings(){
+async function saveSettings(){
   const body={wifiSsid:$('setSsid').value,serverUrl:$('setUrl').value,wipeMethod:$('setMethod').value};
   if($('setPass').value)body.wifiPassword=$('setPass').value;
-  jpost('/api/settings',body).then(res=>{toast(res.ok?'Settings saved ✓':(res.data.message||'Save failed'),res.ok);if(res.ok)closeSet();});
+  if(BOOT.adminPinSet)body.pin=$('setPin').value;
+  const res=await jpost('/api/settings',body);
+  toast(res.ok?'Settings saved ✓':(res.data.message||'Save failed'),res.ok);
+  if(res.ok){closeSet();retry();}
 }
-function openStd(){$('ovStd').style.display='flex';} function closeStd(){$('ovStd').style.display='none';}
-async function retry(){ toast('Reconnecting…'); await jpost('/api/rescan',{}); setTimeout(bootstrap,3500); }
+async function retry(){toast('Reconnecting…');try{await jpost('/api/rescan',{});}catch(e){}
+  setTimeout(bootstrap,3500);}
 
-/* shut down / restart */
+/* ----------------------------------------------------------- power --- */
 function power(action){
   openOv(action==='shutdown'?'Shut down this machine?':'Restart this machine?',
-    'The machine will '+action+' now. Make sure any audit or wipe has finished first.',
-    BOOT.adminPinSet, async ()=>{
-      const b={action}; if(BOOT.adminPinSet) b.pin=$('ovPin').value; closeOv();
+    'The machine will '+action+' now. Make sure any audit or wipe has finished.',
+    BOOT.adminPinSet, async()=>{
+      const b={action}; if(BOOT.adminPinSet)b.pin=$('ovPin').value; closeOv();
       const res=await jpost('/api/power',b);
-      if(res.ok) toast(action==='shutdown'?'Shutting down…':'Restarting…'); else toast(res.data.message||'Failed',false);
-    });
+      if(res.ok)toast(action==='shutdown'?'Shutting down…':'Restarting…');
+      else toast(res.data.message||'Failed',false);
+    }, action==='shutdown'?'Shut down':'Restart');
 }
 
-/* belt-and-braces fullscreen: the first tap forces true fullscreen even if the
-   kiosk browser opened windowed, covering any border. */
-document.addEventListener('click',()=>{
-  const el=document.documentElement;
-  if(!document.fullscreenElement && el.requestFullscreen) el.requestFullscreen().catch(()=>{});
-},{once:true});
-
+/* ----------------------------------------------------------- modal --- */
 let ovCb=null;
-function openOv(t,m,pin,cb){$('ovTitle').textContent=t;$('ovMsg').textContent=m;$('ovPinWrap').style.display=pin?'block':'none';ovCb=cb;$('ov').style.display='flex';}
+function openOv(t,m,pin,cb,goLabel){$('ovTitle').textContent=t;$('ovMsg').textContent=m;
+  $('ovPinWrap').style.display=pin?'block':'none';if(pin)$('ovPin').value='';
+  $('ovGo').textContent=goLabel||'Confirm';ovCb=cb;$('ov').style.display='flex';}
 function closeOv(){$('ov').style.display='none';ovCb=null;}
-$('ovYes').onclick=()=>{if(ovCb)ovCb();};
+function ovGo(){const c=ovCb;if(c)c();}
 
 bootstrap();
 </script>
-</body>
 </html>
