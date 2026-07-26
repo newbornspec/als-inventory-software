@@ -23,6 +23,7 @@ Run:  python3 server.py   then open http://127.0.0.1:8800
 import json
 import os
 import re
+import shutil
 import signal
 import subprocess
 import threading
@@ -592,6 +593,50 @@ def smart_health(dev):
 OPTICAL_CACHE = []   # single-item cache; hardware cannot change mid-session
 
 
+def tool_check():
+    """Which imaging/erase tools this boot media actually has.
+
+    Exists so the operator never has to find a terminal: the kiosk grabs the
+    keyboard, so Ctrl+Alt+F2 usually doesn't work, and 'is Clonezilla here?'
+    is the question that decides how OS install has to be built."""
+    groups = [
+        ("OS install (Clonezilla)", ["ocs-sr"]),
+        ("OS install (fallback engine)",
+         ["partclone.restore", "partclone.ntfs", "partclone.dd", "sfdisk", "ntfsresize"]),
+        ("Compression", ["zstd", "pigz", "gzip"]),
+        ("Wipe + audit", ["shred", "smartctl", "hdparm", "nvme", "blkdiscard"]),
+        ("Kiosk display", ["cage", "xdotool", "xrandr", "firefox-esr", "firefox"]),
+        ("Network shares", ["mount.nfs", "mount.cifs"]),
+    ]
+    out = []
+    for label, names in groups:
+        out.append({"group": label,
+                    "tools": [{"name": n, "present": bool(shutil.which(n))} for n in names]})
+
+    space = ""
+    try:
+        target = "/run/archiso/bootmnt" if os.path.isdir("/run/archiso/bootmnt") else "/"
+        st = os.statvfs(target)
+        free = st.f_bavail * st.f_frsize
+        total = st.f_blocks * st.f_frsize
+        space = "%s free of %s on %s" % (human_size(free), human_size(total), target)
+    except Exception:  # noqa: BLE001
+        pass
+
+    can_clonezilla = bool(shutil.which("ocs-sr"))
+    can_partclone = bool(shutil.which("partclone.restore")) and bool(shutil.which("sfdisk"))
+    if can_clonezilla:
+        verdict = "Clonezilla is installed — OS install can use it."
+    elif can_partclone:
+        verdict = ("Clonezilla is NOT installed, but partclone + sfdisk are — "
+                   "OS install can be built on those instead.")
+    else:
+        verdict = ("Neither Clonezilla nor partclone is on this media — OS install "
+                   "needs software added to the stick.")
+    return {"groups": out, "space": space, "verdict": verdict,
+            "clonezilla": can_clonezilla, "partclone": can_partclone}
+
+
 def has_optical():
     """True if this machine has an optical drive (lsblk type 'rom')."""
     if OPTICAL_CACHE:
@@ -876,6 +921,9 @@ class Handler(BaseHTTPRequestHandler):
             snap["elapsed"] = int(now - job.get("startedAt", now))   # seconds running
             snap["idle"] = int(now - job.get("updatedAt", now))      # seconds since output
             return self._send(200, snap)
+
+        if u.path == "/api/toolcheck":
+            return self._send(200, tool_check())
 
         if u.path == "/api/settings":
             c = STATE["conf"]

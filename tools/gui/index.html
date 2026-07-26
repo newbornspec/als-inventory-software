@@ -399,6 +399,10 @@
       <input id="setImgSrv" placeholder="192.168.1.50:/srv/als-images" /></label>
     <div id="setPinWrap" style="display:none"><label class="fld"><span>Admin PIN</span>
       <input id="setPin" type="password" inputmode="numeric" /></label></div>
+    <div style="border-top:1px solid var(--line);margin:16px 0 12px;padding-top:14px">
+      <div class="lbl" style="margin-bottom:8px">System check</div>
+      <div id="setTools" style="font-size:12.5px;color:var(--mut)">Checking…</div>
+    </div>
     <div class="diag" id="setDiag"></div>
     <div class="mrow"><button class="btn gho" onclick="closeSet()">Cancel</button>
       <button class="btn" onclick="saveSettings()">Save</button></div>
@@ -787,10 +791,28 @@ async function openSettings(){
     $('setImgSrv').value=s.imageServer||'';
   }catch(e){}
   $('setPinWrap').style.display=BOOT.adminPinSet?'block':'none';
+  loadToolCheck();
   $('setDiag').textContent='Display: '+(BOOT.launch||'—')+' · '+innerWidth+'×'+innerHeight+
     ' · screen '+screen.width+'×'+screen.height;
   $('ovSet').style.display='flex';
 }
+/* What this boot media can actually do. Shown here because the kiosk grabs the
+   keyboard, so an operator cannot reach a terminal to check for themselves. */
+async function loadToolCheck(){
+  const el=$('setTools'); el.textContent='Checking…';
+  let t; try{ t=await jget('/api/toolcheck'); }catch(e){ el.textContent='Check failed.'; return; }
+  const cls=t.clonezilla?'ok':(t.partclone?'warn':'bad');
+  let h='<div class="health '+cls+'" style="margin:0 0 10px"><span class="hd"></span><span><b>'+
+        t.verdict+'</b></span></div>';
+  for(const g of t.groups){
+    h+='<div style="margin-bottom:6px"><span style="color:var(--mut2)">'+g.group+':</span> '+
+       g.tools.map(x=>'<span style="color:'+(x.present?'var(--green)':'var(--red)')+'">'+
+         (x.present?'✓':'✗')+' '+x.name+'</span>').join(' &nbsp; ')+'</div>';
+  }
+  if(t.space) h+='<div style="margin-top:8px;color:var(--mut2)">Boot media: '+t.space+'</div>';
+  el.innerHTML=h;
+}
+
 function closeSet(){$('ovSet').style.display='none';}
 async function saveSettings(){
   const body={wifiSsid:$('setSsid').value,serverUrl:$('setUrl').value,
