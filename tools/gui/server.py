@@ -114,14 +114,138 @@ def save_conf(updates):
     for key, val in remaining.items():  # new keys appended
         out.append('%s="%s"\n' % (key, val))
 
-    try:
-        with open(CONF_PATH, "w") as fh:
-            fh.writelines(out)
-    except OSError as exc:
-        return ("Could not write audit.conf (%s). The USB may be read-only — "
-                "remount it read-write and try again." % exc)
+    err = write_boot_file(CONF_PATH, "".join(out))
+    if err:
+        return err
     STATE["conf"] = load_conf()
     return None
+
+
+def mount_point(path):
+    """The mount point the given path lives on (e.g. /run/archiso/bootmnt)."""
+    p = os.path.abspath(path)
+    while p != os.path.dirname(p) and not os.path.ismount(p):
+        p = os.path.dirname(p)
+    return p
+
+
+def remount(mp, mode):
+    try:
+        r = subprocess.run(["mount", "-o", "remount," + mode, mp],
+                           capture_output=True, text=True, timeout=25)
+        return r.returncode == 0
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def write_boot_file(path, text):
+    """Write a file that lives on the boot media.
+
+    SystemRescue mounts the USB read-only, which used to make the Settings
+    screen useless: an operator could type the Wi-Fi details but never save
+    them without dropping to a terminal. So if the plain write fails, remount
+    the stick read-write, write, flush, and put it back read-only.
+    Returns None on success or a human-readable error."""
+    try:
+        with open(path, "w") as fh:
+            fh.write(text)
+        try:
+            os.sync()
+        except AttributeError:
+            pass
+        return None
+    except OSError as first:
+        mp = mount_point(path)
+        if not remount(mp, "rw"):
+            return ("Could not save: %s is mounted read-only and could not be "
+                    "remounted read-write (%s). Run the GUI as root, or edit "
+                    "audit.conf on the stick from another machine." % (mp, first))
+        try:
+            with open(path, "w") as fh:
+                fh.write(text)
+            try:
+                os.sync()
+            except AttributeError:
+                pass
+            return None
+        except OSError as exc:
+            return "Could not save even after remounting %s read-write: %s" % (mp, exc)
+        finally:
+            remount(mp, "ro")     # always leave the stick as we found it
+
+
+# --------------------------------------------------------- offline queue ----
+# Warehouse Wi-Fi drops. Rather than lose a unit's record, a failed upload is
+# written to disk and retried in the background until it lands.
+QUEUE_PATH = "/tmp/als-audit-queue.jsonl"
+QUEUE_LOCK = threading.Lock()
+
+
+def queue_load():
+    try:
+        with open(QUEUE_PATH, "r", errors="replace") as fh:
+            return [json.loads(l) for l in fh if l.strip()]
+    except (OSError, ValueError):
+        return []
+
+
+def queue_write(items):
+    with QUEUE_LOCK:
+        try:
+            with open(QUEUE_PATH, "w") as fh:
+                for it in items:
+                    fh.write(json.dumps(it) + "\n")
+        except OSError:
+            pass
+
+
+def queue_add(payload):
+    with QUEUE_LOCK:
+        try:
+            with open(QUEUE_PATH, "a") as fh:
+                fh.write(json.dumps(payload) + "\n")
+        except OSError:
+            pass
+
+
+def queue_count():
+    return len(queue_load())
+
+
+def upload_audit(payload):
+    """Send a device record. On failure, queue it for automatic retry.
+    Returns (response_or_None, queued_bool, error_message)."""
+    try:
+        return api("/devices/hardware-audit", "POST", payload, ensure_token()), False, ""
+    except Exception as exc:  # noqa: BLE001
+        queue_add(payload)
+        return None, True, str(exc)
+
+
+def queue_flush():
+    """Retry everything waiting. Kept in order; anything that still fails stays."""
+    items = queue_load()
+    if not items:
+        return 0
+    kept, sent = [], 0
+    for it in items:
+        try:
+            api("/devices/hardware-audit", "POST", it, ensure_token())
+            sent += 1
+        except Exception:  # noqa: BLE001
+            kept.append(it)
+    queue_write(kept)
+    return sent
+
+
+def queue_worker():
+    while True:
+        time.sleep(45)
+        try:
+            if queue_count():
+                queue_flush()
+        except Exception:  # noqa: BLE001
+            pass
 
 
 # ------------------------------------------------------------------- API ----
@@ -223,6 +347,9 @@ def refresh(do_login=True):
             try:
                 ensure_token()
                 STATE["lots"] = api("/devices/lots", token=STATE["token"]) or []
+                # Back online — push anything that was held while offline.
+                if queue_count():
+                    threading.Thread(target=queue_flush, daemon=True).start()
             except Exception as exc:  # noqa: BLE001
                 # Prefer the Wi-Fi hint if the network never came up.
                 hint = wifi_msg if wifi_msg and "connected" not in wifi_msg.lower() else ""
@@ -643,6 +770,7 @@ class Handler(BaseHTTPRequestHandler):
                                 or STATE["conf"].get("AUDIT_EMAIL", "") or "Operator"),
                 "adminPinSet": bool(STATE["conf"].get("AUDIT_ADMIN_PIN", "")),
                 "launch": launch_info(),
+                "waiting": queue_count(),   # records held offline, retrying
             })
 
         if u.path == "/api/drives":
@@ -717,16 +845,19 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, {"started": True})
 
         if u.path == "/api/audit":
-            try:
-                payload = {"lotId": body.get("lotId"), "profile": STATE["profile"]}
-                if body.get("subLotId"):
-                    payload["subLotId"] = body["subLotId"]
-                if body.get("notes"):
-                    payload["notes"] = body["notes"]
-                out = api("/devices/hardware-audit", "POST", payload, ensure_token())
-                return self._send(200, out or {})
-            except Exception as exc:  # noqa: BLE001
-                return self._send(500, {"message": str(exc)})
+            if not STATE["profile"]:
+                return self._send(400, {"message": "hardware not captured yet"})
+            payload = {"lotId": body.get("lotId"), "profile": STATE["profile"]}
+            if body.get("subLotId"):
+                payload["subLotId"] = body["subLotId"]
+            if body.get("notes"):
+                payload["notes"] = body["notes"]
+            out, queued, err = upload_audit(payload)
+            if queued:
+                # Never lose the unit: it is on disk and will upload itself.
+                return self._send(200, {"queued": True, "waiting": queue_count(),
+                                        "message": err})
+            return self._send(200, dict(out or {}, queued=False))
 
         if u.path == "/api/wipe/cancel":
             dev = body.get("device", "")
@@ -774,7 +905,14 @@ class Handler(BaseHTTPRequestHandler):
                     payload["lotId"] = lot_id
                 if sub_lot_id:
                     payload["subLotId"] = sub_lot_id
-                out = api("/devices/hardware-audit", "POST", payload, ensure_token())
+                out, queued, err = upload_audit(payload)
+                if queued:
+                    # The erase itself succeeded; only the upload is pending.
+                    result["queued"] = True
+                    result["waiting"] = queue_count()
+                    result["recordError"] = ("no connection — the wipe record is saved "
+                                             "on this machine and will upload automatically")
+                    return
                 result["recorded"] = bool(out and out.get("assetId"))
                 result["recordName"] = (out or {}).get("name")
                 result["recordTag"] = (out or {}).get("tag")
@@ -841,6 +979,7 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     STATE["conf"] = load_conf()
     threading.Thread(target=refresh, daemon=True).start()
+    threading.Thread(target=queue_worker, daemon=True).start()
     srv = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     print("ALS Audit Station GUI on http://127.0.0.1:%d  (engine: %s)" % (PORT, SCRIPT))
     srv.serve_forever()

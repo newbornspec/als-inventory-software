@@ -217,6 +217,11 @@
         <span id="hDate">—</span></span>
       <span class="chip act" id="hConnWrap" onclick="connClick()"><span class="dot" id="hDot"></span>
         <span id="hConn">Checking…</span></span>
+      <span class="chip hidden" id="hQueue" title="Records saved on this machine, waiting to upload"
+            style="color:var(--amber)">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+          stroke-linecap="round"><path d="M12 7v5l3 2"/><circle cx="12" cy="12" r="9"/></svg>
+        <span id="hQueueN"></span></span>
       <button class="iconbtn" title="Settings" onclick="openSettings()">
         <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
           stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1A1.7 1.7 0 0 0 9 19.4a1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
@@ -443,6 +448,10 @@ async function bootstrap(){
   $('hConn').textContent=bad?'Not connected':'Connected';
   $('hConn').style.color=bad?'var(--red)':'var(--green)';
   $('hUser').textContent=b.currentUser||'Operator';
+  // Records held on this machine because the network was down.
+  const q=b.waiting||0;
+  $('hQueue').classList.toggle('hidden',!q);
+  if(q)$('hQueueN').textContent=q+' waiting to upload';
   if(b.error){$('errBanner').classList.remove('hidden');$('errMsg').textContent=b.error;}
   else $('errBanner').classList.add('hidden');
 
@@ -592,7 +601,14 @@ async function startAudit(){
   try{ res=await jpost('/api/audit',{lotId:$('batchSel').value}); }
   catch(e){ res={ok:false,data:{message:'Could not reach the audit service.'}}; }
   $('aRun').classList.add('hidden'); $('aStart').disabled=false;
+  if(res.ok&&res.data&&res.data.queued){
+    // Offline: the record is on disk and uploads itself once back on the network.
+    toast('No connection — audit saved on this machine and will upload automatically ('+
+          (res.data.waiting||1)+' waiting)',false);
+    bootstrap(); return;
+  }
   toast(res.ok?'Audit saved ✓':(res.data.message||'Audit failed'),res.ok);
+  if(res.ok)bootstrap();
 }
 
 /* -------------------------------------------------- job polling (hard) --
@@ -687,7 +703,10 @@ function confirmWipe(){
         onDone:(r)=>{
           const name=started.length>1?(d+': '):'';
           if(r.status==='wiped'){
-            if(r.recorded)
+            if(r.queued)
+              toast(name+'Wipe complete — no connection, record saved on this machine '+
+                    'and will upload automatically ('+(r.waiting||1)+' waiting)',false);
+            else if(r.recorded)
               // A recorded wipe makes the Certificate of Data Erasure issuable.
               toast(name+'Wipe complete — saved as '+(r.recordTag||'a new asset')+' in '+
                     (batch?batch.textContent:'the batch')+'. Erasure certificate now available ✓');
