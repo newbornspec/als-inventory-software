@@ -1,0 +1,44 @@
+# ALS Audit Station configuration — TEMPLATE.
+# Copy to the USB root as audit.conf and fill in. The real audit.conf is
+# gitignored because it holds credentials; keep this file secret-free.
+
+# ALS Inventory — Hardware Audit tool config.
+# Read by hardware-audit.sh so runs need no login or network typed each time.
+# Keep this file next to hardware-audit.sh on the USB.
+
+AUDIT_URL="https://als-inventory-software-production.up.railway.app"
+AUDIT_EMAIL="admin@als.com"
+AUDIT_PASSWORD=""
+
+# Wi-Fi to connect to automatically at the start of each run.
+# Leave WIFI_SSID blank if you use a wired/Ethernet connection.
+WIFI_SSID=""
+WIFI_PASSWORD=""
+
+# DESTRUCTIVE. Set AUDIT_WIPE="1" to securely erase the machine's INTERNAL drives
+# during the audit (you still have to type WIPE to confirm on each machine).
+# Leave "0" (or blank) for audit-only runs — nothing is erased. The USB you boot
+# from is never touched.
+AUDIT_WIPE="0"
+
+# Wipe method (when AUDIT_WIPE=1):
+#   auto      = cryptographic erase if supported, else firmware secure erase,
+#               else single-pass overwrite (default)
+#   crypto    = cryptographic erase only (self-encrypting / NVMe), else overwrite
+#   secure    = firmware secure erase (ATA/NVMe), else overwrite
+#   overwrite = single-pass overwrite + zero (slowest, most compatible)
+AUDIT_WIPE_METHOD="auto"
+# SATA drives are usually "frozen" by the BIOS after boot, which blocks ATA
+# secure erase. Set to "1" to briefly suspend/resume to unfreeze — but some
+# machines don't resume from suspend, so leave "0" unless you've tested it.
+AUDIT_WIPE_UNFREEZE="0"
+
+# --- OS image library -------------------------------------------------------
+# Where installable OS images live. Leave blank to use the /images folder on
+# this stick. Set it to a share on your local image server and every station
+# reads one shared copy instead of carrying 8-15GB per stick:
+#   NFS  ->  192.168.1.50:/srv/als-images
+#   SMB  ->  //192.168.1.50/als-images
+# Mounted read-only and soft, so an unreachable server can never hang the
+# station — it just falls back to the images on the stick.
+IMAGE_SERVER=""
