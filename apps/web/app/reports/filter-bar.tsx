@@ -34,7 +34,7 @@ export function FilterBar({ options }: { options: FilterOptions }) {
     ['batchId', 'supplier', 'manufacturer', 'category', 'grade'].filter((k) => params.get(k)).length;
 
   const cls =
-    'rounded-md border border-neutral-700 bg-neutral-900 px-2 py-1.5 text-xs outline-none focus:border-neutral-500';
+    'rounded-md border border-neutral-200 bg-white px-2 py-1.5 text-xs outline-none focus:border-neutral-300';
 
   return (
     <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -76,7 +76,7 @@ export function FilterBar({ options }: { options: FilterOptions }) {
       </select>
 
       {active > 0 && (
-        <button onClick={clearAll} className="text-xs text-neutral-500 hover:text-neutral-300">
+        <button onClick={clearAll} className="text-xs text-neutral-500 hover:text-neutral-700">
           Clear filters ({active})
         </button>
       )}

@@ -13,48 +13,48 @@ export function NewStockForm({ locations }: { locations: Location[] }) {
   return (
     <form action={formAction} className="mt-6 max-w-sm space-y-3">
       <div className="space-y-1">
-        <label className="text-sm text-neutral-300">Item name</label>
+        <label className="text-sm text-neutral-700">Item name</label>
         <input
           name="name"
           placeholder="USB keyboard"
-          className="w-full rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm outline-none focus:border-neutral-500"
+          className="w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm outline-none focus:border-neutral-300"
         />
       </div>
       <div className="grid grid-cols-2 gap-3">
         <div className="space-y-1">
-          <label className="text-sm text-neutral-300">SKU</label>
+          <label className="text-sm text-neutral-700">SKU</label>
           <input
             name="sku"
             placeholder="KB-USB-01"
-            className="w-full rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm outline-none focus:border-neutral-500"
+            className="w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm outline-none focus:border-neutral-300"
           />
         </div>
         <div className="space-y-1">
-          <label className="text-sm text-neutral-300">Category</label>
+          <label className="text-sm text-neutral-700">Category</label>
           <input
             name="category"
             placeholder="Peripherals"
-            className="w-full rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm outline-none focus:border-neutral-500"
+            className="w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm outline-none focus:border-neutral-300"
           />
         </div>
       </div>
       <div className="grid grid-cols-2 gap-3">
         <div className="space-y-1">
-          <label className="text-sm text-neutral-300">Opening quantity</label>
+          <label className="text-sm text-neutral-700">Opening quantity</label>
           <input
             type="number"
             min={0}
             name="quantity"
             placeholder="0"
-            className="w-full rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm outline-none focus:border-neutral-500"
+            className="w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm outline-none focus:border-neutral-300"
           />
         </div>
         <div className="space-y-1">
-          <label className="text-sm text-neutral-300">Location</label>
+          <label className="text-sm text-neutral-700">Location</label>
           <select
             name="locationId"
             defaultValue=""
-            className="w-full rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm"
+            className="w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm"
           >
             <option value="">Unassigned</option>
             {locations.map((l) => (
@@ -66,20 +66,20 @@ export function NewStockForm({ locations }: { locations: Location[] }) {
         </div>
       </div>
       <div className="space-y-1">
-        <label className="text-sm text-neutral-300">Notes</label>
+        <label className="text-sm text-neutral-700">Notes</label>
         <textarea
           name="notes"
           rows={2}
-          className="w-full rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm outline-none focus:border-neutral-500"
+          className="w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm outline-none focus:border-neutral-300"
         />
       </div>
 
-      {state.error && <p className="text-sm text-red-400">{state.error}</p>}
+      {state.error && <p className="text-sm text-red-600">{state.error}</p>}
 
       <button
         type="submit"
         disabled={pending}
-        className="rounded-md bg-neutral-100 px-4 py-2 text-sm font-medium text-neutral-900 disabled:opacity-50"
+        className="rounded-md bg-[#2b7fff] hover:bg-blue-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
       >
         {pending ? 'Creating…' : 'Create item'}
       </button>

@@ -131,9 +131,9 @@ export function PalletLines({
   const cols = canManage ? 7 : 6;
 
   return (
-    <div className="mt-3 overflow-x-auto rounded-lg border border-neutral-800">
+    <div className="mt-3 overflow-x-auto rounded-lg border border-neutral-200">
       <table className="w-full text-left text-sm">
-        <thead className="bg-neutral-900 text-neutral-400">
+        <thead className="bg-neutral-50 text-neutral-500">
           <tr>
             <th className="min-w-[18rem] px-3 py-2">Variant / size</th>
             <th className="w-28 px-3 py-2">Tier</th>
@@ -146,16 +146,16 @@ export function PalletLines({
         </thead>
         <tbody>
           {lines.map((l) => (
-            <tr key={l.id} className="border-t border-neutral-800">
+            <tr key={l.id} className="border-t border-neutral-200">
               <td className="px-3 py-2">
                 {canManage ? (
                   <input
                     defaultValue={l.variant}
                     onBlur={(e) => saveVariant(l, e.target.value)}
-                    className="w-full rounded border border-neutral-700 bg-neutral-900 px-2 py-1.5"
+                    className="w-full rounded border border-neutral-200 bg-white px-2 py-1.5"
                   />
                 ) : (
-                  <span className="text-neutral-200">{l.variant}</span>
+                  <span className="text-neutral-900">{l.variant}</span>
                 )}
               </td>
               <td className="px-3 py-2">
@@ -163,17 +163,17 @@ export function PalletLines({
                   <select
                     defaultValue={l.tier ?? ''}
                     onChange={(e) => saveTier(l, e.target.value)}
-                    className="w-full rounded border border-neutral-700 bg-neutral-900 px-2 py-1.5"
+                    className="w-full rounded border border-neutral-200 bg-white px-2 py-1.5"
                   >
                     <option value="">None</option>
                     {PALLET_TIERS.map((t) => (
-                      <option key={t} value={t} className="bg-neutral-900">
+                      <option key={t} value={t} className="bg-white">
                         {formatLabel(t)}
                       </option>
                     ))}
                   </select>
                 ) : (
-                  <span className="text-neutral-400">{l.tier ? formatLabel(l.tier) : '—'}</span>
+                  <span className="text-neutral-500">{l.tier ? formatLabel(l.tier) : '—'}</span>
                 )}
               </td>
               <td className="px-3 py-2">
@@ -183,7 +183,7 @@ export function PalletLines({
                     min={0}
                     defaultValue={l.quantity}
                     onBlur={(e) => saveQty(l, parseInt(e.target.value || '0', 10))}
-                    className="w-20 rounded border border-neutral-700 bg-neutral-900 px-2 py-1.5"
+                    className="w-20 rounded border border-neutral-200 bg-white px-2 py-1.5"
                   />
                 ) : (
                   l.quantity
@@ -194,17 +194,17 @@ export function PalletLines({
                   <select
                     defaultValue={l.grade ?? ''}
                     onChange={(e) => saveGrade(l, e.target.value)}
-                    className="w-full rounded border border-neutral-700 bg-neutral-900 px-2 py-1.5"
+                    className="w-full rounded border border-neutral-200 bg-white px-2 py-1.5"
                   >
                     <option value="">Ungraded</option>
                     {CONDITION_GRADES.map((g) => (
-                      <option key={g} value={g} className="bg-neutral-900">
+                      <option key={g} value={g} className="bg-white">
                         {formatLabel(g)}
                       </option>
                     ))}
                   </select>
                 ) : (
-                  <span className="text-neutral-400">{l.grade ? formatLabel(l.grade) : '—'}</span>
+                  <span className="text-neutral-500">{l.grade ? formatLabel(l.grade) : '—'}</span>
                 )}
               </td>
               <td className="px-3 py-2">
@@ -216,7 +216,7 @@ export function PalletLines({
                     defaultValue={l.unitCost ?? ''}
                     placeholder="—"
                     onBlur={(e) => saveCost(l, e.target.value ? parseFloat(e.target.value) : null)}
-                    className="w-24 rounded border border-neutral-700 bg-neutral-900 px-2 py-1.5"
+                    className="w-24 rounded border border-neutral-200 bg-white px-2 py-1.5"
                   />
                 ) : l.unitCost != null ? (
                   money(l.unitCost)
@@ -224,7 +224,7 @@ export function PalletLines({
                   '—'
                 )}
               </td>
-              <td className="px-3 py-2 text-neutral-300">
+              <td className="px-3 py-2 text-neutral-700">
                 {l.unitCost != null ? money(l.unitCost * l.quantity) : '—'}
               </td>
               {canManage && (
@@ -233,12 +233,12 @@ export function PalletLines({
                     {l.quantity > 0 && (
                       <button
                         onClick={() => void sell(l)}
-                        className="text-xs text-emerald-400 hover:underline"
+                        className="text-xs text-emerald-700 hover:underline"
                       >
                         Sell…
                       </button>
                     )}
-                    <button onClick={() => remove(l)} className="text-xs text-red-400 hover:underline">
+                    <button onClick={() => remove(l)} className="text-xs text-red-600 hover:underline">
                       Remove
                     </button>
                   </div>
@@ -256,24 +256,24 @@ export function PalletLines({
         </tbody>
         {canManage && (
           <tfoot>
-            <tr className="border-t border-neutral-800 bg-neutral-900/40">
+            <tr className="border-t border-neutral-200 bg-neutral-50">
               <td className="px-3 py-2">
                 <input
                   value={variant}
                   onChange={(e) => setVariant(e.target.value)}
                   placeholder="e.g. 22 inch"
-                  className="w-full rounded border border-neutral-700 bg-neutral-900 px-2 py-1.5"
+                  className="w-full rounded border border-neutral-200 bg-white px-2 py-1.5"
                 />
               </td>
               <td className="px-3 py-2">
                 <select
                   value={tier}
                   onChange={(e) => setTier(e.target.value)}
-                  className="w-full rounded border border-neutral-700 bg-neutral-900 px-2 py-1.5"
+                  className="w-full rounded border border-neutral-200 bg-white px-2 py-1.5"
                 >
                   <option value="">None</option>
                   {PALLET_TIERS.map((t) => (
-                    <option key={t} value={t} className="bg-neutral-900">
+                    <option key={t} value={t} className="bg-white">
                       {formatLabel(t)}
                     </option>
                   ))}
@@ -286,18 +286,18 @@ export function PalletLines({
                   value={qty}
                   onChange={(e) => setQty(e.target.value)}
                   placeholder="20"
-                  className="w-20 rounded border border-neutral-700 bg-neutral-900 px-2 py-1.5"
+                  className="w-20 rounded border border-neutral-200 bg-white px-2 py-1.5"
                 />
               </td>
               <td className="px-3 py-2">
                 <select
                   value={grade}
                   onChange={(e) => setGrade(e.target.value)}
-                  className="w-full rounded border border-neutral-700 bg-neutral-900 px-2 py-1.5"
+                  className="w-full rounded border border-neutral-200 bg-white px-2 py-1.5"
                 >
                   <option value="">Ungraded</option>
                   {CONDITION_GRADES.map((g) => (
-                    <option key={g} value={g} className="bg-neutral-900">
+                    <option key={g} value={g} className="bg-white">
                       {formatLabel(g)}
                     </option>
                   ))}
@@ -311,7 +311,7 @@ export function PalletLines({
                   value={cost}
                   onChange={(e) => setCost(e.target.value)}
                   placeholder="optional"
-                  className="w-24 rounded border border-neutral-700 bg-neutral-900 px-2 py-1.5"
+                  className="w-24 rounded border border-neutral-200 bg-white px-2 py-1.5"
                 />
               </td>
               <td className="px-3 py-2" />
@@ -319,7 +319,7 @@ export function PalletLines({
                 <button
                   onClick={add}
                   disabled={busy}
-                  className="rounded bg-neutral-100 px-2 py-1 text-xs font-medium text-neutral-900 disabled:opacity-50"
+                  className="rounded bg-[#2b7fff] hover:bg-blue-600 px-2 py-1 text-xs font-medium text-white disabled:opacity-50"
                 >
                   {busy ? '…' : 'Add'}
                 </button>
@@ -328,7 +328,7 @@ export function PalletLines({
           </tfoot>
         )}
       </table>
-      {error && <p className="px-3 py-2 text-xs text-red-400">{error}</p>}
+      {error && <p className="px-3 py-2 text-xs text-red-600">{error}</p>}
     </div>
   );
 }

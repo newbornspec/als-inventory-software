@@ -31,13 +31,13 @@ export default async function InventoryPage() {
   const num = (n: number) => n.toLocaleString('en-GB');
 
   return (
-    <main className="min-h-screen bg-neutral-950 text-neutral-100">
+    <main className="min-h-screen bg-white text-neutral-950">
       <Nav />
       <div className="p-8">
         <div className="flex flex-wrap items-end justify-between gap-4">
           <div>
             <h1 className="text-2xl font-semibold">All Inventory</h1>
-            <p className="mt-1 text-sm text-neutral-400">
+            <p className="mt-1 text-sm text-neutral-500">
               Everything you hold, across all three inventory types. Each section links to its own
               page for the detail.
             </p>
@@ -108,7 +108,7 @@ function StatTile({ label, units, sub, href }: { label: string; units: number; s
   return (
     <Link
       href={href}
-      className="rounded-lg border border-neutral-800 bg-neutral-900/40 p-4 transition hover:border-neutral-600"
+      className="rounded-lg border border-neutral-200 bg-neutral-50 p-4 transition hover:border-neutral-300"
     >
       <div className="text-xs uppercase tracking-wide text-neutral-500">{label}</div>
       <div className="mt-1 text-2xl font-semibold tabular-nums">{units.toLocaleString('en-GB')}</div>
@@ -133,12 +133,12 @@ function Section({
   return (
     <section className="mt-8">
       <div className="flex items-baseline justify-between gap-3">
-        <h2 className="text-sm font-medium text-neutral-300">
+        <h2 className="text-sm font-medium text-neutral-700">
           {title}
           <span className="ml-2 text-neutral-500">· {units.toLocaleString('en-GB')} units</span>
-          <span className="ml-2 text-xs text-neutral-600">({hint})</span>
+          <span className="ml-2 text-xs text-neutral-500">({hint})</span>
         </h2>
-        <Link href={href} className="shrink-0 text-sm text-neutral-400 hover:text-neutral-200">
+        <Link href={href} className="shrink-0 text-sm text-neutral-500 hover:text-neutral-900">
           View all →
         </Link>
       </div>
@@ -151,9 +151,9 @@ function Table({ head, empty, children }: { head: string[]; empty: string; child
   const rows = Array.isArray(children) ? children.flat().filter(Boolean) : children;
   const isEmpty = Array.isArray(rows) && rows.length === 0;
   return (
-    <div className="mt-3 overflow-x-auto rounded-lg border border-neutral-800">
+    <div className="mt-3 overflow-x-auto rounded-lg border border-neutral-200">
       <table className="w-full text-left text-sm">
-        <thead className="bg-neutral-900 text-neutral-400">
+        <thead className="bg-neutral-50 text-neutral-500">
           <tr>
             {head.map((h, i) => (
               <th key={h} className={`px-4 py-3 ${i === head.length - 1 ? 'text-right' : ''}`}>
@@ -190,11 +190,11 @@ function Row({
   muted?: boolean;
 }) {
   return (
-    <tr className="border-t border-neutral-800 hover:bg-neutral-900">
+    <tr className="border-t border-neutral-200 hover:bg-white">
       {cells.map((c, i) => (
-        <td key={i} className={`px-4 py-3 ${i === 0 ? '' : 'text-neutral-400'}`}>
+        <td key={i} className={`px-4 py-3 ${i === 0 ? '' : 'text-neutral-500'}`}>
           {i === 0 ? (
-            <Link href={href} className={`underline ${muted ? 'text-neutral-400' : 'text-neutral-100'}`}>
+            <Link href={href} className={`underline ${muted ? 'text-neutral-500' : 'text-neutral-950'}`}>
               {c}
             </Link>
           ) : (

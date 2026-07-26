@@ -16,13 +16,13 @@ export function Breadcrumbs({ items }: { items: Crumb[] }) {
         return (
           <span key={i} className="flex items-center gap-x-1.5">
             {c.href && !last ? (
-              <Link href={c.href} className="text-neutral-400 hover:text-neutral-200">
+              <Link href={c.href} className="text-neutral-500 hover:text-neutral-900">
                 {c.label}
               </Link>
             ) : (
-              <span className={last ? 'text-neutral-200' : 'text-neutral-400'}>{c.label}</span>
+              <span className={last ? 'text-neutral-900' : 'text-neutral-500'}>{c.label}</span>
             )}
-            {!last && <span className="text-neutral-600">/</span>}
+            {!last && <span className="text-neutral-500">/</span>}
           </span>
         );
       })}

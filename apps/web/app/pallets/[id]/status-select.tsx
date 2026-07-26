@@ -16,7 +16,7 @@ export function PalletStatusSelect({ palletId, status }: { palletId: string; sta
         className="w-full bg-transparent text-lg font-semibold"
       >
         {PALLET_STATUSES.map((s) => (
-          <option key={s} value={s} className="bg-neutral-900">
+          <option key={s} value={s} className="bg-white">
             {formatLabel(s)}
           </option>
         ))}

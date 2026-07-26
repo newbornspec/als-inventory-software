@@ -232,7 +232,7 @@ export default async function ReportsPage({
 
   if (!canSee || !overview) {
     return (
-      <main className="min-h-screen bg-neutral-950 text-neutral-100">
+      <main className="min-h-screen bg-white text-neutral-950">
         <Nav />
         <div className="p-8">
           <h1 className="text-2xl font-semibold">Reports</h1>
@@ -291,7 +291,7 @@ export default async function ReportsPage({
   ];
 
   return (
-    <main className="min-h-screen bg-neutral-950 text-neutral-100">
+    <main className="min-h-screen bg-white text-neutral-950">
       <Nav />
       <div className="p-8">
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -299,17 +299,17 @@ export default async function ReportsPage({
           <div className="flex flex-wrap items-center gap-3 text-sm">
             <a
               href={`/api/reports/export-xlsx?${deviceQs.toString()}`}
-              className="rounded-md bg-neutral-100 px-3 py-1.5 font-medium text-neutral-900"
+              className="rounded-md bg-[#2b7fff] hover:bg-blue-600 px-3 py-1.5 font-medium text-white"
             >
               Export Excel
             </a>
             <a
               href={`/api/reports/export-pdf?${deviceQs.toString()}`}
-              className="rounded-md border border-neutral-700 px-3 py-1.5 text-neutral-200 hover:bg-neutral-900"
+              className="rounded-md border border-neutral-200 px-3 py-1.5 text-neutral-900 hover:bg-white"
             >
               Export PDF
             </a>
-            <a href="/api/reports/assets-csv" className="text-neutral-400 underline">
+            <a href="/api/reports/assets-csv" className="text-neutral-500 underline">
               Assets CSV
             </a>
           </div>
@@ -332,7 +332,7 @@ export default async function ReportsPage({
                   'rounded-md px-3 py-1.5 text-xs ' +
                   (range === p.key
                     ? 'bg-neutral-100 font-medium text-neutral-900'
-                    : 'border border-neutral-700 text-neutral-300 hover:bg-neutral-900')
+                    : 'border border-neutral-200 text-neutral-700 hover:bg-white')
                 }
               >
                 {p.label}
@@ -344,10 +344,10 @@ export default async function ReportsPage({
             {(['batchId', 'supplier', 'manufacturer', 'category', 'grade'] as const).map((k) =>
               params[k] ? <input key={k} type="hidden" name={k} value={params[k]} /> : null,
             )}
-            <input type="date" name="from" defaultValue={params.from ?? ''} className="rounded-md border border-neutral-700 bg-neutral-900 px-2 py-1 text-xs" />
+            <input type="date" name="from" defaultValue={params.from ?? ''} className="rounded-md border border-neutral-200 bg-white px-2 py-1 text-xs" />
             <span>–</span>
-            <input type="date" name="to" defaultValue={params.to ?? ''} className="rounded-md border border-neutral-700 bg-neutral-900 px-2 py-1 text-xs" />
-            <button type="submit" className="rounded-md border border-neutral-700 px-2 py-1 text-neutral-300 hover:bg-neutral-900">
+            <input type="date" name="to" defaultValue={params.to ?? ''} className="rounded-md border border-neutral-200 bg-white px-2 py-1 text-xs" />
+            <button type="submit" className="rounded-md border border-neutral-200 px-2 py-1 text-neutral-700 hover:bg-white">
               Apply
             </button>
           </form>
@@ -356,7 +356,7 @@ export default async function ReportsPage({
         {/* Cross-report dimension filters */}
         {filterOptions && <FilterBar options={filterOptions} />}
         {anyFilter && (
-          <p className="mt-1 text-xs text-neutral-600">
+          <p className="mt-1 text-xs text-neutral-500">
             Filters apply to the Inventory, Sales, Batch &amp; lot and Supplier sections. Warehouse,
             User, Consumables, Pallet and Activity sections show all data.
           </p>
@@ -369,7 +369,7 @@ export default async function ReportsPage({
               <Link
                 key={c.label}
                 href={c.href}
-                className="rounded-lg border border-neutral-800 bg-neutral-900/60 p-4 transition hover:border-neutral-600"
+                className="rounded-lg border border-neutral-200 bg-neutral-50 p-4 transition hover:border-neutral-300"
               >
                 <div className="text-xs uppercase tracking-wide text-neutral-500">{c.label}</div>
                 <div className="mt-1 text-2xl font-semibold tabular-nums">{c.value}</div>
@@ -381,12 +381,12 @@ export default async function ReportsPage({
 
         {/* Inventory analytics — active (unsold) inventory */}
         <section className="mt-8">
-          <h2 className="text-sm font-medium text-neutral-400">
-            Inventory analytics <span className="text-neutral-600">(active inventory)</span>
+          <h2 className="text-sm font-medium text-neutral-500">
+            Inventory analytics <span className="text-neutral-500">(active inventory)</span>
           </h2>
           <div className="mt-3 grid gap-4 lg:grid-cols-2">
-            <div className="rounded-lg border border-neutral-800 bg-neutral-900 p-4">
-              <h3 className="text-sm font-medium text-neutral-300">By category</h3>
+            <div className="rounded-lg border border-neutral-200 bg-white p-4">
+              <h3 className="text-sm font-medium text-neutral-700">By category</h3>
               <div className="mt-3">
                 {overview.byCategory.length > 0 ? (
                   <CategoryDonut data={overview.byCategory} />
@@ -396,8 +396,8 @@ export default async function ReportsPage({
               </div>
             </div>
 
-            <div className="rounded-lg border border-neutral-800 bg-neutral-900 p-4">
-              <h3 className="text-sm font-medium text-neutral-300">By manufacturer</h3>
+            <div className="rounded-lg border border-neutral-200 bg-white p-4">
+              <h3 className="text-sm font-medium text-neutral-700">By manufacturer</h3>
               <div className="mt-3">
                 {overview.byManufacturer.length > 0 ? (
                   <>
@@ -413,11 +413,11 @@ export default async function ReportsPage({
                       </thead>
                       <tbody>
                         {overview.byManufacturer.slice(0, 8).map((m) => (
-                          <tr key={m.label} className="border-t border-neutral-800">
-                            <td className="py-1 text-neutral-300">{m.label}</td>
-                            <td className="py-1 text-right tabular-nums text-neutral-400">{m.count}</td>
-                            <td className="py-1 text-right tabular-nums text-neutral-400">{m.pct.toFixed(0)}%</td>
-                            <td className="py-1 text-right text-neutral-400">{m.avgGrade ?? '—'}</td>
+                          <tr key={m.label} className="border-t border-neutral-200">
+                            <td className="py-1 text-neutral-700">{m.label}</td>
+                            <td className="py-1 text-right tabular-nums text-neutral-500">{m.count}</td>
+                            <td className="py-1 text-right tabular-nums text-neutral-500">{m.pct.toFixed(0)}%</td>
+                            <td className="py-1 text-right text-neutral-500">{m.avgGrade ?? '—'}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -429,8 +429,8 @@ export default async function ReportsPage({
               </div>
             </div>
 
-            <div className="rounded-lg border border-neutral-800 bg-neutral-900 p-4">
-              <h3 className="text-sm font-medium text-neutral-300">By condition grade</h3>
+            <div className="rounded-lg border border-neutral-200 bg-white p-4">
+              <h3 className="text-sm font-medium text-neutral-700">By condition grade</h3>
               <div className="mt-3">
                 {byGradeOrdered.length > 0 ? (
                   <CountBars data={byGradeOrdered} color="aqua" />
@@ -440,8 +440,8 @@ export default async function ReportsPage({
               </div>
             </div>
 
-            <div className="rounded-lg border border-neutral-800 bg-neutral-900 p-4">
-              <h3 className="text-sm font-medium text-neutral-300">By audit status</h3>
+            <div className="rounded-lg border border-neutral-200 bg-white p-4">
+              <h3 className="text-sm font-medium text-neutral-700">By audit status</h3>
               <div className="mt-3">
                 {byAuditLabelled.length > 0 ? (
                   <CountBars data={byAuditLabelled} color="blue" />
@@ -456,8 +456,8 @@ export default async function ReportsPage({
         {/* Sales & Finance analytics */}
         {sales && (
           <section className="mt-8">
-            <h2 className="text-sm font-medium text-neutral-400">
-              Sales &amp; finance <span className="text-neutral-600">({rangeLabel})</span>
+            <h2 className="text-sm font-medium text-neutral-500">
+              Sales &amp; finance <span className="text-neutral-500">({rangeLabel})</span>
             </h2>
 
             <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
@@ -475,7 +475,7 @@ export default async function ReportsPage({
                   value: sales.summary.marginPct == null ? '—' : `${sales.summary.marginPct.toFixed(1)}%`,
                 },
               ].map((c) => (
-                <div key={c.label} className="rounded-lg border border-neutral-800 bg-neutral-900/60 p-3">
+                <div key={c.label} className="rounded-lg border border-neutral-200 bg-neutral-50 p-3">
                   <div className="text-xs uppercase tracking-wide text-neutral-500">{c.label}</div>
                   <div className="mt-1 text-xl font-semibold tabular-nums">{c.value}</div>
                 </div>
@@ -483,9 +483,9 @@ export default async function ReportsPage({
             </div>
 
             <div className="mt-4 grid gap-4 lg:grid-cols-3">
-              <div className="rounded-lg border border-neutral-800 bg-neutral-900 p-4 lg:col-span-2">
-                <h3 className="text-sm font-medium text-neutral-300">
-                  Revenue &amp; profit <span className="text-neutral-600">(last 12 months)</span>
+              <div className="rounded-lg border border-neutral-200 bg-white p-4 lg:col-span-2">
+                <h3 className="text-sm font-medium text-neutral-700">
+                  Revenue &amp; profit <span className="text-neutral-500">(last 12 months)</span>
                 </h3>
                 <div className="mt-3">
                   <MonthlyTrend
@@ -499,8 +499,8 @@ export default async function ReportsPage({
                 </div>
               </div>
 
-              <div className="rounded-lg border border-neutral-800 bg-neutral-900 p-4">
-                <h3 className="text-sm font-medium text-neutral-300">Top manufacturers</h3>
+              <div className="rounded-lg border border-neutral-200 bg-white p-4">
+                <h3 className="text-sm font-medium text-neutral-700">Top manufacturers</h3>
                 <div className="mt-3">
                   {sales.topManufacturers.length > 0 ? (
                     <CountBars
@@ -520,9 +520,9 @@ export default async function ReportsPage({
               <TopTable title="Best-selling categories" rows={sales.topCategories} />
             </div>
 
-            <div className="mt-4 overflow-x-auto rounded-lg border border-neutral-800">
+            <div className="mt-4 overflow-x-auto rounded-lg border border-neutral-200">
               <table className="w-full text-left text-sm">
-                <thead className="bg-neutral-900 text-neutral-400">
+                <thead className="bg-neutral-50 text-neutral-500">
                   <tr>
                     <th className="px-3 py-2">Supplier</th>
                     <th className="px-3 py-2 text-right">Units</th>
@@ -534,20 +534,20 @@ export default async function ReportsPage({
                 </thead>
                 <tbody>
                   {sales.bySupplier.map((s) => (
-                    <tr key={s.label} className="border-t border-neutral-800">
-                      <td className="px-3 py-2 text-neutral-200">{s.label}</td>
-                      <td className="px-3 py-2 text-right tabular-nums text-neutral-400">{s.units}</td>
-                      <td className="px-3 py-2 text-right text-neutral-300">{money(s.revenue)}</td>
-                      <td className="px-3 py-2 text-right text-neutral-400">{money(s.cost)}</td>
+                    <tr key={s.label} className="border-t border-neutral-200">
+                      <td className="px-3 py-2 text-neutral-900">{s.label}</td>
+                      <td className="px-3 py-2 text-right tabular-nums text-neutral-500">{s.units}</td>
+                      <td className="px-3 py-2 text-right text-neutral-700">{money(s.revenue)}</td>
+                      <td className="px-3 py-2 text-right text-neutral-500">{money(s.cost)}</td>
                       <td
                         className={
                           'px-3 py-2 text-right font-medium ' +
-                          (s.profit > 0 ? 'text-emerald-400' : s.profit < 0 ? 'text-red-400' : 'text-neutral-300')
+                          (s.profit > 0 ? 'text-emerald-700' : s.profit < 0 ? 'text-red-600' : 'text-neutral-700')
                         }
                       >
                         {money(s.profit)}
                       </td>
-                      <td className="px-3 py-2 text-right text-neutral-400">
+                      <td className="px-3 py-2 text-right text-neutral-500">
                         {s.marginPct == null ? '—' : `${s.marginPct.toFixed(1)}%`}
                       </td>
                     </tr>
@@ -562,7 +562,7 @@ export default async function ReportsPage({
                 </tbody>
               </table>
             </div>
-            <p className="mt-2 text-xs text-neutral-600">
+            <p className="mt-2 text-xs text-neutral-500">
               Sold-today/this-month are fixed windows; other figures follow the selected range. Profit
               by supplier covers device sales (pallet goods aren&apos;t attributed to a supplier).
             </p>
@@ -572,12 +572,12 @@ export default async function ReportsPage({
         {/* Supplier performance */}
         {suppliers.length > 0 && (
           <section className="mt-8">
-            <h2 className="text-sm font-medium text-neutral-400">
-              Supplier performance <span className="text-neutral-600">(revenue/profit: {rangeLabel})</span>
+            <h2 className="text-sm font-medium text-neutral-500">
+              Supplier performance <span className="text-neutral-500">(revenue/profit: {rangeLabel})</span>
             </h2>
-            <div className="mt-3 overflow-x-auto rounded-lg border border-neutral-800">
+            <div className="mt-3 overflow-x-auto rounded-lg border border-neutral-200">
               <table className="w-full text-left text-sm">
-                <thead className="bg-neutral-900 text-neutral-400">
+                <thead className="bg-neutral-50 text-neutral-500">
                   <tr>
                     <th className="px-3 py-2">Supplier</th>
                     <th className="px-3 py-2 text-right">Lots</th>
@@ -591,17 +591,17 @@ export default async function ReportsPage({
                 </thead>
                 <tbody>
                   {suppliers.map((s) => (
-                    <tr key={s.label} className="border-t border-neutral-800 hover:bg-neutral-900/40">
-                      <td className="px-3 py-2 text-neutral-200">{s.label}</td>
-                      <td className="px-3 py-2 text-right tabular-nums text-neutral-400">{s.batches}</td>
-                      <td className="px-3 py-2 text-right tabular-nums text-neutral-300">{s.assets}</td>
-                      <td className="px-3 py-2 text-right text-neutral-400">{s.avgGrade ?? '—'}</td>
-                      <td className="px-3 py-2 text-right tabular-nums text-neutral-400">{s.unitsSold || '—'}</td>
-                      <td className="px-3 py-2 text-right text-neutral-300">{s.revenue > 0 ? money(s.revenue) : '—'}</td>
+                    <tr key={s.label} className="border-t border-neutral-200 hover:bg-neutral-50">
+                      <td className="px-3 py-2 text-neutral-900">{s.label}</td>
+                      <td className="px-3 py-2 text-right tabular-nums text-neutral-500">{s.batches}</td>
+                      <td className="px-3 py-2 text-right tabular-nums text-neutral-700">{s.assets}</td>
+                      <td className="px-3 py-2 text-right text-neutral-500">{s.avgGrade ?? '—'}</td>
+                      <td className="px-3 py-2 text-right tabular-nums text-neutral-500">{s.unitsSold || '—'}</td>
+                      <td className="px-3 py-2 text-right text-neutral-700">{s.revenue > 0 ? money(s.revenue) : '—'}</td>
                       <td
                         className={
                           'px-3 py-2 text-right font-medium ' +
-                          (s.profit > 0 ? 'text-emerald-400' : s.profit < 0 ? 'text-red-400' : 'text-neutral-300')
+                          (s.profit > 0 ? 'text-emerald-700' : s.profit < 0 ? 'text-red-600' : 'text-neutral-700')
                         }
                       >
                         {s.revenue > 0 ? money(s.profit) : '—'}
@@ -609,7 +609,7 @@ export default async function ReportsPage({
                       <td
                         className={
                           'px-3 py-2 text-right tabular-nums ' +
-                          (s.returnRate == null ? 'text-neutral-500' : s.returnRate > 20 ? 'text-amber-400' : 'text-neutral-400')
+                          (s.returnRate == null ? 'text-neutral-500' : s.returnRate > 20 ? 'text-amber-700' : 'text-neutral-500')
                         }
                       >
                         {s.returnRate == null ? '—' : `${s.returnRate.toFixed(0)}%`}
@@ -619,7 +619,7 @@ export default async function ReportsPage({
                 </tbody>
               </table>
             </div>
-            <p className="mt-2 text-xs text-neutral-600">
+            <p className="mt-2 text-xs text-neutral-500">
               Suppliers are taken from each lot&apos;s source. Lots, assets and average grade are
               lifetime; revenue and profit follow the range. Return rate is a lifetime quality signal
               (returned vs sold events for the supplier&apos;s devices).
@@ -630,19 +630,19 @@ export default async function ReportsPage({
         {/* Batch & lot performance — expandable Batch → Sub-lot drill-down */}
         <section className="mt-8">
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <h2 className="text-sm font-medium text-neutral-400">
+            <h2 className="text-sm font-medium text-neutral-500">
               Batch &amp; lot performance{' '}
-              <span className="text-neutral-600">
+              <span className="text-neutral-500">
                 (revenue/profit: {rangeLabel} · totals:{' '}
                 {money(profitTotals.revenue)} rev / {money(profitTotals.profit)} profit)
               </span>
             </h2>
-            <a href="/api/reports/profit-csv" className="text-sm text-neutral-300 underline">
+            <a href="/api/reports/profit-csv" className="text-sm text-neutral-700 underline">
               Export profit CSV
             </a>
           </div>
           <BatchAnalyticsTable rows={batchAnalytics} />
-          <p className="mt-2 text-xs text-neutral-600">
+          <p className="mt-2 text-xs text-neutral-500">
             Expand a lot to see its sub-lots (assets, sold, avg grade, % audited, cost, revenue).
             Revenue/profit follow the selected range; asset counts and cost are current totals.
             Pallets are separate containers, not children of a batch, so they aren&apos;t counted here.
@@ -652,18 +652,18 @@ export default async function ReportsPage({
         {/* Pallet analytics — standalone pallet list */}
         {palletAnalytics && (
           <section className="mt-8">
-            <h2 className="text-sm font-medium text-neutral-400">
+            <h2 className="text-sm font-medium text-neutral-500">
               Pallet analytics{' '}
-              <span className="text-neutral-600">
+              <span className="text-neutral-500">
                 ({palletAnalytics.summary.activePallets} active ·{' '}
                 {palletAnalytics.summary.shippedPallets} shipped ·{' '}
                 {palletAnalytics.summary.unitsOnHand.toLocaleString('en-GB')} units on hand ·{' '}
                 {palletAnalytics.summary.unitsSold.toLocaleString('en-GB')} sold {rangeLabel})
               </span>
             </h2>
-            <div className="mt-3 overflow-x-auto rounded-lg border border-neutral-800">
+            <div className="mt-3 overflow-x-auto rounded-lg border border-neutral-200">
               <table className="w-full text-left text-sm">
-                <thead className="bg-neutral-900 text-neutral-400">
+                <thead className="bg-neutral-50 text-neutral-500">
                   <tr>
                     <th className="px-3 py-2">Pallet</th>
                     <th className="px-3 py-2">Description</th>
@@ -679,22 +679,22 @@ export default async function ReportsPage({
                 </thead>
                 <tbody>
                   {palletAnalytics.pallets.map((p) => (
-                    <tr key={p.id} className="border-t border-neutral-800 hover:bg-neutral-900/40">
-                      <td className="px-3 py-2 text-neutral-200">
+                    <tr key={p.id} className="border-t border-neutral-200 hover:bg-neutral-50">
+                      <td className="px-3 py-2 text-neutral-900">
                         <Link href={`/pallets/${p.id}`} className="underline">
                           {p.palletNumber}
                         </Link>
                       </td>
-                      <td className="px-3 py-2 text-neutral-400">{p.description ?? '—'}</td>
+                      <td className="px-3 py-2 text-neutral-500">{p.description ?? '—'}</td>
                       <td className="px-3 py-2">
                         <span
                           className={
                             'rounded-full px-2 py-0.5 text-xs ' +
                             (p.status === 'shipped'
-                              ? 'bg-neutral-800 text-neutral-300'
+                              ? 'bg-neutral-100 text-neutral-700'
                               : p.status === 'ready'
-                                ? 'bg-amber-950/50 text-amber-400'
-                                : 'bg-sky-950/50 text-sky-300')
+                                ? 'bg-amber-50 text-amber-700'
+                                : 'bg-sky-50 text-sky-700')
                           }
                         >
                           {formatLabel(p.status)}
@@ -703,13 +703,13 @@ export default async function ReportsPage({
                       <td className="px-3 py-2 text-neutral-500">
                         {p.entryLayout === 'spec' ? 'Spec grid' : 'Variant'}
                       </td>
-                      <td className="px-3 py-2 text-right tabular-nums text-neutral-400">{p.variants}</td>
-                      <td className="px-3 py-2 text-right tabular-nums text-neutral-300">{p.unitsOnPallet}</td>
-                      <td className="px-3 py-2 text-right tabular-nums text-neutral-400">{p.unitsSold || '—'}</td>
-                      <td className="px-3 py-2 text-right text-neutral-300">
+                      <td className="px-3 py-2 text-right tabular-nums text-neutral-500">{p.variants}</td>
+                      <td className="px-3 py-2 text-right tabular-nums text-neutral-700">{p.unitsOnPallet}</td>
+                      <td className="px-3 py-2 text-right tabular-nums text-neutral-500">{p.unitsSold || '—'}</td>
+                      <td className="px-3 py-2 text-right text-neutral-700">
                         {p.revenue > 0 ? money(p.revenue) : '—'}
                       </td>
-                      <td className="px-3 py-2 text-neutral-400">{p.location ?? '—'}</td>
+                      <td className="px-3 py-2 text-neutral-500">{p.location ?? '—'}</td>
                       <td className="px-3 py-2 whitespace-nowrap text-neutral-500">
                         {new Date(p.createdAt).toLocaleDateString('en-GB')}
                       </td>
@@ -725,7 +725,7 @@ export default async function ReportsPage({
                 </tbody>
               </table>
             </div>
-            <p className="mt-2 text-xs text-neutral-600">
+            <p className="mt-2 text-xs text-neutral-500">
               Units are current pallet contents; sold/revenue follow the selected range. Pallets are
               standalone containers, so they have no parent batch/lot or assigned user.
             </p>
@@ -735,8 +735,8 @@ export default async function ReportsPage({
         {/* Warehouse operations — throughput over the range */}
         {warehouse && (
           <section className="mt-8">
-            <h2 className="text-sm font-medium text-neutral-400">
-              Warehouse operations <span className="text-neutral-600">({rangeLabel})</span>
+            <h2 className="text-sm font-medium text-neutral-500">
+              Warehouse operations <span className="text-neutral-500">({rangeLabel})</span>
             </h2>
 
             <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-7">
@@ -748,32 +748,32 @@ export default async function ReportsPage({
                 { label: 'Sold', value: warehouse.metrics.sold },
                 { label: 'Returned', value: warehouse.metrics.returned },
               ].map((c) => (
-                <div key={c.label} className="rounded-lg border border-neutral-800 bg-neutral-900/60 p-3">
+                <div key={c.label} className="rounded-lg border border-neutral-200 bg-neutral-50 p-3">
                   <div className="text-xs uppercase tracking-wide text-neutral-500">{c.label}</div>
                   <div className="mt-1 text-xl font-semibold tabular-nums">{c.value}</div>
                 </div>
               ))}
-              <div className="rounded-lg border border-neutral-800 bg-neutral-900/60 p-3">
+              <div className="rounded-lg border border-neutral-200 bg-neutral-50 p-3">
                 <div className="text-xs uppercase tracking-wide text-neutral-500">Avg processing</div>
                 <div className="mt-1 text-xl font-semibold tabular-nums">
                   {warehouse.avgProcessingDays == null
                     ? '—'
                     : `${warehouse.avgProcessingDays.toFixed(1)}d`}
                 </div>
-                <div className="mt-0.5 text-[10px] text-neutral-600">intake → audit</div>
+                <div className="mt-0.5 text-[10px] text-neutral-500">intake → audit</div>
               </div>
             </div>
 
-            <div className="mt-4 rounded-lg border border-neutral-800 bg-neutral-900 p-4">
-              <h3 className="text-sm font-medium text-neutral-300">
+            <div className="mt-4 rounded-lg border border-neutral-200 bg-white p-4">
+              <h3 className="text-sm font-medium text-neutral-700">
                 Throughput per day{' '}
-                <span className="text-neutral-600">({warehouse.windowLabel})</span>
+                <span className="text-neutral-500">({warehouse.windowLabel})</span>
               </h3>
               <div className="mt-3">
                 <DailyBars data={warehouse.daily} />
               </div>
             </div>
-            <p className="mt-2 text-xs text-neutral-600">
+            <p className="mt-2 text-xs text-neutral-500">
               Counts are warehouse events in the range (received, scanned, audited, shipped, sold,
               returned). Average processing time is the mean days from a device&apos;s intake to its
               first audit, over devices audited in the range.
@@ -784,8 +784,8 @@ export default async function ReportsPage({
         {/* Consumables — bulk stock usage */}
         {consumables && (
           <section className="mt-8">
-            <h2 className="text-sm font-medium text-neutral-400">
-              Consumables <span className="text-neutral-600">({rangeLabel})</span>
+            <h2 className="text-sm font-medium text-neutral-500">
+              Consumables <span className="text-neutral-500">({rangeLabel})</span>
             </h2>
 
             <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
@@ -797,18 +797,18 @@ export default async function ReportsPage({
                 { label: 'Low stock', value: String(consumables.summary.lowStock) },
                 { label: 'Out of stock', value: String(consumables.summary.outOfStock) },
               ].map((c) => (
-                <div key={c.label} className="rounded-lg border border-neutral-800 bg-neutral-900/60 p-3">
+                <div key={c.label} className="rounded-lg border border-neutral-200 bg-neutral-50 p-3">
                   <div className="text-xs uppercase tracking-wide text-neutral-500">{c.label}</div>
                   <div className="mt-1 text-xl font-semibold tabular-nums">{c.value}</div>
-                  {c.sub && <div className="mt-0.5 text-[10px] text-neutral-600">{c.sub}</div>}
+                  {c.sub && <div className="mt-0.5 text-[10px] text-neutral-500">{c.sub}</div>}
                 </div>
               ))}
             </div>
 
             <div className="mt-4 grid gap-4 lg:grid-cols-3">
-              <div className="rounded-lg border border-neutral-800 bg-neutral-900 p-4 lg:col-span-2">
-                <h3 className="text-sm font-medium text-neutral-300">
-                  Consumption &amp; replenishment <span className="text-neutral-600">(last 12 months)</span>
+              <div className="rounded-lg border border-neutral-200 bg-white p-4 lg:col-span-2">
+                <h3 className="text-sm font-medium text-neutral-700">
+                  Consumption &amp; replenishment <span className="text-neutral-500">(last 12 months)</span>
                 </h3>
                 <div className="mt-3">
                   <MonthlyTrend
@@ -823,8 +823,8 @@ export default async function ReportsPage({
                 </div>
               </div>
 
-              <div className="rounded-lg border border-neutral-800 bg-neutral-900 p-4">
-                <h3 className="text-sm font-medium text-neutral-300">Highest usage</h3>
+              <div className="rounded-lg border border-neutral-200 bg-white p-4">
+                <h3 className="text-sm font-medium text-neutral-700">Highest usage</h3>
                 <div className="mt-3">
                   {consumables.topUsage.length > 0 ? (
                     <CountBars data={consumables.topUsage.map((u) => ({ label: u.label, count: u.qty }))} color="blue" max={6} />
@@ -838,22 +838,22 @@ export default async function ReportsPage({
             {(consumables.topOrdered.length > 0 || consumables.lowOrOut.length > 0) && (
               <div className="mt-4 grid gap-4 lg:grid-cols-2">
                 <TopTable title="Most ordered (received)" rows={consumables.topOrdered.map((o) => ({ label: o.label, units: o.qty, revenue: 0 }))} hideRevenue />
-                <div className="rounded-lg border border-neutral-800 bg-neutral-900 p-4">
-                  <h3 className="text-sm font-medium text-neutral-300">Low / out of stock</h3>
+                <div className="rounded-lg border border-neutral-200 bg-white p-4">
+                  <h3 className="text-sm font-medium text-neutral-700">Low / out of stock</h3>
                   {consumables.lowOrOut.length > 0 ? (
                     <ul className="mt-3 space-y-1.5 text-sm">
                       {consumables.lowOrOut.map((l) => (
                         <li key={l.id} className="flex items-center gap-2">
-                          <span className="flex-1 truncate text-neutral-300">
+                          <span className="flex-1 truncate text-neutral-700">
                             {l.name}
-                            {l.sku && <span className="ml-1 text-xs text-neutral-600">{l.sku}</span>}
+                            {l.sku && <span className="ml-1 text-xs text-neutral-500">{l.sku}</span>}
                           </span>
                           <span
                             className={
                               'rounded-full px-2 py-0.5 text-xs ' +
                               (l.status === 'out_of_stock'
-                                ? 'bg-red-950/60 text-red-400'
-                                : 'bg-amber-950/50 text-amber-400')
+                                ? 'bg-red-50 text-red-600'
+                                : 'bg-amber-50 text-amber-700')
                             }
                           >
                             {l.quantity} left
@@ -867,7 +867,7 @@ export default async function ReportsPage({
                 </div>
               </div>
             )}
-            <p className="mt-2 text-xs text-neutral-600">
+            <p className="mt-2 text-xs text-neutral-500">
               Usage/ordering come from the stock movement log (used vs received). Stock levels are
               current; used-this-month and the trend are fixed windows.
             </p>
@@ -877,12 +877,12 @@ export default async function ReportsPage({
         {/* User performance — comparison table */}
         {userPerf.length > 0 && (
           <section className="mt-8">
-            <h2 className="text-sm font-medium text-neutral-400">
-              User performance <span className="text-neutral-600">({rangeLabel})</span>
+            <h2 className="text-sm font-medium text-neutral-500">
+              User performance <span className="text-neutral-500">({rangeLabel})</span>
             </h2>
-            <div className="mt-3 overflow-x-auto rounded-lg border border-neutral-800">
+            <div className="mt-3 overflow-x-auto rounded-lg border border-neutral-200">
               <table className="w-full text-left text-sm">
-                <thead className="bg-neutral-900 text-neutral-400">
+                <thead className="bg-neutral-50 text-neutral-500">
                   <tr>
                     <th className="px-3 py-2">User</th>
                     <th className="px-3 py-2">Role</th>
@@ -897,15 +897,15 @@ export default async function ReportsPage({
                 </thead>
                 <tbody>
                   {userPerf.map((u) => (
-                    <tr key={u.userId} className="border-t border-neutral-800 hover:bg-neutral-900/40">
-                      <td className="px-3 py-2 text-neutral-200">{u.name}</td>
-                      <td className="px-3 py-2 text-neutral-400">{formatLabel(u.role)}</td>
-                      <td className="px-3 py-2 text-right tabular-nums text-neutral-400">{u.batchesCreated}</td>
-                      <td className="px-3 py-2 text-right tabular-nums text-neutral-400">{u.assetsAdded}</td>
-                      <td className="px-3 py-2 text-right tabular-nums text-neutral-300">{u.assetsAudited}</td>
-                      <td className="px-3 py-2 text-right tabular-nums text-neutral-300">{u.itemsSold}</td>
-                      <td className="px-3 py-2 text-right tabular-nums text-neutral-400">{u.itemsReturned}</td>
-                      <td className="px-3 py-2 text-right tabular-nums text-neutral-400">
+                    <tr key={u.userId} className="border-t border-neutral-200 hover:bg-neutral-50">
+                      <td className="px-3 py-2 text-neutral-900">{u.name}</td>
+                      <td className="px-3 py-2 text-neutral-500">{formatLabel(u.role)}</td>
+                      <td className="px-3 py-2 text-right tabular-nums text-neutral-500">{u.batchesCreated}</td>
+                      <td className="px-3 py-2 text-right tabular-nums text-neutral-500">{u.assetsAdded}</td>
+                      <td className="px-3 py-2 text-right tabular-nums text-neutral-700">{u.assetsAudited}</td>
+                      <td className="px-3 py-2 text-right tabular-nums text-neutral-700">{u.itemsSold}</td>
+                      <td className="px-3 py-2 text-right tabular-nums text-neutral-500">{u.itemsReturned}</td>
+                      <td className="px-3 py-2 text-right tabular-nums text-neutral-500">
                         {u.avgProcessingDays == null ? '—' : `${u.avgProcessingDays.toFixed(1)}d`}
                       </td>
                       <td className="px-3 py-2 text-neutral-500">
@@ -916,7 +916,7 @@ export default async function ReportsPage({
                 </tbody>
               </table>
             </div>
-            <p className="mt-2 text-xs text-neutral-600">
+            <p className="mt-2 text-xs text-neutral-500">
               Actions attributed to the acting user within the range; last activity is their most
               recent action of any kind. Assets added counts API/manual creations (bulk scan‑ins
               carry no user). Managers see only their own row.
@@ -928,26 +928,26 @@ export default async function ReportsPage({
         {activity.length > 0 && (
           <section className="mt-8">
             <div className="flex items-center justify-between">
-              <h2 className="text-sm font-medium text-neutral-400">Activity timeline</h2>
-              <Link href="/activity" className="text-sm text-neutral-400 hover:text-neutral-200">
+              <h2 className="text-sm font-medium text-neutral-500">Activity timeline</h2>
+              <Link href="/activity" className="text-sm text-neutral-500 hover:text-neutral-900">
                 View all →
               </Link>
             </div>
-            <ol className="mt-3 rounded-lg border border-neutral-800 bg-neutral-900 p-4">
+            <ol className="mt-3 rounded-lg border border-neutral-200 bg-white p-4">
               {activity.map((e, i) => {
                 const href = activityHref(e);
                 return (
                   <li key={e.id} className="relative flex gap-3 pb-4 last:pb-0">
                     {/* connector line */}
                     {i < activity.length - 1 && (
-                      <span className="absolute left-[5px] top-3 h-full w-px bg-neutral-800" aria-hidden />
+                      <span className="absolute left-[5px] top-3 h-full w-px bg-neutral-100" aria-hidden />
                     )}
                     <span
                       className="relative mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full"
                       style={{ backgroundColor: activityColor(e.action) }}
                     />
                     <div className="min-w-0 flex-1">
-                      <div className="text-sm text-neutral-200">
+                      <div className="text-sm text-neutral-900">
                         {href ? (
                           <Link href={href} className="hover:underline">
                             {e.summary}
@@ -979,14 +979,15 @@ function activityHref(e: ActivityEntry): string | null {
   return null;
 }
 
-// Timeline dot colour by action category (matches the chart palette).
+// Timeline dot colour by action category (matches the light chart palette).
+// Each dot is accompanied by its action label, so identity is never colour-alone.
 function activityColor(action: string): string {
-  if (action.includes('sold')) return '#199e70'; // aqua — money in
-  if (action.includes('returned')) return '#c98500'; // amber
-  if (action.includes('deleted')) return '#e66767'; // red
-  if (action.includes('created')) return '#3987e5'; // blue
-  if (action.includes('moved')) return '#9085e9'; // violet
-  return '#6b6a66'; // neutral (updated/other)
+  if (action.includes('sold')) return '#1baf7a'; // aqua — money in
+  if (action.includes('returned')) return '#eda100'; // yellow
+  if (action.includes('deleted')) return '#e34948'; // red
+  if (action.includes('created')) return '#2a78d6'; // blue
+  if (action.includes('moved')) return '#4a3aa7'; // violet
+  return '#8a8a85'; // neutral (updated/other)
 }
 
 // Compact relative time ("5m ago", "2h ago", "3d ago"); computed at render.
@@ -1015,20 +1016,20 @@ function TopTable({
 }) {
   const max = Math.max(1, ...rows.map((r) => r.units));
   return (
-    <div className="rounded-lg border border-neutral-800 bg-neutral-900 p-4">
-      <h3 className="text-sm font-medium text-neutral-300">{title}</h3>
+    <div className="rounded-lg border border-neutral-200 bg-white p-4">
+      <h3 className="text-sm font-medium text-neutral-700">{title}</h3>
       {rows.length > 0 ? (
         <ul className="mt-3 space-y-2 text-sm">
           {rows.map((r) => (
             <li key={r.label} className="flex items-center gap-3">
-              <span className="w-40 truncate text-neutral-300">{r.label}</span>
-              <span className="relative h-2 flex-1 overflow-hidden rounded-sm bg-neutral-800">
+              <span className="w-40 truncate text-neutral-700">{r.label}</span>
+              <span className="relative h-2 flex-1 overflow-hidden rounded-sm bg-neutral-100">
                 <span
                   className="absolute inset-y-0 left-0 rounded-sm bg-[#3987e5]"
                   style={{ width: `${(r.units / max) * 100}%` }}
                 />
               </span>
-              <span className="w-10 text-right tabular-nums text-neutral-400">{r.units}</span>
+              <span className="w-10 text-right tabular-nums text-neutral-500">{r.units}</span>
               {!hideRevenue && (
                 <span className="w-16 text-right tabular-nums text-neutral-500">{money(r.revenue)}</span>
               )}

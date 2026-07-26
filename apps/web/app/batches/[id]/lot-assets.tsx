@@ -109,16 +109,16 @@ export function LotAssets({
           value={q}
           onChange={(e) => setQ(e.target.value)}
           placeholder="Search this lot — name, make, model, serial, service tag…"
-          className="w-full max-w-md rounded-md border border-neutral-700 bg-neutral-900 px-3 py-1.5 text-sm outline-none focus:border-neutral-500"
+          className="w-full max-w-md rounded-md border border-neutral-200 bg-white px-3 py-1.5 text-sm outline-none focus:border-neutral-300"
         />
         <span className="shrink-0 text-xs text-neutral-500">
           {filtered.length} of {assets.length}
         </span>
       </div>
 
-      <div className={'mt-3 overflow-x-auto rounded-lg border border-neutral-800 ' + (pending ? 'opacity-60' : '')}>
+      <div className={'mt-3 overflow-x-auto rounded-lg border border-neutral-200 ' + (pending ? 'opacity-60' : '')}>
         <table className="w-full text-left text-xs">
-          <thead className="bg-neutral-900 text-neutral-400">
+          <thead className="bg-neutral-50 text-neutral-500">
             <tr>
               <th className="px-3 py-2">Name</th>
               <th className="px-3 py-2">Manufacturer</th>
@@ -138,25 +138,25 @@ export function LotAssets({
           </thead>
           <tbody>
             {filtered.map((a) => (
-              <tr key={a.id} className="border-t border-neutral-800 hover:bg-neutral-900/40">
+              <tr key={a.id} className="border-t border-neutral-200 hover:bg-neutral-50">
                 <td className="px-3 py-2">
-                  <Link href={`/assets/${a.id}`} className="text-neutral-100 underline">
+                  <Link href={`/assets/${a.id}`} className="text-neutral-950 underline">
                     {a.name}
                   </Link>
                 </td>
-                <td className="px-3 py-2 text-neutral-300">{a.manufacturer || '—'}</td>
-                <td className="px-3 py-2 text-neutral-300">{a.model || '—'}</td>
-                <td className="px-3 py-2 text-neutral-400">{a.deviceType || a.category || '—'}</td>
-                <td className="px-3 py-2 text-neutral-400">{a.serialNumber || '—'}</td>
-                <td className="px-3 py-2 text-neutral-400">{a.expressServiceCode || '—'}</td>
-                <td className="px-3 py-2 text-neutral-300">
+                <td className="px-3 py-2 text-neutral-700">{a.manufacturer || '—'}</td>
+                <td className="px-3 py-2 text-neutral-700">{a.model || '—'}</td>
+                <td className="px-3 py-2 text-neutral-500">{a.deviceType || a.category || '—'}</td>
+                <td className="px-3 py-2 text-neutral-500">{a.serialNumber || '—'}</td>
+                <td className="px-3 py-2 text-neutral-500">{a.expressServiceCode || '—'}</td>
+                <td className="px-3 py-2 text-neutral-700">
                   {a.conditionGrade ? formatLabel(a.conditionGrade) : '—'}
                 </td>
-                <td className="px-3 py-2 text-neutral-400">
+                <td className="px-3 py-2 text-neutral-500">
                   {a.auditStatus ? formatLabel(a.auditStatus) : '—'}
                 </td>
-                <td className="px-3 py-2 text-neutral-400">{formatLabel(a.stockStatus)}</td>
-                <td className="px-3 py-2 text-neutral-400">{a.location?.name || '—'}</td>
+                <td className="px-3 py-2 text-neutral-500">{formatLabel(a.stockStatus)}</td>
+                <td className="px-3 py-2 text-neutral-500">{a.location?.name || '—'}</td>
 
                 {canManage && subLots.length > 0 && (
                   <td className="px-3 py-2">
@@ -164,7 +164,7 @@ export function LotAssets({
                       value={a.lotId ?? ''}
                       onChange={(e) => onAssign(a.id, e.target.value)}
                       disabled={pending}
-                      className="max-w-[10rem] rounded-md border border-neutral-700 bg-neutral-900 px-2 py-1 text-xs text-neutral-300"
+                      className="max-w-[10rem] rounded-md border border-neutral-200 bg-white px-2 py-1 text-xs text-neutral-700"
                       aria-label={`Sub-lot for ${a.name}`}
                     >
                       <option value="">— None —</option>
@@ -183,7 +183,7 @@ export function LotAssets({
                       value=""
                       onChange={(e) => onMove(a.id, e.target.value)}
                       disabled={pending}
-                      className="max-w-[10rem] rounded-md border border-neutral-700 bg-neutral-900 px-2 py-1 text-xs text-neutral-300"
+                      className="max-w-[10rem] rounded-md border border-neutral-200 bg-white px-2 py-1 text-xs text-neutral-700"
                       aria-label={`Move ${a.name} to another lot`}
                     >
                       <option value="">Move…</option>
@@ -202,7 +202,7 @@ export function LotAssets({
                     <button
                       onClick={() => onSell(a)}
                       disabled={pending}
-                      className="text-emerald-400 hover:underline"
+                      className="text-emerald-700 hover:underline"
                     >
                       Sell
                     </button>
@@ -214,7 +214,7 @@ export function LotAssets({
                     <button
                       onClick={() => onDelete(a)}
                       disabled={pending}
-                      className="text-red-400 hover:underline"
+                      className="text-red-600 hover:underline"
                     >
                       Delete
                     </button>
@@ -232,7 +232,7 @@ export function LotAssets({
           </tbody>
         </table>
       </div>
-      {error && <p className="mt-2 text-xs text-red-400">{error}</p>}
+      {error && <p className="mt-2 text-xs text-red-600">{error}</p>}
     </div>
   );
 }

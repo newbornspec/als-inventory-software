@@ -60,12 +60,12 @@ export function BatchStatusSelect({ batchId, status }: { batchId: string; status
         className="w-full bg-transparent text-lg font-semibold disabled:opacity-50"
       >
         {BATCH_STATUSES.map((s) => (
-          <option key={s} value={s} className="bg-neutral-900">
+          <option key={s} value={s} className="bg-white">
             {formatLabel(s)}
           </option>
         ))}
       </select>
-      {error && <p className="mt-1 text-xs text-red-400">{error}</p>}
+      {error && <p className="mt-1 text-xs text-red-600">{error}</p>}
     </form>
   );
 }

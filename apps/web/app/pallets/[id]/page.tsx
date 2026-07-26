@@ -52,17 +52,17 @@ export default async function PalletDetailPage({ params }: { params: Promise<{ i
     }));
 
     return (
-      <main className="min-h-screen bg-neutral-950 text-neutral-100">
+      <main className="min-h-screen bg-white text-neutral-950">
         <Nav />
         <div className="p-8">
-          <Link href="/pallets" className="text-sm text-neutral-400 hover:text-neutral-200">
+          <Link href="/pallets" className="text-sm text-neutral-500 hover:text-neutral-900">
             ← Back to Pallets
           </Link>
 
           <div className="mt-3 flex items-start justify-between gap-3">
             <div>
               <h1 className="text-2xl font-semibold">{pallet.palletNumber}</h1>
-              <p className="mt-1 text-sm text-neutral-400">
+              <p className="mt-1 text-sm text-neutral-500">
                 Specification table pallet · {pallet.totalQuantity} units ·{' '}
                 {formatLabel(pallet.status)}
               </p>
@@ -81,7 +81,7 @@ export default async function PalletDetailPage({ params }: { params: Promise<{ i
               {canManage && (
                 <a
                   href={`/api/pallets/${pallet.id}/report`}
-                  className="rounded-md bg-neutral-100 px-3 py-1.5 text-sm font-medium text-neutral-900"
+                  className="rounded-md bg-[#2b7fff] hover:bg-blue-600 px-3 py-1.5 text-sm font-medium text-white"
                 >
                   Export to Excel
                 </a>
@@ -90,7 +90,7 @@ export default async function PalletDetailPage({ params }: { params: Promise<{ i
                 <form action={deletePallet.bind(null, pallet.id)}>
                   <button
                     type="submit"
-                    className="rounded-md border border-red-900 px-3 py-1.5 text-sm text-red-400 hover:bg-red-950"
+                    className="rounded-md border border-red-200 px-3 py-1.5 text-sm text-red-600 hover:bg-red-50"
                   >
                     Delete
                   </button>
@@ -128,21 +128,21 @@ export default async function PalletDetailPage({ params }: { params: Promise<{ i
   );
 
   return (
-    <main className="min-h-screen bg-neutral-950 text-neutral-100">
+    <main className="min-h-screen bg-white text-neutral-950">
       <Nav />
       <div className="p-8">
-        <Link href="/pallets" className="text-sm text-neutral-400 hover:text-neutral-200">
+        <Link href="/pallets" className="text-sm text-neutral-500 hover:text-neutral-900">
           ← Back to Pallets
         </Link>
 
         <div className="mt-3 flex items-start justify-between">
           <div>
             <h1 className="text-2xl font-semibold">{pallet.palletNumber}</h1>
-            <p className="mt-1 text-sm text-neutral-400">
+            <p className="mt-1 text-sm text-neutral-500">
               {pallet.description ?? 'No description'} · {pallet.location?.name ?? 'Unassigned'}
             </p>
             {pallet.status === 'shipped' && pallet.shippedAt && (
-              <p className="mt-1 text-sm text-amber-400">
+              <p className="mt-1 text-sm text-amber-700">
                 Shipped on {new Date(pallet.shippedAt).toLocaleString('en-GB')}
               </p>
             )}
@@ -158,7 +158,7 @@ export default async function PalletDetailPage({ params }: { params: Promise<{ i
             {canManage && (
               <a
                 href={`/api/pallets/${pallet.id}/report`}
-                className="rounded-md bg-neutral-100 px-3 py-1.5 text-sm font-medium text-neutral-900"
+                className="rounded-md bg-[#2b7fff] hover:bg-blue-600 px-3 py-1.5 text-sm font-medium text-white"
               >
                 Export to Excel
               </a>
@@ -167,7 +167,7 @@ export default async function PalletDetailPage({ params }: { params: Promise<{ i
               <form action={deletePallet.bind(null, pallet.id)}>
                 <button
                   type="submit"
-                  className="rounded-md border border-red-900 px-3 py-1.5 text-sm text-red-400 hover:bg-red-950"
+                  className="rounded-md border border-red-200 px-3 py-1.5 text-sm text-red-600 hover:bg-red-50"
                 >
                   Delete
                 </button>
@@ -184,9 +184,9 @@ export default async function PalletDetailPage({ params }: { params: Promise<{ i
             {canManage ? (
               <PalletSupplier palletId={pallet.id} supplier={pallet.supplier} />
             ) : (
-              <span className="text-neutral-200">{pallet.supplier || '—'}</span>
+              <span className="text-neutral-900">{pallet.supplier || '—'}</span>
             )}
-            <span className="text-xs text-neutral-600">who this pallet was bought from</span>
+            <span className="text-xs text-neutral-500">who this pallet was bought from</span>
           </div>
           <div className="flex items-center gap-3">
             <span className="w-16 shrink-0 text-xs uppercase tracking-wide text-neutral-500">
@@ -195,37 +195,37 @@ export default async function PalletDetailPage({ params }: { params: Promise<{ i
             {canManage ? (
               <PalletBuyer palletId={pallet.id} buyer={pallet.buyer} />
             ) : (
-              <span className="text-neutral-200">{pallet.buyer || '—'}</span>
+              <span className="text-neutral-900">{pallet.buyer || '—'}</span>
             )}
-            <span className="text-xs text-neutral-600">who this pallet is being sold to</span>
+            <span className="text-xs text-neutral-500">who this pallet is being sold to</span>
           </div>
         </div>
 
         <div className="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-4">
-          <div className="rounded-lg border border-neutral-800 bg-neutral-900 p-4">
+          <div className="rounded-lg border border-neutral-200 bg-white p-4">
             <div className="text-2xl font-semibold">{pallet.totalQuantity}</div>
-            <div className="mt-1 text-sm text-neutral-400">Total units</div>
+            <div className="mt-1 text-sm text-neutral-500">Total units</div>
           </div>
-          <div className="rounded-lg border border-neutral-800 bg-neutral-900 p-4">
+          <div className="rounded-lg border border-neutral-200 bg-white p-4">
             <div className="text-2xl font-semibold">{pallet.lineCount}</div>
-            <div className="mt-1 text-sm text-neutral-400">Variants</div>
+            <div className="mt-1 text-sm text-neutral-500">Variants</div>
           </div>
-          <div className="rounded-lg border border-neutral-800 bg-neutral-900 p-4">
+          <div className="rounded-lg border border-neutral-200 bg-white p-4">
             <div className="text-2xl font-semibold">{estValue > 0 ? money(estValue) : '—'}</div>
-            <div className="mt-1 text-sm text-neutral-400">Est. value</div>
+            <div className="mt-1 text-sm text-neutral-500">Est. value</div>
           </div>
-          <div className="rounded-lg border border-neutral-800 bg-neutral-900 p-4">
+          <div className="rounded-lg border border-neutral-200 bg-white p-4">
             {canManage ? (
               <PalletStatusSelect palletId={pallet.id} status={pallet.status} />
             ) : (
               <div className="text-2xl font-semibold">{formatLabel(pallet.status)}</div>
             )}
-            <div className="mt-1 text-sm text-neutral-400">Status</div>
+            <div className="mt-1 text-sm text-neutral-500">Status</div>
           </div>
         </div>
 
         <section className="mt-8 max-w-5xl">
-          <h2 className="text-sm font-medium text-neutral-400">Contents by variant</h2>
+          <h2 className="text-sm font-medium text-neutral-500">Contents by variant</h2>
           <PalletLines palletId={pallet.id} lines={pallet.lines ?? []} canManage={canManage} />
         </section>
       </div>

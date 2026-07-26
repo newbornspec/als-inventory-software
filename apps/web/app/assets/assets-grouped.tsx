@@ -13,7 +13,7 @@ type LotAssets = { loading: boolean; error: string | null; assets: Asset[] };
 function AssetRows({ assets }: { assets: Asset[] }) {
   return (
     <table className="w-full text-left text-sm">
-      <thead className="bg-neutral-900 text-neutral-400">
+      <thead className="bg-neutral-50 text-neutral-500">
         <tr>
           <th className="px-4 py-2">Name</th>
           <th className="px-4 py-2">Category</th>
@@ -25,25 +25,25 @@ function AssetRows({ assets }: { assets: Asset[] }) {
       </thead>
       <tbody>
         {assets.map((a) => (
-          <tr key={a.id} className="border-t border-neutral-800 hover:bg-neutral-900">
+          <tr key={a.id} className="border-t border-neutral-200 hover:bg-white">
             <td className="px-4 py-2">
-              <Link href={`/assets/${a.id}`} className="text-neutral-100 underline">
+              <Link href={`/assets/${a.id}`} className="text-neutral-950 underline">
                 {a.name}
               </Link>
             </td>
-            <td className="px-4 py-2 text-neutral-400">{a.category}</td>
+            <td className="px-4 py-2 text-neutral-500">{a.category}</td>
             <td className="px-4 py-2">
-              <span className="rounded-full border border-neutral-700 px-2 py-0.5 text-xs">
+              <span className="rounded-full border border-neutral-200 px-2 py-0.5 text-xs">
                 {formatLabel(a.stockStatus)}
               </span>
             </td>
-            <td className="px-4 py-2 text-neutral-400">
+            <td className="px-4 py-2 text-neutral-500">
               {a.conditionGrade ? formatLabel(a.conditionGrade) : '—'}
             </td>
-            <td className="px-4 py-2 text-neutral-400">
+            <td className="px-4 py-2 text-neutral-500">
               {a.auditStatus ? formatLabel(a.auditStatus) : '—'}
             </td>
-            <td className="px-4 py-2 text-neutral-400">{a.location?.name ?? '—'}</td>
+            <td className="px-4 py-2 text-neutral-500">{a.location?.name ?? '—'}</td>
           </tr>
         ))}
       </tbody>
@@ -92,30 +92,30 @@ export function AssetsGrouped({ batches, unassigned }: { batches: Batch[]; unass
         const isOpen = !!open[b.id];
         const data = cache[b.id];
         return (
-          <div key={b.id} className="rounded-lg border border-neutral-800 bg-neutral-900/40">
+          <div key={b.id} className="rounded-lg border border-neutral-200 bg-neutral-50">
             <div className="flex items-center gap-3 px-4 py-3">
               <button
                 onClick={() => toggle(b.id)}
                 className="flex flex-1 items-center gap-3 text-left"
               >
                 <span className="text-neutral-500">{isOpen ? '▼' : '▶'}</span>
-                <span className="font-semibold text-neutral-100">{b.batchNumber}</span>
+                <span className="font-semibold text-neutral-950">{b.batchNumber}</span>
                 {b.source && <span className="text-sm text-neutral-500">{b.source}</span>}
                 <span className="ml-auto text-xs text-neutral-500">{b.actualUnitCount} items</span>
               </button>
               <Link
                 href={`/batches/${b.id}`}
-                className="shrink-0 text-xs text-neutral-400 underline"
+                className="shrink-0 text-xs text-neutral-500 underline"
               >
                 Open lot →
               </Link>
             </div>
             {isOpen && (
-              <div className="overflow-x-auto border-t border-neutral-800">
+              <div className="overflow-x-auto border-t border-neutral-200">
                 {!data || data.loading ? (
                   <p className="px-4 py-3 text-xs text-neutral-500">Loading devices…</p>
                 ) : data.error ? (
-                  <p className="px-4 py-3 text-xs text-red-400">{data.error}</p>
+                  <p className="px-4 py-3 text-xs text-red-600">{data.error}</p>
                 ) : data.assets.length === 0 ? (
                   <p className="px-4 py-3 text-xs text-neutral-500">No devices.</p>
                 ) : (
@@ -135,18 +135,18 @@ export function AssetsGrouped({ batches, unassigned }: { batches: Batch[]; unass
 function UnassignedGroup({ assets }: { assets: Asset[] }) {
   const [open, setOpen] = useState(false);
   return (
-    <div className="rounded-lg border border-neutral-800 bg-neutral-900/40">
+    <div className="rounded-lg border border-neutral-200 bg-neutral-50">
       <button
         onClick={() => setOpen(!open)}
         className="flex w-full items-center gap-3 px-4 py-3 text-left"
       >
         <span className="text-neutral-500">{open ? '▼' : '▶'}</span>
-        <span className="font-semibold text-neutral-100">No lot</span>
+        <span className="font-semibold text-neutral-950">No lot</span>
         <span className="text-sm text-neutral-500">devices not assigned to a lot</span>
         <span className="ml-auto text-xs text-neutral-500">{assets.length} items</span>
       </button>
       {open && (
-        <div className="overflow-x-auto border-t border-neutral-800">
+        <div className="overflow-x-auto border-t border-neutral-200">
           <AssetRows assets={assets} />
         </div>
       )}

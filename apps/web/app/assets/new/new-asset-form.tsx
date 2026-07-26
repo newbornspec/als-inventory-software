@@ -13,36 +13,36 @@ export function NewAssetForm({ locations }: { locations: Location[] }) {
   return (
     <form action={formAction} className="mt-6 max-w-sm space-y-3">
       <div className="space-y-1">
-        <label className="text-sm text-neutral-300">Tag (barcode/QR value)</label>
+        <label className="text-sm text-neutral-700">Tag (barcode/QR value)</label>
         <input
           name="tag"
           required
           placeholder="AST-0006"
-          className="w-full rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm outline-none focus:border-neutral-500"
+          className="w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm outline-none focus:border-neutral-300"
         />
       </div>
       <div className="space-y-1">
-        <label className="text-sm text-neutral-300">Name</label>
+        <label className="text-sm text-neutral-700">Name</label>
         <input
           name="name"
           required
-          className="w-full rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm outline-none focus:border-neutral-500"
+          className="w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm outline-none focus:border-neutral-300"
         />
       </div>
       <div className="space-y-1">
-        <label className="text-sm text-neutral-300">Category</label>
+        <label className="text-sm text-neutral-700">Category</label>
         <input
           name="category"
           required
-          className="w-full rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm outline-none focus:border-neutral-500"
+          className="w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm outline-none focus:border-neutral-300"
         />
       </div>
       <div className="space-y-1">
-        <label className="text-sm text-neutral-300">Stock status</label>
+        <label className="text-sm text-neutral-700">Stock status</label>
         <select
           name="stockStatus"
           defaultValue="received"
-          className="w-full rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm"
+          className="w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm"
         >
           {STOCK_STATUSES.map((s) => (
             <option key={s} value={s}>
@@ -52,11 +52,11 @@ export function NewAssetForm({ locations }: { locations: Location[] }) {
         </select>
       </div>
       <div className="space-y-1">
-        <label className="text-sm text-neutral-300">Condition grade (optional)</label>
+        <label className="text-sm text-neutral-700">Condition grade (optional)</label>
         <select
           name="conditionGrade"
           defaultValue=""
-          className="w-full rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm"
+          className="w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm"
         >
           <option value="">Ungraded</option>
           {CONDITION_GRADES.map((g) => (
@@ -67,11 +67,11 @@ export function NewAssetForm({ locations }: { locations: Location[] }) {
         </select>
       </div>
       <div className="space-y-1">
-        <label className="text-sm text-neutral-300">Location</label>
+        <label className="text-sm text-neutral-700">Location</label>
         <select
           name="locationId"
           defaultValue=""
-          className="w-full rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm"
+          className="w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm"
         >
           <option value="">Unassigned</option>
           {locations.map((l) => (
@@ -81,12 +81,12 @@ export function NewAssetForm({ locations }: { locations: Location[] }) {
           ))}
         </select>
       </div>
-      {state.error && <p className="text-sm text-red-400">{state.error}</p>}
+      {state.error && <p className="text-sm text-red-600">{state.error}</p>}
 
       <button
         type="submit"
         disabled={pending}
-        className="rounded-md bg-neutral-100 px-4 py-2 text-sm font-medium text-neutral-900 disabled:opacity-50"
+        className="rounded-md bg-[#2b7fff] hover:bg-blue-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
       >
         {pending ? 'Creating…' : 'Create asset'}
       </button>

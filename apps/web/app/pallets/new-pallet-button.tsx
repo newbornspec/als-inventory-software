@@ -52,7 +52,7 @@ export function NewPalletButton() {
     <>
       <button
         onClick={() => setOpen(true)}
-        className="rounded-md bg-neutral-100 px-4 py-2 text-sm font-medium text-neutral-900"
+        className="rounded-md bg-[#2b7fff] hover:bg-blue-600 px-4 py-2 text-sm font-medium text-white"
       >
         New Pallet
       </button>
@@ -63,11 +63,11 @@ export function NewPalletButton() {
           onClick={() => setOpen(false)}
         >
           <div
-            className="w-full max-w-md rounded-xl border border-neutral-800 bg-neutral-950 p-6 shadow-xl"
+            className="w-full max-w-md rounded-xl border border-neutral-200 bg-white p-6 shadow-xl"
             onClick={(e) => e.stopPropagation()}
           >
             <h2 className="text-lg font-semibold">Create New Pallet</h2>
-            <p className="mt-1 text-sm text-neutral-400">
+            <p className="mt-1 text-sm text-neutral-500">
               Choose how you’d like to enter this pallet. Both create the same pallet.
             </p>
 
@@ -78,8 +78,8 @@ export function NewPalletButton() {
                   className={
                     'flex cursor-pointer gap-3 rounded-lg border p-3 ' +
                     (choice === l.key
-                      ? 'border-neutral-400 bg-neutral-900'
-                      : 'border-neutral-800 hover:bg-neutral-900/50')
+                      ? 'border-neutral-300 bg-white'
+                      : 'border-neutral-200 hover:bg-neutral-50')
                   }
                 >
                   <input
@@ -91,25 +91,25 @@ export function NewPalletButton() {
                     className="mt-1"
                   />
                   <span>
-                    <span className="block text-sm font-medium text-neutral-100">{l.title}</span>
-                    <span className="mt-0.5 block text-xs text-neutral-400">{l.blurb}</span>
+                    <span className="block text-sm font-medium text-neutral-950">{l.title}</span>
+                    <span className="mt-0.5 block text-xs text-neutral-500">{l.blurb}</span>
                   </span>
                 </label>
               ))}
             </div>
 
             <div className="mt-5 flex items-center justify-end gap-2">
-              {error && <span className="mr-auto text-xs text-red-400">{error}</span>}
+              {error && <span className="mr-auto text-xs text-red-600">{error}</span>}
               <button
                 onClick={() => setOpen(false)}
-                className="rounded-md border border-neutral-700 px-3 py-1.5 text-sm text-neutral-300 hover:bg-neutral-900"
+                className="rounded-md border border-neutral-200 px-3 py-1.5 text-sm text-neutral-700 hover:bg-white"
               >
                 Cancel
               </button>
               <button
                 onClick={go}
                 disabled={busy}
-                className="rounded-md bg-neutral-100 px-3 py-1.5 text-sm font-medium text-neutral-900 disabled:opacity-50"
+                className="rounded-md bg-[#2b7fff] hover:bg-blue-600 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
               >
                 {busy ? 'Creating…' : 'Continue'}
               </button>

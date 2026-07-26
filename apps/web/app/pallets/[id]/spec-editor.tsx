@@ -30,9 +30,9 @@ const COLUMNS: { key: Field; label: string; list?: string; width: string }[] = [
 ];
 
 const inputCls =
-  'w-full rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm outline-none focus:border-neutral-500';
+  'w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm outline-none focus:border-neutral-300';
 const cellCls =
-  'w-full rounded border border-neutral-700 bg-neutral-900 px-2 py-1.5 text-sm outline-none focus:border-neutral-500';
+  'w-full rounded border border-neutral-200 bg-white px-2 py-1.5 text-sm outline-none focus:border-neutral-300';
 
 export interface SpecEditorMeta {
   description: string;
@@ -242,11 +242,11 @@ export function SpecEditor({
 
       <div className="grid max-w-3xl gap-3 sm:grid-cols-2">
         <label className="space-y-1">
-          <span className="text-sm text-neutral-300">Description</span>
+          <span className="text-sm text-neutral-700">Description</span>
           <input value={meta.description} onChange={(e) => setMeta({ ...meta, description: e.target.value })} placeholder="e.g. Mixed Dell tinies" className={inputCls} />
         </label>
         <label className="space-y-1">
-          <span className="text-sm text-neutral-300">Location</span>
+          <span className="text-sm text-neutral-700">Location</span>
           <select value={meta.locationId} onChange={(e) => setMeta({ ...meta, locationId: e.target.value })} className={inputCls}>
             <option value="">Unassigned</option>
             {locations.map((l) => (
@@ -255,11 +255,11 @@ export function SpecEditor({
           </select>
         </label>
         <label className="space-y-1">
-          <span className="text-sm text-neutral-300">Supplier</span>
+          <span className="text-sm text-neutral-700">Supplier</span>
           <input value={meta.supplier} onChange={(e) => setMeta({ ...meta, supplier: e.target.value })} className={inputCls} />
         </label>
         <label className="space-y-1">
-          <span className="text-sm text-neutral-300">Buyer</span>
+          <span className="text-sm text-neutral-700">Buyer</span>
           <input value={meta.buyer} onChange={(e) => setMeta({ ...meta, buyer: e.target.value })} className={inputCls} />
         </label>
       </div>
@@ -269,20 +269,20 @@ export function SpecEditor({
           value={q}
           onChange={(e) => setQ(e.target.value)}
           placeholder="Search rows…"
-          className="w-full max-w-xs rounded-md border border-neutral-700 bg-neutral-900 px-3 py-1.5 text-sm outline-none focus:border-neutral-500"
+          className="w-full max-w-xs rounded-md border border-neutral-200 bg-white px-3 py-1.5 text-sm outline-none focus:border-neutral-300"
         />
         <span className="shrink-0 text-xs text-neutral-500">
           {q ? `${visible.length} of ${rows.length}` : `${rows.length} rows`}
         </span>
       </div>
 
-      <div className="mt-2 overflow-x-auto rounded-lg border border-neutral-800">
+      <div className="mt-2 overflow-x-auto rounded-lg border border-neutral-200">
         <table className="w-full text-left text-sm">
-          <thead className="bg-neutral-900 text-neutral-400">
+          <thead className="bg-neutral-50 text-neutral-500">
             <tr>
               {COLUMNS.map((c) => (
                 <th key={c.key} className={`${c.width} px-3 py-2`}>
-                  <button onClick={() => sortBy(c.key)} className="hover:text-neutral-200">
+                  <button onClick={() => sortBy(c.key)} className="hover:text-neutral-900">
                     {c.label}
                     {arrow(c.key)}
                   </button>
@@ -295,7 +295,7 @@ export function SpecEditor({
             {visible.map((r) => {
               const manId = manIdByValue.get(r.manufacturer.trim().toLowerCase());
               return (
-                <tr key={r.id} className="border-t border-neutral-800">
+                <tr key={r.id} className="border-t border-neutral-200">
                   {COLUMNS.map((c, ci) => (
                     <td key={c.key} className="px-2 py-1">
                       <input
@@ -314,13 +314,13 @@ export function SpecEditor({
                       {r.lineId && parseInt(r.quantity || '0', 10) > 0 && (
                         <button
                           onClick={() => void sellRow(r)}
-                          className="text-xs text-emerald-400 hover:underline"
+                          className="text-xs text-emerald-700 hover:underline"
                           title="Sell all or part of this row"
                         >
                           Sell…
                         </button>
                       )}
-                      <button onClick={() => removeRow(r.id)} className="text-xs text-red-400 hover:underline" aria-label="Remove row">
+                      <button onClick={() => removeRow(r.id)} className="text-xs text-red-600 hover:underline" aria-label="Remove row">
                         ✕
                       </button>
                     </div>
@@ -340,16 +340,16 @@ export function SpecEditor({
       </div>
 
       <div className="mt-3 flex flex-wrap items-center gap-3">
-        <button onClick={() => setRows((rs) => [...rs, blank()])} className="rounded-md border border-neutral-700 px-3 py-1.5 text-sm text-neutral-300 hover:bg-neutral-900">
+        <button onClick={() => setRows((rs) => [...rs, blank()])} className="rounded-md border border-neutral-200 px-3 py-1.5 text-sm text-neutral-700 hover:bg-white">
           + Add row
         </button>
-        <button onClick={save} disabled={busy} className="rounded-md bg-neutral-100 px-4 py-1.5 text-sm font-medium text-neutral-900 disabled:opacity-50">
+        <button onClick={save} disabled={busy} className="rounded-md bg-[#2b7fff] hover:bg-blue-600 px-4 py-1.5 text-sm font-medium text-white disabled:opacity-50">
           {busy ? 'Saving…' : 'Save changes'}
         </button>
-        {saved && <span className="text-xs text-emerald-400">✓ Saved</span>}
-        {error && <span className="text-xs text-red-400">{error}</span>}
+        {saved && <span className="text-xs text-emerald-700">✓ Saved</span>}
+        {error && <span className="text-xs text-red-600">{error}</span>}
       </div>
-      <p className="mt-2 text-xs text-neutral-600">
+      <p className="mt-2 text-xs text-neutral-500">
         Tip: copy cells from Excel and paste into any cell to fill the grid. Click a column header to
         sort. New values you type are saved to the dropdown lists when you save. Saving replaces the
         pallet&apos;s contents with this grid.

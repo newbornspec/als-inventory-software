@@ -55,7 +55,7 @@ export default async function SubLotDetailPage({
       : null;
 
   return (
-    <main className="min-h-screen bg-neutral-950 text-neutral-100">
+    <main className="min-h-screen bg-white text-neutral-950">
       <Nav />
       <div className="p-8">
         <Breadcrumbs
@@ -70,7 +70,7 @@ export default async function SubLotDetailPage({
         <div className="mt-3 flex items-start justify-between gap-3">
           <div>
             <h1 className="text-2xl font-semibold">{lot.lotNumber}</h1>
-            <p className="mt-1 text-sm text-neutral-400">
+            <p className="mt-1 text-sm text-neutral-500">
               Sub-lot of{' '}
               <Link href={`/batches/${id}`} className="underline">
                 {batch.batchNumber}
@@ -79,7 +79,7 @@ export default async function SubLotDetailPage({
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-2">
-            <span className="rounded-full border border-neutral-700 px-2 py-0.5 text-xs text-neutral-400">
+            <span className="rounded-full border border-neutral-200 px-2 py-0.5 text-xs text-neutral-500">
               {formatLabel(lot.status)}
             </span>
             {canDelete && (
@@ -94,9 +94,9 @@ export default async function SubLotDetailPage({
           </div>
         </div>
 
-        <div className="mt-6 max-w-md rounded-lg border border-neutral-800 bg-neutral-900 p-4">
+        <div className="mt-6 max-w-md rounded-lg border border-neutral-200 bg-white p-4">
           <div className="flex items-baseline justify-between text-sm">
-            <span className="text-neutral-300">
+            <span className="text-neutral-700">
               <span className="text-2xl font-semibold">{lot.actualUnitCount}</span> asset
               {lot.actualUnitCount === 1 ? '' : 's'}
               {lot.expectedUnitCount != null ? ` / ${lot.expectedUnitCount} expected` : ''}
@@ -104,14 +104,14 @@ export default async function SubLotDetailPage({
             {pct != null && <span className="text-neutral-500">{pct}%</span>}
           </div>
           {pct != null && (
-            <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-neutral-800">
+            <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-neutral-100">
               <div className="h-full rounded-full bg-emerald-600" style={{ width: `${pct}%` }} />
             </div>
           )}
         </div>
 
         <section className="mt-8">
-          <h2 className="text-sm font-medium text-neutral-400">Assets in this sub-lot</h2>
+          <h2 className="text-sm font-medium text-neutral-500">Assets in this sub-lot</h2>
           <p className="mt-1 text-xs text-neutral-500">
             Use the dropdown to move a device to another sub-lot, or “— No sub-lot —” to send it
             back to {batch.batchNumber}.

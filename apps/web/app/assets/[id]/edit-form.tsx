@@ -14,27 +14,27 @@ export function AssetEditForm({ asset, locations }: { asset: Asset; locations: L
   return (
     <form action={formAction} className="mt-4 max-w-sm space-y-3">
       <div className="space-y-1">
-        <label className="text-sm text-neutral-300">Name</label>
+        <label className="text-sm text-neutral-700">Name</label>
         <input
           name="name"
           defaultValue={asset.name}
-          className="w-full rounded-md border border-neutral-700 bg-neutral-950 px-3 py-2 text-sm outline-none focus:border-neutral-500"
+          className="w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm outline-none focus:border-neutral-300"
         />
       </div>
       <div className="space-y-1">
-        <label className="text-sm text-neutral-300">Category</label>
+        <label className="text-sm text-neutral-700">Category</label>
         <input
           name="category"
           defaultValue={asset.category}
-          className="w-full rounded-md border border-neutral-700 bg-neutral-950 px-3 py-2 text-sm outline-none focus:border-neutral-500"
+          className="w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm outline-none focus:border-neutral-300"
         />
       </div>
       <div className="space-y-1">
-        <label className="text-sm text-neutral-300">Stock status</label>
+        <label className="text-sm text-neutral-700">Stock status</label>
         <select
           name="stockStatus"
           defaultValue={asset.stockStatus}
-          className="w-full rounded-md border border-neutral-700 bg-neutral-950 px-3 py-2 text-sm"
+          className="w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm"
         >
           {STOCK_STATUSES.map((s) => (
             <option key={s} value={s}>
@@ -44,11 +44,11 @@ export function AssetEditForm({ asset, locations }: { asset: Asset; locations: L
         </select>
       </div>
       <div className="space-y-1">
-        <label className="text-sm text-neutral-300">Condition grade</label>
+        <label className="text-sm text-neutral-700">Condition grade</label>
         <select
           name="conditionGrade"
           defaultValue={asset.conditionGrade ?? ''}
-          className="w-full rounded-md border border-neutral-700 bg-neutral-950 px-3 py-2 text-sm"
+          className="w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm"
         >
           <option value="">Ungraded</option>
           {CONDITION_GRADES.map((g) => (
@@ -59,11 +59,11 @@ export function AssetEditForm({ asset, locations }: { asset: Asset; locations: L
         </select>
       </div>
       <div className="space-y-1">
-        <label className="text-sm text-neutral-300">Location</label>
+        <label className="text-sm text-neutral-700">Location</label>
         <select
           name="locationId"
           defaultValue={asset.locationId ?? ''}
-          className="w-full rounded-md border border-neutral-700 bg-neutral-950 px-3 py-2 text-sm"
+          className="w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm"
         >
           <option value="">Unassigned</option>
           {locations.map((l) => (
@@ -74,7 +74,7 @@ export function AssetEditForm({ asset, locations }: { asset: Asset; locations: L
         </select>
       </div>
       <div className="space-y-1">
-        <label className="text-sm text-neutral-300">Unit cost override (£)</label>
+        <label className="text-sm text-neutral-700">Unit cost override (£)</label>
         <input
           type="number"
           min={0}
@@ -82,16 +82,16 @@ export function AssetEditForm({ asset, locations }: { asset: Asset; locations: L
           name="purchaseCost"
           defaultValue={asset.purchaseCost ?? ''}
           placeholder="leave blank to use even split of lot cost"
-          className="w-full rounded-md border border-neutral-700 bg-neutral-950 px-3 py-2 text-sm outline-none focus:border-neutral-500"
+          className="w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm outline-none focus:border-neutral-300"
         />
       </div>
 
-      {state.error && <p className="text-sm text-red-400">{state.error}</p>}
+      {state.error && <p className="text-sm text-red-600">{state.error}</p>}
 
       <button
         type="submit"
         disabled={pending}
-        className="rounded-md bg-neutral-100 px-4 py-2 text-sm font-medium text-neutral-900 disabled:opacity-50"
+        className="rounded-md bg-[#2b7fff] hover:bg-blue-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
       >
         {pending ? 'Saving…' : 'Save changes'}
       </button>

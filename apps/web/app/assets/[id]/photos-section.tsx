@@ -85,14 +85,14 @@ export function PhotosSection({
 
   return (
     <section>
-      <h2 className="text-sm font-medium text-neutral-400">Photos</h2>
+      <h2 className="text-sm font-medium text-neutral-500">Photos</h2>
 
       <div className="mt-3 flex flex-wrap items-center gap-2">
         <input
           value={caption}
           onChange={(e) => setCaption(e.target.value)}
           placeholder="caption (optional)"
-          className="w-48 rounded border border-neutral-700 bg-neutral-900 px-2 py-1 text-sm"
+          className="w-48 rounded border border-neutral-200 bg-white px-2 py-1 text-sm"
         />
         <input
           ref={fileRef}
@@ -105,17 +105,17 @@ export function PhotosSection({
         <button
           onClick={() => fileRef.current?.click()}
           disabled={busy}
-          className="rounded bg-neutral-100 px-3 py-1.5 text-xs font-medium text-neutral-900 disabled:opacity-50"
+          className="rounded bg-[#2b7fff] hover:bg-blue-600 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50"
         >
           {busy ? 'Uploading…' : '+ Add photo'}
         </button>
-        {error && <span className="text-xs text-red-400">{error}</span>}
+        {error && <span className="text-xs text-red-600">{error}</span>}
       </div>
 
       {photos.length > 0 ? (
         <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
           {photos.map((p) => (
-            <div key={p.id} className="overflow-hidden rounded-lg border border-neutral-800">
+            <div key={p.id} className="overflow-hidden rounded-lg border border-neutral-200">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 src={`/api/assets/${assetId}/photos/${p.id}`}
@@ -123,11 +123,11 @@ export function PhotosSection({
                 className="h-32 w-full object-cover"
               />
               <div className="flex items-center justify-between gap-2 px-2 py-1">
-                <span className="truncate text-xs text-neutral-400">{p.caption ?? '—'}</span>
+                <span className="truncate text-xs text-neutral-500">{p.caption ?? '—'}</span>
                 {canManage && (
                   <button
                     onClick={() => remove(p.id)}
-                    className="shrink-0 text-xs text-red-400 hover:underline"
+                    className="shrink-0 text-xs text-red-600 hover:underline"
                   >
                     Delete
                   </button>

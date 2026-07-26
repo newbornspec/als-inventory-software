@@ -11,11 +11,11 @@ export function NewLotForm({ batchId }: { batchId: string }) {
   });
 
   const field =
-    'w-full rounded-md border border-neutral-700 bg-neutral-900 px-2 py-1.5 text-sm';
+    'w-full rounded-md border border-neutral-200 bg-white px-2 py-1.5 text-sm';
 
   return (
-    <form action={formAction} className="mt-3 space-y-2 rounded-md border border-neutral-800 p-3">
-      <p className="text-xs font-medium text-neutral-400">New sub-lot (spec bucket)</p>
+    <form action={formAction} className="mt-3 space-y-2 rounded-md border border-neutral-200 p-3">
+      <p className="text-xs font-medium text-neutral-500">New sub-lot (spec bucket)</p>
       <div className="grid grid-cols-2 gap-2">
         <input name="manufacturer" placeholder="Manufacturer, e.g. Dell" className={field} />
         <input name="model" placeholder="Model, e.g. OptiPlex 5050" className={field} />
@@ -36,11 +36,11 @@ export function NewLotForm({ batchId }: { batchId: string }) {
         placeholder="Expected units"
         className={field}
       />
-      {state.error && <p className="text-xs text-red-400">{state.error}</p>}
+      {state.error && <p className="text-xs text-red-600">{state.error}</p>}
       <button
         type="submit"
         disabled={pending}
-        className="rounded-md bg-neutral-100 px-3 py-1.5 text-xs font-medium text-neutral-900 disabled:opacity-50"
+        className="rounded-md bg-[#2b7fff] hover:bg-blue-600 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50"
       >
         {pending ? 'Creating…' : 'Create sub-lot'}
       </button>

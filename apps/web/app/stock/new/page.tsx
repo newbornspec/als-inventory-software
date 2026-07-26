@@ -7,7 +7,7 @@ export default async function NewStockPage() {
   const locations = await getLocations();
 
   return (
-    <main className="min-h-screen bg-neutral-950 text-neutral-100">
+    <main className="min-h-screen bg-white text-neutral-950">
       <Nav />
       <div className="p-8">
         <BackLink href="/stock" label="Back to Consumables" />

@@ -72,7 +72,7 @@ export function LookupsManager({ all }: { all: LookupValue[] }) {
               'rounded-md px-3 py-1.5 text-sm ' +
               (tab === c.key
                 ? 'bg-neutral-100 text-neutral-900'
-                : 'border border-neutral-700 text-neutral-300 hover:bg-neutral-900')
+                : 'border border-neutral-200 text-neutral-700 hover:bg-white')
             }
           >
             {c.label}
@@ -82,11 +82,11 @@ export function LookupsManager({ all }: { all: LookupValue[] }) {
 
       {tab === 'model' && (
         <div className="mt-4 flex items-center gap-2 text-sm">
-          <span className="text-neutral-400">Models for</span>
+          <span className="text-neutral-500">Models for</span>
           <select
             value={manufacturerId}
             onChange={(e) => setManufacturerId(e.target.value)}
-            className="rounded-md border border-neutral-700 bg-neutral-900 px-2 py-1.5 text-sm"
+            className="rounded-md border border-neutral-200 bg-white px-2 py-1.5 text-sm"
           >
             <option value="">— Select manufacturer —</option>
             {manufacturers.map((m) => (
@@ -108,19 +108,19 @@ export function LookupsManager({ all }: { all: LookupValue[] }) {
               onChange={(e) => setNewValue(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && onAdd()}
               placeholder={`Add a ${tab} value…`}
-              className="w-full rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm outline-none focus:border-neutral-500"
+              className="w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm outline-none focus:border-neutral-300"
             />
             <button
               onClick={onAdd}
               disabled={pending}
-              className="shrink-0 rounded-md bg-neutral-100 px-3 py-2 text-sm font-medium text-neutral-900 disabled:opacity-50"
+              className="shrink-0 rounded-md bg-[#2b7fff] hover:bg-blue-600 px-3 py-2 text-sm font-medium text-white disabled:opacity-50"
             >
               Add
             </button>
           </div>
         )}
 
-        <ul className="mt-3 divide-y divide-neutral-800 rounded-lg border border-neutral-800">
+        <ul className="mt-3 divide-y divide-neutral-200 rounded-lg border border-neutral-200">
           {rows.map((l) => (
             <li key={l.id} className="flex items-center gap-3 px-3 py-2">
               <input
@@ -130,11 +130,11 @@ export function LookupsManager({ all }: { all: LookupValue[] }) {
                   if (next && next !== l.value) run(() => updateLookup(l.id, { value: next }));
                 }}
                 className={
-                  'w-full rounded border border-transparent bg-transparent px-1 py-1 text-sm hover:border-neutral-700 focus:border-neutral-600 focus:outline-none ' +
-                  (l.active ? 'text-neutral-100' : 'text-neutral-500 line-through')
+                  'w-full rounded border border-transparent bg-transparent px-1 py-1 text-sm hover:border-neutral-200 focus:border-neutral-300 focus:outline-none ' +
+                  (l.active ? 'text-neutral-950' : 'text-neutral-500 line-through')
                 }
               />
-              <label className="flex shrink-0 items-center gap-1 text-xs text-neutral-400">
+              <label className="flex shrink-0 items-center gap-1 text-xs text-neutral-500">
                 <input
                   type="checkbox"
                   checked={l.active}
@@ -147,7 +147,7 @@ export function LookupsManager({ all }: { all: LookupValue[] }) {
                   if (confirm(`Delete "${l.value}"?${l.category === 'manufacturer' ? ' Its models will be removed too.' : ''}`))
                     run(() => deleteLookup(l.id));
                 }}
-                className="shrink-0 text-xs text-red-400 hover:underline"
+                className="shrink-0 text-xs text-red-600 hover:underline"
               >
                 Delete
               </button>
@@ -161,7 +161,7 @@ export function LookupsManager({ all }: { all: LookupValue[] }) {
             </li>
           )}
         </ul>
-        {error && <p className="mt-2 text-xs text-red-400">{error}</p>}
+        {error && <p className="mt-2 text-xs text-red-600">{error}</p>}
       </div>
     </div>
   );

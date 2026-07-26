@@ -84,7 +84,7 @@ function KVRows({ obj }: { obj: Record<string, unknown> }) {
       {entries.map(([k, v]) => (
         <div key={k} className="flex justify-between gap-4 text-sm">
           <dt className="shrink-0 text-neutral-500">{humanize(k)}</dt>
-          <dd className="text-right text-neutral-200 break-all">{formatValue(v)}</dd>
+          <dd className="text-right text-neutral-900 break-all">{formatValue(v)}</dd>
         </div>
       ))}
     </dl>
@@ -102,7 +102,7 @@ function CategoryCard({ name, value }: { name: string; value: unknown }) {
     body = (
       <div className="space-y-3">
         {items.map((el, i) => (
-          <div key={i} className="rounded-md border border-neutral-800 p-2">
+          <div key={i} className="rounded-md border border-neutral-200 p-2">
             <div className="mb-1 text-xs font-medium text-neutral-500">
               {itemLabel} {i + 1}
             </div>
@@ -117,12 +117,12 @@ function CategoryCard({ name, value }: { name: string; value: unknown }) {
       return null;
     }
   } else {
-    body = <div className="text-sm text-neutral-200">{formatValue(value)}</div>;
+    body = <div className="text-sm text-neutral-900">{formatValue(value)}</div>;
   }
 
   return (
-    <div className="rounded-lg border border-neutral-800 bg-neutral-900/40 p-4">
-      <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-neutral-400">
+    <div className="rounded-lg border border-neutral-200 bg-neutral-50 p-4">
+      <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-neutral-500">
         {title}
       </h3>
       {body}
@@ -140,8 +140,8 @@ export function HardwareSection({ profile }: { profile: Record<string, unknown> 
   return (
     <section className="md:col-span-2">
       <div className="flex items-baseline gap-3">
-        <h2 className="text-sm font-medium text-neutral-400">Hardware profile</h2>
-        <span className="text-xs text-neutral-600">Auto-captured · read-only</span>
+        <h2 className="text-sm font-medium text-neutral-500">Hardware profile</h2>
+        <span className="text-xs text-neutral-500">Auto-captured · read-only</span>
       </div>
       <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {ordered.map((cat) => (

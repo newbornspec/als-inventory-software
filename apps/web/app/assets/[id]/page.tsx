@@ -107,7 +107,7 @@ export default async function AssetDetailPage({
   }
 
   return (
-    <main className="min-h-screen bg-neutral-950 text-neutral-100">
+    <main className="min-h-screen bg-white text-neutral-950">
       <Nav />
       <div className="p-8">
         <Breadcrumbs items={crumbs} />
@@ -115,10 +115,10 @@ export default async function AssetDetailPage({
         <div className="mt-3 flex items-start justify-between">
           <div>
             <h1 className="text-2xl font-semibold">{asset.name}</h1>
-            <p className="mt-1 text-sm text-neutral-400">
-              Tag: <span className="text-neutral-200">{asset.tag}</span> · {asset.category}
+            <p className="mt-1 text-sm text-neutral-500">
+              Tag: <span className="text-neutral-900">{asset.tag}</span> · {asset.category}
               {asset.serialNumber && asset.serialNumber !== asset.tag && (
-                <> · S/N: <span className="text-neutral-200">{asset.serialNumber}</span></>
+                <> · S/N: <span className="text-neutral-900">{asset.serialNumber}</span></>
               )}
             </p>
           </div>
@@ -128,7 +128,7 @@ export default async function AssetDetailPage({
               <form action={deleteAsset.bind(null, asset.id)}>
                 <button
                   type="submit"
-                  className="rounded-md border border-red-900 px-3 py-1.5 text-sm text-red-400 hover:bg-red-950"
+                  className="rounded-md border border-red-200 px-3 py-1.5 text-sm text-red-600 hover:bg-red-50"
                 >
                   Delete
                 </button>
@@ -138,7 +138,7 @@ export default async function AssetDetailPage({
         </div>
 
         {isSold && (
-          <div className="mt-4 max-w-2xl rounded-md border border-amber-800 bg-amber-950/40 p-3 text-sm text-amber-300">
+          <div className="mt-4 max-w-2xl rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-700">
             <strong>SOLD</strong> — this asset has left active inventory and is locked.
             {user?.role === 'admin' ? (
               <>
@@ -153,7 +153,7 @@ export default async function AssetDetailPage({
 
         <div className="mt-8 grid gap-8 md:grid-cols-2">
           <section>
-            <h2 className="text-sm font-medium text-neutral-400">Details</h2>
+            <h2 className="text-sm font-medium text-neutral-500">Details</h2>
             {canEdit ? (
               <AssetEditForm asset={asset} locations={locations} />
             ) : (
@@ -192,13 +192,13 @@ export default async function AssetDetailPage({
 
           {canEdit && costing && (
             <section>
-              <h2 className="text-sm font-medium text-neutral-400">Costing &amp; profit</h2>
+              <h2 className="text-sm font-medium text-neutral-500">Costing &amp; profit</h2>
               <dl className="mt-4 max-w-sm space-y-2 text-sm">
                 <div className="flex items-baseline justify-between">
                   <dt className="text-neutral-500">Allocated cost</dt>
                   <dd className="text-right">
                     {costing.allocatedCost != null ? money(costing.allocatedCost) : '—'}
-                    <span className="ml-2 text-xs text-neutral-600">
+                    <span className="ml-2 text-xs text-neutral-500">
                       {costing.purchaseCost != null
                         ? 'override'
                         : costing.evenSplit != null
@@ -226,9 +226,9 @@ export default async function AssetDetailPage({
                           costing.profit == null
                             ? ''
                             : costing.profit > 0
-                              ? 'text-emerald-400'
+                              ? 'text-emerald-700'
                               : costing.profit < 0
-                                ? 'text-red-400'
+                                ? 'text-red-600'
                                 : ''
                         }
                       >
@@ -249,13 +249,13 @@ export default async function AssetDetailPage({
           )}
 
           <section>
-            <h2 className="text-sm font-medium text-neutral-400">History</h2>
+            <h2 className="text-sm font-medium text-neutral-500">History</h2>
             <ul className="mt-4 space-y-3">
               {history.map((h) => (
-                <li key={h.id} className="border-l-2 border-neutral-800 pl-3 text-sm">
-                  <div className="text-neutral-200">{formatLabel(h.eventType)}</div>
+                <li key={h.id} className="border-l-2 border-neutral-200 pl-3 text-sm">
+                  <div className="text-neutral-900">{formatLabel(h.eventType)}</div>
                   {h.notes && <div className="text-neutral-500">{h.notes}</div>}
-                  <div className="text-xs text-neutral-600">
+                  <div className="text-xs text-neutral-500">
                     {new Date(h.createdAt).toLocaleString()}
                   </div>
                 </li>
@@ -267,7 +267,7 @@ export default async function AssetDetailPage({
           </section>
 
           <section>
-            <h2 className="text-sm font-medium text-neutral-400">Label</h2>
+            <h2 className="text-sm font-medium text-neutral-500">Label</h2>
             <div className="mt-4 flex items-start gap-6">
               <img
                 src={`/api/assets/${asset.id}/barcode?type=qr`}
@@ -282,7 +282,7 @@ export default async function AssetDetailPage({
             </div>
             <Link
               href={`/assets/${asset.id}/label`}
-              className="mt-3 inline-block text-sm text-neutral-400 underline"
+              className="mt-3 inline-block text-sm text-neutral-500 underline"
             >
               Open printable label →
             </Link>

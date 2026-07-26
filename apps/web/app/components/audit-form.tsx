@@ -77,21 +77,21 @@ export function AuditForm({ assetId, onSaved }: { assetId: string; onSaved?: () 
 
   if (saved) {
     return (
-      <div className="rounded-md border border-emerald-800 bg-emerald-950/40 p-3 text-sm text-emerald-300">
+      <div className="rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-700">
         Audit recorded — will sync automatically when online.
       </div>
     );
   }
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-3 rounded-md border border-neutral-800 p-4">
+    <form onSubmit={handleSubmit} className="space-y-3 rounded-md border border-neutral-200 p-4">
       <div className="grid grid-cols-2 gap-3">
         <div className="space-y-1">
-          <label className="text-xs text-neutral-400">Audit status</label>
+          <label className="text-xs text-neutral-500">Audit status</label>
           <select
             value={auditStatus}
             onChange={(e) => setAuditStatus(e.target.value)}
-            className="w-full rounded-md border border-neutral-700 bg-neutral-900 px-2 py-1.5 text-sm"
+            className="w-full rounded-md border border-neutral-200 bg-white px-2 py-1.5 text-sm"
           >
             <option value="">—</option>
             {AUDIT_STATUSES.map((s) => (
@@ -102,11 +102,11 @@ export function AuditForm({ assetId, onSaved }: { assetId: string; onSaved?: () 
           </select>
         </div>
         <div className="space-y-1">
-          <label className="text-xs text-neutral-400">Cosmetic grade</label>
+          <label className="text-xs text-neutral-500">Cosmetic grade</label>
           <select
             value={cosmeticGrade}
             onChange={(e) => setCosmeticGrade(e.target.value)}
-            className="w-full rounded-md border border-neutral-700 bg-neutral-900 px-2 py-1.5 text-sm"
+            className="w-full rounded-md border border-neutral-200 bg-white px-2 py-1.5 text-sm"
           >
             <option value="">—</option>
             {CONDITION_GRADES.map((g) => (
@@ -119,11 +119,11 @@ export function AuditForm({ assetId, onSaved }: { assetId: string; onSaved?: () 
       </div>
 
       <div>
-        <label className="text-xs text-neutral-400">Functional tests</label>
+        <label className="text-xs text-neutral-500">Functional tests</label>
         <div className="mt-1 grid grid-cols-2 gap-2 sm:grid-cols-3">
           {TEST_FIELDS.map((field) => (
-            <div key={field} className="flex items-center justify-between rounded-md border border-neutral-700 px-2 py-1">
-              <span className="text-xs capitalize text-neutral-300">{field}</span>
+            <div key={field} className="flex items-center justify-between rounded-md border border-neutral-200 px-2 py-1">
+              <span className="text-xs capitalize text-neutral-700">{field}</span>
               <select
                 value={tests[field] ?? ''}
                 onChange={(e) => setTests((prev) => ({ ...prev, [field]: e.target.value }))}
@@ -141,11 +141,11 @@ export function AuditForm({ assetId, onSaved }: { assetId: string; onSaved?: () 
 
       <div className="grid grid-cols-2 gap-3">
         <div className="space-y-1">
-          <label className="text-xs text-neutral-400">Data wipe status</label>
+          <label className="text-xs text-neutral-500">Data wipe status</label>
           <select
             value={dataWipeStatus}
             onChange={(e) => setDataWipeStatus(e.target.value)}
-            className="w-full rounded-md border border-neutral-700 bg-neutral-900 px-2 py-1.5 text-sm"
+            className="w-full rounded-md border border-neutral-200 bg-white px-2 py-1.5 text-sm"
           >
             <option value="">—</option>
             {DATA_WIPE_STATUSES.map((s) => (
@@ -156,11 +156,11 @@ export function AuditForm({ assetId, onSaved }: { assetId: string; onSaved?: () 
           </select>
         </div>
         <div className="space-y-1">
-          <label className="text-xs text-neutral-400">Final disposition</label>
+          <label className="text-xs text-neutral-500">Final disposition</label>
           <select
             value={finalDisposition}
             onChange={(e) => setFinalDisposition(e.target.value)}
-            className="w-full rounded-md border border-neutral-700 bg-neutral-900 px-2 py-1.5 text-sm"
+            className="w-full rounded-md border border-neutral-200 bg-white px-2 py-1.5 text-sm"
           >
             <option value="">—</option>
             {FINAL_DISPOSITIONS.map((d) => (
@@ -173,30 +173,30 @@ export function AuditForm({ assetId, onSaved }: { assetId: string; onSaved?: () 
       </div>
 
       <div className="space-y-1">
-        <label className="text-xs text-neutral-400">Data wipe method</label>
+        <label className="text-xs text-neutral-500">Data wipe method</label>
         <input
           value={dataWipeMethod}
           onChange={(e) => setDataWipeMethod(e.target.value)}
           placeholder="e.g. NIST SP 800-88, DBAN, ATA Secure Erase, Physical destruction"
-          className="w-full rounded-md border border-neutral-700 bg-neutral-900 px-2 py-1.5 text-sm"
+          className="w-full rounded-md border border-neutral-200 bg-white px-2 py-1.5 text-sm"
         />
-        <p className="text-xs text-neutral-600">Appears on the data-erasure certificate.</p>
+        <p className="text-xs text-neutral-500">Appears on the data-erasure certificate.</p>
       </div>
 
       <div className="space-y-1">
-        <label className="text-xs text-neutral-400">Notes</label>
+        <label className="text-xs text-neutral-500">Notes</label>
         <textarea
           value={notes}
           onChange={(e) => setNotes(e.target.value)}
           rows={2}
-          className="w-full rounded-md border border-neutral-700 bg-neutral-900 px-2 py-1.5 text-sm"
+          className="w-full rounded-md border border-neutral-200 bg-white px-2 py-1.5 text-sm"
         />
       </div>
 
       <button
         type="submit"
         disabled={saving}
-        className="rounded-md bg-neutral-100 px-4 py-2 text-sm font-medium text-neutral-900 disabled:opacity-50"
+        className="rounded-md bg-[#2b7fff] hover:bg-blue-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
       >
         {saving ? 'Saving…' : 'Record Audit'}
       </button>

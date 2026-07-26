@@ -43,16 +43,16 @@ function Tile({
 }) {
   const color =
     tone === 'good'
-      ? 'text-emerald-400'
+      ? 'text-emerald-700'
       : tone === 'bad'
-        ? 'text-red-400'
+        ? 'text-red-600'
         : tone === 'warn'
-          ? 'text-amber-400'
+          ? 'text-amber-700'
           : '';
   return (
-    <div className="rounded-lg border border-neutral-800 bg-neutral-900 p-4">
+    <div className="rounded-lg border border-neutral-200 bg-white p-4">
       <div className={'text-2xl font-semibold ' + color}>{value}</div>
-      <div className="mt-1 text-sm text-neutral-400">{label}</div>
+      <div className="mt-1 text-sm text-neutral-500">{label}</div>
     </div>
   );
 }
@@ -61,15 +61,15 @@ function Bars({ title, rows }: { title: string; rows: Bucket[] }) {
   const max = Math.max(1, ...rows.map((r) => r.count));
   return (
     <div>
-      <h3 className="text-sm font-medium text-neutral-400">{title}</h3>
+      <h3 className="text-sm font-medium text-neutral-500">{title}</h3>
       <div className="mt-3 space-y-2">
         {rows.map((r) => (
           <div key={r.key} className="flex items-center gap-3 text-sm">
-            <span className="w-40 shrink-0 truncate text-neutral-300">{formatLabel(r.key)}</span>
-            <div className="h-2 flex-1 overflow-hidden rounded-full bg-neutral-800">
+            <span className="w-40 shrink-0 truncate text-neutral-700">{formatLabel(r.key)}</span>
+            <div className="h-2 flex-1 overflow-hidden rounded-full bg-neutral-100">
               <div className="h-full bg-neutral-400" style={{ width: `${(r.count / max) * 100}%` }} />
             </div>
-            <span className="w-10 shrink-0 text-right text-neutral-400">{r.count}</span>
+            <span className="w-10 shrink-0 text-right text-neutral-500">{r.count}</span>
           </div>
         ))}
         {rows.length === 0 && <p className="text-sm text-neutral-500">No data.</p>}
@@ -90,13 +90,13 @@ export default async function DashboardPage() {
   ]);
 
   return (
-    <main className="min-h-screen bg-neutral-950 text-neutral-100">
+    <main className="min-h-screen bg-white text-neutral-950">
       <Nav />
       <div className="p-8">
         <div className="flex items-center justify-between">
           <h1 className="text-2xl font-semibold">Dashboard</h1>
           {canSeeFinance && (
-            <Link href="/reports" className="text-sm text-neutral-400 hover:text-neutral-200">
+            <Link href="/reports" className="text-sm text-neutral-500 hover:text-neutral-900">
               Reports →
             </Link>
           )}
@@ -137,7 +137,7 @@ export default async function DashboardPage() {
               <Bars title="By condition grade" rows={summary.byGrade} />
               <Bars title="Ageing (in stock)" rows={summary.ageing} />
               <div>
-                <h3 className="text-sm font-medium text-neutral-400">Lots &amp; repairs</h3>
+                <h3 className="text-sm font-medium text-neutral-500">Lots &amp; repairs</h3>
                 <dl className="mt-3 space-y-2 text-sm">
                   <div className="flex justify-between">
                     <dt className="text-neutral-500">Lots (reconciled / total)</dt>
@@ -164,7 +164,7 @@ export default async function DashboardPage() {
         )}
 
         <div className="mt-8">
-          <h2 className="text-sm font-medium text-neutral-400">Alerts</h2>
+          <h2 className="text-sm font-medium text-neutral-500">Alerts</h2>
           <ul className="mt-3 space-y-2">
             {notifications.map((n) => (
               <li key={n.id}>
@@ -173,8 +173,8 @@ export default async function DashboardPage() {
                   className={
                     'block rounded-md border px-4 py-2 text-sm ' +
                     (n.severity === 'critical'
-                      ? 'border-red-900 bg-red-950/40 text-red-300'
-                      : 'border-amber-900 bg-amber-950/40 text-amber-300')
+                      ? 'border-red-200 bg-red-50 text-red-600'
+                      : 'border-amber-200 bg-amber-50 text-amber-700')
                   }
                 >
                   {n.message}

@@ -18,7 +18,7 @@ export function ReassignOwner({
       <select
         name="ownerId"
         defaultValue={currentOwnerId ?? ''}
-        className="rounded border border-neutral-700 bg-neutral-950 px-2 py-1 text-xs text-neutral-200"
+        className="rounded border border-neutral-200 bg-white px-2 py-1 text-xs text-neutral-900"
         aria-label="Reassign owner"
       >
         {users.map((u) => (
@@ -29,7 +29,7 @@ export function ReassignOwner({
       </select>
       <button
         type="submit"
-        className="rounded border border-neutral-600 px-2 py-1 text-xs text-neutral-100 hover:bg-neutral-800"
+        className="rounded border border-neutral-300 px-2 py-1 text-xs text-neutral-950 hover:bg-neutral-100"
       >
         Reassign
       </button>

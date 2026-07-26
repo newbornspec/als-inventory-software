@@ -9,7 +9,7 @@ export default async function NewUserPage() {
   if (session?.role !== 'admin') redirect('/dashboard');
 
   return (
-    <main className="min-h-screen bg-neutral-950 text-neutral-100">
+    <main className="min-h-screen bg-white text-neutral-950">
       <Nav />
       <div className="p-8">
         <BackLink href="/users" label="Back to Users" />

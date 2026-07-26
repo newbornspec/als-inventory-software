@@ -135,15 +135,15 @@ export function ImportExpected({ batchId, hasExisting }: { batchId: string; hasE
   const preview = rows.slice(0, 3);
 
   return (
-    <div className="rounded-md border border-neutral-800 p-3">
+    <div className="rounded-md border border-neutral-200 p-3">
       <div className="flex items-center justify-between gap-3">
         <div>
-          <div className="text-sm font-medium text-neutral-200">Import supplier list</div>
+          <div className="text-sm font-medium text-neutral-900">Import supplier list</div>
           <div className="text-xs text-neutral-500">
             CSV or Excel. {hasExisting ? 'Re-importing replaces the current expected list.' : ''}
           </div>
         </div>
-        <label className="cursor-pointer rounded-md bg-neutral-100 px-3 py-1.5 text-xs font-medium text-neutral-900">
+        <label className="cursor-pointer rounded-md bg-[#2b7fff] hover:bg-blue-600 px-3 py-1.5 text-xs font-medium text-white">
           Choose file
           <input type="file" accept=".csv,.xlsx,.xls" onChange={onFile} className="hidden" />
         </label>
@@ -151,21 +151,21 @@ export function ImportExpected({ batchId, hasExisting }: { batchId: string; hasE
 
       {fileName && !error && columns.length > 0 && (
         <div className="mt-3 space-y-3">
-          <div className="text-xs text-neutral-400">
-            <span className="text-neutral-200">{fileName}</span> — {rows.length} rows. Map the
+          <div className="text-xs text-neutral-500">
+            <span className="text-neutral-900">{fileName}</span> — {rows.length} rows. Map the
             columns:
           </div>
 
           <div className="grid grid-cols-2 gap-2">
             {TARGET_FIELDS.map((f) => (
               <label key={f.key} className="flex items-center justify-between gap-2 text-xs">
-                <span className="text-neutral-400">{f.label}</span>
+                <span className="text-neutral-500">{f.label}</span>
                 <select
                   value={mapping[f.key] ?? ''}
                   onChange={(e) =>
                     setMapping((m) => ({ ...m, [f.key]: e.target.value || undefined }))
                   }
-                  className="min-w-0 flex-1 rounded border border-neutral-700 bg-neutral-900 px-1.5 py-1 text-neutral-200"
+                  className="min-w-0 flex-1 rounded border border-neutral-200 bg-white px-1.5 py-1 text-neutral-900"
                 >
                   <option value="">— none —</option>
                   {columns.map((c) => (
@@ -178,9 +178,9 @@ export function ImportExpected({ batchId, hasExisting }: { batchId: string; hasE
             ))}
           </div>
 
-          <div className="overflow-x-auto rounded border border-neutral-800">
+          <div className="overflow-x-auto rounded border border-neutral-200">
             <table className="w-full text-left text-[11px]">
-              <thead className="bg-neutral-900 text-neutral-500">
+              <thead className="bg-neutral-50 text-neutral-500">
                 <tr>
                   {TARGET_FIELDS.filter((f) => mapping[f.key]).map((f) => (
                     <th key={f.key} className="px-2 py-1 font-normal">
@@ -191,9 +191,9 @@ export function ImportExpected({ batchId, hasExisting }: { batchId: string; hasE
               </thead>
               <tbody>
                 {preview.map((row, i) => (
-                  <tr key={i} className="border-t border-neutral-800">
+                  <tr key={i} className="border-t border-neutral-200">
                     {TARGET_FIELDS.filter((f) => mapping[f.key]).map((f) => (
-                      <td key={f.key} className="px-2 py-1 text-neutral-300">
+                      <td key={f.key} className="px-2 py-1 text-neutral-700">
                         {String(row[mapping[f.key] as string] ?? '')}
                       </td>
                     ))}
@@ -213,9 +213,9 @@ export function ImportExpected({ batchId, hasExisting }: { batchId: string; hasE
         </div>
       )}
 
-      {error && <p className="mt-2 text-xs text-red-400">{error}</p>}
+      {error && <p className="mt-2 text-xs text-red-600">{error}</p>}
       {done != null && (
-        <p className="mt-2 text-xs text-emerald-400">Imported {done} expected line items.</p>
+        <p className="mt-2 text-xs text-emerald-700">Imported {done} expected line items.</p>
       )}
     </div>
   );

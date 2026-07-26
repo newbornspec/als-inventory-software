@@ -35,7 +35,7 @@ export function SellAssetButton({ assetId, name }: { assetId: string; name: stri
       >
         {busy ? 'Selling…' : 'Mark as Sold'}
       </button>
-      {error && <span className="text-xs text-red-400">{error}</span>}
+      {error && <span className="text-xs text-red-600">{error}</span>}
     </span>
   );
 }

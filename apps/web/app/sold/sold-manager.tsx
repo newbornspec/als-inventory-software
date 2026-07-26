@@ -22,7 +22,7 @@ interface Dest {
 
 const cellCls = 'px-3 py-2';
 const filterCls =
-  'rounded-md border border-neutral-700 bg-neutral-900 px-2 py-1.5 text-sm outline-none focus:border-neutral-500';
+  'rounded-md border border-neutral-200 bg-white px-2 py-1.5 text-sm outline-none focus:border-neutral-300';
 
 export function SoldManager({
   assets,
@@ -251,7 +251,7 @@ export function SoldManager({
 
   const chk = 'h-4 w-4 accent-emerald-600';
   const btn =
-    'rounded-md border border-neutral-600 px-2.5 py-1 text-xs text-neutral-200 hover:bg-neutral-800 disabled:opacity-50';
+    'rounded-md border border-neutral-300 px-2.5 py-1 text-xs text-neutral-900 hover:bg-neutral-100 disabled:opacity-50';
 
   function BulkBar({
     count,
@@ -274,8 +274,8 @@ export function SoldManager({
   }) {
     if (count === 0) return null;
     return (
-      <div className="mt-2 flex flex-wrap items-center gap-2 rounded-md border border-neutral-700 bg-neutral-900/70 px-3 py-2">
-        <span className="text-xs font-medium text-neutral-200">{count} selected</span>
+      <div className="mt-2 flex flex-wrap items-center gap-2 rounded-md border border-neutral-200 bg-neutral-50 px-3 py-2">
+        <span className="text-xs font-medium text-neutral-900">{count} selected</span>
         {isAdmin && (
           <>
             <button onClick={onOriginal} disabled={busy} className={btn}>
@@ -297,7 +297,7 @@ export function SoldManager({
         <button onClick={onExport} disabled={busy} className={btn}>
           Export selected (CSV)
         </button>
-        <button onClick={onClear} disabled={busy} className="text-xs text-neutral-500 hover:text-neutral-300">
+        <button onClick={onClear} disabled={busy} className="text-xs text-neutral-500 hover:text-neutral-700">
           Clear
         </button>
       </div>
@@ -347,7 +347,7 @@ export function SoldManager({
         {hasFilters && (
           <button
             onClick={() => { setQ(''); setFBatch(''); setFMan(''); setFSoldBy(''); setFPallet(''); setFrom(''); setTo(''); }}
-            className="text-xs text-neutral-500 hover:text-neutral-300"
+            className="text-xs text-neutral-500 hover:text-neutral-700"
           >
             Clear filters
           </button>
@@ -355,13 +355,13 @@ export function SoldManager({
       </div>
 
       {(notice || error) && (
-        <p className={`mt-3 text-sm ${error ? 'text-red-400' : 'text-emerald-400'}`}>{error ?? notice}</p>
+        <p className={`mt-3 text-sm ${error ? 'text-red-600' : 'text-emerald-700'}`}>{error ?? notice}</p>
       )}
 
       {/* ============ Serialized devices: Batch → Sub-lot → device ============ */}
       <section className="mt-6">
         <div className="flex items-center gap-3">
-          <label className="flex items-center gap-2 text-sm font-medium text-neutral-300">
+          <label className="flex items-center gap-2 text-sm font-medium text-neutral-700">
             <input
               type="checkbox"
               className={chk}
@@ -392,9 +392,9 @@ export function SoldManager({
             const gIds = g.lots.flatMap((l) => l.items.map((a) => a.id));
             const open = !collapsed.has(g.key);
             return (
-              <div key={g.key} className="rounded-lg border border-neutral-800">
-                <div className="flex items-center gap-2 bg-neutral-900 px-3 py-2">
-                  <button onClick={() => toggleCollapse(g.key)} className="w-5 text-neutral-400 hover:text-neutral-200" aria-label={open ? 'Collapse' : 'Expand'}>
+              <div key={g.key} className="rounded-lg border border-neutral-200">
+                <div className="flex items-center gap-2 bg-white px-3 py-2">
+                  <button onClick={() => toggleCollapse(g.key)} className="w-5 text-neutral-500 hover:text-neutral-900" aria-label={open ? 'Collapse' : 'Expand'}>
                     {open ? '▾' : '▸'}
                   </button>
                   <input
@@ -404,7 +404,7 @@ export function SoldManager({
                     onChange={(e) => setSelA(toggleIn(selA, gIds, e.target.checked))}
                     aria-label={`Select all in ${g.label}`}
                   />
-                  <span className="font-medium text-neutral-100">{g.label}</span>
+                  <span className="font-medium text-neutral-950">{g.label}</span>
                   <span className="text-xs text-neutral-500">
                     {g.count} item{g.count === 1 ? '' : 's'} sold
                   </span>
@@ -415,9 +415,9 @@ export function SoldManager({
                     const lIds = l.items.map((a) => a.id);
                     const lOpen = !collapsed.has(l.key);
                     return (
-                      <div key={l.key} className="border-t border-neutral-800">
+                      <div key={l.key} className="border-t border-neutral-200">
                         <div className="flex items-center gap-2 px-3 py-1.5 pl-8">
-                          <button onClick={() => toggleCollapse(l.key)} className="w-5 text-neutral-500 hover:text-neutral-300" aria-label={lOpen ? 'Collapse' : 'Expand'}>
+                          <button onClick={() => toggleCollapse(l.key)} className="w-5 text-neutral-500 hover:text-neutral-700" aria-label={lOpen ? 'Collapse' : 'Expand'}>
                             {lOpen ? '▾' : '▸'}
                           </button>
                           <input
@@ -427,8 +427,8 @@ export function SoldManager({
                             onChange={(e) => setSelA(toggleIn(selA, lIds, e.target.checked))}
                             aria-label={`Select all in ${l.label}`}
                           />
-                          <span className="text-sm text-neutral-300">{l.label}</span>
-                          <span className="text-xs text-neutral-600">{l.items.length} item{l.items.length === 1 ? '' : 's'}</span>
+                          <span className="text-sm text-neutral-700">{l.label}</span>
+                          <span className="text-xs text-neutral-500">{l.items.length} item{l.items.length === 1 ? '' : 's'}</span>
                         </div>
                         {lOpen && (
                           <div className="overflow-x-auto">
@@ -447,7 +447,7 @@ export function SoldManager({
                               </thead>
                               <tbody>
                                 {l.items.map((a) => (
-                                  <tr key={a.id} className="border-t border-neutral-800/60 hover:bg-neutral-900/40">
+                                  <tr key={a.id} className="border-t border-neutral-200 hover:bg-neutral-50">
                                     <td className="px-3 py-1.5 pl-12">
                                       <input
                                         type="checkbox"
@@ -457,13 +457,13 @@ export function SoldManager({
                                         aria-label={`Select ${a.name}`}
                                       />
                                     </td>
-                                    <td className={`${cellCls} text-neutral-100`}>{a.name}</td>
-                                    <td className={`${cellCls} text-neutral-400`}>{man(a) || '—'}</td>
-                                    <td className={`${cellCls} text-neutral-400`}>{mod(a) || '—'}</td>
-                                    <td className={`${cellCls} text-neutral-400`}>{a.serialNumber ?? '—'}</td>
-                                    <td className={`${cellCls} text-neutral-400`}>{a.tag}</td>
-                                    <td className={`${cellCls} text-neutral-400`}>{date(a.soldAt)}</td>
-                                    <td className={`${cellCls} text-neutral-400`}>{a.soldBy?.name ?? '—'}</td>
+                                    <td className={`${cellCls} text-neutral-950`}>{a.name}</td>
+                                    <td className={`${cellCls} text-neutral-500`}>{man(a) || '—'}</td>
+                                    <td className={`${cellCls} text-neutral-500`}>{mod(a) || '—'}</td>
+                                    <td className={`${cellCls} text-neutral-500`}>{a.serialNumber ?? '—'}</td>
+                                    <td className={`${cellCls} text-neutral-500`}>{a.tag}</td>
+                                    <td className={`${cellCls} text-neutral-500`}>{date(a.soldAt)}</td>
+                                    <td className={`${cellCls} text-neutral-500`}>{a.soldBy?.name ?? '—'}</td>
                                   </tr>
                                 ))}
                               </tbody>
@@ -477,7 +477,7 @@ export function SoldManager({
             );
           })}
           {assetGroups.length === 0 && (
-            <p className="rounded-lg border border-neutral-800 px-4 py-6 text-center text-sm text-neutral-500">
+            <p className="rounded-lg border border-neutral-200 px-4 py-6 text-center text-sm text-neutral-500">
               {hasFilters ? 'No sold devices match the filters.' : 'No sold devices yet.'}
             </p>
           )}
@@ -487,7 +487,7 @@ export function SoldManager({
       {/* ============ Pallet goods: grouped by pallet ============ */}
       <section className="mt-8">
         <div className="flex items-center gap-3">
-          <label className="flex items-center gap-2 text-sm font-medium text-neutral-300">
+          <label className="flex items-center gap-2 text-sm font-medium text-neutral-700">
             <input
               type="checkbox"
               className={chk}
@@ -519,9 +519,9 @@ export function SoldManager({
             const gIds = g.items.map((x) => x.id);
             const open = !collapsed.has(g.key);
             return (
-              <div key={g.key} className="rounded-lg border border-neutral-800">
-                <div className="flex items-center gap-2 bg-neutral-900 px-3 py-2">
-                  <button onClick={() => toggleCollapse(g.key)} className="w-5 text-neutral-400 hover:text-neutral-200" aria-label={open ? 'Collapse' : 'Expand'}>
+              <div key={g.key} className="rounded-lg border border-neutral-200">
+                <div className="flex items-center gap-2 bg-white px-3 py-2">
+                  <button onClick={() => toggleCollapse(g.key)} className="w-5 text-neutral-500 hover:text-neutral-900" aria-label={open ? 'Collapse' : 'Expand'}>
                     {open ? '▾' : '▸'}
                   </button>
                   <input
@@ -531,7 +531,7 @@ export function SoldManager({
                     onChange={(e) => setSelP(toggleIn(selP, gIds, e.target.checked))}
                     aria-label={`Select all from ${g.label}`}
                   />
-                  <span className="font-medium text-neutral-100">{g.label}</span>
+                  <span className="font-medium text-neutral-950">{g.label}</span>
                   <span className="text-xs text-neutral-500">
                     {g.units} unit{g.units === 1 ? '' : 's'} · {g.items.length} row{g.items.length === 1 ? '' : 's'}
                   </span>
@@ -550,7 +550,7 @@ export function SoldManager({
                       </thead>
                       <tbody>
                         {g.items.map((l) => (
-                          <tr key={l.id} className="border-t border-neutral-800/60 hover:bg-neutral-900/40">
+                          <tr key={l.id} className="border-t border-neutral-200 hover:bg-neutral-50">
                             <td className="px-3 py-1.5 pl-8">
                               <input
                                 type="checkbox"
@@ -560,10 +560,10 @@ export function SoldManager({
                                 aria-label={`Select ${l.variant}`}
                               />
                             </td>
-                            <td className={`${cellCls} text-neutral-100`}>{l.variant}</td>
+                            <td className={`${cellCls} text-neutral-950`}>{l.variant}</td>
                             <td className={`${cellCls} font-medium tabular-nums`}>{l.quantity}</td>
-                            <td className={`${cellCls} text-neutral-400`}>{date(l.soldAt)}</td>
-                            <td className={`${cellCls} text-neutral-400`}>{l.soldBy?.name ?? '—'}</td>
+                            <td className={`${cellCls} text-neutral-500`}>{date(l.soldAt)}</td>
+                            <td className={`${cellCls} text-neutral-500`}>{l.soldBy?.name ?? '—'}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -574,7 +574,7 @@ export function SoldManager({
             );
           })}
           {palletGroups.length === 0 && (
-            <p className="rounded-lg border border-neutral-800 px-4 py-6 text-center text-sm text-neutral-500">
+            <p className="rounded-lg border border-neutral-200 px-4 py-6 text-center text-sm text-neutral-500">
               {hasFilters ? 'No sold pallet goods match the filters.' : 'No sold pallet goods yet.'}
             </p>
           )}

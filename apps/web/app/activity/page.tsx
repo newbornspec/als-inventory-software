@@ -30,12 +30,12 @@ export default async function ActivityPage() {
     : [];
 
   return (
-    <main className="min-h-screen bg-neutral-950 text-neutral-100">
+    <main className="min-h-screen bg-white text-neutral-950">
       <Nav />
       <div className="p-8">
         <Breadcrumbs items={[{ label: 'Dashboard', href: '/dashboard' }, { label: 'Activity' }]} />
         <h1 className="mt-3 text-2xl font-semibold">Activity log</h1>
-        <p className="mt-1 text-sm text-neutral-400">
+        <p className="mt-1 text-sm text-neutral-500">
           Every meaningful action, newest first — who did what, and when.
         </p>
 
@@ -46,9 +46,9 @@ export default async function ActivityPage() {
         ) : entries.length === 0 ? (
           <p className="mt-6 text-sm text-neutral-500">No activity recorded yet.</p>
         ) : (
-          <div className="mt-6 overflow-x-auto rounded-lg border border-neutral-800">
+          <div className="mt-6 overflow-x-auto rounded-lg border border-neutral-200">
             <table className="w-full text-left text-sm">
-              <thead className="bg-neutral-900 text-neutral-400">
+              <thead className="bg-neutral-50 text-neutral-500">
                 <tr>
                   <th className="px-4 py-2">When</th>
                   <th className="px-4 py-2">User</th>
@@ -59,16 +59,16 @@ export default async function ActivityPage() {
                 {entries.map((e) => {
                   const href = entityHref(e);
                   return (
-                    <tr key={e.id} className="border-t border-neutral-800">
-                      <td className="whitespace-nowrap px-4 py-2 text-neutral-400">
+                    <tr key={e.id} className="border-t border-neutral-200">
+                      <td className="whitespace-nowrap px-4 py-2 text-neutral-500">
                         {new Date(e.createdAt).toLocaleString('en-GB')}
                       </td>
-                      <td className="whitespace-nowrap px-4 py-2 text-neutral-200">
+                      <td className="whitespace-nowrap px-4 py-2 text-neutral-900">
                         {e.user?.name ?? 'System'}
                       </td>
-                      <td className="px-4 py-2 text-neutral-300">
+                      <td className="px-4 py-2 text-neutral-700">
                         {href ? (
-                          <Link href={href} className="underline hover:text-neutral-100">
+                          <Link href={href} className="underline hover:text-neutral-950">
                             {e.summary}
                           </Link>
                         ) : (

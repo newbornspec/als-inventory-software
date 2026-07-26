@@ -16,11 +16,11 @@ export function PalletBuyer({
         name="buyer"
         defaultValue={buyer ?? ''}
         placeholder="buyer"
-        className="w-48 rounded border border-neutral-700 bg-neutral-950 px-2 py-1 text-sm"
+        className="w-48 rounded border border-neutral-200 bg-white px-2 py-1 text-sm"
       />
       <button
         type="submit"
-        className="rounded border border-neutral-600 px-2 py-1 text-xs text-neutral-100"
+        className="rounded border border-neutral-300 px-2 py-1 text-xs text-neutral-950"
       >
         Save
       </button>

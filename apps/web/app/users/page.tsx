@@ -14,22 +14,22 @@ export default async function UsersPage() {
   const users = await apiFetch<AppUser[]>('/users');
 
   return (
-    <main className="min-h-screen bg-neutral-950 text-neutral-100">
+    <main className="min-h-screen bg-white text-neutral-950">
       <Nav />
       <div className="p-8">
         <div className="flex items-center justify-between">
           <h1 className="text-2xl font-semibold">Users</h1>
           <Link
             href="/users/new"
-            className="rounded-md bg-neutral-100 px-4 py-2 text-sm font-medium text-neutral-900"
+            className="rounded-md bg-[#2b7fff] hover:bg-blue-600 px-4 py-2 text-sm font-medium text-white"
           >
             New User
           </Link>
         </div>
 
-        <div className="mt-6 overflow-x-auto rounded-lg border border-neutral-800">
+        <div className="mt-6 overflow-x-auto rounded-lg border border-neutral-200">
           <table className="w-full text-left text-sm">
-            <thead className="bg-neutral-900 text-neutral-400">
+            <thead className="bg-neutral-50 text-neutral-500">
               <tr>
                 <th className="px-4 py-3">Name</th>
                 <th className="px-4 py-3">Email</th>
@@ -39,16 +39,16 @@ export default async function UsersPage() {
             </thead>
             <tbody>
               {users.map((user) => (
-                <tr key={user.id} className="border-t border-neutral-800">
+                <tr key={user.id} className="border-t border-neutral-200">
                   <td className="px-4 py-3">{user.name}</td>
-                  <td className="px-4 py-3 text-neutral-400">{user.email}</td>
+                  <td className="px-4 py-3 text-neutral-500">{user.email}</td>
                   <td className="px-4 py-3">
                     <form action={updateUserRole.bind(null, user.id)} className="flex gap-2">
                       <select
                         name="role"
                         defaultValue={user.role}
                         disabled={user.id === session.userId}
-                        className="rounded-md border border-neutral-700 bg-neutral-900 px-2 py-1 text-sm disabled:opacity-50"
+                        className="rounded-md border border-neutral-200 bg-white px-2 py-1 text-sm disabled:opacity-50"
                       >
                         {ROLES.map((r) => (
                           <option key={r} value={r}>
@@ -59,7 +59,7 @@ export default async function UsersPage() {
                       {user.id !== session.userId && (
                         <button
                           type="submit"
-                          className="rounded-md border border-neutral-700 px-2 py-1 text-xs text-neutral-300"
+                          className="rounded-md border border-neutral-200 px-2 py-1 text-xs text-neutral-700"
                         >
                           Save
                         </button>
@@ -71,7 +71,7 @@ export default async function UsersPage() {
                       <form action={deleteUser.bind(null, user.id)}>
                         <button
                           type="submit"
-                          className="text-xs text-red-400 hover:underline"
+                          className="text-xs text-red-600 hover:underline"
                         >
                           Delete
                         </button>

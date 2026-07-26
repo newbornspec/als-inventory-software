@@ -279,7 +279,7 @@ export function CameraScanner({ onDecode, onReadText, cooldownMs = 1500 }: Camer
 
   if (error) {
     return (
-      <div className="max-w-sm rounded-md border border-red-900 bg-red-950/40 p-3 text-sm text-red-300">
+      <div className="max-w-sm rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-600">
         {error}
       </div>
     );
@@ -287,7 +287,7 @@ export function CameraScanner({ onDecode, onReadText, cooldownMs = 1500 }: Camer
 
   return (
     <div className="max-w-sm space-y-2">
-      <div className="relative overflow-hidden rounded-md border border-neutral-700 bg-black">
+      <div className="relative overflow-hidden rounded-md border border-neutral-200 bg-black">
         <video ref={videoRef} className="w-full" muted playsInline autoPlay />
         {engine && !torchFailed && (
           <button
@@ -296,7 +296,7 @@ export function CameraScanner({ onDecode, onReadText, cooldownMs = 1500 }: Camer
             aria-pressed={torchOn}
             className={
               'absolute right-2 top-2 rounded-full px-3 py-1.5 text-xs font-medium ' +
-              (torchOn ? 'bg-amber-400 text-neutral-900' : 'bg-black/60 text-neutral-100')
+              (torchOn ? 'bg-amber-400 text-neutral-900' : 'bg-black/60 text-neutral-950')
             }
           >
             {torchOn ? '⚡ Flash on' : '⚡ Flash'}
@@ -306,20 +306,20 @@ export function CameraScanner({ onDecode, onReadText, cooldownMs = 1500 }: Camer
       <div className="flex items-center justify-between gap-2">
         <p className="text-xs text-neutral-500">
           A clear barcode scans automatically. For small or dim labels, tap{' '}
-          <span className="text-neutral-300">Read text</span> and aim at the Service Tag line.
+          <span className="text-neutral-700">Read text</span> and aim at the Service Tag line.
         </p>
         {onReadText && (
           <button
             type="button"
             onClick={readText}
             disabled={ocrBusy}
-            className="shrink-0 rounded-md bg-neutral-100 px-3 py-1.5 text-xs font-medium text-neutral-900 disabled:opacity-50"
+            className="shrink-0 rounded-md bg-[#2b7fff] hover:bg-blue-600 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50"
           >
             {ocrBusy ? 'Reading…' : 'Read text'}
           </button>
         )}
       </div>
-      <p className="text-[11px] text-neutral-600">
+      <p className="text-[11px] text-neutral-500">
         Scanner:{' '}
         {engine === 'native'
           ? 'fast (native)'
@@ -329,7 +329,7 @@ export function CameraScanner({ onDecode, onReadText, cooldownMs = 1500 }: Camer
         {torchFailed ? ' · flash not supported here' : ''}
       </p>
       {ocrBusy && ocrStatus && <p className="text-xs text-neutral-500">{ocrStatus}</p>}
-      {ocrError && <p className="text-xs text-amber-400">{ocrError}</p>}
+      {ocrError && <p className="text-xs text-amber-700">{ocrError}</p>}
     </div>
   );
 }

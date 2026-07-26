@@ -7,9 +7,9 @@ import { formatLabel } from '@/lib/asset-options';
 
 function PalletTable({ pallets, shipped }: { pallets: Pallet[]; shipped: boolean }) {
   return (
-    <div className="mt-3 overflow-x-auto rounded-lg border border-neutral-800">
+    <div className="mt-3 overflow-x-auto rounded-lg border border-neutral-200">
       <table className="w-full text-left text-sm">
-        <thead className="bg-neutral-900 text-neutral-400">
+        <thead className="bg-neutral-50 text-neutral-500">
           <tr>
             <th className="px-4 py-3">Pallet #</th>
             <th className="px-4 py-3">Description</th>
@@ -22,28 +22,28 @@ function PalletTable({ pallets, shipped }: { pallets: Pallet[]; shipped: boolean
         </thead>
         <tbody>
           {pallets.map((p) => (
-            <tr key={p.id} className="border-t border-neutral-800 hover:bg-neutral-900">
+            <tr key={p.id} className="border-t border-neutral-200 hover:bg-white">
               <td className="px-4 py-3">
-                <Link href={`/pallets/${p.id}`} className="text-neutral-100 underline">
+                <Link href={`/pallets/${p.id}`} className="text-neutral-950 underline">
                   {p.palletNumber}
                 </Link>
               </td>
-              <td className="px-4 py-3 text-neutral-400">{p.description ?? '—'}</td>
-              <td className="px-4 py-3 text-neutral-400">{p.supplier || '—'}</td>
+              <td className="px-4 py-3 text-neutral-500">{p.description ?? '—'}</td>
+              <td className="px-4 py-3 text-neutral-500">{p.supplier || '—'}</td>
               <td className="px-4 py-3">
                 {shipped ? (
-                  <span className="text-neutral-400">
+                  <span className="text-neutral-500">
                     {p.shippedAt ? new Date(p.shippedAt).toLocaleDateString('en-GB') : '—'}
                   </span>
                 ) : (
-                  <span className="rounded-full border border-neutral-700 px-2 py-0.5 text-xs">
+                  <span className="rounded-full border border-neutral-200 px-2 py-0.5 text-xs">
                     {formatLabel(p.status)}
                   </span>
                 )}
               </td>
               <td className="px-4 py-3 font-medium">{p.totalQuantity}</td>
-              <td className="px-4 py-3 text-neutral-400">{p.lineCount}</td>
-              <td className="px-4 py-3 text-neutral-400">{p.location?.name ?? '—'}</td>
+              <td className="px-4 py-3 text-neutral-500">{p.lineCount}</td>
+              <td className="px-4 py-3 text-neutral-500">{p.location?.name ?? '—'}</td>
             </tr>
           ))}
           {pallets.length === 0 && (
@@ -68,7 +68,7 @@ export default async function PalletsPage() {
   const shipped = pallets.filter((p) => p.status === 'shipped');
 
   return (
-    <main className="min-h-screen bg-neutral-950 text-neutral-100">
+    <main className="min-h-screen bg-white text-neutral-950">
       <Nav />
       <div className="p-8">
         <div className="flex items-center justify-between">
@@ -77,13 +77,13 @@ export default async function PalletsPage() {
         </div>
 
         <section className="mt-6">
-          <h2 className="text-sm font-medium text-neutral-400">Active ({active.length})</h2>
+          <h2 className="text-sm font-medium text-neutral-500">Active ({active.length})</h2>
           <PalletTable pallets={active} shipped={false} />
         </section>
 
         {shipped.length > 0 && (
           <section className="mt-8">
-            <h2 className="text-sm font-medium text-neutral-400">Shipped ({shipped.length})</h2>
+            <h2 className="text-sm font-medium text-neutral-500">Shipped ({shipped.length})</h2>
             <PalletTable pallets={shipped} shipped />
           </section>
         )}

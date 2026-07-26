@@ -23,9 +23,9 @@ export function AuditSection({ assetId, audits }: { assetId: string; audits: Ass
   return (
     <section>
       <div className="flex items-center justify-between">
-        <h2 className="text-sm font-medium text-neutral-400">ITAD Audits</h2>
+        <h2 className="text-sm font-medium text-neutral-500">ITAD Audits</h2>
         {!showForm && (
-          <button onClick={() => setShowForm(true)} className="text-xs text-neutral-400 underline">
+          <button onClick={() => setShowForm(true)} className="text-xs text-neutral-500 underline">
             + Record audit
           </button>
         )}
@@ -34,7 +34,7 @@ export function AuditSection({ assetId, audits }: { assetId: string; audits: Ass
       {hasWipe && (
         <a
           href={`/api/assets/${assetId}/erasure-certificate`}
-          className="mt-2 inline-block rounded-md border border-emerald-800 px-3 py-1.5 text-xs text-emerald-300 hover:bg-emerald-950/40"
+          className="mt-2 inline-block rounded-md border border-emerald-200 px-3 py-1.5 text-xs text-emerald-700 hover:bg-emerald-50"
         >
           ↓ Data-erasure certificate (PDF)
         </a>
@@ -58,8 +58,8 @@ export function AuditSection({ assetId, audits }: { assetId: string; audits: Ass
 
       <ul className="mt-4 space-y-3">
         {audits.map((a) => (
-          <li key={a.id} className="border-l-2 border-neutral-800 pl-3 text-sm">
-            <div className="text-neutral-200">
+          <li key={a.id} className="border-l-2 border-neutral-200 pl-3 text-sm">
+            <div className="text-neutral-900">
               {a.auditStatus ? formatLabel(a.auditStatus) : 'Audit recorded'}
               {a.cosmeticGrade && ` · ${formatLabel(a.cosmeticGrade)}`}
             </div>
@@ -70,7 +70,7 @@ export function AuditSection({ assetId, audits }: { assetId: string; audits: Ass
               <div className="text-neutral-500">Data wipe: {formatLabel(a.dataWipeStatus)}</div>
             )}
             {a.notes && <div className="text-neutral-500">{a.notes}</div>}
-            <div className="text-xs text-neutral-600">{new Date(a.createdAt).toLocaleString()}</div>
+            <div className="text-xs text-neutral-500">{new Date(a.createdAt).toLocaleString()}</div>
           </li>
         ))}
         {audits.length === 0 && !showForm && (

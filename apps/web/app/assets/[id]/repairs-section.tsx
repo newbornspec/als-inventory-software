@@ -75,10 +75,10 @@ export function RepairsSection({
 
   return (
     <section>
-      <h2 className="text-sm font-medium text-neutral-400">Repairs &amp; refurbishment</h2>
-      <div className="mt-3 overflow-x-auto rounded-lg border border-neutral-800">
+      <h2 className="text-sm font-medium text-neutral-500">Repairs &amp; refurbishment</h2>
+      <div className="mt-3 overflow-x-auto rounded-lg border border-neutral-200">
         <table className="w-full text-left text-sm">
-          <thead className="bg-neutral-900 text-neutral-400">
+          <thead className="bg-neutral-50 text-neutral-500">
             <tr>
               <th className="px-3 py-2">Work / fault</th>
               <th className="px-3 py-2">Parts</th>
@@ -90,12 +90,12 @@ export function RepairsSection({
           </thead>
           <tbody>
             {repairs.map((r) => (
-              <tr key={r.id} className="border-t border-neutral-800 align-top">
+              <tr key={r.id} className="border-t border-neutral-200 align-top">
                 <td className="px-3 py-2">
                   <input
                     defaultValue={r.description}
                     onBlur={(e) => e.target.value.trim() && e.target.value !== r.description && save(r, { description: e.target.value })}
-                    className="w-full rounded border border-neutral-700 bg-neutral-900 px-2 py-1"
+                    className="w-full rounded border border-neutral-200 bg-white px-2 py-1"
                   />
                 </td>
                 <td className="px-3 py-2">
@@ -103,7 +103,7 @@ export function RepairsSection({
                     defaultValue={r.partsUsed ?? ''}
                     placeholder="—"
                     onBlur={(e) => e.target.value !== (r.partsUsed ?? '') && save(r, { partsUsed: e.target.value })}
-                    className="w-full rounded border border-neutral-700 bg-neutral-900 px-2 py-1"
+                    className="w-full rounded border border-neutral-200 bg-white px-2 py-1"
                   />
                 </td>
                 <td className="px-3 py-2">
@@ -117,17 +117,17 @@ export function RepairsSection({
                       const v = e.target.value ? parseFloat(e.target.value) : null;
                       if (v !== r.cost) save(r, { cost: v });
                     }}
-                    className="w-20 rounded border border-neutral-700 bg-neutral-900 px-2 py-1"
+                    className="w-20 rounded border border-neutral-200 bg-white px-2 py-1"
                   />
                 </td>
                 <td className="px-3 py-2">
                   <select
                     defaultValue={r.status}
                     onChange={(e) => save(r, { status: e.target.value as RepairStatus })}
-                    className="w-full rounded border border-neutral-700 bg-neutral-900 px-2 py-1"
+                    className="w-full rounded border border-neutral-200 bg-white px-2 py-1"
                   >
                     {REPAIR_STATUSES.map((s) => (
-                      <option key={s} value={s} className="bg-neutral-900">
+                      <option key={s} value={s} className="bg-white">
                         {formatLabel(s)}
                       </option>
                     ))}
@@ -142,7 +142,7 @@ export function RepairsSection({
                   <td className="px-3 py-2">
                     <button
                       onClick={() => run(() => deleteRepair(assetId, r.id))}
-                      className="text-xs text-red-400 hover:underline"
+                      className="text-xs text-red-600 hover:underline"
                     >
                       Remove
                     </button>
@@ -159,13 +159,13 @@ export function RepairsSection({
             )}
           </tbody>
           <tfoot>
-            <tr className="border-t border-neutral-800 bg-neutral-900/40">
+            <tr className="border-t border-neutral-200 bg-neutral-50">
               <td className="px-3 py-2">
                 <input
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
                   placeholder="e.g. Replaced faulty charging port"
-                  className="w-full rounded border border-neutral-700 bg-neutral-900 px-2 py-1"
+                  className="w-full rounded border border-neutral-200 bg-white px-2 py-1"
                 />
               </td>
               <td className="px-3 py-2">
@@ -173,7 +173,7 @@ export function RepairsSection({
                   value={parts}
                   onChange={(e) => setParts(e.target.value)}
                   placeholder="parts (optional)"
-                  className="w-full rounded border border-neutral-700 bg-neutral-900 px-2 py-1"
+                  className="w-full rounded border border-neutral-200 bg-white px-2 py-1"
                 />
               </td>
               <td className="px-3 py-2">
@@ -184,17 +184,17 @@ export function RepairsSection({
                   value={cost}
                   onChange={(e) => setCost(e.target.value)}
                   placeholder="optional"
-                  className="w-20 rounded border border-neutral-700 bg-neutral-900 px-2 py-1"
+                  className="w-20 rounded border border-neutral-200 bg-white px-2 py-1"
                 />
               </td>
               <td className="px-3 py-2">
                 <select
                   value={status}
                   onChange={(e) => setStatus(e.target.value as RepairStatus)}
-                  className="w-full rounded border border-neutral-700 bg-neutral-900 px-2 py-1"
+                  className="w-full rounded border border-neutral-200 bg-white px-2 py-1"
                 >
                   {REPAIR_STATUSES.map((s) => (
-                    <option key={s} value={s} className="bg-neutral-900">
+                    <option key={s} value={s} className="bg-white">
                       {formatLabel(s)}
                     </option>
                   ))}
@@ -205,7 +205,7 @@ export function RepairsSection({
                 <button
                   onClick={add}
                   disabled={busy}
-                  className="rounded bg-neutral-100 px-2 py-1 text-xs font-medium text-neutral-900 disabled:opacity-50"
+                  className="rounded bg-[#2b7fff] hover:bg-blue-600 px-2 py-1 text-xs font-medium text-white disabled:opacity-50"
                 >
                   {busy ? '…' : 'Add'}
                 </button>
@@ -213,7 +213,7 @@ export function RepairsSection({
             </tr>
           </tfoot>
         </table>
-        {error && <p className="px-3 py-2 text-xs text-red-400">{error}</p>}
+        {error && <p className="px-3 py-2 text-xs text-red-600">{error}</p>}
       </div>
     </section>
   );

@@ -53,7 +53,7 @@ export function SellPalletButton({
       >
         {busy ? 'Selling…' : 'Sell whole pallet'}
       </button>
-      {error && <span className="text-xs text-red-400">{error}</span>}
+      {error && <span className="text-xs text-red-600">{error}</span>}
     </span>
   );
 }

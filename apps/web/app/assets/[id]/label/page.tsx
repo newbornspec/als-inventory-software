@@ -23,7 +23,7 @@ export default async function AssetLabelPage({
       <div className="mx-auto mb-4 max-w-xs print:hidden">
         <Link
           href={`/assets/${asset.id}`}
-          className="text-sm text-neutral-600 hover:text-neutral-900"
+          className="text-sm text-neutral-500 hover:text-neutral-900"
         >
           ← Back to device
         </Link>

@@ -51,16 +51,16 @@ export default async function AssetsPage({
   }
 
   return (
-    <main className="min-h-screen bg-neutral-950 text-neutral-100">
+    <main className="min-h-screen bg-white text-neutral-950">
       <Nav />
       <div className="p-8">
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-semibold">Assets</h1>
-            <p className="mt-1 text-sm text-neutral-400">
+            <p className="mt-1 text-sm text-neutral-500">
               Serialized devices only, grouped by their lot — expand a lot to see its units, or
               search to jump straight to one. For pallet stock and consumables, see{' '}
-              <Link href="/inventory" className="text-neutral-300 underline hover:text-neutral-100">
+              <Link href="/inventory" className="text-neutral-700 underline hover:text-neutral-950">
                 All Inventory
               </Link>
               .
@@ -69,7 +69,7 @@ export default async function AssetsPage({
           {canCreate && (
             <Link
               href="/assets/new"
-              className="shrink-0 rounded-md bg-neutral-100 px-4 py-2 text-sm font-medium text-neutral-900"
+              className="shrink-0 rounded-md bg-[#2b7fff] hover:bg-blue-600 px-4 py-2 text-sm font-medium text-white"
             >
               New Asset
             </Link>
@@ -81,12 +81,12 @@ export default async function AssetsPage({
             name="search"
             defaultValue={params.search}
             placeholder="Search by tag, serial or name…"
-            className="min-w-[18rem] flex-1 rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm outline-none focus:border-neutral-500"
+            className="min-w-[18rem] flex-1 rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm outline-none focus:border-neutral-300"
           />
           <select
             name="stockStatus"
             defaultValue={params.stockStatus ?? ''}
-            className="rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm"
+            className="rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm"
           >
             <option value="">All stock statuses</option>
             {STOCK_STATUSES.map((s) => (
@@ -98,7 +98,7 @@ export default async function AssetsPage({
           <select
             name="conditionGrade"
             defaultValue={params.conditionGrade ?? ''}
-            className="rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm"
+            className="rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm"
           >
             <option value="">All condition grades</option>
             {CONDITION_GRADES.map((g) => (
@@ -110,7 +110,7 @@ export default async function AssetsPage({
           <select
             name="auditStatus"
             defaultValue={params.auditStatus ?? ''}
-            className="rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm"
+            className="rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm"
           >
             <option value="">All audit statuses</option>
             {AUDIT_STATUSES.map((s) => (
@@ -121,14 +121,14 @@ export default async function AssetsPage({
           </select>
           <button
             type="submit"
-            className="rounded-md border border-neutral-700 px-4 py-2 text-sm text-neutral-300"
+            className="rounded-md border border-neutral-200 px-4 py-2 text-sm text-neutral-700"
           >
             Filter
           </button>
           {isSearching && (
             <Link
               href="/assets"
-              className="rounded-md px-4 py-2 text-sm text-neutral-500 hover:text-neutral-300"
+              className="rounded-md px-4 py-2 text-sm text-neutral-500 hover:text-neutral-700"
             >
               Clear
             </Link>
@@ -136,9 +136,9 @@ export default async function AssetsPage({
         </form>
 
         {isSearching ? (
-          <div className="mt-6 overflow-x-auto rounded-lg border border-neutral-800">
+          <div className="mt-6 overflow-x-auto rounded-lg border border-neutral-200">
             <table className="w-full text-left text-sm">
-              <thead className="bg-neutral-900 text-neutral-400">
+              <thead className="bg-neutral-50 text-neutral-500">
                 <tr>
                   <th className="px-4 py-3">Name</th>
                   <th className="px-4 py-3">Category</th>
@@ -150,25 +150,25 @@ export default async function AssetsPage({
               </thead>
               <tbody>
                 {flat.map((asset) => (
-                  <tr key={asset.id} className="border-t border-neutral-800 hover:bg-neutral-900">
+                  <tr key={asset.id} className="border-t border-neutral-200 hover:bg-white">
                     <td className="px-4 py-3">
-                      <Link href={`/assets/${asset.id}`} className="text-neutral-100 underline">
+                      <Link href={`/assets/${asset.id}`} className="text-neutral-950 underline">
                         {asset.name}
                       </Link>
                     </td>
-                    <td className="px-4 py-3 text-neutral-400">{asset.category}</td>
+                    <td className="px-4 py-3 text-neutral-500">{asset.category}</td>
                     <td className="px-4 py-3">
-                      <span className="rounded-full border border-neutral-700 px-2 py-0.5 text-xs">
+                      <span className="rounded-full border border-neutral-200 px-2 py-0.5 text-xs">
                         {formatLabel(asset.stockStatus)}
                       </span>
                     </td>
-                    <td className="px-4 py-3 text-neutral-400">
+                    <td className="px-4 py-3 text-neutral-500">
                       {asset.conditionGrade ? formatLabel(asset.conditionGrade) : '—'}
                     </td>
-                    <td className="px-4 py-3 text-neutral-400">
+                    <td className="px-4 py-3 text-neutral-500">
                       {asset.auditStatus ? formatLabel(asset.auditStatus) : '—'}
                     </td>
-                    <td className="px-4 py-3 text-neutral-400">{asset.location?.name ?? '—'}</td>
+                    <td className="px-4 py-3 text-neutral-500">{asset.location?.name ?? '—'}</td>
                   </tr>
                 ))}
                 {flat.length === 0 && (

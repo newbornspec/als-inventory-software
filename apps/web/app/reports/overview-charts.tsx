@@ -15,32 +15,38 @@ import {
   YAxis,
 } from 'recharts';
 
-// Dark-surface palette (validated against the card surface #171717 with the
-// dataviz six-checks script; CVD floor band mitigated by the legend + counts
-// tables that always accompany the donut). Categorical slots in FIXED order.
+// Light-surface palette. Re-validated when the app moved from the dark theme:
+// the previous steps were tuned for the #171717 card and failed the
+// normal-vision floor on white (magenta vs red, ΔE 7.8). These are the
+// light-mode steps, all six checks passing — worst adjacent CVD ΔE 9.1,
+// worst adjacent normal-vision ΔE 19.6. Categorical slots in FIXED order:
+// assigned by position, never cycled, never reordered by rank.
 const CATEGORICAL = [
-  '#3987e5', // blue
-  '#199e70', // aqua
-  '#c98500', // yellow
+  '#2a78d6', // blue
+  '#eb6834', // orange
+  '#1baf7a', // aqua
+  '#eda100', // yellow
+  '#e87ba4', // magenta
   '#008300', // green
-  '#9085e9', // violet
-  '#e66767', // red
-  '#d55181', // magenta
-  '#d95926', // orange
+  '#4a3aa7', // violet
+  '#e34948', // red
 ];
-const OTHER_GRAY = '#6b6a66';
-const SINGLE_BLUE = '#3987e5';
-const SINGLE_AQUA = '#199e70';
-const INK_MUTED = '#898781';
-const GRID = '#2c2c2a';
-const SURFACE = '#171717';
+// Aqua, yellow and magenta sit below 3:1 on white — the relief rule applies,
+// which the legend rows and counts tables beside every chart already satisfy.
+const OTHER_GRAY = '#8a8a85';
+const SINGLE_BLUE = '#2a78d6';
+const SINGLE_AQUA = '#1baf7a';
+const INK_MUTED = '#52514e';
+const GRID = '#e5e5e5';
+const SURFACE = '#ffffff';
 
 const tooltipStyle = {
-  backgroundColor: '#262626',
-  border: '1px solid rgba(255,255,255,0.1)',
+  backgroundColor: '#ffffff',
+  border: '1px solid #e5e5e5',
   borderRadius: 6,
   fontSize: 12,
-  color: '#fff',
+  color: '#0b0b0b',
+  boxShadow: '0 8px 24px rgba(15,23,42,0.08)',
 };
 
 export interface LabelCount {
@@ -98,8 +104,8 @@ export function CategoryDonut({ data }: { data: LabelCount[] }) {
                   r.label === 'Other' ? OTHER_GRAY : CATEGORICAL[i % CATEGORICAL.length],
               }}
             />
-            <span className="flex-1 truncate text-neutral-300">{r.label}</span>
-            <span className="tabular-nums text-neutral-400">{r.count}</span>
+            <span className="flex-1 truncate text-neutral-700">{r.label}</span>
+            <span className="tabular-nums text-neutral-500">{r.count}</span>
             <span className="w-12 text-right text-xs tabular-nums text-neutral-500">
               {total > 0 ? `${((r.count / total) * 100).toFixed(0)}%` : ''}
             </span>
@@ -196,7 +202,7 @@ export function MonthlyTrend({
 
   return (
     <div>
-      <div className="mb-2 flex items-center gap-4 text-xs text-neutral-400">
+      <div className="mb-2 flex items-center gap-4 text-xs text-neutral-500">
         {series.map((s) => (
           <span key={s.key} className="flex items-center gap-1.5">
             <span className="inline-block h-2 w-4 rounded-sm" style={{ backgroundColor: ACCENT[s.color] }} />

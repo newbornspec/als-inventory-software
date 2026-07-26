@@ -13,12 +13,12 @@ export default async function LookupsPage() {
     : [];
 
   return (
-    <main className="min-h-screen bg-neutral-950 text-neutral-100">
+    <main className="min-h-screen bg-white text-neutral-950">
       <Nav />
       <div className="p-8">
         <Breadcrumbs items={[{ label: 'Dashboard', href: '/dashboard' }, { label: 'Lookups' }]} />
         <h1 className="mt-3 text-2xl font-semibold">Lookup values</h1>
-        <p className="mt-1 max-w-2xl text-sm text-neutral-400">
+        <p className="mt-1 max-w-2xl text-sm text-neutral-500">
           The master dropdown lists used by pallet Layout 2 (and future forms). New values also
           get added automatically when someone types one during data entry. Disable a value to
           hide it from dropdowns without affecting records that already use it.
