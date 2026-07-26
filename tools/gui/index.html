@@ -100,8 +100,18 @@
        font:12px/1.55 ui-monospace,Menlo,Consolas,monospace;height:190px;overflow:auto;
        white-space:pre-wrap}
   .est{display:flex;align-items:center;justify-content:space-between;border:1px solid var(--line);
-       border-radius:10px;padding:12px 14px;color:var(--mut);font-size:13.5px}
+       border-radius:10px;padding:11px 14px;color:var(--mut);font-size:13.5px}
   .est b{color:var(--ink);font-weight:600}
+
+  /* drive health (SMART) */
+  .health{display:flex;align-items:flex-start;gap:9px;border-radius:10px;padding:9px 12px;
+          margin:-6px 0 10px;font-size:12.5px;line-height:1.4}
+  .health .hd{width:8px;height:8px;border-radius:50%;flex:none;margin-top:5px}
+  .health b{font-weight:600}
+  .health.ok{background:#f0fdf4;color:#15803d} .health.ok .hd{background:var(--green)}
+  .health.warn{background:#fffbeb;color:var(--amber)} .health.warn .hd{background:#f59e0b}
+  .health.bad{background:#fef2f2;color:#b91c1c} .health.bad .hd{background:var(--red)}
+  .health.na{background:#f8fafc;color:var(--mut)} .health.na .hd{background:var(--mut2)}
 
   /* alerts */
   .alert{border:1px solid #fecaca;background:#fef2f2;border-radius:12px;padding:14px 16px;
@@ -124,6 +134,49 @@
   .toast.bad{background:var(--red)}
   .foot{display:flex;gap:10px;align-items:center}
   .diag{font-size:11px;color:var(--mut2);margin-top:14px}
+
+  /* ------------------------------------------------- large displays ---
+     Without this the console keeps laptop-sized type on a big monitor and
+     sits as a small island in the middle. Scale the type, controls and grid
+     width with the display so it looks native on 1080p, 1440p and 4K. */
+  @media(min-width:1700px){
+    body{font-size:16.5px}
+    .grid{max-width:1860px;gap:22px}
+    .col{gap:20px}
+    .card{padding:21px 25px;border-radius:16px}
+    .brand h1{font-size:22px} .brand p{font-size:13.5px}
+    .logo{width:44px;height:44px}
+    .lbl{font-size:12px} .sublbl{font-size:11.5px}
+    .sel select{font-size:16px;padding-top:15px;padding-bottom:15px}
+    .btn{font-size:16.5px;padding:16px}
+    .hwv{font-size:15.5px} .hwk{font-size:11.5px}
+    .hwic{width:38px;height:38px}
+    .bmeta .v{font-size:15.5px} .bmeta .k{font-size:12px}
+    .est{font-size:15px;padding:14px 16px}
+    .health{font-size:14px}
+    .chip{font-size:15px}
+  }
+  @media(min-width:2400px){
+    body{font-size:19.5px}
+    .grid{max-width:2500px;gap:28px}
+    .col{gap:24px}
+    .card{padding:26px 32px;border-radius:18px}
+    .scroll{padding:26px}
+    .brand h1{font-size:27px} .brand p{font-size:16px}
+    .logo{width:54px;height:54px;border-radius:13px}
+    .lbl{font-size:14px} .sublbl{font-size:13px}
+    .sel select{font-size:19px;padding:19px 44px 19px 50px}
+    .btn{font-size:20px;padding:20px}
+    .hwv{font-size:18.5px} .hwk{font-size:13px}
+    .hwic{width:46px;height:46px;border-radius:12px}
+    .hwi{padding:17px 0}
+    .bmeta .v{font-size:18.5px} .bmeta .k{font-size:13.5px}
+    .est{font-size:18px;padding:18px 20px}
+    .health{font-size:16.5px;padding:13px 15px}
+    .chip{font-size:18px}
+    .iconbtn{width:46px;height:46px}
+    .log{font-size:15px;height:250px}
+  }
 </style>
 </head>
 
@@ -273,6 +326,7 @@
             <span class="ri"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
               stroke-width="2" stroke-linecap="round"><path d="M6 9l6 6 6-6"/></svg></span>
           </div>
+          <div class="health hidden" id="wHealth"></div>
           <p class="sublbl">Wipe method</p>
           <div class="sel" style="margin-bottom:14px">
             <span class="li"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -434,8 +488,31 @@ function fillImages(){
     : '<option value="">No OS images on this stick</option>';
 }
 
+/* --- drive health (SMART) ------------------------------------------------
+   Shown before the operator commits: a dying disk is worth knowing about
+   BEFORE starting a wipe that can run for hours. */
+function healthOf(dev){const d=DRIVES.find(x=>x.device===dev);return d?d.health:null;}
+function healthText(h){
+  if(!h||h.status==='unknown')return['na','SMART not available for this drive',''];
+  const extra=[];
+  if(h.hours)extra.push(Number(h.hours).toLocaleString()+' hrs');
+  if(h.tempC)extra.push(h.tempC+'°C');
+  // Kept to one or two lines; the full advisory appears in the confirm dialog.
+  if(h.status==='failing')return['bad','Drive is FAILING',(h.reasons||[]).join(' · ')];
+  if(h.status==='caution')return['warn','Drive health: caution',(h.reasons||[]).join(' · ')];
+  return['ok','Drive health: good',extra.join(' · ')];
+}
+function renderHealth(){
+  const el=$('wHealth'), h=healthOf($('wDrive').value);
+  if(!$('wDrive').value){el.classList.add('hidden');return;}
+  const [cls,title,detail]=healthText(h);
+  el.className='health '+cls;
+  el.innerHTML='<span class="hd"></span><span><b>'+title+'</b>'+(detail?' — '+detail:'')+'</span>';
+}
+
 /* estimated wipe time — honest maths from drive size + method */
 function estimate(){
+  renderHealth();
   const o=$('wDrive').selectedOptions[0];
   if(!o||!o.dataset){$('wEst').textContent='—';return;}
   const bytes=+(o.dataset.bytes||0), rota=o.dataset.rota==='1', m=$('wMethod').value;
@@ -522,8 +599,15 @@ function pollJob(kind,o){
 function confirmWipe(){
   const dev=$('wDrive').value, o=$('wDrive').selectedOptions[0];
   const batch=$('batchSel').selectedOptions[0];
+  const h=healthOf(dev);
+  let warn='';
+  if(h&&h.status==='failing')
+    warn=' ⚠ SMART reports this drive is FAILING ('+(h.reasons||[]).join(', ')+
+         ') — the wipe may stall or never finish.';
+  else if(h&&h.status==='caution')
+    warn=' ⚠ This drive reports faults ('+(h.reasons||[]).join(', ')+') and may wipe slowly or fail.';
   openOv('Erase '+dev+'?','This permanently destroys all data on '+(o?o.textContent:dev)+
-    ' and records the wipe against '+(batch?batch.textContent:'the selected batch')+'. This cannot be undone.',
+    ' and records the wipe against '+(batch?batch.textContent:'the selected batch')+'. This cannot be undone.'+warn,
     false, async()=>{
     closeOv();
     let res;
@@ -538,7 +622,11 @@ function confirmWipe(){
       onDone:(r)=>{
         $('wActions').classList.remove('hidden'); $('wRun').classList.add('hidden');
         if(r.status==='wiped'){
-          if(r.recorded)toast('Wipe complete & saved to '+(batch?batch.textContent:'the batch')+' ✓');
+          if(r.recorded)
+            // A recorded wipe makes the Certificate of Data Erasure issuable in
+            // Als Inventory, so tell the operator it is ready.
+            toast('Wipe complete — saved as '+(r.recordTag||'a new asset')+' in '+
+                  (batch?batch.textContent:'the batch')+'. Erasure certificate now available ✓');
           else if(r.recordError)toast('Wiped, but not saved: '+r.recordError,false);
           else toast('Wipe complete ✓');
         }else{

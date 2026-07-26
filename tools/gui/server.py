@@ -206,6 +206,14 @@ def refresh(do_login=True):
         STATE["conf"] = load_conf()
         prof, summ = capture()
         STATE["profile"], STATE["summary"] = prof, summ
+        # Attach SMART health to the profile so it is stored on the asset record
+        # (profile is kept verbatim as JSONB, so this needs no API change).
+        if isinstance(STATE["profile"], dict):
+            STATE["profile"]["driveHealth"] = [
+                {"device": d["device"], "model": d.get("model"), "size": d.get("size"),
+                 "health": d.get("health")}
+                for d in list_drives()
+            ]
         if do_login:
             wifi_msg = connect_network()
             try:
@@ -253,6 +261,15 @@ def ident():
     # the UI stays presentation-only.
     cores = joins(["%sC" % c["cores"] if c.get("cores") else "",
                    "%sT" % c["threads"] if c.get("threads") else ""], "/")
+
+    # Worst drive health across the internal disks, shown on the Storage line.
+    rank = {"failing": 3, "caution": 2, "healthy": 1}
+    worst = ""
+    for d in list_drives():
+        s = ((d.get("health") or {}).get("status") or "")
+        if rank.get(s, 0) > rank.get(worst, 0):
+            worst = s
+    health_note = (" · Health: %s" % worst.capitalize()) if worst else ""
     return {
         "name": " ".join(x for x in [i.get("manufacturer"), i.get("model")] if x) or "Unknown device",
         "deviceType": i.get("deviceType", ""),
@@ -267,8 +284,8 @@ def ident():
             "processor": joins([c.get("model"), cores, c.get("maxClock")]),
             "memory": joins([("%s GB" % mm["totalGb"]) if mm.get("totalGb") else "",
                              mm.get("type"), mm.get("speed")]),
-            "storage": joins([joins([d.get("capacity"), d.get("type")], " ")
-                              for d in st], ", ") or "",
+            "storage": (joins([joins([d.get("capacity"), d.get("type")], " ")
+                               for d in st], ", ") or "") + health_note,
             "display": joins([dsp.get("size"), dsp.get("resolution")]),
             "optical": "Present" if has_optical() else "Not present",
             "network": joins([net.get("wifi"), net.get("bluetooth"), net.get("ethernet")]),
@@ -331,6 +348,7 @@ def list_drives():
             "rotational": rota == "1",
             "model": lsblk_field(line, "MODEL") or "Unknown model",
             "method": method,
+            "health": smart_health("/dev/" + name),
         })
     return drives
 
@@ -343,6 +361,70 @@ def human_size(n):
         v = n / 1_000_000_000_000.0
         return ("%.1f" % v).rstrip("0").rstrip(".") + " TB"
     return "%d GB" % round(n / 1_000_000_000.0)
+
+
+SMART_CACHE = {}   # device -> (timestamp, health dict)
+
+
+def smart_health(dev):
+    """SMART summary for one drive, so a failing disk is flagged BEFORE an
+    operator commits to a multi-hour wipe. Handles both ATA and NVMe via
+    `smartctl -j`. Returns None when SMART is unavailable (e.g. USB bridges)."""
+    hit = SMART_CACHE.get(dev)
+    if hit and time.time() - hit[0] < 300:
+        return hit[1]
+    try:
+        out = subprocess.run(["smartctl", "-j", "-H", "-A", dev],
+                             capture_output=True, text=True, timeout=30).stdout
+        d = json.loads(out)
+    except Exception:  # noqa: BLE001
+        return None
+    if not isinstance(d, dict) or not d:
+        return None
+
+    passed = (d.get("smart_status") or {}).get("passed")
+    hours = (d.get("power_on_time") or {}).get("hours")
+    temp = (d.get("temperature") or {}).get("current")
+    reallocated = pending = media_err = pct_used = None
+
+    nv = d.get("nvme_smart_health_information_log") or {}
+    if nv:
+        pct_used = nv.get("percentage_used")
+        media_err = nv.get("media_errors")
+        hours = hours or nv.get("power_on_hours")
+    for a in ((d.get("ata_smart_attributes") or {}).get("table") or []):
+        raw = (a.get("raw") or {}).get("value")
+        if a.get("id") == 5:
+            reallocated = raw
+        elif a.get("id") == 197:
+            pending = raw
+
+    reasons = []
+    if passed is False:
+        reasons.append("SMART self-assessment FAILED")
+    if reallocated:
+        reasons.append("%s reallocated sector%s" % (reallocated, "" if reallocated == 1 else "s"))
+    if pending:
+        reasons.append("%s pending sector%s" % (pending, "" if pending == 1 else "s"))
+    if media_err:
+        reasons.append("%s media error%s" % (media_err, "" if media_err == 1 else "s"))
+    if isinstance(pct_used, int) and pct_used >= 90:
+        reasons.append("%d%% of rated write life used" % pct_used)
+
+    if passed is False:
+        status = "failing"
+    elif reasons:
+        status = "caution"
+    elif passed is True:
+        status = "healthy"
+    else:
+        status = "unknown"
+
+    health = {"status": status, "reasons": reasons, "hours": hours,
+              "tempC": temp, "reallocated": reallocated, "pending": pending,
+              "mediaErrors": media_err, "percentUsed": pct_used}
+    SMART_CACHE[dev] = (time.time(), health)
+    return health
 
 
 def has_optical():
