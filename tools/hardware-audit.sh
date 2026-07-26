@@ -423,6 +423,15 @@ gui_wipe_one() {
     echo "WIPE_RESULT {\"status\":\"failed\",\"method\":\"removable device refused\",\"device\":\"$dev\"}"
     return 1
   fi
+  # Pseudo-devices are not real disks: /dev/loop* is the boot media's own
+  # SquashFS, and wiping it is both pointless and confusing.
+  case "$d" in
+    loop*|ram*|zram*|sr*|fd*|dm-*)
+      echo "Refusing: $dev is not a real disk (it is a $d pseudo-device)."
+      echo "WIPE_RESULT {\"status\":\"failed\",\"method\":\"none\",\"device\":\"$dev\",\"reason\":\"$dev is not a physical disk\"}"
+      return 1
+      ;;
+  esac
   export AUDIT_WIPE_METHOD="$want"
   rota=$(cat "/sys/block/$d/queue/rotational" 2>/dev/null)
   m=""; verified=0; fw=0

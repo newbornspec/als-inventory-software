@@ -257,6 +257,15 @@ def ident():
     def joins(parts, sep=" · "):
         return sep.join(str(x) for x in parts if x)
 
+    def nic(s):
+        """'Centrino Advanced-N 6205 [Taylor Peak]' -> 'Centrino Advanced-N 6205'.
+        Vendor strings carry codenames and boilerplate that wrap onto three
+        lines in the hardware panel."""
+        s = re.sub(r"\s*[\[(][^\])]*[\])]", "", s or "").strip()
+        s = re.sub(r"\s*(Gigabit\s+)?Network Connection\s*$", "", s, flags=re.I)
+        s = re.sub(r"\s*(Wireless|Ethernet)\s+(Network\s+)?(Adapter|Controller)\s*$", "", s, flags=re.I)
+        return s.strip(" -·")
+
     # The hardware card shows one line per component; each is assembled here so
     # the UI stays presentation-only.
     cores = joins(["%sC" % c["cores"] if c.get("cores") else "",
@@ -288,11 +297,12 @@ def ident():
                                for d in st], ", ") or "") + health_note,
             "display": joins([dsp.get("size"), dsp.get("resolution")]),
             "optical": "Present" if has_optical() else "Not present",
-            "network": joins([net.get("wifi"), net.get("bluetooth"), net.get("ethernet")]),
+            "network": joins([nic(net.get("wifi")), nic(net.get("bluetooth")),
+                              nic(net.get("ethernet"))]),
             "batteryLine": joins([bat.get("fullChargeCapacity") or bat.get("designCapacity"),
                                   ("Health %s" % bat["health"]) if bat.get("health") else "",
                                   bat.get("status")]),
-            "tpm": joins([sec.get("tpm"),
+            "tpm": joins([sec.get("tpm") or "No TPM detected",
                           ("Secure Boot %s" % sec["secureBoot"]) if sec.get("secureBoot") else ""]),
         },
     }
@@ -310,8 +320,9 @@ def list_drives():
     drives = []
     try:
         # -b gives SIZE in bytes, so the UI can estimate how long a wipe takes.
+        # TYPE lets us drop pseudo-devices (see the filter below).
         out = subprocess.run(
-            ["lsblk", "-dPb", "-o", "NAME,SIZE,MODEL,TRAN,RM,ROTA"],
+            ["lsblk", "-dPb", "-o", "NAME,SIZE,MODEL,TRAN,RM,ROTA,TYPE"],
             capture_output=True, text=True, timeout=15).stdout
     except Exception:
         return drives
@@ -322,6 +333,14 @@ def list_drives():
         tran = lsblk_field(line, "TRAN")
         rm = lsblk_field(line, "RM")
         rota = lsblk_field(line, "ROTA")
+        # Only real whole disks. Without this, the boot media's SquashFS shows up
+        # as /dev/loop0 ("1 GB, unknown model") and — being first alphabetically —
+        # becomes the default wipe/install target. Also drops zram, ram and
+        # optical devices.
+        if lsblk_field(line, "TYPE") != "disk":
+            continue
+        if re.match(r"^(loop|ram|zram|sr|fd|md|dm-)", name):
+            continue
         if tran == "usb" or rm == "1":
             continue
         try:
