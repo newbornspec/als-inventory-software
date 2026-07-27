@@ -278,6 +278,7 @@
                 stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg>
               Start audit</button>
           </div>
+          <div class="health hidden" id="aPrior"></div>
           <div class="hidden" id="aRun">
             <div class="pr ind" style="margin-top:14px"><i></i></div>
             <div style="font-size:12.5px;color:var(--mut);margin-top:8px">Uploading audit…</div>
@@ -514,6 +515,7 @@ function onBatch(){
     ? new Date(l.createdAt).toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}):'—';
   $('bBy').textContent=(l&&(l.createdByName||l.ownerName))||'—';
   $('aStart').disabled=!(BOOT.device&&$('batchSel').value);
+  checkPrior();
 }
 
 function driveOpts(){return DRIVES.map(d=>'<option value="'+d.device+'" data-bytes="'+(d.bytes||0)+
@@ -661,7 +663,55 @@ function fillHardware(){
 }
 
 /* ------------------------------------------------------------- audit --- */
+/* Has this machine already been audited into the selected batch? Answered by
+   serial, the same key the upload uses, so the warning matches what would
+   actually happen. Silent when offline or when there is no serial. */
+let PRIOR=null;
+async function checkPrior(){
+  const el=$('aPrior'); if(!el)return;
+  const lot=$('batchSel').value;
+  PRIOR=null;
+  if(!lot||!BOOT.device){el.classList.add('hidden');el.__k=null;return;}
+  let p;
+  try{ p=await jget('/api/priorAudit?lotId='+encodeURIComponent(lot)); }
+  catch(e){ el.classList.add('hidden');el.__k=null;return; }
+  if(!p||!p.found){el.classList.add('hidden');el.__k=null;return;}
+  PRIOR=p;
+  const when=p.lastAuditAt
+    ? new Date(p.lastAuditAt).toLocaleString('en-GB',{day:'2-digit',month:'short',
+        year:'numeric',hour:'2-digit',minute:'2-digit'})
+    : 'previously';
+  const bits=[];
+  if(p.tag)bits.push('as '+p.tag);
+  if(p.auditCount)bits.push(p.auditCount+(p.auditCount===1?' audit':' audits')+' on record');
+  if(p.lastWipeStatus)bits.push('wipe: '+p.lastWipeStatus);
+  const html='<span class="hd"></span><span><b>Already audited in this batch</b> — '+
+    when+(bits.length?' · '+bits.join(' · '):'')+
+    '. Running the audit again updates that record rather than creating a new one.</span>';
+  const key='warn|'+html;
+  if(el.__k===key){el.classList.remove('hidden');return;}
+  el.__k=key;el.className='health warn';el.innerHTML=html;
+  el.classList.remove('hidden');
+}
+
 async function startAudit(){
+  if(!BOOT.device){toast('Hardware not detected yet.',false);return;}
+  if(PRIOR&&PRIOR.found){
+    const when=PRIOR.lastAuditAt
+      ? new Date(PRIOR.lastAuditAt).toLocaleString('en-GB',{day:'2-digit',month:'short',
+          year:'numeric',hour:'2-digit',minute:'2-digit'})
+      : 'previously';
+    openOv('Already audited — audit again?',
+      'This machine'+(PRIOR.tag?' ('+PRIOR.tag+')':'')+' was already audited into this batch on '+
+      when+'. Continuing updates the existing record with a fresh capture; it does not create a '+
+      'duplicate, and the wipe history is kept.',
+      false, ()=>{closeOv();doAudit();}, 'Update the audit');
+    return;
+  }
+  doAudit();
+}
+
+async function doAudit(){
   if(!BOOT.device){toast('Hardware not detected yet.',false);return;}
   $('aStart').disabled=true; $('aRun').classList.remove('hidden');
   let res;
@@ -672,10 +722,11 @@ async function startAudit(){
     // Offline: the record is on disk and uploads itself once back on the network.
     toast('No connection — audit saved on this machine and will upload automatically ('+
           (res.data.waiting||1)+' waiting)',false);
-    bootstrap(); return;
+    bootstrap(); checkPrior(); return;
   }
-  toast(res.ok?'Audit saved ✓':(res.data.message||'Audit failed'),res.ok);
-  if(res.ok)bootstrap();
+  toast(res.ok?(PRIOR&&PRIOR.found?'Audit updated ✓':'Audit saved ✓')
+              :(res.data.message||'Audit failed'),res.ok);
+  if(res.ok){bootstrap();checkPrior();}
 }
 
 /* -------------------------------------------------- job polling (hard) --

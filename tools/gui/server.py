@@ -30,6 +30,7 @@ import threading
 import time
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import urllib.parse
 from urllib.parse import urlparse, parse_qs
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -842,6 +843,70 @@ def net_check():
             "verdict": verdict, "interfaces": ifaces, "routes": routes}
 
 
+PRIOR_CACHE = {"key": None, "ts": 0.0, "data": None}
+
+
+def prior_audit(lot_id):
+    """Has the machine currently on the bench already been audited into this
+    batch? Matched on serial number, which is how the API identifies a device
+    (find-or-create by serial), so this answers the same question the upload
+    would. Returns None when unknown - no profile, no serial, or offline.
+
+    Cached briefly and keyed on lot+serial: the UI asks whenever the operator
+    changes batch, and this must never become another per-poll network call."""
+    prof = STATE.get("profile") or {}
+    ident = (prof.get("identification") or {}) if isinstance(prof, dict) else {}
+    serial = (ident.get("serialNumber") or "").strip()
+    if not serial or not lot_id:
+        return None
+
+    key = "%s|%s" % (lot_id, serial)
+    now = time.time()
+    if PRIOR_CACHE["key"] == key and now - PRIOR_CACHE["ts"] < 20:
+        return PRIOR_CACHE["data"]
+
+    try:
+        rows = api("/assets?batchId=%s&search=%s" % (lot_id, urllib.parse.quote(serial)),
+                   token=ensure_token()) or []
+    except Exception:  # noqa: BLE001
+        return None                      # offline: stay silent rather than guess
+
+    match = None
+    for a in rows if isinstance(rows, list) else []:
+        # ILIKE %serial% can match loosely; require an exact serial or tag hit.
+        for field in ("serialNumber", "tag"):
+            if (a.get(field) or "").strip().lower() == serial.lower():
+                match = a
+                break
+        if match:
+            break
+    if not match:
+        PRIOR_CACHE.update(key=key, ts=now, data={"found": False})
+        return PRIOR_CACHE["data"]
+
+    audits = []
+    try:
+        audits = api("/assets/%s/audits" % match["id"], token=ensure_token()) or []
+    except Exception:  # noqa: BLE001
+        audits = []
+    last = audits[0] if isinstance(audits, list) and audits else None
+
+    data = {
+        "found": True,
+        "assetId": match.get("id"),
+        "name": match.get("name"),
+        "tag": match.get("tag"),
+        "serial": serial,
+        "auditCount": len(audits) if isinstance(audits, list) else 0,
+        "lastAuditAt": (last or {}).get("createdAt"),
+        "lastWipeStatus": (last or {}).get("dataWipeStatus"),
+        "grade": match.get("conditionGrade"),
+        "auditStatus": match.get("auditStatus"),
+    }
+    PRIOR_CACHE.update(key=key, ts=now, data=data)
+    return data
+
+
 def tool_check():
     """Which imaging/erase tools this boot media actually has.
 
@@ -1215,6 +1280,10 @@ class Handler(BaseHTTPRequestHandler):
             # can be opened, so it must never touch hardware or the network.
             return self._send(200, {"ok": True})
 
+        if u.path == "/api/priorAudit":
+            lot = (parse_qs(u.query).get("lotId") or [""])[0]
+            return self._send(200, prior_audit(lot) or {"found": False, "unknown": True})
+
         if u.path == "/api/toolcheck":
             return self._send(200, tool_check())
 
@@ -1264,6 +1333,7 @@ class Handler(BaseHTTPRequestHandler):
             if body.get("notes"):
                 payload["notes"] = body["notes"]
             out, queued, err = upload_audit(payload)
+            PRIOR_CACHE["key"] = None       # this device's history just changed
             if queued:
                 # Never lose the unit: it is on disk and will upload itself.
                 return self._send(200, {"queued": True, "waiting": queue_count(),
