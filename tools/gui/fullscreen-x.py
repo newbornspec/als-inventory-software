@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Force the kiosk browser window to fill the whole screen.
+"""Force the kiosk browser's MAIN window to fill the whole screen.
 
 WHY THIS EXISTS: Firefox --kiosk hides the toolbar but opens its window at ~90%
 of the screen and never truly fullscreens; no window manager auto-fills it. The
@@ -7,15 +7,49 @@ usual fix (xdotool/wmctrl) needs a package that isn't on the live media and
 can't always be installed. So this resizer uses ONLY what is guaranteed present
 on any X system: python3 + libX11 (via ctypes). No extra packages, no internet.
 
-It runs inside the xinit session (DISPLAY set), reads the real screen size from
-X (so it is resolution-independent — any laptop panel or external monitor), and
-resizes every large top-level window to the full screen a few times a second for
-~40s. That catches the browser once it has finished starting, and stops fighting
-it as soon as it is already full-screen.
+HARD-LEARNED RULES (from real hardware): a native <select> dropdown is itself a
+top-level X window. The first version of this script resized/raised/focused
+EVERY large window once a second — so the instant the operator opened the batch
+dropdown, its popup was seized and Firefox closed the menu. Symptom: menus
+"snap shut" on click; only keyboard selection works. Therefore, exactly like a
+real window manager, this script must:
+
+  * skip override-redirect windows — menus, dropdowns and tooltips set this
+    flag precisely to say "window managers: hands off";
+  * skip windows that are not currently viewable;
+  * skip anything smaller than 60% of the screen in either dimension — that is
+    a dialog or popup, never the kiosk browser (which opens at ~90%);
+  * steal focus/raise at most ONCE per window, when it is first fixed —
+    repeatedly focusing every second fights the user;
+  * never crash on a window that vanished mid-loop (menus close fast), so a
+    no-op X error handler is installed.
 """
 import ctypes
 import ctypes.util
 import time
+
+IS_VIEWABLE = 2          # XWindowAttributes.map_state
+
+
+class XWA(ctypes.Structure):
+    """XWindowAttributes — layout per Xlib.h."""
+    _fields_ = [
+        ("x", ctypes.c_int), ("y", ctypes.c_int),
+        ("width", ctypes.c_int), ("height", ctypes.c_int),
+        ("border_width", ctypes.c_int), ("depth", ctypes.c_int),
+        ("visual", ctypes.c_void_p), ("root", ctypes.c_ulong),
+        ("class_", ctypes.c_int),
+        ("bit_gravity", ctypes.c_int), ("win_gravity", ctypes.c_int),
+        ("backing_store", ctypes.c_int),
+        ("backing_planes", ctypes.c_ulong), ("backing_pixel", ctypes.c_ulong),
+        ("save_under", ctypes.c_int),
+        ("colormap", ctypes.c_ulong), ("map_installed", ctypes.c_int),
+        ("map_state", ctypes.c_int),
+        ("all_event_masks", ctypes.c_long), ("your_event_mask", ctypes.c_long),
+        ("do_not_propagate_mask", ctypes.c_long),
+        ("override_redirect", ctypes.c_int),
+        ("screen", ctypes.c_void_p),
+    ]
 
 
 def main():
@@ -42,13 +76,20 @@ def main():
     X.XDefaultRootWindow.argtypes = [vp]
     X.XQueryTree.argtypes = [vp, Window, P(Window), P(Window), P(P(Window)), P(cu)]
     X.XQueryTree.restype = ci
-    X.XGetGeometry.argtypes = [vp, Window, P(Window), P(ci), P(ci), P(cu), P(cu), P(cu), P(cu)]
-    X.XGetGeometry.restype = ci
+    X.XGetWindowAttributes.argtypes = [vp, Window, P(XWA)]
+    X.XGetWindowAttributes.restype = ci
     X.XMoveResizeWindow.argtypes = [vp, Window, ci, ci, cu, cu]
     X.XRaiseWindow.argtypes = [vp, Window]
     X.XSetInputFocus.argtypes = [vp, Window, ci, ctypes.c_ulong]
     X.XFree.argtypes = [vp]
     X.XSync.argtypes = [vp, ci]
+
+    # A menu can vanish between "list windows" and "inspect window"; the default
+    # Xlib error handler would terminate the process. Ignore errors instead.
+    HANDLER = ctypes.CFUNCTYPE(ci, vp, vp)
+    noop = HANDLER(lambda d, e: 0)
+    X.XSetErrorHandler.argtypes = [HANDLER]
+    X.XSetErrorHandler(noop)
 
     dpy = X.XOpenDisplay(None)
     if not dpy:
@@ -70,27 +111,31 @@ def main():
             X.XFree(ch)
         return out
 
-    def size_of(w):
-        rr = Window()
-        gx, gy = ci(), ci()
-        gw, gh, gb, gd = cu(), cu(), cu(), cu()
-        if not X.XGetGeometry(dpy, w, ctypes.byref(rr), ctypes.byref(gx), ctypes.byref(gy),
-                             ctypes.byref(gw), ctypes.byref(gh), ctypes.byref(gb), ctypes.byref(gd)):
-            return (0, 0)
-        return (gw.value, gh.value)
+    focused_once = set()
 
-    # Watch for ~10 minutes at 1s cadence. It only calls resize when a window is
-    # NOT already full, so once the browser fills the screen it costs almost
-    # nothing — but it also re-fills instantly if the browser ever shrinks back.
-    for _ in range(600):
+    # Watch for ~25 minutes: every 1s at first (catch the browser settling),
+    # dropping to every 3s once things are stable. Cheap: it only acts on a
+    # main-window-sized window that is not already fullscreen.
+    for i in range(600):
         for w in top_children():
-            gw, gh = size_of(w)
-            if gw > 200 and gh > 200 and (gw != sw or gh != sh):
-                X.XMoveResizeWindow(dpy, w, 0, 0, sw, sh)
+            a = XWA()
+            if not X.XGetWindowAttributes(dpy, w, ctypes.byref(a)):
+                continue
+            if a.override_redirect or a.map_state != IS_VIEWABLE:
+                continue                      # menus/dropdowns/tooltips/hidden
+            if a.width < sw * 0.6 or a.height < sh * 0.6:
+                continue                      # dialogs and popups, not the kiosk
+            if a.width == sw and a.height == sh and a.x == 0 and a.y == 0:
+                continue                      # already perfect
+            X.XMoveResizeWindow(dpy, w, 0, 0, sw, sh)
+            if w not in focused_once:
+                # Raise and focus only the first time: doing it every second
+                # would fight whatever the operator is interacting with.
                 X.XRaiseWindow(dpy, w)
                 X.XSetInputFocus(dpy, w, 2, 0)  # RevertToParent, CurrentTime
+                focused_once.add(w)
         X.XSync(dpy, 0)
-        time.sleep(1)
+        time.sleep(1 if i < 120 else 3)
 
 
 if __name__ == "__main__":
