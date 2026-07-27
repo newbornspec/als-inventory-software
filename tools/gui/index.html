@@ -509,7 +509,7 @@ function fillWipeDrives(){
     box.innerHTML=DRIVES.map(d=>{
       const h=d.health, cls=!h||h.status==='unknown'?'na':(h.status==='failing'?'bad':
               (h.status==='caution'?'warn':'ok'));
-      const lab=!h||h.status==='unknown'?'no SMART':h.status;
+      const lab=(h===null||h===undefined)?'checking…':(h.status==='unknown'?'no SMART':h.status);
       return '<label class="dchk"><input type="checkbox" class="wchk" value="'+d.device+
         '" onchange="estimate()" checked><span class="dn">'+d.device+' — '+(d.size||'?')+
         (d.model&&d.model!=='Unknown model'?' · '+d.model:'')+
@@ -562,7 +562,9 @@ function fillImages(){
    BEFORE starting a wipe that can run for hours. */
 function healthOf(dev){const d=DRIVES.find(x=>x.device===dev);return d?d.health:null;}
 function healthText(h){
-  if(!h||h.status==='unknown')return['na','SMART not available for this drive',''];
+  // null = still being probed in the background; 'unknown' = probed, no SMART.
+  if(h===null||h===undefined)return['na','Checking drive health…',''];
+  if(h.status==='unknown')return['na','SMART not available for this drive',''];
   const extra=[];
   if(h.hours)extra.push(Number(h.hours).toLocaleString()+' hrs');
   if(h.tempC)extra.push(h.tempC+'°C');

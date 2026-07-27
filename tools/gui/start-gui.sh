@@ -145,23 +145,29 @@ ALS_GUI_PORT="$PORT" python3 "$DIR/server.py" &
 SRV=$!
 trap 'kill "$SRV" 2>/dev/null' EXIT
 
-# Wait for it to answer before opening the browser.
-for _ in $(seq 1 40); do
+# Wait for the backend before opening the browser. Poll /api/health, which is
+# deliberately trivial (no hardware, no network), so this measures only whether
+# the server is accepting connections. Opening the browser too early is what
+# produces Firefox's "Unable to connect to 127.0.0.1:8800" page and makes the
+# whole stick look dead, so the window is generous.
+READY=0
+for _ in $(seq 1 120); do          # up to 60s
   if command -v curl >/dev/null 2>&1; then
-    curl -s -o /dev/null "$URL" && break
+    curl -sf -o /dev/null --max-time 2 "$URL/api/health" && { READY=1; break; }
   elif command -v python3 >/dev/null 2>&1; then
-    python3 - "$URL" <<'PY' && break
+    python3 - "$URL/api/health" <<'PY' && { READY=1; break; }
 import sys, urllib.request
 try:
-    urllib.request.urlopen(sys.argv[1], timeout=1); sys.exit(0)
+    urllib.request.urlopen(sys.argv[1], timeout=2); sys.exit(0)
 except Exception:
     sys.exit(1)
 PY
   else
-    sleep 2; break
+    sleep 3; READY=1; break
   fi
   sleep 0.5
 done
+[ "$READY" = "1" ] || echo "WARNING: backend did not answer in 60s — opening anyway."
 
 # --------------------------------------------------------------- frontend ----
 if [ "${ALS_NO_X:-0}" = "1" ]; then

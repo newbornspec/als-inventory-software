@@ -180,7 +180,9 @@ def write_boot_file(path, text):
 # Warehouse Wi-Fi drops. Rather than lose a unit's record, a failed upload is
 # written to disk and retried in the background until it lands.
 QUEUE_PATH = "/tmp/als-audit-queue.jsonl"
-QUEUE_LOCK = threading.Lock()
+QUEUE_LOCK = threading.Lock()      # guards the file
+FLUSH_LOCK = threading.Lock()      # only one flush at a time, or a record could
+                                   # be uploaded twice by two racing threads
 
 
 def queue_load():
@@ -226,6 +228,15 @@ def upload_audit(payload):
 
 def queue_flush():
     """Retry everything waiting. Kept in order; anything that still fails stays."""
+    if not FLUSH_LOCK.acquire(blocking=False):
+        return 0                    # another flush is already running
+    try:
+        return _queue_flush()
+    finally:
+        FLUSH_LOCK.release()
+
+
+def _queue_flush():
     items = queue_load()
     if not items:
         return 0
@@ -318,7 +329,7 @@ def connect_network():
         # (association + DHCP + retries). Cutting it short would throw away the
         # diagnostic message that tells the operator what is actually wrong.
         proc = subprocess.run(["bash", SCRIPT, "--connect-wifi"],
-                              capture_output=True, text=True, timeout=180)
+                              capture_output=True, text=True, timeout=90)
         lines = [l for l in (proc.stdout or "").splitlines() if l.strip()]
         return " ".join(lines[-2:]) if lines else ""
     except subprocess.TimeoutExpired:
@@ -466,7 +477,7 @@ def list_drives(force=False):
         # TYPE lets us drop pseudo-devices (see the filter below).
         out = subprocess.run(
             ["lsblk", "-dPb", "-o", "NAME,SIZE,MODEL,TRAN,RM,ROTA,TYPE"],
-            capture_output=True, text=True, timeout=15).stdout
+            capture_output=True, text=True, timeout=8).stdout
     except Exception:
         return drives
     for line in out.splitlines():
@@ -526,23 +537,39 @@ def human_size(n):
     return "%d GB" % round(n / 1_000_000_000.0)
 
 
-SMART_CACHE = {}   # device -> (timestamp, health dict)
+SMART_CACHE = {}     # device -> (timestamp, health dict)
+SMART_PENDING = set()  # devices being probed right now, so we probe each once
 
 
-def smart_health(dev):
+def smart_health(dev, block=False):
     """SMART summary for one drive, so a failing disk is flagged BEFORE an
     operator commits to a multi-hour wipe. Handles both ATA and NVMe via
-    `smartctl -j`. Returns None when SMART is unavailable (e.g. USB bridges)."""
+    `smartctl -j`.
+
+    NON-BLOCKING by default: smartctl can take many seconds per disk, and this
+    is reached from /api/bootstrap, which the UI polls while the page is
+    loading. Blocking here would leave the operator staring at an empty screen,
+    so an unprobed drive returns None and is probed on a background thread; the
+    next poll picks up the answer."""
     hit = SMART_CACHE.get(dev)
     if hit and time.time() - hit[0] < 300:
         return hit[1]
+    if not block:
+        if dev not in SMART_PENDING:
+            SMART_PENDING.add(dev)
+            threading.Thread(target=lambda: smart_health(dev, block=True),
+                             daemon=True).start()
+        return None
     try:
         out = subprocess.run(["smartctl", "-j", "-H", "-A", dev],
-                             capture_output=True, text=True, timeout=30).stdout
+                             capture_output=True, text=True, timeout=12).stdout
         d = json.loads(out)
     except Exception:  # noqa: BLE001
+        SMART_PENDING.discard(dev)
         return None
     if not isinstance(d, dict) or not d:
+        SMART_CACHE[dev] = (time.time(), None)   # remember: this drive has no SMART
+        SMART_PENDING.discard(dev)
         return None
 
     passed = (d.get("smart_status") or {}).get("passed")
@@ -587,6 +614,7 @@ def smart_health(dev):
               "tempC": temp, "reallocated": reallocated, "pending": pending,
               "mediaErrors": media_err, "percentUsed": pct_used}
     SMART_CACHE[dev] = (time.time(), health)
+    SMART_PENDING.discard(dev)
     return health
 
 
@@ -837,7 +865,7 @@ def has_optical():
         return OPTICAL_CACHE[0]
     try:
         out = subprocess.run(["lsblk", "-dno", "TYPE"], capture_output=True,
-                             text=True, timeout=10).stdout
+                             text=True, timeout=6).stdout
         found = "rom" in out.split()
     except Exception:  # noqa: BLE001
         found = False
@@ -1115,6 +1143,11 @@ class Handler(BaseHTTPRequestHandler):
             snap["elapsed"] = int(now - job.get("startedAt", now))   # seconds running
             snap["idle"] = int(now - job.get("updatedAt", now))      # seconds since output
             return self._send(200, snap)
+
+        if u.path == "/api/health":
+            # Deliberately trivial: the launcher polls this to know when the UI
+            # can be opened, so it must never touch hardware or the network.
+            return self._send(200, {"ok": True})
 
         if u.path == "/api/toolcheck":
             return self._send(200, tool_check())
