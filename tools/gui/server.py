@@ -603,6 +603,46 @@ def sync_clock():
     bare "not connected" with no error text. Tries NTP, then falls back to the
     Date header of a PLAIN HTTP request (no certificate needed, so it works
     even when TLS is exactly what's broken)."""
+    # --- Layer 1: the offline floor -----------------------------------------
+    # Most audited machines are old and their CMOS battery is dead, so they boot
+    # believing it is years ago. Before touching the network, refuse to be
+    # earlier than the boot media's own files: the stick cannot predate the day
+    # it was written. Costs nothing, needs no network, and happens instantly.
+    floor = 0.0
+    for p in (CONF_PATH, SCRIPT, os.path.join(HERE, "index.html"),
+              os.path.join(HERE, "server.py")):
+        try:
+            floor = max(floor, os.path.getmtime(p))
+        except (OSError, TypeError):
+            pass
+    floor_applied = False
+    if floor and time.time() < floor - 60 and shutil.which("date"):
+        try:
+            r = subprocess.run(["date", "-u", "-s",
+                                time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(floor))],
+                               capture_output=True, timeout=10)
+            floor_applied = r.returncode == 0
+        except Exception:  # noqa: BLE001
+            pass
+
+    # --- Layer 2: exact time from the network -------------------------------
+    # A time server on the warehouse LAN is tried first: it answers in
+    # milliseconds and works with no internet at all. Point TIME_SERVER at the
+    # image server (see IMAGE-SERVER-SETUP.md) to make offline benches exact.
+    host = (STATE["conf"].get("TIME_SERVER") or "").strip()
+    if not host:
+        spec = (STATE["conf"].get("IMAGE_SERVER") or "").strip()
+        host = spec.lstrip("/").split(":")[0].split("/")[0] if spec else ""
+    if host:
+        for cmd in (["sntp", "-Ss", host], ["ntpdate", "-u", host],
+                    ["chronyd", "-q", "-t", "8", "server %s iburst" % host]):
+            if not shutil.which(cmd[0]):
+                continue
+            try:
+                subprocess.run(cmd, capture_output=True, timeout=15)
+            except Exception:  # noqa: BLE001
+                pass
+
     # Ask the network what time it is. Plain HTTP on purpose: no certificate is
     # involved, so this works even when a wrong clock is breaking TLS.
     true_epoch = None
@@ -620,6 +660,9 @@ def sync_clock():
         except Exception:  # noqa: BLE001
             continue
     if true_epoch is None:
+        if floor_applied:
+            return True, ("no time source reachable — set from the boot media date "
+                          "(approximate, but late enough for HTTPS)")
         return False, "no time source reachable"
 
     drift = true_epoch - time.time()
@@ -1252,6 +1295,14 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     STATE["conf"] = load_conf()
+    # First action of the whole program. An old machine with a dead CMOS battery
+    # boots with a wrong date, which breaks every HTTPS call downstream, so the
+    # clock is corrected before the API is ever contacted.
+    try:
+        ok, msg = sync_clock()
+        print("clock: %s" % msg)
+    except Exception as exc:  # noqa: BLE001
+        print("clock: %s" % exc)
     threading.Thread(target=refresh, daemon=True).start()
     threading.Thread(target=queue_worker, daemon=True).start()
     srv = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)

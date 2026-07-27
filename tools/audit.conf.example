@@ -42,3 +42,12 @@ AUDIT_WIPE_UNFREEZE="0"
 # Mounted read-only and soft, so an unreachable server can never hang the
 # station — it just falls back to the images on the stick.
 IMAGE_SERVER=""
+
+# --- time -------------------------------------------------------------------
+# Audited machines are old and their CMOS batteries are usually dead, so they
+# boot with the wrong date — which breaks HTTPS (certificates look "not yet
+# valid") and stops audits uploading. The station corrects its clock at every
+# boot. Set this to your image server to get exact time with NO internet:
+#   TIME_SERVER="192.168.0.20"
+# Leave blank and it uses the image server's host, then the internet.
+TIME_SERVER=""

@@ -69,6 +69,27 @@ The share is mounted read-only and *soft*, so if the server is off or the cable
 is out, the station does **not** hang — it warns and falls back to whatever
 images are on the stick.
 
+## 3b. Serve the time as well (recommended)
+
+The machines you audit are old and their CMOS batteries are usually dead, so
+they boot with the wrong date. A wrong clock breaks HTTPS — certificates look
+"not yet valid" — so audits silently fail to upload. Let this server hand out
+the correct time and every bench is right even with no internet:
+
+```bash
+sudo apt install -y chrony
+```
+
+Allow your network to ask it (adjust the subnet):
+
+```bash
+echo 'allow 192.168.0.0/24' | sudo tee -a /etc/chrony/chrony.conf
+sudo systemctl restart chrony
+```
+
+Then set `TIME_SERVER` in `audit.conf` to this server's IP, or just leave it
+blank — the station falls back to the image server's address automatically.
+
 ## 4. Creating a golden image
 
 1. Build one machine exactly as you want to ship it — Windows, drivers,
