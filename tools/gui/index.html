@@ -416,7 +416,31 @@
 
 <script>
 const $=(id)=>document.getElementById(id);
-let BOOT={}, LOTS=[], DRIVES=[];
+let BOOT={}, LOTS=[], DRIVES=[], METHOD_SET=false;
+
+/* While hardware detection runs, bootstrap() polls every 1.5s. The old code
+   rewrote every control's innerHTML on every poll, which (a) closed any open
+   dropdown the instant it opened, (b) reset whatever the operator had
+   selected, and (c) made the whole page feel sluggish from constant DOM
+   churn. These helpers only touch the DOM when the content has actually
+   changed, and never rewrite a select the operator is using — a pending
+   update is applied when it loses focus. */
+function setHTML(el,html){
+  if(!el||el.__h===html)return false;
+  el.__h=html;el.innerHTML=html;return true;
+}
+function fillSelect(sel,html){
+  if(!sel||sel.__h===html)return false;
+  if(document.activeElement===sel){sel.__pending=html;return false;}
+  const prev=sel.value;
+  sel.__h=html;sel.innerHTML=html;
+  if(prev&&Array.from(sel.options).some(o=>o.value===prev))sel.value=prev;
+  return true;
+}
+document.addEventListener('focusout',(e)=>{
+  const el=e.target;
+  if(el&&el.__pending){const h=el.__pending;el.__pending=null;fillSelect(el,h);}
+},true);
 
 async function jget(u){const r=await fetch(u,{cache:'no-store'});return r.json();}
 async function jpost(u,b){const r=await fetch(u,{method:'POST',headers:{'Content-Type':'application/json'},
@@ -476,10 +500,11 @@ async function bootstrap(){
 }
 
 function fillBatches(){
-  const s=$('batchSel');
-  if(!LOTS.length){s.innerHTML='<option value="">No batches available</option>';onBatch();return;}
-  s.innerHTML=LOTS.map(l=>'<option value="'+l.id+'">'+(l.batchNumber||l.id)+'</option>').join('');
-  onBatch();
+  const html=!LOTS.length
+    ? '<option value="">No batches available</option>'
+    : LOTS.map(l=>'<option value="'+l.id+'">'+(l.batchNumber||l.id)+'</option>').join('');
+  fillSelect($('batchSel'),html);
+  onBatch();   // meta text only — cheap, and counts can change without the list changing
 }
 function onBatch(){
   const l=LOTS.find(x=>x.id===$('batchSel').value);
@@ -495,9 +520,11 @@ function driveOpts(){return DRIVES.map(d=>'<option value="'+d.device+'" data-byt
   '" data-rota="'+(d.rotational?1:0)+'">'+d.device+' — '+(d.size||'?')+
   (d.model&&d.model!=='Unknown model'?' · '+d.model:'')+'</option>').join('');}
 function fillDrives(){
-  $('iDrive').innerHTML=DRIVES.length?driveOpts():'<option value="">No internal drive detected</option>';
+  fillSelect($('iDrive'),DRIVES.length?driveOpts():'<option value="">No internal drive detected</option>');
   fillWipeDrives();
-  if(BOOT.wipeMethod)$('wMethod').value=BOOT.wipeMethod;
+  // Seed the method from config ONCE. Re-applying it on every poll silently
+  // undid the operator's choice (e.g. picking the fast zero pass).
+  if(!METHOD_SET&&BOOT.wipeMethod){$('wMethod').value=BOOT.wipeMethod;METHOD_SET=true;}
   estimate();
 }
 
@@ -506,7 +533,10 @@ function fillDrives(){
 function fillWipeDrives(){
   const box=$('wDriveBox');
   if(DRIVES.length>1){
-    box.innerHTML=DRIVES.map(d=>{
+    const prev=new Set(Array.from(document.querySelectorAll('.wchk'))
+                       .filter(c=>c.checked).map(c=>c.value));
+    const had=document.querySelectorAll('.wchk').length>0;
+    const html=DRIVES.map(d=>{
       const h=d.health, cls=!h||h.status==='unknown'?'na':(h.status==='failing'?'bad':
               (h.status==='caution'?'warn':'ok'));
       const lab=(h===null||h===undefined)?'checking…':(h.status==='unknown'?'no SMART':h.status);
@@ -514,13 +544,19 @@ function fillWipeDrives(){
         '" onchange="estimate()" checked><span class="dn">'+d.device+' — '+(d.size||'?')+
         (d.model&&d.model!=='Unknown model'?' · '+d.model:'')+
         '</span><span class="dh '+cls+'">'+lab+'</span></label>';}).join('');
+    if(setHTML(box,html)&&had){
+      // untick what the operator had unticked before the redraw
+      document.querySelectorAll('.wchk').forEach(c=>{c.checked=prev.has(c.value);});
+    }
   }else{
-    box.innerHTML='<div class="sel"><span class="li"><svg width="16" height="16" viewBox="0 0 24 24" '+
+    const sel0=$('wDrive');
+    if(sel0&&document.activeElement===sel0)return;   // menu open — try next poll
+    setHTML(box,'<div class="sel"><span class="li"><svg width="16" height="16" viewBox="0 0 24 24" '+
       'fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="20" height="10" rx="2"/>'+
       '<path d="M6 12h.01M10 12h6"/></svg></span><select id="wDrive" onchange="estimate()">'+
       (DRIVES.length?driveOpts():'<option value="">No internal drive detected</option>')+
       '</select><span class="ri"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" '+
-      'stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 9l6 6 6-6"/></svg></span></div>';
+      'stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 9l6 6 6-6"/></svg></span></div>');
   }
 }
 function selectedWipeDrives(){
@@ -534,27 +570,24 @@ function devKey(d){return d.replace(/[^A-Za-z0-9]/g,'_');}
    from a stale local copy without anyone noticing. */
 function renderImageSource(){
   const el=$('iSource'); if(!el) return;
-  if(BOOT.imageError){
-    el.className='health warn';
-    el.innerHTML='<span class="hd"></span><span><b>Image server unreachable</b> — '+
-                 BOOT.imageError+'</span>';
-    return;
-  }
-  if(BOOT.imageSource==='server'){
-    el.className='health ok';
-    el.innerHTML='<span class="hd"></span><span><b>Images: shared server library</b></span>';
-    return;
-  }
-  el.className='health na';
-  el.innerHTML='<span class="hd"></span><span>Images: this stick (no image server set)</span>';
+  let cls,html;
+  if(BOOT.imageError){cls='health warn';
+    html='<span class="hd"></span><span><b>Image server unreachable</b> — '+BOOT.imageError+'</span>';}
+  else if(BOOT.imageSource==='server'){cls='health ok';
+    html='<span class="hd"></span><span><b>Images: shared server library</b></span>';}
+  else{cls='health na';
+    html='<span class="hd"></span><span>Images: this stick (no image server set)</span>';}
+  const key=cls+'|'+html;
+  if(el.__k===key)return;
+  el.__k=key;el.className=cls;el.innerHTML=html;
 }
 
 function fillImages(){
   const im=BOOT.osImages||[];
-  $('iImage').innerHTML=im.length
+  fillSelect($('iImage'),im.length
     ? im.map(i=>'<option value="'+i.id+'"'+(i.present?'':' disabled')+'>'+i.name+
         (i.version?' · '+i.version:'')+(i.present?'':' (image missing)')+'</option>').join('')
-    : '<option value="">No OS images on this stick</option>';
+    : '<option value="">No OS images on this stick</option>');
 }
 
 /* --- drive health (SMART) ------------------------------------------------
@@ -579,10 +612,12 @@ function renderHealth(){
   // banner in the single-drive case (or when a selected drive is in trouble).
   const bad=picked.map(healthOf).filter(h=>h&&(h.status==='failing'||h.status==='caution'));
   const h=(DRIVES.length>1?bad[0]:healthOf(picked[0]));
-  if(!picked.length||!h&&DRIVES.length>1){el.classList.add('hidden');return;}
+  if(!picked.length||!h&&DRIVES.length>1){el.classList.add('hidden');el.__k=null;return;}
   const [cls,title,detail]=healthText(h);
-  el.className='health '+cls;
-  el.innerHTML='<span class="hd"></span><span><b>'+title+'</b>'+(detail?' — '+detail:'')+'</span>';
+  const html='<span class="hd"></span><span><b>'+title+'</b>'+(detail?' — '+detail:'')+'</span>';
+  const key=cls+'|'+html;
+  if(el.__k===key)return;
+  el.__k=key;el.className='health '+cls;el.innerHTML=html;
 }
 
 /* estimated wipe time — honest maths from drive size + method.
@@ -618,11 +653,11 @@ const HWDEF=[
 ];
 function fillHardware(){
   const hw=(BOOT.device&&BOOT.device.hw)||{};
-  $('hwGrid').innerHTML=HWDEF.map(([k,label,path])=>
+  setHTML($('hwGrid'),HWDEF.map(([k,label,path])=>
     '<div class="hwi"><div class="hwic"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" '+
     'stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">'+path+
     '</svg></div><div><div class="hwk">'+label+'</div><div class="hwv">'+
-    (hw[k]||(BOOT.device?'Not detected':'—'))+'</div></div></div>').join('');
+    (hw[k]||(BOOT.device?'Not detected':'—'))+'</div></div></div>').join(''));
 }
 
 /* ------------------------------------------------------------- audit --- */

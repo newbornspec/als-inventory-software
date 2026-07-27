@@ -216,11 +216,20 @@ def queue_count():
     return len(queue_load())
 
 
+UPLOAD_LOCK = threading.Lock()
+
+
 def upload_audit(payload):
     """Send a device record. On failure, queue it for automatic retry.
-    Returns (response_or_None, queued_bool, error_message)."""
+    Returns (response_or_None, queued_bool, error_message).
+
+    Serialized: two drives in the same machine can finish wiping in the same
+    second, and both records carry the same serial. The API finds-or-creates
+    by serial, so two simultaneous uploads can race past the find and create
+    the device twice. One at a time turns the second into a clean re-audit."""
     try:
-        return api("/devices/hardware-audit", "POST", payload, ensure_token()), False, ""
+        with UPLOAD_LOCK:
+            return api("/devices/hardware-audit", "POST", payload, ensure_token()), False, ""
     except Exception as exc:  # noqa: BLE001
         queue_add(payload)
         return None, True, str(exc)
@@ -541,6 +550,15 @@ SMART_CACHE = {}     # device -> (timestamp, health dict)
 SMART_PENDING = set()  # devices being probed right now, so we probe each once
 
 
+def _smart_unknown():
+    """Probed, but SMART is unavailable/unreadable. Distinct from None (= probe
+    still running): the UI shows "Checking..." for None, and if a no-SMART drive
+    were cached as None it would say "Checking..." forever."""
+    return {"status": "unknown", "reasons": [], "hours": None, "tempC": None,
+            "reallocated": None, "pending": None, "mediaErrors": None,
+            "percentUsed": None}
+
+
 def smart_health(dev, block=False):
     """SMART summary for one drive, so a failing disk is flagged BEFORE an
     operator commits to a multi-hour wipe. Handles both ATA and NVMe via
@@ -560,17 +578,26 @@ def smart_health(dev, block=False):
             threading.Thread(target=lambda: smart_health(dev, block=True),
                              daemon=True).start()
         return None
+    if not shutil.which("smartctl"):
+        health = _smart_unknown()
+        SMART_CACHE[dev] = (time.time(), health)
+        SMART_PENDING.discard(dev)
+        return health
     try:
         out = subprocess.run(["smartctl", "-j", "-H", "-A", dev],
                              capture_output=True, text=True, timeout=12).stdout
         d = json.loads(out)
     except Exception:  # noqa: BLE001
+        # Cache the failure too: every terminal state must resolve the probe.
+        health = _smart_unknown()
+        SMART_CACHE[dev] = (time.time(), health)
         SMART_PENDING.discard(dev)
-        return None
+        return health
     if not isinstance(d, dict) or not d:
-        SMART_CACHE[dev] = (time.time(), None)   # remember: this drive has no SMART
+        health = _smart_unknown()
+        SMART_CACHE[dev] = (time.time(), health)
         SMART_PENDING.discard(dev)
-        return None
+        return health
 
     passed = (d.get("smart_status") or {}).get("passed")
     hours = (d.get("power_on_time") or {}).get("hours")
@@ -894,9 +921,23 @@ def mount_image_server(force=False):
     if not spec:
         IMAGE_STATE.update(root=IMAGES_LOCAL, source="usb", error="", checked=now)
         return IMAGES_LOCAL, "usb", ""
-    if not force and image_mounted() and now - IMAGE_STATE["checked"] < 30:
-        return IMAGE_STATE["root"], IMAGE_STATE["source"], IMAGE_STATE["error"]
+    # Serve the cached verdict - success OR failure - inside the TTL. Without
+    # caching failures, a bench whose server is off re-ran `mount` (a multi-
+    # second subprocess) on every poll, which is exactly the class of stall
+    # that makes the kiosk feel dead. /api/rescan and Settings force a retry.
+    if not force and IMAGE_STATE["checked"] and now - IMAGE_STATE["checked"] < 45:
+        return (IMAGE_STATE["root"] or IMAGES_LOCAL, IMAGE_STATE["source"],
+                IMAGE_STATE["error"])
+    if not MOUNT_LOCK.acquire(blocking=False):     # one mount attempt at a time
+        return (IMAGE_STATE["root"] or IMAGES_LOCAL, IMAGE_STATE["source"],
+                IMAGE_STATE["error"])
+    try:
+        return _mount_image_server(spec, now)
+    finally:
+        MOUNT_LOCK.release()
 
+
+def _mount_image_server(spec, now):
     if image_mounted():
         IMAGE_STATE.update(root=IMAGE_MOUNT, source="server", error="", checked=now)
         return IMAGE_MOUNT, "server", ""
@@ -910,7 +951,7 @@ def mount_image_server(force=False):
         cmd = ["mount", "-t", "nfs", "-o", "ro,soft,timeo=50,retrans=2,nolock",
                spec, IMAGE_MOUNT]
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
         ok = r.returncode == 0
         err = "" if ok else (r.stderr or r.stdout or "").strip().split("\n")[-1]
     except Exception as exc:  # noqa: BLE001
@@ -925,21 +966,45 @@ def mount_image_server(force=False):
     return IMAGES_LOCAL, "usb", IMAGE_STATE["error"]
 
 
+MOUNT_LOCK = threading.Lock()
+
+
+def ensure_images_async():
+    """Kick a mount attempt in the background if the state is stale/unknown."""
+    if IMAGE_STATE["checked"] and time.time() - IMAGE_STATE["checked"] < 45:
+        return
+    threading.Thread(target=mount_image_server, daemon=True).start()
+
+
 def images_root():
-    return mount_image_server()[0]
+    # Request-path accessor: NEVER mounts. /api/bootstrap is polled while the
+    # page loads, and a mount against an unreachable server blocks for seconds.
+    ensure_images_async()
+    return IMAGE_STATE["root"] or IMAGES_LOCAL
+
+
+MANIFEST_CACHE = {"root": None, "ts": 0.0, "data": []}
 
 
 def list_os_images():
     root = images_root()
     if not root:
         return []
+    # Short TTL cache: the manifest may live on the NFS share, and
+    # /api/bootstrap is polled - without this, every poll is a network
+    # filesystem read.
+    now = time.time()
+    if MANIFEST_CACHE["root"] == root and now - MANIFEST_CACHE["ts"] < 3:
+        return MANIFEST_CACHE["data"]
     manifest = os.path.join(root, "manifest.json")
     if not os.path.isfile(manifest):
+        MANIFEST_CACHE.update(root=root, ts=now, data=[])
         return []
     try:
         with open(manifest, "r", errors="replace") as fh:
             data = json.load(fh)
     except (OSError, ValueError):
+        MANIFEST_CACHE.update(root=root, ts=now, data=[])
         return []
     imgs = []
     for it in data.get("images", []):
@@ -953,6 +1018,7 @@ def list_os_images():
             "dir": d,
             "present": present,  # false = listed but image files not on the stick yet
         })
+    MANIFEST_CACHE.update(root=root, ts=now, data=imgs)
     return imgs
 
 
@@ -1309,7 +1375,9 @@ class Handler(BaseHTTPRequestHandler):
                 updates["AUDIT_WIPE_METHOD"] = body["wipeMethod"]
             if "imageServer" in body:
                 updates["IMAGE_SERVER"] = body["imageServer"].strip()
-                IMAGE_STATE["checked"] = 0.0        # re-evaluate on next use
+                IMAGE_STATE["checked"] = 0.0        # re-evaluate immediately
+                threading.Thread(target=lambda: mount_image_server(force=True),
+                                 daemon=True).start()
             err = save_conf(updates)
             if err:
                 return self._send(500, {"message": err})
@@ -1340,6 +1408,10 @@ def main():
             print("clock: %s" % msg)
         except Exception as exc:  # noqa: BLE001
             print("clock: %s" % exc)
+        try:
+            mount_image_server(force=True)   # so the first poll already knows
+        except Exception:  # noqa: BLE001
+            pass
         refresh()
     threading.Thread(target=boot, daemon=True).start()
     threading.Thread(target=queue_worker, daemon=True).start()
