@@ -346,6 +346,7 @@ def refresh(do_login=True):
             ]
         if do_login:
             wifi_msg = connect_network()
+            sync_clock()          # a wrong clock breaks HTTPS before anything else
             try:
                 ensure_token()
                 STATE["lots"] = api("/devices/lots", token=STATE["token"]) or []
@@ -593,6 +594,39 @@ def smart_health(dev):
 OPTICAL_CACHE = []   # single-item cache; hardware cannot change mid-session
 
 
+def sync_clock():
+    """Set the system clock from the network.
+
+    A live-booted machine with no working RTC can be months out of date, and a
+    wrong clock breaks HTTPS: the server's certificate looks "not yet valid",
+    so the connection is refused before any data flows — which surfaces as a
+    bare "not connected" with no error text. Tries NTP, then falls back to the
+    Date header of a PLAIN HTTP request (no certificate needed, so it works
+    even when TLS is exactly what's broken)."""
+    before = time.time()
+    for cmd in (["chronyd", "-q", "-t", "15"], ["ntpd", "-qg"],
+                ["sntp", "-Ss", "pool.ntp.org"], ["timedatectl", "set-ntp", "true"]):
+        if not shutil.which(cmd[0]):
+            continue
+        try:
+            subprocess.run(cmd, capture_output=True, timeout=30)
+            if abs(time.time() - before) > 60:
+                return True, "synced with %s" % cmd[0]
+        except Exception:  # noqa: BLE001
+            pass
+    try:
+        # Plain HTTP so no certificate is involved.
+        resp = urllib.request.urlopen("http://clients3.google.com/generate_204", timeout=12)
+        stamp = resp.headers.get("Date")
+        if stamp and shutil.which("date"):
+            subprocess.run(["date", "-u", "-s", stamp], capture_output=True, timeout=10)
+            subprocess.run(["hwclock", "-w"], capture_output=True, timeout=10)
+            return True, "set from HTTP Date header"
+    except Exception as exc:  # noqa: BLE001
+        return False, str(exc)
+    return False, "no time source available"
+
+
 def net_check():
     """Diagnose the network layer by layer, so 'not connected' names the actual
     broken step instead of leaving the operator guessing. Runs in the GUI
@@ -656,13 +690,29 @@ def net_check():
             dns_detail = "cannot resolve %s (%s)" % (host, exc)
     steps.append(("Look up the server name", dns_ok, dns_detail))
 
+    # A clock that is days out makes every HTTPS call fail with an empty error.
+    now = time.strftime("%a %d %b %Y %H:%M UTC", time.gmtime())
+    clock_ok, clock_detail = True, now
+    try:
+        resp = urllib.request.urlopen("http://clients3.google.com/generate_204", timeout=10)
+        real = resp.headers.get("Date")
+        if real:
+            import email.utils
+            drift = abs(time.time() - email.utils.mktime_tz(email.utils.parsedate_tz(real)))
+            if drift > 300:
+                clock_ok = False
+                clock_detail = "%s — WRONG by %d days (breaks HTTPS)" % (now, drift // 86400)
+    except Exception:  # noqa: BLE001
+        pass
+    steps.append(("System clock", clock_ok, clock_detail))
+
     api_ok, api_detail = False, "no AUDIT_URL set"
     if api_url:
         try:
             urllib.request.urlopen(urllib.request.Request(api_url), timeout=12)
             api_ok, api_detail = True, api_url
         except Exception as exc:  # noqa: BLE001
-            api_detail = "%s (%s)" % (api_url, exc)
+            api_detail = "%s (%s)" % (api_url, (str(exc) or type(exc).__name__))
     steps.append(("Reach ALS Inventory", api_ok, api_detail))
 
     # Name the first broken step — that is the thing to fix.
