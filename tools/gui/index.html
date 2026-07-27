@@ -400,6 +400,9 @@
     <div id="setPinWrap" style="display:none"><label class="fld"><span>Admin PIN</span>
       <input id="setPin" type="password" inputmode="numeric" /></label></div>
     <div style="border-top:1px solid var(--line);margin:16px 0 12px;padding-top:14px">
+      <div class="lbl" style="margin-bottom:8px">Network check</div>
+      <div id="setNet" style="font-size:12.5px;color:var(--mut);margin-bottom:8px">
+        <button class="btn gho sm" onclick="loadNetCheck()">Run network check</button></div>
       <div class="lbl" style="margin-bottom:8px">System check</div>
       <div id="setTools" style="font-size:12.5px;color:var(--mut)">Checking…</div>
     </div>
@@ -798,6 +801,22 @@ async function openSettings(){
 }
 /* What this boot media can actually do. Shown here because the kiosk grabs the
    keyboard, so an operator cannot reach a terminal to check for themselves. */
+/* Layer-by-layer network diagnosis: names the first broken step so "not
+   connected" becomes actionable. */
+async function loadNetCheck(){
+  const el=$('setNet'); el.textContent='Checking… (up to 30s)';
+  let t; try{ t=await jget('/api/netcheck'); }catch(e){ el.textContent='Check failed.'; return; }
+  const bad=t.verdict.indexOf('First failure')===0;
+  let h='<div class="health '+(bad?'bad':'ok')+'" style="margin:0 0 10px"><span class="hd"></span>'+
+        '<span><b>'+t.verdict+'</b></span></div>';
+  for(const s of t.steps){
+    h+='<div style="margin-bottom:5px"><span style="color:'+(s.ok?'var(--green)':'var(--red)')+'">'+
+       (s.ok?'✓':'✗')+'</span> '+s.name+' <span style="color:var(--mut2)">— '+s.detail+'</span></div>';
+  }
+  h+='<div style="margin-top:8px"><button class="btn gho sm" onclick="loadNetCheck()">Run again</button></div>';
+  el.innerHTML=h;
+}
+
 async function loadToolCheck(){
   const el=$('setTools'); el.textContent='Checking…';
   let t; try{ t=await jget('/api/toolcheck'); }catch(e){ el.textContent='Check failed.'; return; }

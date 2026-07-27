@@ -593,6 +593,88 @@ def smart_health(dev):
 OPTICAL_CACHE = []   # single-item cache; hardware cannot change mid-session
 
 
+def net_check():
+    """Diagnose the network layer by layer, so 'not connected' names the actual
+    broken step instead of leaving the operator guessing. Runs in the GUI
+    because the kiosk grabs the keyboard — there is no terminal to use."""
+    def sh(cmd, timeout=8):
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+            return (r.stdout or r.stderr or "").strip(), r.returncode
+        except Exception as exc:  # noqa: BLE001
+            return "error: %s" % exc, 1
+
+    api_url = (STATE["conf"].get("AUDIT_URL") or "").strip()
+    host = ""
+    try:
+        host = urlparse(api_url).hostname or ""
+    except Exception:  # noqa: BLE001
+        pass
+
+    ifaces, _ = sh(["ip", "-br", "a"])
+    routes, _ = sh(["ip", "route"])
+    gw = ""
+    for line in routes.splitlines():
+        parts = line.split()
+        if parts[:1] == ["default"] and len(parts) > 2:
+            gw = parts[2]
+            break
+
+    servers = []
+    try:
+        with open("/etc/resolv.conf", errors="replace") as fh:
+            servers = [l.split()[1] for l in fh
+                       if l.strip().startswith("nameserver") and len(l.split()) > 1]
+    except OSError:
+        pass
+
+    steps = []
+    has_ip = any(("/" in l and "127.0.0.1" not in l and "UP" in l.upper())
+                 for l in ifaces.splitlines())
+    steps.append(("Network address", has_ip,
+                  "an address from the router" if has_ip else "no address — cable or DHCP"))
+
+    steps.append(("Default gateway", bool(gw), gw or "none — cannot leave this network"))
+
+    if gw:
+        _, rc = sh(["ping", "-c", "1", "-W", "2", gw])
+        steps.append(("Reach the router", rc == 0, gw))
+
+    _, rc = sh(["ping", "-c", "1", "-W", "3", "1.1.1.1"])
+    net_ok = rc == 0
+    steps.append(("Reach the internet", net_ok, "1.1.1.1 (bypasses DNS)"))
+
+    steps.append(("DNS servers set", bool(servers), ", ".join(servers) or "none in resolv.conf"))
+
+    dns_ok, dns_detail = False, "no API host configured"
+    if host:
+        try:
+            import socket
+            dns_detail = socket.gethostbyname(host)
+            dns_ok = True
+        except Exception as exc:  # noqa: BLE001
+            dns_detail = "cannot resolve %s (%s)" % (host, exc)
+    steps.append(("Look up the server name", dns_ok, dns_detail))
+
+    api_ok, api_detail = False, "no AUDIT_URL set"
+    if api_url:
+        try:
+            urllib.request.urlopen(urllib.request.Request(api_url), timeout=12)
+            api_ok, api_detail = True, api_url
+        except Exception as exc:  # noqa: BLE001
+            api_detail = "%s (%s)" % (api_url, exc)
+    steps.append(("Reach ALS Inventory", api_ok, api_detail))
+
+    # Name the first broken step — that is the thing to fix.
+    verdict = "Everything reachable."
+    for name, ok, _detail in steps:
+        if not ok:
+            verdict = "First failure: %s" % name
+            break
+    return {"steps": [{"name": n, "ok": bool(o), "detail": d} for n, o, d in steps],
+            "verdict": verdict, "interfaces": ifaces, "routes": routes}
+
+
 def tool_check():
     """Which imaging/erase tools this boot media actually has.
 
@@ -924,6 +1006,9 @@ class Handler(BaseHTTPRequestHandler):
 
         if u.path == "/api/toolcheck":
             return self._send(200, tool_check())
+
+        if u.path == "/api/netcheck":
+            return self._send(200, net_check())
 
         if u.path == "/api/settings":
             c = STATE["conf"]
