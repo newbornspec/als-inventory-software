@@ -603,28 +603,45 @@ def sync_clock():
     bare "not connected" with no error text. Tries NTP, then falls back to the
     Date header of a PLAIN HTTP request (no certificate needed, so it works
     even when TLS is exactly what's broken)."""
-    before = time.time()
-    for cmd in (["chronyd", "-q", "-t", "15"], ["ntpd", "-qg"],
-                ["sntp", "-Ss", "pool.ntp.org"], ["timedatectl", "set-ntp", "true"]):
-        if not shutil.which(cmd[0]):
-            continue
+    # Ask the network what time it is. Plain HTTP on purpose: no certificate is
+    # involved, so this works even when a wrong clock is breaking TLS.
+    true_epoch = None
+    for url in ("http://clients3.google.com/generate_204",
+                "http://www.msftconnecttest.com/connecttest.txt",
+                "http://neverssl.com"):
         try:
-            subprocess.run(cmd, capture_output=True, timeout=30)
-            if abs(time.time() - before) > 60:
-                return True, "synced with %s" % cmd[0]
+            stamp = urllib.request.urlopen(url, timeout=10).headers.get("Date")
+            if stamp:
+                import email.utils
+                parsed = email.utils.parsedate_tz(stamp)
+                if parsed:
+                    true_epoch = email.utils.mktime_tz(parsed)
+                    break
         except Exception:  # noqa: BLE001
-            pass
+            continue
+    if true_epoch is None:
+        return False, "no time source reachable"
+
+    drift = true_epoch - time.time()
+    if abs(drift) < 120:
+        return True, "clock already correct"
+
+    # Set it explicitly rather than trusting an NTP daemon to have worked: an
+    # earlier version inferred success from elapsed wall time, so NTP tools that
+    # merely hung looked like a successful sync and the real fix never ran.
+    if not shutil.which("date"):
+        return False, "clock is out by %d days but `date` is unavailable" % (abs(drift) // 86400)
+    stamp = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(true_epoch))
     try:
-        # Plain HTTP so no certificate is involved.
-        resp = urllib.request.urlopen("http://clients3.google.com/generate_204", timeout=12)
-        stamp = resp.headers.get("Date")
-        if stamp and shutil.which("date"):
-            subprocess.run(["date", "-u", "-s", stamp], capture_output=True, timeout=10)
-            subprocess.run(["hwclock", "-w"], capture_output=True, timeout=10)
-            return True, "set from HTTP Date header"
+        r = subprocess.run(["date", "-u", "-s", stamp], capture_output=True,
+                           text=True, timeout=10)
+        if r.returncode != 0:
+            return False, "could not set clock: %s" % ((r.stderr or r.stdout).strip()
+                                                       or "permission denied?")
     except Exception as exc:  # noqa: BLE001
         return False, str(exc)
-    return False, "no time source available"
+    subprocess.run(["hwclock", "-w"], capture_output=True, timeout=10)   # persist it
+    return True, "clock corrected (was out by %d days)" % (abs(drift) // 86400)
 
 
 def net_check():
@@ -1079,6 +1096,13 @@ class Handler(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(length) or b"{}") if length else {}
         except ValueError:
             body = {}
+
+        if u.path == "/api/fixclock":
+            ok, msg = sync_clock()
+            if ok:
+                STATE["token"] = None       # re-login now that TLS can succeed
+                threading.Thread(target=refresh, daemon=True).start()
+            return self._send(200, {"ok": ok, "message": msg})
 
         if u.path == "/api/rescan":
             DRIVES_CACHE["ts"] = 0.0        # a rescan must re-read the hardware
