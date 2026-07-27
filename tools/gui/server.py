@@ -346,7 +346,6 @@ def refresh(do_login=True):
             ]
         if do_login:
             wifi_msg = connect_network()
-            sync_clock()          # a wrong clock breaks HTTPS before anything else
             try:
                 ensure_token()
                 STATE["lots"] = api("/devices/lots", token=STATE["token"]) or []
@@ -625,32 +624,15 @@ def sync_clock():
         except Exception:  # noqa: BLE001
             pass
 
-    # --- Layer 2: exact time from the network -------------------------------
-    # A time server on the warehouse LAN is tried first: it answers in
-    # milliseconds and works with no internet at all. Point TIME_SERVER at the
-    # image server (see IMAGE-SERVER-SETUP.md) to make offline benches exact.
-    host = (STATE["conf"].get("TIME_SERVER") or "").strip()
-    if not host:
-        spec = (STATE["conf"].get("IMAGE_SERVER") or "").strip()
-        host = spec.lstrip("/").split(":")[0].split("/")[0] if spec else ""
-    if host:
-        for cmd in (["sntp", "-Ss", host], ["ntpdate", "-u", host],
-                    ["chronyd", "-q", "-t", "8", "server %s iburst" % host]):
-            if not shutil.which(cmd[0]):
-                continue
-            try:
-                subprocess.run(cmd, capture_output=True, timeout=15)
-            except Exception:  # noqa: BLE001
-                pass
-
-    # Ask the network what time it is. Plain HTTP on purpose: no certificate is
-    # involved, so this works even when a wrong clock is breaking TLS.
+    # --- Layer 2: exact time from the internet ------------------------------
+    # Tried first because it is ONE fast request when it works. Plain HTTP on
+    # purpose: no certificate is involved, so it succeeds even when a wrong
+    # clock is breaking TLS.
     true_epoch = None
     for url in ("http://clients3.google.com/generate_204",
-                "http://www.msftconnecttest.com/connecttest.txt",
-                "http://neverssl.com"):
+                "http://www.msftconnecttest.com/connecttest.txt"):
         try:
-            stamp = urllib.request.urlopen(url, timeout=10).headers.get("Date")
+            stamp = urllib.request.urlopen(url, timeout=6).headers.get("Date")
             if stamp:
                 import email.utils
                 parsed = email.utils.parsedate_tz(stamp)
@@ -659,6 +641,26 @@ def sync_clock():
                     break
         except Exception:  # noqa: BLE001
             continue
+
+    # --- Layer 3: a time server on the LAN ----------------------------------
+    # Only reached when there is no internet — an offline bench. These tools
+    # have long timeouts, which is why they are last and never on the fast path.
+    if true_epoch is None:
+        host = (STATE["conf"].get("TIME_SERVER") or "").strip()
+        if not host:
+            spec = (STATE["conf"].get("IMAGE_SERVER") or "").strip()
+            host = spec.lstrip("/").split(":")[0].split("/")[0] if spec else ""
+        if host:
+            for cmd in (["sntp", "-Ss", host], ["ntpdate", "-u", host]):
+                if not shutil.which(cmd[0]):
+                    continue
+                try:
+                    r = subprocess.run(cmd, capture_output=True, timeout=12)
+                    if r.returncode == 0:
+                        return True, "synced with the time server at %s" % host
+                except Exception:  # noqa: BLE001
+                    pass
+
     if true_epoch is None:
         if floor_applied:
             return True, ("no time source reachable — set from the boot media date "
@@ -1295,15 +1297,18 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     STATE["conf"] = load_conf()
-    # First action of the whole program. An old machine with a dead CMOS battery
-    # boots with a wrong date, which breaks every HTTPS call downstream, so the
-    # clock is corrected before the API is ever contacted.
-    try:
-        ok, msg = sync_clock()
-        print("clock: %s" % msg)
-    except Exception as exc:  # noqa: BLE001
-        print("clock: %s" % exc)
-    threading.Thread(target=refresh, daemon=True).start()
+    # Correct the clock BEFORE logging in (a wrong date breaks HTTPS), but do it
+    # on a background thread: these are network calls with timeouts, and blocking
+    # here would stop the web server from listening — the kiosk browser opens
+    # within seconds and would show "unable to connect".
+    def boot():
+        try:
+            _ok, msg = sync_clock()
+            print("clock: %s" % msg)
+        except Exception as exc:  # noqa: BLE001
+            print("clock: %s" % exc)
+        refresh()
+    threading.Thread(target=boot, daemon=True).start()
     threading.Thread(target=queue_worker, daemon=True).start()
     srv = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     print("ALS Audit Station GUI on http://127.0.0.1:%d  (engine: %s)" % (PORT, SCRIPT))
