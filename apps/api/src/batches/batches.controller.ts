@@ -41,7 +41,11 @@ export class BatchesController {
     return this.batches.findOne(id, req.user);
   }
 
-  @Roles(UserRole.ADMIN, UserRole.MANAGER)
+  // Technicians included deliberately: they already see the lot and every
+  // device in it on screen, so the spreadsheet exposes nothing new — it is the
+  // same data in a printable form, and they are the ones working the lot.
+  // generateReport still applies per-user scoping via req.user.
+  @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.TECHNICIAN)
   @Get(':id/report.xlsx')
   async report(@Param('id') id: string, @Req() req: any): Promise<StreamableFile> {
     const { buffer, filename } = await this.batches.generateReport(id, req.user);

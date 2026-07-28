@@ -1,11 +1,12 @@
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
+import { downloadError } from '@/lib/download-error';
 
 export async function GET() {
   const store = await cookies();
   const token = store.get('token')?.value;
   if (!token) {
-    return NextResponse.json({ message: 'Not authenticated' }, { status: 401 });
+    return downloadError(401, 'profit CSV');
   }
 
   const res = await fetch(`${process.env.API_URL}/reports/profit.csv`, {
@@ -14,7 +15,7 @@ export async function GET() {
   });
 
   if (!res.ok) {
-    return NextResponse.json({ message: 'Failed to export report' }, { status: res.status });
+    return downloadError(res.status, 'profit CSV');
   }
 
   return new NextResponse(res.body, {

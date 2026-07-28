@@ -1,19 +1,20 @@
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
+import { downloadError } from '@/lib/download-error';
 
 // Streams the API's multi-sheet reports workbook, forwarding the current date
 // range + filters (from the query string) and the httpOnly auth cookie.
 export async function GET(req: Request) {
   const store = await cookies();
   const token = store.get('token')?.value;
-  if (!token) return NextResponse.json({ message: 'Not authenticated' }, { status: 401 });
+  if (!token) return downloadError(401, 'Excel report');
 
   const qs = new URL(req.url).searchParams.toString();
   const res = await fetch(`${process.env.API_URL}/reports/export.xlsx?${qs}`, {
     headers: { Authorization: `Bearer ${token}` },
     cache: 'no-store',
   });
-  if (!res.ok) return NextResponse.json({ message: 'Failed to export report' }, { status: res.status });
+  if (!res.ok) return downloadError(res.status, 'Excel report');
 
   return new NextResponse(res.body, {
     headers: {

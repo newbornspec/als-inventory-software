@@ -1,5 +1,6 @@
 import { cookies } from 'next/headers';
 import { NextRequest, NextResponse } from 'next/server';
+import { downloadError } from '@/lib/download-error';
 
 // Proxies the barcode/QR PNG through Next.js so the browser <img> tag never
 // needs the JWT directly — <img src> can't send an Authorization header,
@@ -15,7 +16,7 @@ export async function GET(
   const store = await cookies();
   const token = store.get('token')?.value;
   if (!token) {
-    return NextResponse.json({ message: 'Not authenticated' }, { status: 401 });
+    return downloadError(401, 'barcode');
   }
 
   const res = await fetch(`${process.env.API_URL}/assets/${id}/barcode?type=${type}`, {
@@ -24,7 +25,7 @@ export async function GET(
   });
 
   if (!res.ok) {
-    return NextResponse.json({ message: 'Failed to generate barcode' }, { status: res.status });
+    return downloadError(res.status, 'barcode');
   }
 
   return new NextResponse(res.body, {

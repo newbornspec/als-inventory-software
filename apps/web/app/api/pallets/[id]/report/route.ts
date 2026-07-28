@@ -1,5 +1,6 @@
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
+import { downloadError } from '@/lib/download-error';
 
 // Streams the API's formatted .xlsx pallet report to the browser as a download,
 // attaching the httpOnly auth cookie the client fetch can't read.
@@ -8,7 +9,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
   const store = await cookies();
   const token = store.get('token')?.value;
   if (!token) {
-    return NextResponse.json({ message: 'Not authenticated' }, { status: 401 });
+    return downloadError(401, 'pallet report');
   }
 
   const res = await fetch(`${process.env.API_URL}/pallets/${id}/report.xlsx`, {
@@ -17,7 +18,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
   });
 
   if (!res.ok) {
-    return NextResponse.json({ message: 'Failed to generate report' }, { status: res.status });
+    return downloadError(res.status, 'pallet report');
   }
 
   return new NextResponse(res.body, {
