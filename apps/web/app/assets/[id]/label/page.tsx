@@ -15,8 +15,8 @@ interface AuditSpec {
 
 // Label stock. Change these two values to match your printer's media and the
 // whole layout follows — nothing else is hard-coded to a size.
-const LABEL_W = '89mm';
-const LABEL_H = '25mm';
+const LABEL_W = '88.9mm'; // 3.5in
+const LABEL_H = '27.94mm'; // 1.1in
 
 export default async function AssetLabelPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -40,10 +40,22 @@ export default async function AssetLabelPage({ params }: { params: Promise<{ id:
   ]);
   const spec = audits[0];
 
+  // Vendor CPU strings are verbose ("Intel(R) Core(TM) i5-4590 CPU @ 3.30GHz")
+  // and eat the label's one line. Trim them to the form used on the existing
+  // labels: "CORE I5-4590 3.30GHZ".
+  const cpu = (spec?.cpu ?? '')
+    .replace(/\((R|TM)\)/g, '') // Intel(R) Core(TM) -> Intel Core
+    .replace(/\b(Intel|AMD)\b/gi, '') // the maker is implied on our stock
+    .replace(/\bCPU\b|\bProcessor\b/gi, '')
+    .replace(/\s+with\s+.*?Graphics\b/i, '') // drop 'with Radeon Graphics'
+    .replace(/\s*@\s*/, ' ') // '@ 3.30GHz' -> '3.30GHz'
+    .replace(/\s+/g, ' ')
+    .trim();
+
   // Line 1 — what the device is, as on the existing labels:
   // "DELL LATITUDE 7320 CORE I5-1135G7 2.40 GHZ 13.2""
   const title =
-    [asset.manufacturer, asset.model, spec?.cpu, spec?.screenSize]
+    [asset.manufacturer, asset.model, cpu, spec?.screenSize]
       .filter(Boolean)
       .join(' ')
       .toUpperCase() || asset.name.toUpperCase();
@@ -85,13 +97,13 @@ export default async function AssetLabelPage({ params }: { params: Promise<{ id:
         className="label mx-auto overflow-hidden border border-neutral-300 bg-white px-[2mm] py-[1.5mm] text-black"
         style={{ width: LABEL_W, height: LABEL_H }}
       >
-        <div className="truncate text-[7pt] leading-[1.15] font-bold tracking-tight">{title}</div>
-        <div className="truncate text-[6pt] leading-[1.15] text-neutral-700">{specLine}</div>
+        <div className="truncate text-[9pt] leading-[1.15] font-bold tracking-tight">{title}</div>
+        <div className="truncate text-[8pt] leading-[1.15] text-neutral-700">{specLine}</div>
 
-        <div className="mt-[0.6mm] flex items-end justify-between gap-[2mm]">
+        <div className="mt-[1mm] flex items-end justify-between gap-[2mm]">
           <div className="min-w-0">
-            <div className="text-[13pt] leading-none font-bold tracking-tight">{unit}</div>
-            <div className="mt-[0.5mm] truncate text-[5pt] leading-[1.1] text-neutral-700">
+            <div className="text-[20pt] leading-none font-bold tracking-tight">{unit}</div>
+            <div className="mt-[0.5mm] truncate text-[6.5pt] leading-[1.1] text-neutral-700">
               {[
                 batch?.batchNumber,
                 lot?.lotNumber,
@@ -106,7 +118,7 @@ export default async function AssetLabelPage({ params }: { params: Promise<{ id:
           <img
             src={`/api/assets/${asset.id}/barcode?type=code128`}
             alt={`Barcode ${unit}`}
-            className="h-[9mm] w-[34mm] shrink-0 object-contain"
+            className="h-[14mm] w-[40mm] shrink-0 object-contain"
           />
         </div>
       </div>
