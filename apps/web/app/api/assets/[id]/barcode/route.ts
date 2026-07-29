@@ -19,7 +19,7 @@ export async function GET(
     return downloadError(401, 'barcode');
   }
 
-  const res = await fetch(`${process.env.API_URL}/assets/${id}/barcode?type=${type}`, {
+  const res = await fetch(`${process.env.API_URL}/assets/${id}/barcode?type=${type}${request.nextUrl.searchParams.get('text') === '0' ? '&text=0' : ''}`, {
     headers: { Authorization: `Bearer ${token}` },
     cache: 'no-store',
   });
