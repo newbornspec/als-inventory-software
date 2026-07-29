@@ -41,7 +41,11 @@ export interface HardwareProfile {
     [key: string]: unknown;
   };
   memory?: {
-    totalGb?: number;
+    totalGb?: number; // standardised installed capacity — see common/spec-normalise.ts
+    // What the OS actually reported, kept only when it differs from totalGb.
+    // /proc/meminfo excludes firmware-reserved memory, so this is where the
+    // "15 GB on a 16 GB machine" reading is retained for diagnostics.
+    detectedGb?: number;
     type?: string; // DDR3 | DDR4 | DDR5
     speed?: string;
     modules?: number;
