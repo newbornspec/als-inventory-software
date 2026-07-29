@@ -610,9 +610,32 @@ if [ "$CPU_VENDOR" = "Intel" ]; then
 fi
 
 # --- memory ---
+# /proc/meminfo reports the memory the OS can USE, which is installed capacity
+# minus whatever the firmware reserved (integrated graphics, management engine).
+# That is why real 16 GB machines report 15, and 8 GB machines report 7. The
+# per-module sizes from dmidecode are the actual installed capacity, so prefer
+# those and keep the OS reading as the diagnostic value.
 MEM_KB=$(grep MemTotal /proc/meminfo 2>/dev/null | awk '{print $2}')
-RAM_GB=""; [ -n "$MEM_KB" ] && RAM_GB=$(( (MEM_KB + 512*1024) / (1024*1024) ))
+RAM_DETECTED=""; [ -n "$MEM_KB" ] && RAM_DETECTED=$(( (MEM_KB + 512*1024) / (1024*1024) ))
 MEMT=$(dmidecode -t memory 2>/dev/null)
+# Sum every populated slot. Sizes come through as "8192 MB", "8 GB" or "No Module
+# Installed"; anything without a unit we can read is skipped rather than guessed.
+RAM_GB=$(printf '%s\n' "$MEMT" | sed -n 's/^[[:space:]]*Size:[[:space:]]*//p' | awk '
+  /No Module|Not Installed|Unknown/ { next }
+  {
+    v = $1 + 0
+    if (v <= 0) next
+    if      ($2 ~ /^[Tt][Bb]/) mb += v * 1024 * 1024
+    else if ($2 ~ /^[Gg][Bb]/) mb += v * 1024
+    else if ($2 ~ /^[Mm][Bb]/) mb += v
+    else if ($2 ~ /^[Kk][Bb]/) mb += v / 1024
+  }
+  END { if (mb > 0) printf "%.0f", mb / 1024 }')
+# No dmidecode (or it told us nothing): fall back to the OS figure rounded UP to
+# the nearest even GB, which recovers every standard size — 7->8, 15->16, 31->32.
+if [ -z "$RAM_GB" ] && [ -n "$RAM_DETECTED" ] && [ "$RAM_DETECTED" -gt 0 ]; then
+  RAM_GB=$(( (RAM_DETECTED + 1) / 2 * 2 ))
+fi
 RAM_TYPE=$(printf '%s\n' "$MEMT" | sed -n 's/^[[:space:]]*Type:[[:space:]]*//p' | grep -iE '^DDR|^LPDDR' | head -n1)
 RAM_SPEED=$(printf '%s\n' "$MEMT" | sed -n 's/^[[:space:]]*Speed:[[:space:]]*//p' | grep -iE 'MT/s|MHz' | head -n1)
 RAM_SLOTS=$(printf '%s\n' "$MEMT" | grep -c '^Memory Device')
@@ -703,18 +726,6 @@ $(lspci -mm 2>/dev/null | grep -iE '"(VGA compatible controller|3D controller|Di
 GFXEOF
 GRAPHICS="[${GFX_ELEMS#,}]"
 
-# --- display (best-effort EDID; often blank on a headless live boot) ---
-DISP_RES=""; DISP_SIZE=""
-if command -v edid-decode >/dev/null 2>&1; then
-  for e in /sys/class/drm/*/edid; do
-    [ -s "$e" ] || continue
-    dec=$(edid-decode "$e" 2>/dev/null)
-    DISP_RES=$(printf '%s\n' "$dec" | grep -oE 'DTD [0-9]+:[[:space:]]*[0-9]+x[0-9]+' | grep -oE '[0-9]+x[0-9]+' | head -n1)
-    DISP_SIZE=$(printf '%s\n' "$dec" | sed -n 's/.*Maximum image size:[[:space:]]*//p' | head -n1)
-    [ -n "$DISP_RES" ] && break
-  done
-fi
-
 # --- battery ---
 BAT_HEALTH=""; BAT_DESIGN=""; BAT_FULL=""; BAT_CYCLES=""; BAT_STATUS=""
 for b in /sys/class/power_supply/BAT*; do
@@ -731,6 +742,68 @@ for b in /sys/class/power_supply/BAT*; do
 done
 [ "$BAT_CYCLES" = "0" ] && BAT_CYCLES=""
 [ -z "$DEVICE_TYPE" ] && { [ -n "$BAT_HEALTH" ] && DEVICE_TYPE="Laptop" || DEVICE_TYPE="Desktop"; }
+
+# --- display: the BUILT-IN panel, laptops only ---
+# Deliberately placed after the battery check above, because that is what settles
+# DEVICE_TYPE on machines whose chassis type is blank — running this any earlier
+# would skip real laptops.
+#
+# Only eDP/LVDS/DSI connectors are read: those are the internal panel. Reading
+# every /sys/class/drm/*/edid would pick up whatever monitor happens to be on the
+# bench and record its size as the laptop's.
+#
+# The size comes from EDID directly rather than from edid-decode, which is not
+# installed on a minimal live image. Byte 68 of the first detailed timing
+# descriptor holds the high nibbles of the physical image size in MILLIMETRES
+# (bytes 66/67 hold the low bytes); that is precise enough to identify the
+# marketed panel size, where the header's centimetre fields at 21/22 are not.
+# Those cm fields are kept as the fallback for panels with no DTD size.
+DISP_RES=""; DISP_SIZE=""
+if [ "$DEVICE_TYPE" = "Laptop" ]; then
+  for e in /sys/class/drm/*-eDP-*/edid /sys/class/drm/*-LVDS-*/edid /sys/class/drm/*-DSI-*/edid; do
+    [ -s "$e" ] || continue
+    # One EDID block is 128 bytes; flattened to a single line for awk.
+    EBYTES=$(od -An -v -tu1 -N128 "$e" 2>/dev/null | tr '\n' ' ')
+    [ -n "$EBYTES" ] || continue
+    EOUT=$(printf '%s\n' "$EBYTES" | awk '
+      NF < 128 { exit }
+      {
+        for (i = 1; i <= NF; i++) b[i-1] = $i + 0   # 0-indexed, as the spec numbers them
+        # Physical image size from the first DTD (millimetres).
+        hmm = (int(b[68] / 16) * 256) + b[66]
+        vmm = ((b[68] % 16) * 256) + b[67]
+        # No DTD size: fall back to the header centimetre fields.
+        if (hmm < 100 || vmm < 50) { hmm = b[21] * 10; vmm = b[22] * 10 }
+        # Active pixels, also from the first DTD.
+        hpx = (int(b[58] / 16) * 256) + b[56]
+        vpx = (int(b[61] / 16) * 256) + b[59]
+
+        size = ""
+        if (hmm >= 100 && vmm >= 50) {
+          d = sqrt(hmm * hmm + vmm * vmm) / 25.4
+          if (d >= 7 && d <= 40) {
+            # Snap to a panel size that actually exists: EDID millimetres put a
+            # 14" panel at 13.96". Canonical list lives in the API, at
+            # apps/api/src/common/spec-normalise.ts — keep the two in step.
+            n = split("10.1 11.6 12.0 12.1 12.5 13.0 13.3 13.5 14.0 15.0 15.6 16.0 17.0 17.3 18.4", std, " ")
+            best = 0; bd = 999
+            for (i = 1; i <= n; i++) {
+              x = std[i] + 0
+              dd = (x > d) ? x - d : d - x
+              if (dd < bd) { bd = dd; best = x }
+            }
+            if (bd <= 0.4) d = best
+            size = (d == int(d)) ? sprintf("%d\"", d) : sprintf("%.1f\"", d)
+          }
+        }
+        res = (hpx > 0 && vpx > 0) ? sprintf("%dx%d", hpx, vpx) : ""
+        printf "%s|%s", size, res
+      }')
+    DISP_SIZE=${EOUT%%|*}
+    DISP_RES=${EOUT#*|}
+    [ -n "$DISP_SIZE" ] && break
+  done
+fi
 
 # --- network ---
 NET_ETH=$(lspci -mm 2>/dev/null | grep -i '"Ethernet controller"' | awk -F'"' '{print $6}' | head -n1)
@@ -764,6 +837,9 @@ CPU=$(o_end)
 
 o_begin
 o_n totalGb "$RAM_GB"; o_s type "$RAM_TYPE"; o_s speed "$RAM_SPEED"
+# Only when it disagrees with the installed total — the OS-visible figure is a
+# diagnostic, not the spec, so it must never be what a label or export shows.
+[ -n "$RAM_DETECTED" ] && [ "$RAM_DETECTED" != "$RAM_GB" ] && o_n detectedGb "$RAM_DETECTED"
 o_n modules "$RAM_MODULES"; o_n slots "$RAM_SLOTS"; o_n maxGb "$RAM_MAX"
 MEMORY=$(o_end)
 
@@ -806,6 +882,12 @@ printf "  %-14s %s\n" "Device"   "${MFR:-?} ${MODEL:-?} (${DEVICE_TYPE:-?})"
 printf "  %-14s %s\n" "Serial"   "${SERIAL:-?}${EXPRESS:+  ·  express $EXPRESS}"
 printf "  %-14s %s\n" "CPU"      "${CPU_MODEL:-?} — ${CPU_CORES:-?}C/${CPU_THREADS:-?}T"
 printf "  %-14s %s\n" "RAM"      "${RAM_GB:-?} GB ${RAM_TYPE} ${RAM_SPEED}"
+# Make the firmware reservation visible to the operator rather than silently
+# showing a different number than the machine's own POST screen does.
+if [ -n "$RAM_DETECTED" ] && [ "$RAM_DETECTED" != "$RAM_GB" ]; then
+  printf "  %-14s %s\n" "" "(OS sees ${RAM_DETECTED} GB — remainder reserved by firmware)"
+fi
+[ -n "$DISP_SIZE" ] && printf "  %-14s %s\n" "Screen"   "$DISP_SIZE${DISP_RES:+  ·  $DISP_RES}"
 printf "  %-14s %s\n" "Storage"  "$(printf '%s' "$STORAGE" | grep -oE '"capacity":"[^"]*"' | sed 's/.*://; s/"//g' | paste -sd', ' -)"
 printf "  %-14s %s\n" "Drive health" "${SMART_SUMMARY:-n/a}"
 printf "  %-14s %s\n" "Battery"  "${BAT_HEALTH:-n/a}"
