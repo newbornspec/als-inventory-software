@@ -16,6 +16,7 @@ import { UpdateAssetDto } from './dto/update-asset.dto';
 import { QueryAssetsDto } from './dto/query-assets.dto';
 import { CreateAssetAuditDto } from './dto/create-asset-audit.dto';
 import { sanitizeUser } from '../users/sanitize-user';
+import { screenSizeFor, standardiseRamGb } from '../common/spec-normalise';
 import { ActivityService } from '../activity/activity.service';
 import {
   isScopedManager,
@@ -218,10 +219,22 @@ export class AssetsService {
   // outcome onto the asset itself, so list views can filter by "latest
   // grade" without joining the full audit history every time.
   async createAudit(assetId: string, dto: CreateAssetAuditDto, userId: string): Promise<AssetAudit> {
-    await this.findOne(assetId); // 404s if the asset doesn't exist
+    const asset = await this.findOne(assetId); // 404s if the asset doesn't exist
 
+    // Same normalisation the USB tool's ingest path applies, so an audit typed
+    // into the web form can't reintroduce a 15 GB capacity or put a screen size
+    // on a tower. deviceType falls back to category for rows captured before
+    // deviceType existed. See common/spec-normalise.ts.
     const audit = await this.audits.save(
-      this.audits.create({ ...dto, assetId, auditedById: userId }),
+      this.audits.create({
+        ...dto,
+        ...(dto.ramGb !== undefined ? { ramGb: standardiseRamGb(dto.ramGb) } : {}),
+        ...(dto.screenSize !== undefined
+          ? { screenSize: screenSizeFor(asset.deviceType ?? asset.category, dto.screenSize) }
+          : {}),
+        assetId,
+        auditedById: userId,
+      }),
     );
 
     await this.assets.update(assetId, {

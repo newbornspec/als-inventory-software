@@ -40,6 +40,9 @@ const KEY_LABELS: Record<string, string> = {
   pendingSectors: 'Pending sectors',
   ssdLifeUsedPct: 'SSD life used (%)',
   totalGb: 'Total (GB)',
+  // Present only when the OS reported less than is installed, because the
+  // firmware reserved some for integrated graphics. Total is the real capacity.
+  detectedGb: 'Reported by OS (GB)',
   maxGb: 'Max (GB)',
   expressServiceCode: 'Express service code',
   serialNumber: 'Serial number',

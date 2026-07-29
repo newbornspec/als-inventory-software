@@ -9,6 +9,8 @@ import { AssetAudit } from '../assets/asset-audit.entity';
 import { AssetHistory, AssetEventType } from '../assets/asset-history.entity';
 import { IngestAuditDto } from './dto/ingest-audit.dto';
 import { HardwareProfile } from './hardware-profile.type';
+import { normaliseHardwareProfile } from './normalise-profile';
+import { screenSizeFor, standardiseRamGb } from '../common/spec-normalise';
 import { ActivityService } from '../activity/activity.service';
 
 @Injectable()
@@ -96,6 +98,14 @@ export class DevicesService {
     const deviceType = (ident.deviceType ?? dto.category ?? '').trim() || null;
     const expressCode = ident.expressServiceCode?.trim() || null;
 
+    // Normalise the captured spec once, here. Both the USB tool and the manual
+    // add-asset form land on this path, and the label, the xlsx export and the
+    // web app all read what this writes — so standardising on the way in is what
+    // keeps them from disagreeing. See common/spec-normalise.ts for the rules.
+    const normalisedProfile = normaliseHardwareProfile(profile, deviceType);
+    const ramGb = standardiseRamGb(profile?.memory?.totalGb ?? dto.ramGb ?? null);
+    const screenSize = screenSizeFor(deviceType, profile?.display?.size ?? dto.screenSize ?? null);
+
     const tag = serial || `HW-${Date.now()}`;
     const name = [manufacturer, model].filter(Boolean).join(' ').trim() || 'Audited device';
     const category = deviceType || 'Uncategorised';
@@ -119,7 +129,7 @@ export class DevicesService {
         serialNumber: serial,
         expressServiceCode: expressCode,
         // cast: QueryDeepPartialEntity rejects the profile's open index signature.
-        hardwareProfile: profile as any,
+        hardwareProfile: normalisedProfile as any,
         ...(asset.batchId !== lotId ? { batchId: lotId } : {}),
         // Only touch the sub-lot when one was supplied (the USB tool never sends it).
         ...(dto.subLotId !== undefined ? { lotId: dto.subLotId } : {}),
@@ -136,7 +146,7 @@ export class DevicesService {
           deviceType,
           serialNumber: serial,
           expressServiceCode: expressCode,
-          hardwareProfile: profile,
+          hardwareProfile: normalisedProfile,
           batchId: lotId,
           lotId: dto.subLotId ?? null, // optional sub-lot (spec bucket)
           stockStatus: AssetStockStatus.AUDITED,
@@ -151,17 +161,17 @@ export class DevicesService {
     await this.audits.save(
       this.audits.create({
         assetId: asset.id,
-        hardwareProfile: profile,
+        hardwareProfile: normalisedProfile,
         manufacturer,
         model,
         serialNumber: serial,
         cpu: profile?.cpu?.model ?? dto.cpu ?? null,
-        ramGb: profile?.memory?.totalGb ?? dto.ramGb ?? null,
+        ramGb,
         storageCapacity:
           (firstDrive ? [firstDrive.capacity, firstDrive.type].filter(Boolean).join(' ') : '') ||
           dto.storageCapacity ||
           null,
-        screenSize: profile?.display?.size ?? dto.screenSize ?? null,
+        screenSize,
         screenResolution: profile?.display?.resolution ?? dto.screenResolution ?? null,
         batteryHealth: profile?.battery?.health ?? dto.batteryHealth ?? null,
         biosLocked: dto.biosLocked ?? null,

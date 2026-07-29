@@ -9,6 +9,7 @@ import { Asset, AssetStockStatus } from '../assets/asset.entity';
 import { sanitizeUser, type SafeUser } from '../users/sanitize-user';
 import { ActivityService } from '../activity/activity.service';
 import { assertOwnsBatch, accessibleBatchWhere, type RequestUser } from '../common/ownership';
+import { screenSizeFor, standardiseRamGb } from '../common/spec-normalise';
 import { UserRole } from '../users/user.entity';
 
 export interface BatchWithCount extends Omit<Batch, 'receivedBy' | 'owner' | 'createdBy'> {
@@ -177,9 +178,11 @@ export class BatchesService {
             .filter(Boolean)
             .join(' ')
         : '';
-      const ramStr = mem
-        ? [mem.totalGb ? `${mem.totalGb} GB` : '', mem.type, mem.speed].filter(Boolean).join(' ')
-        : '';
+      // Capacity only. The type and speed stay in hardware_profile for diagnostics,
+      // but a resale spec sheet wants "16 GB", not "16 GB DDR4 3200 MT/s" — the
+      // extra detail reads as noise to a buyer and made the column unusably wide.
+      const ramGb = standardiseRamGb(mem?.totalGb);
+      const ramStr = ramGb != null ? `${ramGb} GB` : '';
       const storageStr = hp?.storage?.length
         ? hp.storage
             .map((d) => [d.capacity, d.type].filter(Boolean).join(' '))
@@ -192,8 +195,14 @@ export class BatchesService {
             .filter(Boolean)
             .join(', ')
         : '';
+      // Size only for devices with a built-in panel; a tower has no screen size,
+      // so printing one there would be mis-detected or stale data. Resolution is
+      // still shown for anything that reported it.
+      const deviceType = a.deviceType ?? ident?.deviceType ?? a.category ?? null;
       const displayStr = hp?.display
-        ? [hp.display.size, hp.display.resolution].filter(Boolean).join(' ')
+        ? [screenSizeFor(deviceType, hp.display.size), hp.display.resolution]
+            .filter(Boolean)
+            .join(' ')
         : '';
 
       ws.getRow(dataRow).values = [
