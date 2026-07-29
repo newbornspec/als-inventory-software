@@ -13,10 +13,14 @@ interface AuditSpec {
   createdAt: string;
 }
 
-// Label stock. Change these two values to match your printer's media and the
-// whole layout follows — nothing else is hard-coded to a size.
-const LABEL_W = '88.9mm'; // 3.5in
-const LABEL_H = '27.94mm'; // 1.1in
+// Label stock: Brother DK-11201 (Standard Address Label) on a QL-800.
+// These are the DRIVER's media dimensions, not the printable area — matching
+// them exactly is what makes the print dialog pick the right size instead of
+// falling back to a default and scaling. The ~1mm unprintable edge is covered
+// by the padding on .label below. Change these two values for other stock and
+// the whole layout follows; nothing else is hard-coded to a size.
+const LABEL_W = '90mm'; // DK-11201 length
+const LABEL_H = '29mm'; // DK-11201 width
 
 export default async function AssetLabelPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -94,7 +98,7 @@ export default async function AssetLabelPage({ params }: { params: Promise<{ id:
 
       {/* The label itself. Sized to the stock so what you see is what prints. */}
       <div
-        className="label mx-auto overflow-hidden border border-neutral-300 bg-white px-[2mm] py-[1.5mm] text-black"
+        className="label mx-auto overflow-hidden border border-neutral-300 bg-white px-[2.5mm] py-[2mm] text-black"
         style={{ width: LABEL_W, height: LABEL_H }}
       >
         <div className="truncate text-[9pt] leading-[1.15] font-bold tracking-tight">{title}</div>
@@ -126,8 +130,10 @@ export default async function AssetLabelPage({ params }: { params: Promise<{ id:
       <div className="no-print mx-auto mt-6 max-w-md">
         <PrintButton />
         <p className="mt-3 text-xs text-neutral-500">
-          Label stock: {LABEL_W} × {LABEL_H}. Set your printer to that size with no scaling
-          (&ldquo;Actual size&rdquo;), and turn headers and footers off.
+          Brother QL-800 · DK-11201 ({LABEL_W} × {LABEL_H}). In the print dialog choose the
+          QL-800, set paper to <strong>29mm x 90mm</strong>, scale to{' '}
+          <strong>Actual size</strong> (not &ldquo;Fit&rdquo;), and turn headers and footers off.
+          Chrome remembers these per site, so you only set them once.
         </p>
       </div>
     </main>
