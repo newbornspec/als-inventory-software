@@ -7,6 +7,9 @@ import { apiFetch, ApiError } from '@/lib/api-server';
 export interface Asset {
   id: string;
   tag: string;
+  // Permanent Unit ID (U-000001) — the value printed and barcoded on the label.
+  // Optional: assets created before the Unit ID column may not have one.
+  unitId?: string | null;
   name: string;
   category: string;
   stockStatus: string;

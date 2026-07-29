@@ -35,7 +35,15 @@ export function LotAssets({
     const needle = q.trim().toLowerCase();
     if (!needle) return assets;
     return assets.filter((a) =>
-      [a.name, a.manufacturer, a.model, a.deviceType, a.serialNumber, a.expressServiceCode]
+      [
+        a.unitId,
+        a.name,
+        a.manufacturer,
+        a.model,
+        a.deviceType,
+        a.serialNumber,
+        a.expressServiceCode,
+      ]
         .filter(Boolean)
         .some((v) => String(v).toLowerCase().includes(needle)),
     );
@@ -100,7 +108,8 @@ export function LotAssets({
 
   const actionCols =
     (canManage ? 2 : 0) + (canDelete ? 1 : 0) + (canManage && subLots.length > 0 ? 1 : 0);
-  const totalCols = 10 + actionCols;
+  // 10 data columns + Unit ID + the always-present Print column.
+  const totalCols = 12 + actionCols;
 
   return (
     <div className="mt-3">
@@ -120,6 +129,7 @@ export function LotAssets({
         <table className="w-full text-left text-xs">
           <thead className="bg-neutral-50 text-neutral-500">
             <tr>
+              <th className="px-3 py-2">Unit ID</th>
               <th className="px-3 py-2">Name</th>
               <th className="px-3 py-2">Manufacturer</th>
               <th className="px-3 py-2">Model</th>
@@ -133,12 +143,14 @@ export function LotAssets({
               {canManage && subLots.length > 0 && <th className="px-3 py-2">Sub-lot</th>}
               {canManage && otherBatches.length > 0 && <th className="px-3 py-2">Move to</th>}
               {canManage && <th className="px-3 py-2" />}
+              <th className="px-3 py-2" />
               {canDelete && <th className="px-3 py-2" />}
             </tr>
           </thead>
           <tbody>
             {filtered.map((a) => (
               <tr key={a.id} className="border-t border-neutral-200 hover:bg-neutral-50">
+                <td className="px-3 py-2 font-mono text-neutral-950">{a.unitId || '—'}</td>
                 <td className="px-3 py-2">
                   <Link href={`/assets/${a.id}`} className="text-neutral-950 underline">
                     {a.name}
@@ -208,6 +220,16 @@ export function LotAssets({
                     </button>
                   </td>
                 )}
+
+                <td className="px-3 py-2">
+                  <Link
+                    href={`/assets/${a.id}/label`}
+                    target="_blank"
+                    className="text-[#2b7fff] hover:underline"
+                  >
+                    Print
+                  </Link>
+                </td>
 
                 {canDelete && (
                   <td className="px-3 py-2">

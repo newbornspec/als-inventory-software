@@ -4,6 +4,7 @@ import { Repository } from 'typeorm';
 import { User } from '../users/user.entity';
 import { Batch } from '../batches/batch.entity';
 import { Asset, AssetStockStatus } from '../assets/asset.entity';
+import { nextUnitId } from '../assets/unit-id';
 import { AssetAudit } from '../assets/asset-audit.entity';
 import { AssetHistory, AssetEventType } from '../assets/asset-history.entity';
 import { IngestAuditDto } from './dto/ingest-audit.dto';
@@ -127,6 +128,7 @@ export class DevicesService {
       asset = await this.assets.save(
         this.assets.create({
           tag,
+          unitId: await nextUnitId(this.assets),
           name,
           category,
           manufacturer,

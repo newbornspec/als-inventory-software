@@ -103,7 +103,10 @@ export class AssetsController {
   ): Promise<StreamableFile> {
     const asset = await this.assets.findOne(id);
     const normalizedType: BarcodeType = type === 'code128' ? 'code128' : 'qr';
-    const buffer = await this.barcodeService.generate(asset.tag, normalizedType);
+    // Encode the permanent Unit ID. Falls back to the tag for any asset that
+    // predates the Unit ID column, so old printed labels and this endpoint
+    // never disagree. Search resolves either value, so scanning works for both.
+    const buffer = await this.barcodeService.generate(asset.unitId ?? asset.tag, normalizedType);
     return new StreamableFile(buffer);
   }
 

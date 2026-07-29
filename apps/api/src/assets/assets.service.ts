@@ -7,6 +7,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Asset, AssetStockStatus } from './asset.entity';
+import { nextUnitId } from './unit-id';
 import { Batch, BatchStatus } from '../batches/batch.entity';
 import { AssetEventType, AssetHistory } from './asset-history.entity';
 import { AssetAudit } from './asset-audit.entity';
@@ -65,7 +66,7 @@ export class AssetsService {
 
     if (query.search) {
       qb.andWhere(
-        '(asset.tag ILIKE :search OR asset.name ILIKE :search OR asset.serialNumber ILIKE :search OR asset.expressServiceCode ILIKE :search)',
+        '(asset.tag ILIKE :search OR asset.unitId ILIKE :search OR asset.name ILIKE :search OR asset.serialNumber ILIKE :search OR asset.expressServiceCode ILIKE :search)',
         { search: `%${query.search}%` },
       );
     }
@@ -142,7 +143,9 @@ export class AssetsService {
     // Managers can only create assets inside a lot they own.
     await this.assertOwnsTargetLot(dto.batchId ?? null, user);
     const userId = user?.userId;
-    const asset = await this.assets.save(this.assets.create(dto));
+    const asset = await this.assets.save(
+      this.assets.create({ ...dto, unitId: await nextUnitId(this.assets) }),
+    );
     if (userId) await this.logEvent(asset.id, AssetEventType.CREATED, userId, 'Asset created');
     await this.activity.record({
       userId,

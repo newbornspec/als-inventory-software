@@ -65,9 +65,19 @@ export class Asset {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  // The value encoded in the asset's barcode/QR label
+  // Warehouse identifier — usually the manufacturer serial, or a generated
+  // fallback when a device has none. Kept as-is: existing labels and scans
+  // still resolve by it.
   @Column({ unique: true })
   tag: string;
+
+  // The permanent Unit ID (U-000001) — third level of Batch -> Lot -> Unit, and
+  // the value encoded in the printed label's barcode. Assigned once at creation
+  // and never changed or reused, deliberately independent of the lot: assets
+  // move between lots, and a lot-derived ID would invalidate labels already
+  // stuck on the device. Nullable only so the migration/deploy window is safe.
+  @Column({ name: 'unit_id', type: 'varchar', unique: true, nullable: true })
+  unitId: string | null;
 
   @Column()
   name: string;
