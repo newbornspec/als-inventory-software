@@ -8,16 +8,19 @@ import type { Batch } from '@/lib/actions/batches';
 import type { Asset } from '@/lib/actions/assets';
 import { setAuditLot } from '@/lib/actions/devices';
 import { formatLabel } from '@/lib/asset-options';
+import { DeleteBatchButton } from './delete-batch-button';
 
 type LotAssets = { loading: boolean; error: string | null; assets: Asset[] };
 
 export function LotsAccordion({
   lots,
   canExport,
+  canDelete,
   activeAuditLotId,
 }: {
   lots: Batch[];
   canExport: boolean;
+  canDelete: boolean;
   activeAuditLotId: string | null;
 }) {
   const router = useRouter();
@@ -176,6 +179,25 @@ export function LotsAccordion({
                 Open lot
                 <ArrowRight className="size-4" />
               </Link>
+              {canDelete && (
+                <DeleteBatchButton
+                  batchId={lot.id}
+                  batchNumber={lot.batchNumber}
+                  // ?? actualUnitCount because web and API deploy independently:
+                  // if this ships to Vercel before the API returns totalUnitCount,
+                  // the count would be undefined and the confirmation would read
+                  // "undefined devices". Falls back to the live count, which is
+                  // only wrong for a lot with sold devices — and the API recounts
+                  // sold-inclusive before it deletes anything either way.
+                  deviceCount={lot.totalUnitCount ?? lot.actualUnitCount}
+                  soldCount={Math.max(0, (lot.totalUnitCount ?? 0) - lot.actualUnitCount)}
+                  // Passed through as-is: undefined means the API predates these
+                  // counts, and the dialog must say "any manifest/sub-lots" rather
+                  // than silently treat unknown as none.
+                  manifestLineCount={lot.expectedLineCount}
+                  subLotCount={lot.subLotCount}
+                />
+              )}
             </div>
 
             {isOpen && (

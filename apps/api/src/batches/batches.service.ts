@@ -3,6 +3,8 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import * as ExcelJS from 'exceljs';
 import { Batch, BatchStatus } from './batch.entity';
+import { Lot } from './lot.entity';
+import { ExpectedLineItem } from './expected-line-item.entity';
 import { CreateBatchDto } from './dto/create-batch.dto';
 import { UpdateBatchDto } from './dto/update-batch.dto';
 import { Asset, AssetStockStatus } from '../assets/asset.entity';
@@ -17,6 +19,14 @@ export interface BatchWithCount extends Omit<Batch, 'receivedBy' | 'owner' | 'cr
   owner: SafeUser | null;
   createdBy: SafeUser | null;
   actualUnitCount: number;
+  // Sold-inclusive. actualUnitCount deliberately omits sold devices, so only this
+  // one is safe to show before a destructive action.
+  totalUnitCount: number;
+  // Real row counts for the two other things a batch delete destroys. Needed so a
+  // delete confirmation can never claim a lot is empty while it still holds a
+  // supplier manifest or planned sub-lots.
+  subLotCount: number;
+  expectedLineCount: number;
   // Live per-lot roll-ups so the Lots view can show operational progress
   // (audit/grading throughput) without loading every asset.
   readyForSale: number;
@@ -355,15 +365,62 @@ export class BatchesService {
     return after;
   }
 
+  // Deletes the lot AND everything in it. Note what the database does NOT do for
+  // us: assets.batch_id and lots.batch_id are both ON DELETE SET NULL
+  // (1752040000000-CreateBatchesAndLots.ts:50,57), so plainly deleting the batch
+  // row would leave its devices and sub-lots alive but parentless — no supplier,
+  // no cost basis, invisible to scoped managers, and purged from every offline
+  // client with no bucket that can ever match batch_id IS NULL again. Orphaning is
+  // strictly worse than either keeping or deleting, so we delete explicitly.
   async remove(id: string, userId?: string): Promise<void> {
     const before = await this.findOne(id);
-    await this.batches.delete(id);
+
+    // Counted sold-inclusive on purpose. withCounts() excludes sold devices from
+    // actualUnitCount, so reusing that number here would let a delete that
+    // destroys a whole consignment's sale history look like it cleared an
+    // empty lot.
+    const totals = await this.assets
+      .createQueryBuilder('asset')
+      .select('COUNT(*)', 'total')
+      .addSelect(`COUNT(*) FILTER (WHERE asset.stock_status = 'sold')`, 'sold')
+      .where('asset.batchId = :id', { id })
+      .getRawOne<{ total: string; sold: string }>();
+    const assetCount = parseInt(totals?.total ?? '0', 10);
+    const soldCount = parseInt(totals?.sold ?? '0', 10);
+
+    // One transaction — a half-deleted lot is the orphan case above, arrived at by
+    // accident. Order is deliberate:
+    //   assets first  — asset_audits, asset_history, asset_photos and repair_logs
+    //                   are ON DELETE CASCADE off assets, so this is the step that
+    //                   removes each device's audit trail and wipe evidence
+    //   sub-lots next  — SET NULL would strand them, so remove them here
+    //   the batch last — cascades expected_line_items, the supplier manifest
+    await this.batches.manager.transaction(async (tx) => {
+      await tx.delete(Asset, { batchId: id });
+      await tx.delete(Lot, { batchId: id });
+      await tx.delete(Batch, { id });
+    });
+
+    // Snapshot the lot's identity into the log line. The row is gone, and its
+    // supplier, cost and received date exist nowhere else afterwards — same
+    // reasoning as pallet_sold_lines snapshotting pallet_number so profit stays
+    // computable once the source row has been removed.
+    const detail = [
+      before.source ? `supplier ${before.source}` : null,
+      before.totalCost != null ? `cost £${before.totalCost}` : null,
+      before.receivedDate ? `received ${before.receivedDate}` : null,
+    ]
+      .filter(Boolean)
+      .join(' · ');
     await this.activity.record({
       userId,
       action: 'batch.deleted',
       entityType: 'batch',
       entityId: id,
-      summary: `Deleted ${before.batchNumber}`,
+      summary:
+        `Deleted ${before.batchNumber} and its ${assetCount} device${assetCount === 1 ? '' : 's'}` +
+        (soldCount > 0 ? ` (${soldCount} sold)` : '') +
+        (detail ? ` · ${detail}` : ''),
     });
   }
 
@@ -371,30 +428,66 @@ export class BatchesService {
   // it's impossible for it to drift from what's actually been scanned in.
   private async withCounts(batches: Batch[]): Promise<BatchWithCount[]> {
     if (batches.length === 0) return [];
+    // Sold assets keep their batch link for provenance but are out of active
+    // inventory, so they must not count toward any lot's LIVE totals. That
+    // exclusion used to be a WHERE on the whole query; it is now per-aggregate so
+    // the same pass can also return `everything` — the sold-INCLUSIVE count.
+    // Destructive actions must be measured against that one: a fully-sold lot has
+    // an actualUnitCount of 0 while still holding an entire consignment.
+    const LIVE = `asset.stock_status != 'sold'`;
     const rows = await this.assets
       .createQueryBuilder('asset')
       .select('asset.batchId', 'batchId')
-      .addSelect('COUNT(*)', 'total')
-      .addSelect(`COUNT(*) FILTER (WHERE asset.audit_status = 'ready_for_sale')`, 'readyForSale')
+      .addSelect(`COUNT(*) FILTER (WHERE ${LIVE})`, 'total')
+      .addSelect('COUNT(*)', 'everything')
       .addSelect(
-        `COUNT(*) FILTER (WHERE asset.condition_grade = 'scrap' OR asset.audit_status = 'ber')`,
+        `COUNT(*) FILTER (WHERE asset.audit_status = 'ready_for_sale' AND ${LIVE})`,
+        'readyForSale',
+      )
+      .addSelect(
+        `COUNT(*) FILTER (WHERE (asset.condition_grade = 'scrap' OR asset.audit_status = 'ber') AND ${LIVE})`,
         'scrap',
       )
+      // No LIVE clause needed — 'quarantined' and 'sold' are the same column, so
+      // a quarantined row cannot also be sold.
       .addSelect(`COUNT(*) FILTER (WHERE asset.stock_status = 'quarantined')`, 'quarantine')
-      .addSelect(`COUNT(*) FILTER (WHERE asset.audit_status IS NOT NULL)`, 'audited')
+      .addSelect(`COUNT(*) FILTER (WHERE asset.audit_status IS NOT NULL AND ${LIVE})`, 'audited')
       .where('asset.batchId IN (:...ids)', { ids: batches.map((b) => b.id) })
-      // Sold assets keep their batch link for provenance but are out of active
-      // inventory — they must not count toward any lot's live totals.
-      .andWhere(`asset.stock_status != 'sold'`)
       .groupBy('asset.batchId')
       .getRawMany<{
         batchId: string;
         total: string;
+        everything: string;
         readyForSale: string;
         scrap: string;
         quarantine: string;
         audited: string;
       }>();
+    // Sub-lots and imported manifest lines are user-authored data that a batch
+    // delete cascades away, so their REAL counts have to travel with the batch —
+    // expectedUnitCount is a hand-typed declared figure (batch.entity.ts:83) and
+    // says nothing about how many manifest rows exist. Queried through the shared
+    // manager so this needs no extra repositories in the module.
+    const ids = batches.map((b) => b.id);
+    const [subLotRows, expectedRows] = await Promise.all([
+      this.batches.manager
+        .createQueryBuilder(Lot, 'lot')
+        .select('lot.batchId', 'batchId')
+        .addSelect('COUNT(*)', 'total')
+        .where('lot.batchId IN (:...ids)', { ids })
+        .groupBy('lot.batchId')
+        .getRawMany<{ batchId: string; total: string }>(),
+      this.batches.manager
+        .createQueryBuilder(ExpectedLineItem, 'eli')
+        .select('eli.batchId', 'batchId')
+        .addSelect('COUNT(*)', 'total')
+        .where('eli.batchId IN (:...ids)', { ids })
+        .groupBy('eli.batchId')
+        .getRawMany<{ batchId: string; total: string }>(),
+    ]);
+    const subLots = new Map(subLotRows.map((r) => [r.batchId, parseInt(r.total, 10)]));
+    const expected = new Map(expectedRows.map((r) => [r.batchId, parseInt(r.total, 10)]));
+
     const map = new Map(rows.map((r) => [r.batchId, r]));
     return batches.map((b) => {
       const r = map.get(b.id);
@@ -404,6 +497,9 @@ export class BatchesService {
         owner: b.owner ? sanitizeUser(b.owner) : null,
         createdBy: b.createdBy ? sanitizeUser(b.createdBy) : null,
         actualUnitCount: r ? parseInt(r.total, 10) : 0,
+        totalUnitCount: r ? parseInt(r.everything, 10) : 0,
+        subLotCount: subLots.get(b.id) ?? 0,
+        expectedLineCount: expected.get(b.id) ?? 0,
         readyForSale: r ? parseInt(r.readyForSale, 10) : 0,
         scrap: r ? parseInt(r.scrap, 10) : 0,
         quarantine: r ? parseInt(r.quarantine, 10) : 0,

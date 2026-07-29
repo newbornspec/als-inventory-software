@@ -19,6 +19,12 @@ export interface Batch {
   status: string;
   notes: string | null;
   actualUnitCount: number;
+  // Sold-inclusive. actualUnitCount omits sold devices, so a fully-sold lot reads
+  // as 0 units — only this count is safe to show before a destructive action.
+  totalUnitCount: number;
+  // Real row counts, unrelated to the hand-typed expectedUnitCount below.
+  subLotCount: number;
+  expectedLineCount: number;
   readyForSale: number;
   scrap: number;
   quarantine: number;
@@ -250,6 +256,25 @@ export async function importExpectedLineItems(
   } catch (err) {
     return { error: err instanceof ApiError ? err.message : 'Import failed.' };
   }
+}
+
+// Delete a whole lot and everything in it (admin only; the API enforces the
+// role). Returns the error rather than redirecting, because the button lives in
+// the lots list and needs to show a message in place instead of crashing the page.
+export async function deleteBatch(id: string): Promise<{ error?: string }> {
+  try {
+    await apiFetch(`/batches/${id}`, { method: 'DELETE' });
+  } catch (err) {
+    // Already gone (double-click, or removed in another tab)? The goal is met.
+    if (!(err instanceof ApiError && err.status === 404)) {
+      return { error: err instanceof ApiError ? err.message : 'Could not delete the lot.' };
+    }
+  }
+  revalidatePath('/batches');
+  revalidatePath('/assets');
+  revalidatePath('/inventory');
+  revalidatePath('/reports');
+  return {};
 }
 
 function emptyToUndefined(value: FormDataEntryValue | null): string | undefined {

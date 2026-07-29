@@ -14,6 +14,9 @@ export default async function LotsPage() {
   ]);
   const canCreate =
     user?.role === 'admin' || user?.role === 'manager' || user?.role === 'technician';
+  // Deleting a lot removes its devices and their audit trail with it, so it stays
+  // admin-only — narrower than canCreate.
+  const canDelete = user?.role === 'admin';
 
   return (
     <main className="min-h-screen bg-white text-neutral-950">
@@ -72,6 +75,7 @@ export default async function LotsPage() {
         <LotsAccordion
           lots={lots}
           canExport={canCreate}
+          canDelete={canDelete}
           activeAuditLotId={auditTarget?.batchId ?? null}
         />
       </div>
