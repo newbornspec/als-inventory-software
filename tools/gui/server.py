@@ -180,6 +180,12 @@ def write_boot_file(path, text):
 # --------------------------------------------------------- offline queue ----
 # Warehouse Wi-Fi drops. Rather than lose a unit's record, a failed upload is
 # written to disk and retried in the background until it lands.
+# Condition-grade slugs the API's assets_condition_grade_enum accepts. Mirrors
+# AssetConditionGrade in apps/api/src/assets/asset.entity.ts — the kiosk is a
+# standalone file with no build step, so this list is duplicated by necessity;
+# if that enum ever gains a value, update it here and in index.html too.
+GRADES = ("grade_a", "grade_b", "grade_c", "grade_d", "for_parts", "scrap")
+
 QUEUE_PATH = "/tmp/als-audit-queue.jsonl"
 QUEUE_LOCK = threading.Lock()      # guards the file
 FLUSH_LOCK = threading.Lock()      # only one flush at a time, or a record could
@@ -1332,6 +1338,14 @@ class Handler(BaseHTTPRequestHandler):
                 payload["subLotId"] = body["subLotId"]
             if body.get("notes"):
                 payload["notes"] = body["notes"]
+            # Operator's condition grade. Only forwarded when it is one of the
+            # slugs the API's enum accepts — anything else is DROPPED rather than
+            # passed through. A rejected payload is queued and retried every 45s
+            # forever by upload_audit/queue_worker, which cannot tell a 400 from a
+            # network outage, so one bad value would wedge the queue permanently.
+            grade = (body.get("cosmeticGrade") or "").strip()
+            if grade in GRADES:
+                payload["cosmeticGrade"] = grade
             out, queued, err = upload_audit(payload)
             PRIOR_CACHE["key"] = None       # this device's history just changed
             if queued:

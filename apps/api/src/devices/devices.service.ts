@@ -75,8 +75,11 @@ export class DevicesService {
   // the lot (or re-audits it if the same serial comes through again).
   //
   // The comprehensive `profile` is stored as-is (JSONB) on the asset and snapshotted
-  // on the audit row. Only auto-derived hardware identity is written to the asset;
-  // warehouse fields (grade, cost, location, status, notes) are never overwritten.
+  // on the audit row. Auto-derived hardware identity plus the operator's chosen
+  // grade are written to the asset; the remaining warehouse fields (cost, location,
+  // status, notes) are never overwritten. The grade is written ONLY when the capture
+  // tool actually sends one, so an older USB stick can never blank a grade set in
+  // the web app.
   async ingest(userId: string, dto: IngestAuditDto) {
     const user = await this.users.findOne({ where: { id: userId } });
     const lotId = dto.lotId ?? user?.activeAuditLotId ?? null;
@@ -117,9 +120,9 @@ export class DevicesService {
       .getOne();
     let created = false;
     if (asset) {
-      // Refresh only auto-captured hardware identity + profile; leave the lot as
-      // set (moving it only if a different lot was chosen) and never touch grade,
-      // cost, location, status or notes.
+      // Refresh auto-captured hardware identity + profile, and the grade when the
+      // operator supplied one; leave the lot as set (moving it only if a different
+      // lot was chosen) and never touch cost, location, status or notes.
       await this.assets.update(asset.id, {
         name,
         category,
@@ -130,6 +133,10 @@ export class DevicesService {
         expressServiceCode: expressCode,
         // cast: QueryDeepPartialEntity rejects the profile's open index signature.
         hardwareProfile: normalisedProfile as any,
+        // Newest physical inspection wins, matching what the web audit form already
+        // does (assets.service.ts createAudit). Guarded so a stick that sends no
+        // grade leaves whatever the warehouse set.
+        ...(dto.cosmeticGrade ? { conditionGrade: dto.cosmeticGrade } : {}),
         ...(asset.batchId !== lotId ? { batchId: lotId } : {}),
         // Only touch the sub-lot when one was supplied (the USB tool never sends it).
         ...(dto.subLotId !== undefined ? { lotId: dto.subLotId } : {}),
@@ -147,6 +154,7 @@ export class DevicesService {
           serialNumber: serial,
           expressServiceCode: expressCode,
           hardwareProfile: normalisedProfile,
+          ...(dto.cosmeticGrade ? { conditionGrade: dto.cosmeticGrade } : {}),
           batchId: lotId,
           lotId: dto.subLotId ?? null, // optional sub-lot (spec bucket)
           stockStatus: AssetStockStatus.AUDITED,
@@ -178,6 +186,10 @@ export class DevicesService {
         chargerIncluded: dto.chargerIncluded ?? null,
         dataWipeStatus: dto.dataWipeStatus ?? null,
         dataWipeMethod: dto.dataWipeMethod ?? null,
+        // Unconditional: asset_audits is the append-only compliance trail, so it
+        // records the grade judged at this moment (or null). This is what the
+        // erasure certificate's "Cosmetic grade" line reads.
+        cosmeticGrade: dto.cosmeticGrade ?? null,
         notes: dto.notes ?? null,
         auditedById: userId,
       }),

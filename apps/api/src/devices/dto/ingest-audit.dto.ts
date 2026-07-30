@@ -1,6 +1,7 @@
 import { IsBoolean, IsEnum, IsInt, IsObject, IsOptional, IsString, IsUUID, Min } from 'class-validator';
 import type { HardwareProfile } from '../hardware-profile.type';
 import { DataWipeStatus } from '../../assets/asset-audit.entity';
+import { AssetConditionGrade } from '../../assets/asset.entity';
 
 // Auto-read specs from the capture tool. No asset tag / no verification — the
 // device is created (or re-audited) in the target lot using its serial.
@@ -35,6 +36,14 @@ export class IngestAuditDto {
   // wipe lands on the audit record (and feeds the erasure certificate).
   @IsOptional() @IsEnum(DataWipeStatus) dataWipeStatus?: DataWipeStatus;
   @IsOptional() @IsString() dataWipeMethod?: string;
+
+  // The operator's physical condition grade, chosen on the capture tool's audit
+  // panel. Optional forever: USB sticks are updated by hand, so older ones send
+  // nothing and must keep working. @IsEnum is not decoration — condition_grade is
+  // a real Postgres enum, so an unrecognised value ('A' instead of 'grade_a')
+  // would reach the driver and 500 AFTER the asset row was already written, since
+  // ingest() is not wrapped in a transaction.
+  @IsOptional() @IsEnum(AssetConditionGrade) cosmeticGrade?: AssetConditionGrade;
 
   // True when a human entered this via the "Add asset" form rather than the
   // capture tool — only affects the history-note wording (provenance).

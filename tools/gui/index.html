@@ -270,6 +270,26 @@
         <!-- audit -->
         <div class="card">
           <div class="lbl" style="margin-bottom:12px">Audit</div>
+          <p class="sublbl">Asset grade</p>
+          <div class="sel" style="max-width:270px;margin-bottom:16px">
+            <span class="li"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+              stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l2.6 5.6 6.1.8-4.5
+              4.2 1.1 6-5.3-3-5.3 3 1.1-6L3.3 9.4l6.1-.8z"/></svg></span>
+            <!-- Values are the API's enum slugs, NOT the letters: condition_grade is a
+                 Postgres enum, so 'A' would 500 the ingest. Mirrors AssetConditionGrade
+                 in apps/api/src/assets/asset.entity.ts. Static markup on purpose - the
+                 1.5s bootstrap poll rewrites #aReady/#hwGrid/#wDriveBox, and anything
+                 inside a rewritten container loses the operator's selection mid-click. -->
+            <select id="gradeSel" onchange="auditGate()">
+              <option value="">Select grade…</option>
+              <option value="grade_a">Grade A</option>
+              <option value="grade_b">Grade B</option>
+              <option value="grade_c">Grade C</option>
+              <option value="grade_d">Grade D</option>
+            </select>
+            <span class="ri"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+              stroke-width="2" stroke-linecap="round"><path d="M6 9l6 6 6-6"/></svg></span>
+          </div>
           <div style="display:flex;align-items:center;gap:18px;flex-wrap:wrap">
             <div style="flex:1;min-width:230px;color:var(--mut);font-size:14.5px" id="aReady">
               Collect hardware and system information for the current unit.</div>
@@ -492,12 +512,25 @@ async function bootstrap(){
 
   fillBatches(); fillDrives(); fillImages(); fillHardware(); renderImageSource();
 
-  $('aStart').disabled=!(b.device&&$('batchSel').value);
-  $('wStart').disabled=!$('wDrive').value;
+  auditGate();
+  // NOTE: the old line here was  $('wStart').disabled=!$('wDrive').value;
+  // #wDrive only exists on the single-drive branch of fillWipeDrives(); with two or
+  // more disks that branch renders .wchk checkboxes instead, so this threw a
+  // TypeError and aborted the rest of bootstrap() - including the re-poll below -
+  // leaving hardware detection dead on dual-drive machines. estimate() (called from
+  // fillDrives) already sets wStart correctly for both branches, so it is just gone.
   $('aReady').textContent=b.device
     ? 'Detected '+b.device.name+'. The audit is saved to the selected batch.'
     : (b.capturing?'Detecting hardware…':'Collect hardware and system information for the current unit.');
   if(b.capturing) setTimeout(bootstrap,1500);
+}
+
+// Start audit needs hardware, a batch AND a grade. One helper because the same
+// condition is evaluated from bootstrap(), onBatch(), the grade select's onchange
+// and after a run finishes - four places that must never disagree.
+function auditGate(){
+  const g=$('gradeSel');
+  $('aStart').disabled=!(BOOT.device&&$('batchSel').value&&g&&g.value);
 }
 
 function fillBatches(){
@@ -514,7 +547,7 @@ function onBatch(){
   $('bDate').textContent=(l&&l.createdAt)
     ? new Date(l.createdAt).toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}):'—';
   $('bBy').textContent=(l&&(l.createdByName||l.ownerName))||'—';
-  $('aStart').disabled=!(BOOT.device&&$('batchSel').value);
+  auditGate();
   checkPrior();
 }
 
@@ -696,6 +729,10 @@ async function checkPrior(){
 
 async function startAudit(){
   if(!BOOT.device){toast('Hardware not detected yet.',false);return;}
+  // Checked before the already-audited modal: the other order makes the operator
+  // confirm the re-audit prompt first and only then learn the grade is missing.
+  if(!$('gradeSel').value){
+    toast('Please select an asset grade before starting the audit.',false);return;}
   if(PRIOR&&PRIOR.found){
     const when=PRIOR.lastAuditAt
       ? new Date(PRIOR.lastAuditAt).toLocaleString('en-GB',{day:'2-digit',month:'short',
@@ -715,9 +752,15 @@ async function doAudit(){
   if(!BOOT.device){toast('Hardware not detected yet.',false);return;}
   $('aStart').disabled=true; $('aRun').classList.remove('hidden');
   let res;
-  try{ res=await jpost('/api/audit',{lotId:$('batchSel').value}); }
+  const grade=$('gradeSel').value;
+  const body={lotId:$('batchSel').value};
+  // Omitted entirely when unset. Sending '' would fail the API's @IsEnum (@IsOptional
+  // skips undefined/null, not an empty string) and a 400 is queued and retried every
+  // 45s forever, so one blank would wedge the upload queue permanently.
+  if(grade) body.cosmeticGrade=grade;
+  try{ res=await jpost('/api/audit',body); }
   catch(e){ res={ok:false,data:{message:'Could not reach the audit service.'}}; }
-  $('aRun').classList.add('hidden'); $('aStart').disabled=false;
+  $('aRun').classList.add('hidden'); auditGate();
   if(res.ok&&res.data&&res.data.queued){
     // Offline: the record is on disk and uploads itself once back on the network.
     toast('No connection — audit saved on this machine and will upload automatically ('+
