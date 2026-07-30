@@ -98,6 +98,10 @@ export class BatchesService {
     wb.creator = 'ALS Trade Wholesales';
     const ws = wb.addWorksheet('Lot Report');
     const headers = [
+      // First column on purpose: it is the permanent per-device identifier and the
+      // one printed on the physical label, so matching a unit on the bench to a row
+      // in this sheet starts here. Same order as the lot's asset list in the app.
+      'Unit ID',
       'Manufacturer',
       'Model',
       'Device type',
@@ -116,7 +120,9 @@ export class BatchesService {
       'Battery health',
       'Unit cost (£)',
     ];
-    const widths = [16, 22, 12, 18, 14, 16, 14, 10, 16, 30, 20, 26, 22, 18, 18, 14, 13];
+    // One entry per header, in the same order — ws.columns is positional, and
+    // lastCol/the total row are both derived from headers.length.
+    const widths = [12, 16, 22, 12, 18, 14, 16, 14, 10, 16, 30, 20, 26, 22, 18, 18, 14, 13];
     ws.columns = widths.map((w) => ({ width: w }));
     const lastCol = ws.getColumn(headers.length).letter;
 
@@ -215,6 +221,9 @@ export class BatchesService {
         : '';
 
       ws.getRow(dataRow).values = [
+        // Blank for anything audited before Unit IDs existed; the Tag column still
+        // identifies those rows.
+        a.unitId ?? '',
         ident?.manufacturer ?? a.name ?? '',
         ident?.model ?? '',
         a.deviceType ?? ident?.deviceType ?? a.category ?? '',
