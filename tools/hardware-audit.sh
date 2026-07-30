@@ -761,22 +761,41 @@ done
 DISP_RES=""; DISP_SIZE=""
 if [ "$DEVICE_TYPE" = "Laptop" ]; then
   for e in /sys/class/drm/*-eDP-*/edid /sys/class/drm/*-LVDS-*/edid /sys/class/drm/*-DSI-*/edid; do
-    [ -s "$e" ] || continue
-    # One EDID block is 128 bytes; flattened to a single line for awk.
+    # DELIBERATELY -r, NOT -s. The kernel declares the DRM 'edid' attribute as a
+    # binary sysfs attribute with .size = 0, so stat() reports an empty file even
+    # though reading it returns a full 128-byte block. An earlier version tested
+    # -s here and therefore skipped EVERY panel it found, on every laptop — which
+    # is why the screen size was always blank. Judge by what the read returns.
+    [ -r "$e" ] || continue
+    # One EDID block is 128 bytes; flattened to a single line for awk. A short or
+    # empty read is caught by the parser's own `NF < 128 { exit }` guard, so no
+    # size test is needed here (or trustworthy).
     EBYTES=$(od -An -v -tu1 -N128 "$e" 2>/dev/null | tr '\n' ' ')
     [ -n "$EBYTES" ] || continue
     EOUT=$(printf '%s\n' "$EBYTES" | awk '
       NF < 128 { exit }
       {
         for (i = 1; i <= NF; i++) b[i-1] = $i + 0   # 0-indexed, as the spec numbers them
-        # Physical image size from the first DTD (millimetres).
-        hmm = (int(b[68] / 16) * 256) + b[66]
-        vmm = ((b[68] % 16) * 256) + b[67]
-        # No DTD size: fall back to the header centimetre fields.
+
+        # EDID holds FOUR 18-byte descriptors starting at byte 54. Only a DETAILED
+        # TIMING descriptor carries the physical image size (at +12/+13/+14), and a
+        # descriptor is a timing one only when its first two bytes - the pixel clock -
+        # are non-zero. Reading descriptor 1 blindly fails on panels that put a
+        # display descriptor (monitor name, range limits) first, which is what the
+        # Latitude 3310 does: its edid is a full 128 bytes yet yielded no size.
+        hmm = 0; vmm = 0; hpx = 0; vpx = 0
+        for (o = 54; o <= 108; o += 18) {
+          if (b[o] == 0 && b[o+1] == 0) continue          # not a timing descriptor
+          if (hpx == 0) {
+            hpx = (int(b[o+4] / 16) * 256) + b[o+2]
+            vpx = (int(b[o+7] / 16) * 256) + b[o+5]
+          }
+          h = (int(b[o+14] / 16) * 256) + b[o+12]
+          v = ((b[o+14] % 16) * 256) + b[o+13]
+          if (h >= 100 && v >= 50) { hmm = h; vmm = v; break }
+        }
+        # Header centimetre fields as the last resort (less precise, hence second).
         if (hmm < 100 || vmm < 50) { hmm = b[21] * 10; vmm = b[22] * 10 }
-        # Active pixels, also from the first DTD.
-        hpx = (int(b[58] / 16) * 256) + b[56]
-        vpx = (int(b[61] / 16) * 256) + b[59]
 
         size = ""
         if (hmm >= 100 && vmm >= 50) {
@@ -784,7 +803,7 @@ if [ "$DEVICE_TYPE" = "Laptop" ]; then
           if (d >= 7 && d <= 40) {
             # Snap to a panel size that actually exists: EDID millimetres put a
             # 14" panel at 13.96". Canonical list lives in the API, at
-            # apps/api/src/common/spec-normalise.ts — keep the two in step.
+            # apps/api/src/common/spec-normalise.ts - keep the two in step.
             n = split("10.1 11.6 12.0 12.1 12.5 13.0 13.3 13.5 14.0 15.0 15.6 16.0 17.0 17.3 18.4", std, " ")
             best = 0; bd = 999
             for (i = 1; i <= n; i++) {
@@ -803,6 +822,35 @@ if [ "$DEVICE_TYPE" = "Laptop" ]; then
     DISP_RES=${EOUT#*|}
     [ -n "$DISP_SIZE" ] && break
   done
+fi
+
+# --- why did the panel size come back empty? ---
+# Attached to the audit ONLY when a laptop yields no size, so it can be read back
+# out of the database instead of transcribed off a kiosk screen with no terminal.
+# It disappears by itself once detection works on a machine.
+# NOTE: read $DISPLAY here, not below - line ~848 reuses that name for a JSON
+# fragment, which clobbers the X11 variable for anything after it.
+DISP_DEBUG=""
+if [ -z "$DISP_SIZE" ] && [ "$DEVICE_TYPE" = "Laptop" ]; then
+  for f in /sys/class/drm/*/edid; do
+    [ -e "$f" ] || continue
+    d=${f%/edid}
+    # stat= what `test -s` sees, read= what actually comes back. If those disagree
+    # (stat0/read128) that is the sysfs size-0 trap, and it is worth recording.
+    DISP_DEBUG="$DISP_DEBUG${DISP_DEBUG:+; }$(basename "$d")=stat$(stat -c%s "$f" 2>/dev/null)/read$(wc -c <"$f" 2>/dev/null | tr -d ' ')/$(cat "$d/status" 2>/dev/null)"
+  done
+  [ -z "$DISP_DEBUG" ] && DISP_DEBUG="no /sys/class/drm/*/edid entries"
+  # The internal panel's raw base block, so its layout can be decoded here rather
+  # than guessed at across another boot cycle. 128 bytes = 256 hex chars.
+  for e2 in /sys/class/drm/*-eDP-*/edid /sys/class/drm/*-LVDS-*/edid /sys/class/drm/*-DSI-*/edid; do
+    [ -r "$e2" ] || continue   # -s would skip it — same sysfs size-0 trap as above
+    DISP_DEBUG="$DISP_DEBUG | hex:$(od -An -tx1 -N128 "$e2" 2>/dev/null | tr -d ' 
+')"
+    break
+  done
+  # DISPLAY is usually unset for a subprocess of the backend, so try :0 too.
+  XR=$( { xrandr 2>/dev/null || DISPLAY=:0 xrandr 2>/dev/null; } | grep -m1 ' connected' | sed 's/(.*)//;s/  */ /g')
+  [ -n "$XR" ] && DISP_DEBUG="$DISP_DEBUG | xrandr: $XR"
 fi
 
 # --- network ---
@@ -845,7 +893,8 @@ MEMORY=$(o_end)
 
 o_begin
 o_s size "$DISP_SIZE"; o_s resolution "$DISP_RES"
-DISPLAY=$(o_end)
+o_s detectDebug "$DISP_DEBUG"
+DISPLAY_OBJ=$(o_end)
 
 o_begin
 o_s health "$BAT_HEALTH"; o_s designCapacity "$BAT_DESIGN"; o_s fullChargeCapacity "$BAT_FULL"
@@ -869,7 +918,7 @@ p_obj cpu "$CPU"
 p_obj memory "$MEMORY"
 p_obj storage "$STORAGE"
 p_obj graphics "$GRAPHICS"
-p_obj display "$DISPLAY"
+p_obj display "$DISPLAY_OBJ"
 p_obj battery "$BATTERY"
 p_obj network "$NETWORK"
 p_obj security "$SECURITY"
