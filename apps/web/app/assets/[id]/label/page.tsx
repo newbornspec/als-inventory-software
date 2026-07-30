@@ -64,6 +64,12 @@ export default async function AssetLabelPage({ params }: { params: Promise<{ id:
   // Vendor CPU strings are verbose ("Intel(R) Core(TM) i5-4590 CPU @ 3.30GHz")
   // and eat the label's one line. Trim them to the form used on the existing
   // labels: "CORE I5-4590 3.30GHZ".
+  //
+  // Same rules as cleanCpuModel() in apps/api/src/common/spec-normalise.ts, which
+  // the xlsx export uses — kept in step by hand, since the web app cannot import
+  // from the API. The one deliberate difference: this drops the Intel/AMD word
+  // (dropMaker) because 90mm of label width is the binding constraint, whereas the
+  // export keeps it so a spreadsheet reader can tell Intel from AMD.
   const cpu = (spec?.cpu ?? '')
     .replace(/\((R|TM)\)/g, '') // Intel(R) Core(TM) -> Intel Core
     .replace(/\b(Intel|AMD)\b/gi, '') // the maker is implied on our stock

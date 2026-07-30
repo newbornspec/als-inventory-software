@@ -11,7 +11,7 @@ import { Asset, AssetStockStatus } from '../assets/asset.entity';
 import { sanitizeUser, type SafeUser } from '../users/sanitize-user';
 import { ActivityService } from '../activity/activity.service';
 import { assertOwnsBatch, accessibleBatchWhere, type RequestUser } from '../common/ownership';
-import { screenSizeFor, standardiseRamGb } from '../common/spec-normalise';
+import { cleanCpuModel, screenSizeFor, standardiseRamGb } from '../common/spec-normalise';
 import { UserRole } from '../users/user.entity';
 
 export interface BatchWithCount extends Omit<Batch, 'receivedBy' | 'owner' | 'createdBy'> {
@@ -180,14 +180,13 @@ export class BatchesService {
       const ident = hp?.identification;
       const cpu = hp?.cpu;
       const mem = hp?.memory;
-      const cpuStr = cpu
-        ? [
-            cpu.model,
-            cpu.cores || cpu.threads ? `(${cpu.cores ?? '?'}C/${cpu.threads ?? '?'}T)` : '',
-          ]
-            .filter(Boolean)
-            .join(' ')
-        : '';
+      // Model only — no "(4C/8T)". Core and thread counts are still captured and
+      // stay in hardware_profile for diagnostics; they just read as noise to a
+      // buyer on a resale spec sheet, same reasoning as dropping the RAM speed.
+      // Then tidied: "Intel(R) Core(TM) i7-4770 CPU @ 3.40GHz" -> "Intel Core
+      // i7-4770 3.40GHz". The maker is kept here (unlike the label, which drops it
+      // for width) because a spreadsheet reader wants Intel vs AMD.
+      const cpuStr = cleanCpuModel(cpu?.model);
       // Capacity only. The type and speed stay in hardware_profile for diagnostics,
       // but a resale spec sheet wants "16 GB", not "16 GB DDR4 3200 MT/s" — the
       // extra detail reads as noise to a buyer and made the column unusably wide.

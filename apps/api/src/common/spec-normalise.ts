@@ -29,6 +29,36 @@ export function standardiseRamGb(gb: number | null | undefined): number | null {
   return Math.ceil(n / 2) * 2;
 }
 
+/**
+ * Tidy a vendor CPU string for display.
+ *
+ * Intel reports "Intel(R) Core(TM) i7-4770 CPU @ 3.40GHz" and AMD is no better.
+ * The registered-trademark marks, the redundant "CPU"/"Processor" and the "@" are
+ * noise on a spec sheet, and the trailing "with Radeon Graphics" is a different
+ * component's name entirely.
+ *
+ * `dropMaker` removes the Intel/AMD word too. That is right on the printed label,
+ * where 90mm of width is the binding constraint and the maker is implied by the
+ * model number — but wrong in an export, where a buyer reading a spreadsheet
+ * genuinely wants to know Intel from AMD. Hence the option rather than one rule.
+ *
+ * The printed label at apps/web/app/assets/[id]/label/page.tsx applies the same
+ * rules inline with dropMaker behaviour; it cannot import this file (separate
+ * deploy target, no wired shared package), so the two are kept in step by hand.
+ */
+export function cleanCpuModel(
+  raw: string | null | undefined,
+  opts: { dropMaker?: boolean } = {},
+): string {
+  let s = String(raw ?? '')
+    .replace(/\((R|TM)\)/gi, '') // Intel(R) Core(TM) -> Intel Core
+    .replace(/\bCPU\b|\bProcessor\b/gi, '')
+    .replace(/\s+with\s+.*?Graphics\b/i, '') // drop 'with Radeon Graphics'
+    .replace(/\s*@\s*/, ' '); // '@ 3.40GHz' -> '3.40GHz'
+  if (opts.dropMaker) s = s.replace(/\b(Intel|AMD)\b/gi, '');
+  return s.replace(/\s+/g, ' ').trim();
+}
+
 // Panel sizes that actually exist, laptop and monitor. EDID encodes the physical
 // image size in millimetres, so the computed diagonal lands a few tenths off the
 // marketed size (a 14" panel is 309x174mm -> 13.96"); snapping to this list is

@@ -1,10 +1,52 @@
 import {
+  cleanCpuModel,
   hasBuiltInDisplay,
   lacksBuiltInDisplay,
   normaliseScreenSize,
   screenSizeFor,
   standardiseRamGb,
 } from './spec-normalise';
+
+describe('cleanCpuModel', () => {
+  // Every distinct CPU string in the live BATCH-000020 export, verbatim.
+  it.each([
+    ['Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz', 'Intel Core i3-8145U 2.10GHz'],
+    ['Intel(R) Core(TM) i7-2600 CPU @ 3.40GHz', 'Intel Core i7-2600 3.40GHz'],
+    ['Intel(R) Core(TM) i7-3770 CPU @ 3.40GHz', 'Intel Core i7-3770 3.40GHz'],
+    ['Intel(R) Core(TM) i7-4770 CPU @ 3.40GHz', 'Intel Core i7-4770 3.40GHz'],
+    ['Intel(R) Core(TM) i7-4790 CPU @ 3.60GHz', 'Intel Core i7-4790 3.60GHz'],
+    ['Intel(R) Core(TM) i7-6700 CPU @ 3.40GHz', 'Intel Core i7-6700 3.40GHz'],
+    ['Intel(R) Core(TM) i7-7700 CPU @ 3.60GHz', 'Intel Core i7-7700 3.60GHz'],
+  ])('tidies %s', (raw, expected) => {
+    expect(cleanCpuModel(raw)).toBe(expected);
+  });
+
+  it('handles AMD, including the graphics suffix that is a different component', () => {
+    expect(cleanCpuModel('AMD Ryzen 5 3600 6-Core Processor')).toBe('AMD Ryzen 5 3600 6-Core');
+    expect(cleanCpuModel('AMD Ryzen 5 5600G with Radeon Graphics')).toBe('AMD Ryzen 5 5600G');
+  });
+
+  it('keeps the maker by default and drops it only when asked', () => {
+    const raw = 'Intel(R) Core(TM) i5-1145G7 CPU @ 2.60GHz';
+    expect(cleanCpuModel(raw)).toBe('Intel Core i5-1145G7 2.60GHz');
+    expect(cleanCpuModel(raw, { dropMaker: true })).toBe('Core i5-1145G7 2.60GHz');
+  });
+
+  it('is idempotent, so cleaning an already-clean string is safe', () => {
+    const once = cleanCpuModel('Intel(R) Core(TM) i7-4770 CPU @ 3.40GHz');
+    expect(cleanCpuModel(once)).toBe(once);
+  });
+
+  it('returns an empty string for missing input rather than "undefined"', () => {
+    for (const bad of [null, undefined, '', '   ']) {
+      expect(cleanCpuModel(bad as string)).toBe('');
+    }
+  });
+
+  it('leaves a string with nothing to strip alone', () => {
+    expect(cleanCpuModel('Apple M2 Pro')).toBe('Apple M2 Pro');
+  });
+});
 
 describe('standardiseRamGb', () => {
   // The table from the spec, verbatim.
