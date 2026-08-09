@@ -342,7 +342,21 @@
             <span class="ri"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
               stroke-width="2" stroke-linecap="round"><path d="M6 9l6 6 6-6"/></svg></span>
           </div>
-          <div class="sub hidden" id="iMeta" style="margin:-8px 0 12px;font-size:12px;color:var(--mut2)"></div>
+          <div class="sub hidden" id="iMeta"
+               style="margin:-8px 0 12px;font-size:12px;color:var(--mut2);display:flex;
+                      align-items:center;gap:10px">
+            <span id="iMetaTxt"></span><span style="flex:1"></span>
+            <button class="lnk" onclick="openRename()">Rename</button>
+          </div>
+          <div class="hidden" id="iRenameWrap" style="margin-bottom:14px">
+            <label class="fld"><span>Image name</span>
+              <input id="iRenameVal" maxlength="60"
+                     placeholder="e.g. Windows 11 Pro - Standard Office" /></label>
+            <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px">
+              <button class="btn gho sm" onclick="closeRename()">Cancel</button>
+              <button class="btn sm" onclick="saveImageName()">Save</button>
+            </div>
+          </div>
           <div class="health hidden" id="iSource"></div>
           <!-- Outcome of the last install. Persists until the next one starts:
                a toast that fades cannot tell an operator returning to the bench
@@ -651,13 +665,36 @@ function fillImages(){
 
 /* The technical detail, kept visible but subordinate to the name. */
 function showImageMeta(){
-  const el=$('iMeta'); if(!el)return;
+  const el=$('iMeta'),txt=$('iMetaTxt'); if(!el||!txt)return;
   const i=(BOOT.osImages||[]).find(x=>x.id===$('iImage').value);
   const bits=[];
   if(i&&i.version)bits.push(i.version);
-  if(i&&i.unlisted)bits.push('not named yet — folder name shown');
-  el.textContent=bits.join(' · ');
-  el.classList.toggle('hidden',!bits.length);
+  if(i&&i.unlisted&&!i.renamed)bits.push('not named yet — folder name shown');
+  txt.textContent=bits.join(' · ');
+  // The row carries the Rename button, so it stays up whenever an image is
+  // selected even when there is no technical detail to show.
+  el.classList.toggle('hidden',!i);
+}
+
+/* Renaming an image. The name is the operator's own — "Windows 11 Pro -
+   Standard Office" identifies a build in a way "23H2 64-bit" never can. Stored
+   on the stick, because the image library is mounted read-only by design. */
+function openRename(){
+  const i=(BOOT.osImages||[]).find(x=>x.id===$('iImage').value);
+  if(!i){toast('Select an image first.',false);return;}
+  $('iRenameVal').value=i.name||'';
+  $('iRenameWrap').classList.remove('hidden');
+  $('iRenameVal').focus(); $('iRenameVal').select();
+}
+function closeRename(){ $('iRenameWrap').classList.add('hidden'); }
+async function saveImageName(){
+  const id=$('iImage').value, name=$('iRenameVal').value.trim();
+  if(!id)return;
+  const r=await jpost('/api/os/images/name',{imageId:id,name:name});
+  if(!(r.data&&r.data.ok)){toast((r.data&&r.data.message)||'Could not save the name.',false);return;}
+  BOOT.osImages=r.data.images||BOOT.osImages;
+  closeRename(); fillImages(); $('iImage').value=id; showImageMeta();
+  toast(name?('Renamed to “'+name+'” ✓'):'Name reset ✓',true);
 }
 
 /* --- drive health (SMART) ------------------------------------------------

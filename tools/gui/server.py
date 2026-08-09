@@ -182,6 +182,46 @@ def write_boot_file(path, text):
             remount(mp, "ro")     # always leave the stick as we found it
 
 
+# ------------------------------------------------------------ image names ----
+# The operator's own label for each OS image, e.g. "Windows 11 Pro - Standard
+# Office". Kept on the stick rather than beside the images because the image
+# library is mounted READ-ONLY on purpose — that is what stops a machine being
+# imaged from damaging it — so the station cannot write there, and should not
+# be able to.
+
+def image_names_path():
+    """Beside audit.conf at the stick root."""
+    base = os.path.dirname(CONF_PATH) if CONF_PATH else os.path.dirname(HERE)
+    return os.path.join(base, "image-names.json")
+
+
+def load_image_names():
+    try:
+        with open(image_names_path(), "r", errors="replace") as fh:
+            data = json.load(fh)
+        return {k: v for k, v in data.items() if isinstance(v, str)} \
+            if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def save_image_name(image_id, name):
+    """Set (or clear, when name is blank) one image's label.
+    Returns None on success or a human-readable error."""
+    names = load_image_names()
+    name = (name or "").strip()[:60]
+    if name:
+        names[image_id] = name
+    else:
+        names.pop(image_id, None)          # blank restores the manifest name
+    err = write_boot_file(image_names_path(),
+                          json.dumps(names, indent=2, sort_keys=True) + "\n")
+    if err:
+        return err
+    MANIFEST_CACHE["ts"] = 0.0             # or the rename would not show for 30s
+    return None
+
+
 # --------------------------------------------------------- offline queue ----
 # Warehouse Wi-Fi drops. Rather than lose a unit's record, a failed upload is
 # written to disk and retried in the background until it lands.
@@ -1161,16 +1201,21 @@ def list_os_images():
     now = time.time()
     if MANIFEST_CACHE["root"] == root and now - MANIFEST_CACHE["ts"] < 3:
         return MANIFEST_CACHE["data"]
+    # A missing or unreadable manifest is no longer fatal — the directory scan
+    # further down finds every restorable image on its own. A library holding
+    # images but no manifest.json used to report an empty list, which looks
+    # exactly like a library that is not mounted.
+    data = {}
     manifest = os.path.join(root, "manifest.json")
-    if not os.path.isfile(manifest):
-        MANIFEST_CACHE.update(root=root, ts=now, data=[])
-        return []
-    try:
-        with open(manifest, "r", errors="replace") as fh:
-            data = json.load(fh)
-    except (OSError, ValueError):
-        MANIFEST_CACHE.update(root=root, ts=now, data=[])
-        return []
+    if os.path.isfile(manifest):
+        try:
+            with open(manifest, "r", errors="replace") as fh:
+                data = json.load(fh)
+        except (OSError, ValueError):
+            data = {}
+    if not isinstance(data, dict):
+        data = {}
+    names = load_image_names()
     imgs = []
     listed = set()
     for it in data.get("images", []):
@@ -1189,7 +1234,8 @@ def list_os_images():
             # stays in the record but no longer competes with it for the name:
             # three images all reading "Windows 11 Pro - 23H2 64-bit" told you
             # nothing about which was which.
-            "name": it.get("name", it.get("id")),
+            "name": names.get(it.get("id")) or it.get("name", it.get("id")),
+            "renamed": bool(names.get(it.get("id"))),
             "version": it.get("version", ""),
             "icon": it.get("icon", ""),
             "dir": d,
@@ -1211,8 +1257,9 @@ def list_os_images():
             p = os.path.join(root, d)
             if not os.path.isdir(p) or not image_complete(p):
                 continue
-            imgs.append({"id": d, "name": d, "version": "", "icon": "", "dir": d,
-                         "present": True, "incomplete": False, "unlisted": True})
+            imgs.append({"id": d, "name": names.get(d) or d, "version": "",
+                         "icon": "", "dir": d, "present": True, "incomplete": False,
+                         "unlisted": True, "renamed": bool(names.get(d))})
     except OSError:
         pass
 
@@ -1568,6 +1615,18 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"queued": True, "waiting": queue_count(),
                                         "message": err})
             return self._send(200, dict(out or {}, queued=False))
+
+        if u.path == "/api/os/images/name":
+            # Deliberately not PIN-gated: this is a label, it is reversible, and
+            # a blank value simply restores the manifest name.
+            image = (body.get("imageId") or "").strip()
+            if not re.match(r"^[A-Za-z0-9_.-]+$", image):
+                return self._send(400, {"message": "invalid image"})
+            err = save_image_name(image, body.get("name") or "")
+            if err:
+                return self._send(500, {"message": err})
+            # save_image_name already expired the cache, so this rebuilds.
+            return self._send(200, {"ok": True, "images": list_os_images()})
 
         if u.path == "/api/os/install/cancel":
             # Without this the only way out of a wedged restore was rebooting the
