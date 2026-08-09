@@ -756,6 +756,62 @@ def sync_clock():
     return True, "clock corrected (was out by %d days)" % (abs(drift) // 86400)
 
 
+def _dns_query(name):
+    """A standard recursive A query — what a resolver actually exists to answer.
+    (The first version of this probe asked for the root NS record, which is a
+    DNS-amplification vector that some resolvers drop. No reason to invite
+    being told a working server is dead.)"""
+    q = bytearray(b"\xab\xcd\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00")
+    for label in name.split("."):
+        q.append(len(label))
+        q.extend(label.encode())
+    q.append(0)
+    q.extend(b"\x00\x01\x00\x01")          # QTYPE=A, QCLASS=IN
+    return bytes(q)
+
+
+def dns_probe(server, name="cloudflare.com", timeout=4):
+    """Can this resolver be reached, and over which transport?
+
+    Returns (ok, note). UDP first, because that is what the system resolver
+    uses. TCP 53 second, because the difference between the two is the whole
+    diagnosis: a site that filters UDP 53 (to force traffic through its own
+    resolver) but passes TCP is a network policy, not a dead server, and the
+    operator should not be sent hunting for a fault on the station."""
+    import socket
+    q = _dns_query(name)
+
+    sk = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sk.settimeout(timeout)
+    try:
+        sk.sendto(q, (server, 53))
+        data, _ = sk.recvfrom(512)
+        # Match the transaction id so a stray packet cannot pass for an answer.
+        if len(data) > 12 and data[0] == 0xAB and data[1] == 0xCD:
+            return True, "answers"
+    except Exception:  # noqa: BLE001
+        pass
+    finally:
+        try:
+            sk.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+    try:
+        st = socket.create_connection((server, 53), timeout=timeout)
+        try:
+            st.sendall(len(q).to_bytes(2, "big") + q)   # DNS/TCP length prefix
+            data = st.recv(514)
+        finally:
+            st.close()
+        if len(data) > 14 and data[2] == 0xAB and data[3] == 0xCD:
+            return True, "answers over TCP only (UDP 53 filtered on this network)"
+    except Exception:  # noqa: BLE001
+        pass
+
+    return False, "SILENT"
+
+
 def net_check():
     """Diagnose the network layer by layer, so 'not connected' names the actual
     broken step instead of leaving the operator guessing. Runs in the GUI
@@ -803,19 +859,24 @@ def net_check():
         _, rc = sh(["ping", "-c", "1", "-W", "2", gw])
         steps.append(("Reach the router", rc == 0, gw))
 
-    # Try ICMP first, then fall back to a TCP connect. A network that filters
-    # ping outbound would otherwise report the internet as unreachable and send
-    # the operator after the wrong problem — this step is the one the verdict
-    # names as "First failure", so a false negative here is expensive.
+    # Never judge the internet by one address or one protocol. This site blocks
+    # 1.1.1.1 outright — by ICMP and by TCP — while the rest of the internet
+    # works fine, and plenty of networks filter ping. Either alone produced a
+    # red "First failure" on a station that was uploading audits happily.
     _, rc = sh(["ping", "-c", "1", "-W", "3", "1.1.1.1"])
     net_ok, net_detail = rc == 0, "1.1.1.1 (bypasses DNS)"
     if not net_ok:
-        try:
-            import socket
-            socket.create_connection(("1.1.1.1", 443), timeout=5).close()
-            net_ok, net_detail = True, "1.1.1.1:443 — reachable (ping is filtered here)"
-        except Exception:  # noqa: BLE001
-            net_detail = "1.1.1.1 unreachable by ping AND by TCP 443"
+        import socket
+        for ip, who in (("1.1.1.1", "Cloudflare"), ("8.8.8.8", "Google"), ("9.9.9.9", "Quad9")):
+            try:
+                socket.create_connection((ip, 443), timeout=4).close()
+                net_ok = True
+                net_detail = "%s:443 (%s) — ping is filtered on this network" % (ip, who)
+                break
+            except Exception:  # noqa: BLE001
+                continue
+        if not net_ok:
+            net_detail = "1.1.1.1 / 8.8.8.8 / 9.9.9.9 all unreachable by ping and TCP 443"
     steps.append(("Reach the internet", net_ok, net_detail))
 
     steps.append(("DNS servers set", bool(servers), ", ".join(servers) or "none in resolv.conf"))
@@ -823,27 +884,9 @@ def net_check():
     # "Configured" and "reachable" are different failures with different fixes:
     # unreachable resolvers mean routing/firewall, not DNS.
     if servers:
-        reach = []
-        for s in servers[:3]:
-            ok = False
-            try:
-                import socket
-                sk = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                sk.settimeout(4)
-                # Minimal DNS query for "." NS — enough to prove the resolver answers.
-                sk.sendto(b"\xab\xcd\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00"
-                          b"\x00\x00\x02\x00\x01", (s, 53))
-                sk.recvfrom(512)
-                ok = True
-            except Exception:  # noqa: BLE001
-                ok = False
-            finally:
-                try:
-                    sk.close()
-                except Exception:  # noqa: BLE001
-                    pass
-            reach.append("%s %s" % (s, "answers" if ok else "SILENT"))
-        any_ok = any("answers" in r for r in reach)
+        probes = [(s,) + dns_probe(s) for s in servers[:3]]
+        reach = ["%s %s" % (s, note) for s, _ok, note in probes]
+        any_ok = any(ok for _s, ok, _n in probes)
         steps.append(("DNS servers answer", any_ok, ", ".join(reach)))
 
     dns_ok, dns_detail = False, "no API host configured"
@@ -881,14 +924,23 @@ def net_check():
             api_detail = "%s (%s)" % (api_url, (str(exc) or type(exc).__name__))
     steps.append(("Reach ALS Inventory", api_ok, api_detail))
 
-    # Name the first broken step — that is the thing to fix.
-    verdict = "Everything reachable."
-    for name, ok, _detail in steps:
-        if not ok:
-            verdict = "First failure: %s" % name
-            break
-    return {"steps": [{"name": n, "ok": bool(o), "detail": d} for n, o, d in steps],
-            "verdict": verdict, "interfaces": ifaces, "routes": routes}
+    # Reaching ALS Inventory is the ONLY thing that decides whether this station
+    # is usable. Every step above it exists to explain a failure, not to be one:
+    # treated as failures in their own right they cried wolf on a working
+    # station, and the operator went looking for a network fault that was not
+    # there. When the API is reachable, a failed diagnostic is advisory.
+    if api_ok:
+        verdict = "Everything working — ALS Inventory is reachable."
+    else:
+        verdict = "Everything reachable."
+        for name, ok, _detail in steps:
+            if not ok:
+                verdict = "First failure: %s" % name
+                break
+    return {"steps": [{"name": n, "ok": bool(o), "detail": d,
+                       "advisory": bool(api_ok and not o)} for n, o, d in steps],
+            "verdict": verdict, "ok": bool(api_ok),
+            "interfaces": ifaces, "routes": routes}
 
 
 PRIOR_CACHE = {"key": None, "ts": 0.0, "data": None}

@@ -971,8 +971,13 @@ async function loadNetCheck(){
   let h='<div class="health '+(bad?'bad':'ok')+'" style="margin:0 0 10px"><span class="hd"></span>'+
         '<span><b>'+t.verdict+'</b></span></div>';
   for(const s of t.steps){
-    h+='<div style="margin-bottom:5px"><span style="color:'+(s.ok?'var(--green)':'var(--red)')+'">'+
-       (s.ok?'✓':'✗')+'</span> '+s.name+' <span style="color:var(--mut2)">— '+s.detail+'</span></div>';
+    /* advisory = this step failed but ALS Inventory is reachable anyway, so it
+       is information, not a fault. Amber ⓘ, never red. */
+    const col=s.ok?'var(--green)':(s.advisory?'var(--amber,#b45309)':'var(--red)');
+    const gly=s.ok?'✓':(s.advisory?'ⓘ':'✗');
+    h+='<div style="margin-bottom:5px"><span style="color:'+col+'">'+gly+'</span> '+
+       s.name+' <span style="color:var(--mut2)">— '+s.detail+
+       (s.advisory?' <i>(not a problem — the station is online)</i>':'')+'</span></div>';
   }
   /* The backend already gathers these; not showing them meant the one thing
      that identifies a routing fault was unreachable from a keyboard-grabbed
