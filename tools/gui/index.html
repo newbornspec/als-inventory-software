@@ -338,11 +338,16 @@
           <div class="sel" style="margin-bottom:16px">
             <span class="li"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
               stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg></span>
-            <select id="iImage"></select>
+            <select id="iImage" onchange="showImageMeta()"></select>
             <span class="ri"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
               stroke-width="2" stroke-linecap="round"><path d="M6 9l6 6 6-6"/></svg></span>
           </div>
+          <div class="sub hidden" id="iMeta" style="margin:-8px 0 12px;font-size:12px;color:var(--mut2)"></div>
           <div class="health hidden" id="iSource"></div>
+          <!-- Outcome of the last install. Persists until the next one starts:
+               a toast that fades cannot tell an operator returning to the bench
+               whether the machine in front of them was imaged or not. -->
+          <div class="health hidden" id="iResult"></div>
           <div id="iActions">
             <button class="btn" id="iStart" onclick="confirmInstall()">
               <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
@@ -477,6 +482,11 @@ function toast(m,good=true){const t=$('toast');t.textContent=m;t.className='toas
 
 function fmtSecs(s){s=Math.max(0,s|0);const h=(s/3600)|0,m=((s%3600)/60)|0,x=s%60;
   return (h?h+'h ':'')+((h||m)?m+'m ':'')+(h?'':x+'s');}
+/* Image names come from manifest.json and from folder names on a shared
+   server. Operator-controlled, but a stray < or & would still break the option
+   markup, and these strings are interpolated into innerHTML in three places. */
+function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,
+  c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 function fmtBytes(n){n=+n||0;
   for(const [s,v] of [['TB',1e12],['GB',1e9],['MB',1e6],['kB',1e3]])
     if(n>=v)return (n/v).toFixed(1).replace(/\.0$/,'')+' '+s;
@@ -627,10 +637,27 @@ function renderImageSource(){
 
 function fillImages(){
   const im=BOOT.osImages||[];
+  /* The name the operator gave the image IS the label. Showing
+     "Windows 11 Pro · 23H2 64-bit" for three different builds told them nothing
+     about which was which; the version still travels in the record and is shown
+     as a subtitle, where it cannot be mistaken for the identity. */
   fillSelect($('iImage'),im.length
-    ? im.map(i=>'<option value="'+i.id+'"'+(i.present?'':' disabled')+'>'+i.name+
-        (i.version?' · '+i.version:'')+(i.present?'':' (image missing)')+'</option>').join('')
-    : '<option value="">No OS images on this stick</option>');
+    ? im.map(i=>'<option value="'+esc(i.id)+'"'+(i.present?'':' disabled')+'>'+esc(i.name)+
+        (i.present?'':(i.incomplete?' (incomplete — recapture)':' (not copied yet)'))+
+        '</option>').join('')
+    : '<option value="">No OS images available</option>');
+  showImageMeta();
+}
+
+/* The technical detail, kept visible but subordinate to the name. */
+function showImageMeta(){
+  const el=$('iMeta'); if(!el)return;
+  const i=(BOOT.osImages||[]).find(x=>x.id===$('iImage').value);
+  const bits=[];
+  if(i&&i.version)bits.push(i.version);
+  if(i&&i.unlisted)bits.push('not named yet — folder name shown');
+  el.textContent=bits.join(' · ');
+  el.classList.toggle('hidden',!bits.length);
 }
 
 /* --- drive health (SMART) ------------------------------------------------
@@ -922,11 +949,24 @@ async function cancelInstall(){
 }
 
 /* ----------------------------------------------------------- install --- */
+/* state: 'running' | 'done' | 'failed' | null (clear) */
+function setInstallResult(state,name,dev,why){
+  const el=$('iResult'); if(!el)return;
+  if(!state){el.classList.add('hidden');return;}
+  const cls=state==='done'?'ok':(state==='failed'?'bad':'warn');
+  const txt=state==='done'?'✓ Completed':(state==='failed'?'✕ Failed':'Installing…');
+  el.className='health '+cls;
+  el.innerHTML='<span class="hd"></span><span><b>'+esc(name||'OS image')+'</b><br>'+txt+
+    (dev?' · '+esc(dev):'')+(why?'<br>'+esc(why):'')+'</span>';
+  el.classList.remove('hidden');
+}
+
 function confirmInstall(){
   const img=$('iImage').value, dev=$('iDrive').value;
   if(!img){toast('No OS image selected.',false);return;}
   if(!dev){toast('No target drive.',false);return;}
   const io=$('iImage').selectedOptions[0], dobj=$('iDrive').selectedOptions[0];
+  const imgName=io?io.textContent.trim():img;
   openOv('Install '+(io?io.textContent:img)+'?','This erases '+(dobj?dobj.textContent:dev)+
     ' and writes the OS image to it. This cannot be undone.', false, async()=>{
     closeOv();
@@ -935,12 +975,15 @@ function confirmInstall(){
     catch(e){ toast('Could not start the install.',false); return; }
     if(!res.ok){toast(res.data.message||'Could not start install',false);return;}
     $('iActions').classList.add('hidden'); $('iRun').classList.remove('hidden');
+    setInstallResult('running',imgName,dev,'');
     $('iStat').textContent='Writing image'; $('iPct').textContent='0%';
     $('iBar').classList.add('ind'); $('iBar').firstElementChild.style.width='0%';
     pollJob('install',{logId:'iLog',barId:'iBar',pctId:'iPct',statId:'iStat',label:'Writing image',
       onDone:(r)=>{
         $('iActions').classList.remove('hidden'); $('iRun').classList.add('hidden');
         const ok=r.status==='installed';
+        setInstallResult(ok?'done':'failed',imgName,dev,
+          ok?'':(r.reason||r.message||'reason not reported'));
         toast(ok?'OS image loaded ✓':('Install failed — '+(r.reason||r.message||'reason not reported')),ok);
       }});
   },'Install');

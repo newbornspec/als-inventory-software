@@ -1172,6 +1172,7 @@ def list_os_images():
         MANIFEST_CACHE.update(root=root, ts=now, data=[])
         return []
     imgs = []
+    listed = set()
     for it in data.get("images", []):
         d = it.get("dir") or it.get("id")
         # "Present" has to mean RESTORABLE, not merely "the folder exists".
@@ -1180,8 +1181,14 @@ def list_os_images():
         # usable image. IMAGE-SERVER-SETUP.md already promised this behaviour.
         exists = bool(d) and os.path.isdir(os.path.join(root, d))
         present = exists and image_complete(os.path.join(root, d))
+        if d:
+            listed.add(d)
         imgs.append({
             "id": it.get("id"),
+            # The operator's own label. Everything technical (version, build)
+            # stays in the record but no longer competes with it for the name:
+            # three images all reading "Windows 11 Pro - 23H2 64-bit" told you
+            # nothing about which was which.
             "name": it.get("name", it.get("id")),
             "version": it.get("version", ""),
             "icon": it.get("icon", ""),
@@ -1190,7 +1197,25 @@ def list_os_images():
             # Distinguishes "not copied yet" from "copied but the capture never
             # finished", so the UI can say which.
             "incomplete": exists and not present,
+            "unlisted": False,
         })
+
+    # Anything restorable sitting in the library but NOT named in the manifest
+    # is still offered, under its folder name. Promoting a capture should not
+    # require hand-editing JSON before the station will admit the image exists —
+    # an image you cannot see is indistinguishable from one that is missing.
+    try:
+        for d in sorted(os.listdir(root)):
+            if d in listed or d.startswith("."):
+                continue
+            p = os.path.join(root, d)
+            if not os.path.isdir(p) or not image_complete(p):
+                continue
+            imgs.append({"id": d, "name": d, "version": "", "icon": "", "dir": d,
+                         "present": True, "incomplete": False, "unlisted": True})
+    except OSError:
+        pass
+
     MANIFEST_CACHE.update(root=root, ts=now, data=imgs)
     return imgs
 
