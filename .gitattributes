@@ -1,3 +1,20 @@
+# Binary assets, marked explicitly. Git guesses "binary" by looking for a NUL
+# byte in the first 8KB, and a small ReportLab PDF can contain none at all — so
+# it was classified as TEXT, and with core.autocrlf=true a fresh clone on Windows
+# would insert a CR before every LF inside the content streams and hand you a
+# corrupt file. Nothing warns you; the PDF simply stops opening.
+*.pdf binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.zip binary
+*.xlsx binary
+*.docx binary
+
 # Shell scripts must keep LF endings or they break on Linux (bad interpreter ^M).
 # The hardware-audit tool is copied straight to a Linux live USB and run there.
 *.sh text eol=lf
