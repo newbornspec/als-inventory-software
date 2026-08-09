@@ -24,7 +24,6 @@
   .logo{width:38px;height:38px;border-radius:10px;background:var(--blsoft);
         display:grid;place-items:center;color:var(--blue);flex:none}
   .brand h1{margin:0;font-size:19px;font-weight:700;letter-spacing:-.2px}
-  .brand p{margin:0;font-size:12.5px;color:var(--mut2)}
   .hmeta{display:flex;align-items:center;gap:18px;flex:none}
   .chip{display:inline-flex;align-items:center;gap:7px;font-size:13.5px;color:var(--mut);white-space:nowrap}
   .chip.act{cursor:pointer}
@@ -159,7 +158,7 @@
     .grid{max-width:1860px;gap:22px}
     .col{gap:20px}
     .card{padding:21px 25px;border-radius:16px}
-    .brand h1{font-size:22px} .brand p{font-size:13.5px}
+    .brand h1{font-size:22px}
     .logo{width:44px;height:44px}
     .lbl{font-size:12px} .sublbl{font-size:11.5px}
     .sel select{font-size:16px;padding-top:15px;padding-bottom:15px}
@@ -177,7 +176,7 @@
     .col{gap:24px}
     .card{padding:26px 32px;border-radius:18px}
     .scroll{padding:26px}
-    .brand h1{font-size:27px} .brand p{font-size:16px}
+    .brand h1{font-size:27px}
     .logo{width:54px;height:54px;border-radius:13px}
     .lbl{font-size:14px} .sublbl{font-size:13px}
     .sel select{font-size:19px;padding:19px 44px 19px 50px}
@@ -203,10 +202,7 @@
         <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
              stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
       </div>
-      <div>
-        <h1>Audit Software</h1>
-        <p>ALS inventory audit console</p>
-      </div>
+      <h1>Audit Software</h1>
     </div>
     <div class="hmeta">
       <span class="chip"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -316,7 +312,6 @@
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
               stroke-linecap="round"><path d="M12 3v9"/><path d="M6.5 7a8 8 0 1 0 11 0"/></svg>
             Shutdown</button>
-          <span class="diag" id="ftDisp"></span>
         </div>
       </div>
 
@@ -343,8 +338,8 @@
               stroke-width="2" stroke-linecap="round"><path d="M6 9l6 6 6-6"/></svg></span>
           </div>
           <div class="sub hidden" id="iMeta"
-               style="margin:-8px 0 12px;font-size:12px;color:var(--mut2);display:flex;
-                      align-items:center;gap:10px">
+               style="margin:-10px 0 12px;font-size:12px;color:var(--mut2);display:flex;
+                      align-items:center;gap:10px;justify-content:flex-end">
             <span id="iMetaTxt"></span><span style="flex:1"></span>
             <button class="lnk" onclick="openRename()">Rename</button>
           </div>
@@ -516,10 +511,6 @@ function clock(){$('hDate').textContent=new Date().toLocaleDateString('en-GB',
   {day:'2-digit',month:'short',year:'numeric'});}
 setInterval(clock,30000);clock();
 
-function disp(){const vw=innerWidth,vh=innerHeight,sw=screen.width||0,sh=screen.height||0;
-  $('ftDisp').textContent=(BOOT.launch?BOOT.launch+' · ':'')+'vp '+vw+'×'+vh+' · scr '+sw+'×'+sh;}
-addEventListener('resize',disp);
-
 function connClick(){ if(BOOT.error) openSettings(); }
 
 /* --------------------------------------------------------- bootstrap --- */
@@ -528,7 +519,6 @@ async function bootstrap(){
   try{ b=await jget('/api/bootstrap'); }
   catch(e){ setTimeout(bootstrap,3000); return; }
   BOOT=b; LOTS=b.lots||[]; DRIVES=b.drives||[];
-  disp();
 
   const bad=!!b.error||!b.server;
   $('hDot').className='dot'+(bad?' bad':'');
@@ -667,10 +657,11 @@ function fillImages(){
 function showImageMeta(){
   const el=$('iMeta'),txt=$('iMetaTxt'); if(!el||!txt)return;
   const i=(BOOT.osImages||[]).find(x=>x.id===$('iImage').value);
-  const bits=[];
-  if(i&&i.version)bits.push(i.version);
-  if(i&&i.unlisted&&!i.renamed)bits.push('not named yet — folder name shown');
-  txt.textContent=bits.join(' · ');
+  // The build string ("23H2 64-bit") is deliberately NOT shown: it is the same
+  // for every image built from the same media, so on screen it only added noise
+  // next to the name that actually identifies the build. Still carried in the
+  // record, and still in the manifest.
+  txt.textContent=(i&&i.unlisted&&!i.renamed)?'not named yet — folder name shown':'';
   // The row carries the Rename button, so it stays up whenever an image is
   // selected even when there is no technical detail to show.
   el.classList.toggle('hidden',!i);
