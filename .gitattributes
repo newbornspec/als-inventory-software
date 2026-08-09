@@ -1,6 +1,13 @@
 # Shell scripts must keep LF endings or they break on Linux (bad interpreter ^M).
 # The hardware-audit tool is copied straight to a Linux live USB and run there.
 *.sh text eol=lf
+# The kiosk backend carries a #!/usr/bin/env python3 shebang and is copied to the
+# same Linux live USB. start-gui.sh currently invokes it as `python3 server.py`,
+# so CRLF would not bite today — but the moment anything runs it directly it
+# would die with the same "bad interpreter" as a CRLF shell script.
+*.py text eol=lf
+# Served from the station's own loopback HTTP server on Linux.
+tools/gui/*.html text eol=lf
 # SystemRescue autorun entry (no extension) and .desktop launcher run on Linux too.
 tools/autorun text eol=lf
 *.desktop text eol=lf

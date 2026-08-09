@@ -68,6 +68,11 @@ STATE = {
 JOBS = {"wipe": None, "install": None}
 PROCS = {}          # kind -> Popen, so a running job can be cancelled
 LOCK = threading.Lock()
+# Guards job["log"]/job["seq"] as a PAIR. Two threads now append to a running
+# job's log (the engine reader and the disk-write watchdog), and the /api/job
+# incremental protocol derives the client's window from seq - len(log) — so a
+# torn read there would silently skip or repeat lines on the operator's screen.
+LOG_LOCK = threading.Lock()
 
 # Drives are wiped concurrently, so each gets its own job keyed by device.
 def wipe_kind(device):
@@ -1080,7 +1085,12 @@ def list_os_images():
     imgs = []
     for it in data.get("images", []):
         d = it.get("dir") or it.get("id")
-        present = bool(d) and os.path.isdir(os.path.join(root, d))
+        # "Present" has to mean RESTORABLE, not merely "the folder exists".
+        # A capture aborted by a full disk or a thermal shutdown leaves the big
+        # payload files but not these three, and it must never be offered as a
+        # usable image. IMAGE-SERVER-SETUP.md already promised this behaviour.
+        exists = bool(d) and os.path.isdir(os.path.join(root, d))
+        present = exists and image_complete(os.path.join(root, d))
         imgs.append({
             "id": it.get("id"),
             "name": it.get("name", it.get("id")),
@@ -1088,17 +1098,92 @@ def list_os_images():
             "icon": it.get("icon", ""),
             "dir": d,
             "present": present,  # false = listed but image files not on the stick yet
+            # Distinguishes "not copied yet" from "copied but the capture never
+            # finished", so the UI can say which.
+            "incomplete": exists and not present,
         })
     MANIFEST_CACHE.update(root=root, ts=now, data=imgs)
     return imgs
 
 
 # ------------------------------------------------------------- job runner ----
-def start_job(kind, argv, result_prefix, device="", on_done=None):
+
+def _bytes_short(n):
+    """Progress-scale formatter. human_size() rounds to whole GB and returns ""
+    for small values, so a 98 MB/s rate would render as "0 GB"."""
+    n = float(n or 0)
+    for unit, step in (("TB", 1e12), ("GB", 1e9), ("MB", 1e6), ("kB", 1e3)):
+        if n >= step:
+            return ("%.1f" % (n / step)).rstrip("0").rstrip(".") + " " + unit
+    return "%d B" % int(n)
+
+
+def disk_written_bytes(device):
+    """Bytes written to a whole disk since boot, asked of the kernel directly.
+    Field 7 of /sys/block/<dev>/stat is sectors written, 512 B each."""
+    kname = (device or "").replace("/dev/", "").strip()
+    if not kname or "/" in kname:
+        return None
+    try:
+        with open("/sys/block/%s/stat" % kname, "r") as fh:
+            return int(fh.read().split()[6]) * 512
+    except (OSError, IndexError, ValueError):
+        return None
+
+
+def _write_watchdog(job, device, stop):
+    """Heartbeat driven by real disk writes instead of engine chatter.
+
+    Clonezilla hands partclone an ncurses UI and we run it through a pipe with
+    no terminal attached, so a perfectly healthy restore prints NOTHING for its
+    entire run. That made `idle` a measure of talkativeness rather than
+    liveness, and a working restore looked exactly like a dead one. Asking the
+    kernel how many bytes actually landed on the drive is engine-independent,
+    so it keeps working whatever we restore with later."""
+    base = disk_written_bytes(device)
+    if base is None:
+        return
+    last, last_t = base, time.time()
+    while not stop.wait(15):
+        cur = disk_written_bytes(device)
+        if cur is None:
+            return
+        now = time.time()
+        delta = cur - last
+        rate = delta / max(0.001, now - last_t)
+        job["writeBytes"] = cur - base
+        job["writeStalled"] = delta == 0
+        last, last_t = cur, now
+        if not delta:
+            continue                 # nothing moved — let `idle` climb, honestly
+        el = int(now - job.get("startedAt", now))
+        with LOG_LOCK:
+            job["log"].append("    [%02d:%02d:%02d] %s written to %s (%s/s)" % (
+                el // 3600, (el % 3600) // 60, el % 60,
+                _bytes_short(cur - base), device.replace("/dev/", ""),
+                _bytes_short(rate)))
+            job["seq"] += 1
+            del job["log"][:-400]
+        job["updatedAt"] = now
+
+
+def image_complete(path):
+    """A Clonezilla savedisk only counts as finished once these exist. The two
+    small metadata files are what a restore reads first, and clonezilla-img is
+    the last thing written on a successful save."""
+    return all(os.path.isfile(os.path.join(path, f))
+               for f in ("disk", "parts", "clonezilla-img"))
+
+
+def start_job(kind, argv, result_prefix, device="", on_done=None,
+              watch_writes=False, noun="process", hint=""):
     """Run a long command in the background, streaming its stdout into a rolling
     log and parsing the final `<PREFIX> {json}` line into `result`. `on_done`
     (given the parsed result) runs after the process ends and before the job is
-    marked finished — used to upload the wipe record."""
+    marked finished — used to upload the wipe record. `watch_writes` adds a
+    kernel-level disk-write heartbeat for engines that go quiet (see
+    _write_watchdog); `noun`/`hint` word the message shown if it dies without
+    a verdict."""
     now = time.time()
     with LOCK:
         cur = JOBS.get(kind)
@@ -1106,18 +1191,29 @@ def start_job(kind, argv, result_prefix, device="", on_done=None):
             return False
         JOBS[kind] = {"running": True, "log": [], "result": None, "error": None,
                       "device": device, "startedAt": now, "updatedAt": now,
-                      "cancelled": False, "seq": 0}
+                      "cancelled": False, "seq": 0,
+                      # None = not being watched; the UI needs to tell "quiet but
+                      # writing" apart from "genuinely stopped".
+                      "writeBytes": 0, "writeStalled": None}
     job = JOBS[kind]
 
     def worker():
         proc = None
+        stop_watch = threading.Event()
         try:
             # start_new_session puts the engine in its own process group, so a
             # cancel can take down the whole tree (shred/dd keep running
             # otherwise) instead of orphaning a process writing to a disk.
+            # stdin=DEVNULL: if any sub-step ever prompts despite -batch, it
+            # fails fast instead of blocking forever on a keyboard nobody is at —
+            # which is indistinguishable from a hang.
             proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                    stdin=subprocess.DEVNULL,
                                     text=True, bufsize=1, start_new_session=True)
             PROCS[kind] = proc
+            if watch_writes and device:
+                threading.Thread(target=_write_watchdog,
+                                 args=(job, device, stop_watch), daemon=True).start()
             for line in proc.stdout:
                 line = line.rstrip("\n")
                 job["updatedAt"] = time.time()
@@ -1127,9 +1223,10 @@ def start_job(kind, argv, result_prefix, device="", on_done=None):
                     except ValueError:
                         job["error"] = "could not parse result line"
                 elif line:
-                    job["log"].append(line)
-                    job["seq"] += 1          # total lines ever produced
-                    del job["log"][:-400]    # keep only the tail in memory
+                    with LOG_LOCK:
+                        job["log"].append(line)
+                        job["seq"] += 1          # total lines ever produced
+                        del job["log"][:-400]    # keep only the tail in memory
             proc.wait()
             if job["result"] is None and job["error"] is None:
                 # The engine died without a verdict. Say so precisely instead of
@@ -1138,12 +1235,15 @@ def start_job(kind, argv, result_prefix, device="", on_done=None):
                     job["error"] = "Cancelled by the operator."
                 else:
                     rc = proc.returncode
-                    job["error"] = ("The wipe process ended unexpectedly without a result "
-                                    "(exit code %s). The drive may be failing or was "
-                                    "disconnected." % rc)
+                    # start_job is generic, so this must be too — a failed OS
+                    # install used to tell the operator the WIPE had died.
+                    job["error"] = ("The %s ended unexpectedly without a result "
+                                    "(exit code %s).%s" % (noun, rc,
+                                                           " " + hint if hint else ""))
         except Exception as exc:  # noqa: BLE001
             job["error"] = str(exc)
         finally:
+            stop_watch.set()             # stop the disk-write heartbeat
             # Post-step (e.g. upload the wipe record). Its own failures attach to
             # the result so the UI can show "wiped but not saved".
             if on_done and job.get("result"):
@@ -1260,9 +1360,10 @@ class Handler(BaseHTTPRequestHandler):
                                         "seq": 0, "logFrom": 0})
             # Serialise a snapshot, not the live dict the worker thread mutates.
             now = time.time()
-            snap = dict(job)
-            log = list(job.get("log") or [])
-            seq = job.get("seq", len(log))
+            with LOG_LOCK:
+                snap = dict(job)
+                log = list(job.get("log") or [])
+                seq = job.get("seq", len(log))
             first = seq - len(log)          # index of the oldest retained line
             # Incremental: a multi-hour wipe is polled thousands of times, so send
             # only lines the client has not seen instead of the whole log each time.
@@ -1354,6 +1455,12 @@ class Handler(BaseHTTPRequestHandler):
                                         "message": err})
             return self._send(200, dict(out or {}, queued=False))
 
+        if u.path == "/api/os/install/cancel":
+            # Without this the only way out of a wedged restore was rebooting the
+            # station: every retry 409s while `running` is set.
+            ok, msg = cancel_job("install")
+            return self._send(200, {"ok": ok, "message": msg})
+
         if u.path == "/api/wipe/cancel":
             dev = body.get("device", "")
             ok, msg = cancel_job(wipe_kind(dev) if dev else "wipe")
@@ -1415,7 +1522,8 @@ class Handler(BaseHTTPRequestHandler):
             started, busy = [], []
             for d in devices:
                 ok = start_job(wipe_kind(d), ["bash", SCRIPT, "--wipe-drive", d, method],
-                               "WIPE_RESULT ", d, on_done=record_wipe)
+                               "WIPE_RESULT ", d, on_done=record_wipe, noun="wipe",
+                               hint="The drive may be failing or was disconnected.")
                 (started if ok else busy).append(d)
             if not started:
                 return self._send(409, {"message": "a wipe is already running on %s"
@@ -1427,6 +1535,13 @@ class Handler(BaseHTTPRequestHandler):
             image = body.get("imageId", "")
             if not re.match(r"^/dev/[A-Za-z0-9]+$", device):
                 return self._send(400, {"message": "invalid device"})
+            # That regex is only an injection guard — "/dev/nvme0n1p3" satisfies
+            # it, and restoring a whole-disk image onto a single partition yields
+            # a machine that will not boot. Check against the enumerated whole
+            # disks instead, so the dropdown is not the only thing protecting us.
+            if device not in {d.get("device") for d in (list_drives() or [])}:
+                return self._send(400, {"message": "%s is not an installable whole disk"
+                                                   % device})
             if not re.match(r"^[A-Za-z0-9_.-]+$", image or ""):
                 return self._send(400, {"message": "invalid image"})
             # Point the driver at whichever library is active (server share or
@@ -1437,7 +1552,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(400, {"message": "no image library available"})
             os.environ["ALS_IMAGES_ROOT"] = root
             started = start_job("install", ["bash", INSTALL_SH, image, device],
-                                "INSTALL_RESULT ", device)
+                                "INSTALL_RESULT ", device, watch_writes=True,
+                                noun="restore",
+                                hint="Open Show details for Clonezilla's last output.")
             if not started:
                 return self._send(409, {"message": "an install is already running"})
             return self._send(200, {"started": True, "imageSource": source,

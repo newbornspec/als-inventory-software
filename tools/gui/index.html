@@ -352,7 +352,11 @@
           <div class="hidden" id="iRun">
             <div class="prow"><span id="iStat">Writing image</span><b id="iPct">0%</b></div>
             <div class="pr" id="iBar"><i></i></div>
-            <div style="margin-top:9px"><button class="lnk" onclick="toggleLog('iLog',this)">Show details</button></div>
+            <div style="display:flex;align-items:center;gap:12px;margin-top:9px">
+              <button class="lnk" onclick="toggleLog('iLog',this)">Show details</button>
+              <span style="flex:1"></span>
+              <button class="btn gho sm" onclick="cancelInstall()">■ Stop</button>
+            </div>
             <div class="log hidden" id="iLog"></div>
           </div>
         </div>
@@ -473,6 +477,10 @@ function toast(m,good=true){const t=$('toast');t.textContent=m;t.className='toas
 
 function fmtSecs(s){s=Math.max(0,s|0);const h=(s/3600)|0,m=((s%3600)/60)|0,x=s%60;
   return (h?h+'h ':'')+((h||m)?m+'m ':'')+(h?'':x+'s');}
+function fmtBytes(n){n=+n||0;
+  for(const [s,v] of [['TB',1e12],['GB',1e9],['MB',1e6],['kB',1e3]])
+    if(n>=v)return (n/v).toFixed(1).replace(/\.0$/,'')+' '+s;
+  return n+' B';}
 /* Estimates never need seconds. */
 function fmtEta(s){s=Math.round(s);const h=(s/3600)|0,m=Math.round((s%3600)/60);
   return h?(h+'h '+m+'m'):(m?m+'m':'< 1m');}
@@ -777,7 +785,13 @@ async function doAudit(){
    job ALWAYS ends in onDone exactly once, so the screen can never be stranded
    on a progress panel with the controls hidden. */
 function pctFrom(log){
-  for(let i=log.length-1;i>=0;i--){const m=/(\d{1,3})\s*%/.exec(log[i]);
+  /* \d{1,3} cannot span a decimal point, so the old /(\d{1,3})\s*%/ backtracked
+     onto the FRACTION: "Completed: 100.00%" read as 0 and "12.34%" as 34 — and
+     any match strips the bar's `ind` class, so a bogus 0 froze it mid-run.
+     Prefer partclone's own wording, then fall back to a decimal-aware match. */
+  for(let i=log.length-1;i>=0;i--){
+    const m=/(?:completed|progress)[:\s]*(\d{1,3})(?:\.\d+)?\s*%/i.exec(log[i])
+          ||/(?:^|[^\d.])(\d{1,3})(?:\.\d+)?\s*%/.exec(log[i]);
     if(m){const v=+m[1];if(v>=0&&v<=100)return v;}}
   return null;
 }
@@ -811,7 +825,15 @@ function pollJob(kind,o){
         bar.firstElementChild.style.width=p+'%';}}
     if(o.pctId&&$(o.pctId))$(o.pctId).textContent=(p==null?'—':p+'%');
     if(o.statId&&$(o.statId)){let t=(o.label||'Running')+' · '+fmtSecs(j.elapsed||0);
-      if((j.idle||0)>120)t+=' · no new output for '+fmtSecs(j.idle)+' (large drives work quietly)';
+      if(j.writeBytes)t+=' · '+fmtBytes(j.writeBytes)+' written';
+      /* Only alarming once the DRIVE has gone quiet too. Engine silence alone is
+         normal — Clonezilla says nothing for a whole partition — and the old
+         copy reassured the operator during a real hang while contradicting the
+         frozen 0% beside it. writeStalled is null when nothing is watching. */
+      if((j.idle||0)>120)
+        t+=(j.writeStalled===false)?' · working quietly'
+          :' · no new output for '+fmtSecs(j.idle)
+            +(j.writeStalled===true?' and no disk activity':' (large drives work quietly)');
       $(o.statId).textContent=t;}
     if(j.running){setTimeout(tick,1500);return;}
     if(j.result)finish(j.result);
@@ -889,6 +911,14 @@ async function cancelWipe(dev){
     false, async()=>{ closeOv();
       const r=await jpost('/api/wipe/cancel',{device:dev});
       toast((r.data&&r.data.message)||'Stopping…',false); },'Stop wipe');
+}
+
+async function cancelInstall(){
+  openOv('Stop the image restore?',
+    'The drive will be left partly written and must be re-imaged before it can be used.',
+    false, async()=>{ closeOv();
+      const r=await jpost('/api/os/install/cancel',{});
+      toast((r.data&&r.data.message)||'Stopping…',false); },'Stop restore');
 }
 
 /* ----------------------------------------------------------- install --- */
