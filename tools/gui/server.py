@@ -231,37 +231,107 @@ def save_image_name(image_id, name):
 # if that enum ever gains a value, update it here and in index.html too.
 GRADES = ("grade_a", "grade_b", "grade_c", "grade_d", "for_parts", "scrap")
 
-QUEUE_PATH = "/tmp/als-audit-queue.jsonl"
+# /tmp is a tmpfs on a live USB boot, so the queue used to live in RAM: every
+# record still waiting for the network was lost the moment the machine was
+# switched off — which is exactly what an operator does with a station that
+# cannot reach the server. It now lives on the stick beside audit.conf, and RAM
+# is only the fallback for when the stick will not take a write at all.
+QUEUE_FALLBACK = "/tmp/als-audit-queue.jsonl"
 QUEUE_LOCK = threading.Lock()      # guards the file
 FLUSH_LOCK = threading.Lock()      # only one flush at a time, or a record could
                                    # be uploaded twice by two racing threads
 
 
-def queue_load():
+def queue_path():
+    """Beside audit.conf on the stick, so a queued audit survives a reboot."""
+    base = os.path.dirname(CONF_PATH) if CONF_PATH else None
+    return os.path.join(base, "audit-queue.jsonl") if base else QUEUE_FALLBACK
+
+
+def queue_on_stick():
+    """Whether the stick is where we would WRITE. Internal plumbing only."""
+    return queue_path() != QUEUE_FALLBACK
+
+
+def queue_durable():
+    """Whether everything currently queued would survive a power-off.
+
+    Deliberately not just a path check: a write can fall back to RAM when the
+    stick refuses it, and a station that answers "safe to reboot" on the
+    strength of its preferred path would then lose the records it promised to
+    keep. Derived from what is actually on disk, so it cannot drift."""
+    if not queue_on_stick():
+        return False
+    return not _read_jsonl(QUEUE_FALLBACK)
+
+
+def _read_jsonl(path):
     try:
-        with open(QUEUE_PATH, "r", errors="replace") as fh:
+        with open(path, "r", errors="replace") as fh:
             return [json.loads(l) for l in fh if l.strip()]
     except (OSError, ValueError):
         return []
 
 
-def queue_write(items):
-    with QUEUE_LOCK:
+def _queue_load_unlocked():
+    items = _read_jsonl(queue_path())
+    if queue_on_stick():
+        # Anything stranded in RAM by an earlier boot, or by a write the stick
+        # refused, still counts as waiting.
+        items += _read_jsonl(QUEUE_FALLBACK)
+    return items
+
+
+def _queue_write_unlocked(items):
+    text = "".join(json.dumps(it) + "\n" for it in items)
+    path = queue_path()
+    err = None
+    try:
+        with open(path, "w") as fh:
+            fh.write(text)
         try:
-            with open(QUEUE_PATH, "w") as fh:
-                for it in items:
-                    fh.write(json.dumps(it) + "\n")
+            os.sync()
+        except AttributeError:
+            pass
+    except OSError:
+        # The stick is normally mounted read-only; this is the same remount
+        # dance audit.conf already uses.
+        err = write_boot_file(path, text)
+
+    if err is None and queue_on_stick():
+        # The stick copy is authoritative now. Drop any RAM copy, or the same
+        # record would be counted — and re-uploaded — twice.
+        try:
+            if os.path.exists(QUEUE_FALLBACK):
+                os.remove(QUEUE_FALLBACK)
         except OSError:
             pass
+        return
+    if err:
+        # Never lose a record because the stick would not take it. RAM is worse
+        # than the stick, and far better than nowhere.
+        try:
+            with open(QUEUE_FALLBACK, "w") as fh:
+                fh.write(text)
+        except OSError:
+            pass
+
+
+def queue_load():
+    with QUEUE_LOCK:
+        return _queue_load_unlocked()
+
+
+def queue_write(items):
+    with QUEUE_LOCK:
+        _queue_write_unlocked(items)
 
 
 def queue_add(payload):
+    # Read-modify-write rather than append: there is no appending through the
+    # remount path, and the queue only ever holds a handful of records.
     with QUEUE_LOCK:
-        try:
-            with open(QUEUE_PATH, "a") as fh:
-                fh.write(json.dumps(payload) + "\n")
-        except OSError:
-            pass
+        _queue_write_unlocked(_queue_load_unlocked() + [payload])
 
 
 def queue_count():
@@ -1493,6 +1563,9 @@ class Handler(BaseHTTPRequestHandler):
                 "adminPinSet": bool(STATE["conf"].get("AUDIT_ADMIN_PIN", "")),
                 "launch": launch_info(),
                 "waiting": queue_count(),   # records held offline, retrying
+                # False = the stick would not take the write, so the queue is in
+                # RAM and a reboot would lose it. The operator needs to know.
+                "queueDurable": queue_durable(),
                 "imageSource": IMAGE_STATE["source"],   # "server" | "usb"
                 "imageError": IMAGE_STATE["error"],
             })

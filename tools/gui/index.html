@@ -217,8 +217,7 @@
         <span id="hDate">—</span></span>
       <span class="chip act" id="hConnWrap" onclick="connClick()"><span class="dot" id="hDot"></span>
         <span id="hConn">Checking…</span></span>
-      <span class="chip hidden" id="hQueue" title="Records saved on this machine, waiting to upload"
-            style="color:var(--amber)">
+      <span class="chip hidden" id="hQueue" style="color:var(--amber)">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
           stroke-linecap="round"><path d="M12 7v5l3 2"/><circle cx="12" cy="12" r="9"/></svg>
         <span id="hQueueN"></span></span>
@@ -532,7 +531,18 @@ async function bootstrap(){
   // Records held on this machine because the network was down.
   const q=b.waiting||0;
   $('hQueue').classList.toggle('hidden',!q);
-  if(q)$('hQueueN').textContent=q+' waiting to upload';
+  if(q){
+    $('hQueueN').textContent=q+' waiting to upload';
+    /* Whether these survive a power-off is the only thing the operator can act
+       on, so say it rather than hiding it in a tooltip. */
+    const safe=b.queueDurable!==false;
+    $('hQueue').title=safe
+      ? q+' record(s) saved on the USB stick, waiting for the network. '+
+        'They upload by themselves when it returns — safe to reboot or shut down.'
+      : q+' record(s) held in memory because the stick could not be written. '+
+        'DO NOT reboot or shut down: they would be lost.';
+    $('hQueue').style.color=safe?'var(--amber)':'var(--red)';
+  }
   if(b.error){$('errBanner').classList.remove('hidden');$('errMsg').textContent=b.error;}
   else $('errBanner').classList.add('hidden');
 
