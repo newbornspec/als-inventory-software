@@ -803,11 +803,48 @@ def net_check():
         _, rc = sh(["ping", "-c", "1", "-W", "2", gw])
         steps.append(("Reach the router", rc == 0, gw))
 
+    # Try ICMP first, then fall back to a TCP connect. A network that filters
+    # ping outbound would otherwise report the internet as unreachable and send
+    # the operator after the wrong problem — this step is the one the verdict
+    # names as "First failure", so a false negative here is expensive.
     _, rc = sh(["ping", "-c", "1", "-W", "3", "1.1.1.1"])
-    net_ok = rc == 0
-    steps.append(("Reach the internet", net_ok, "1.1.1.1 (bypasses DNS)"))
+    net_ok, net_detail = rc == 0, "1.1.1.1 (bypasses DNS)"
+    if not net_ok:
+        try:
+            import socket
+            socket.create_connection(("1.1.1.1", 443), timeout=5).close()
+            net_ok, net_detail = True, "1.1.1.1:443 — reachable (ping is filtered here)"
+        except Exception:  # noqa: BLE001
+            net_detail = "1.1.1.1 unreachable by ping AND by TCP 443"
+    steps.append(("Reach the internet", net_ok, net_detail))
 
     steps.append(("DNS servers set", bool(servers), ", ".join(servers) or "none in resolv.conf"))
+
+    # "Configured" and "reachable" are different failures with different fixes:
+    # unreachable resolvers mean routing/firewall, not DNS.
+    if servers:
+        reach = []
+        for s in servers[:3]:
+            ok = False
+            try:
+                import socket
+                sk = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                sk.settimeout(4)
+                # Minimal DNS query for "." NS — enough to prove the resolver answers.
+                sk.sendto(b"\xab\xcd\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00"
+                          b"\x00\x00\x02\x00\x01", (s, 53))
+                sk.recvfrom(512)
+                ok = True
+            except Exception:  # noqa: BLE001
+                ok = False
+            finally:
+                try:
+                    sk.close()
+                except Exception:  # noqa: BLE001
+                    pass
+            reach.append("%s %s" % (s, "answers" if ok else "SILENT"))
+        any_ok = any("answers" in r for r in reach)
+        steps.append(("DNS servers answer", any_ok, ", ".join(reach)))
 
     dns_ok, dns_detail = False, "no API host configured"
     if host:

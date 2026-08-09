@@ -974,6 +974,15 @@ async function loadNetCheck(){
     h+='<div style="margin-bottom:5px"><span style="color:'+(s.ok?'var(--green)':'var(--red)')+'">'+
        (s.ok?'✓':'✗')+'</span> '+s.name+' <span style="color:var(--mut2)">— '+s.detail+'</span></div>';
   }
+  /* The backend already gathers these; not showing them meant the one thing
+     that identifies a routing fault was unreachable from a keyboard-grabbed
+     kiosk. Collapsed so it does not shout on a healthy station. */
+  if(t.interfaces||t.routes){
+    h+='<div style="margin-top:10px"><button class="lnk" onclick="toggleLog(\'netDet\',this)">Show network detail</button></div>'+
+       '<div class="log hidden" id="netDet">'+
+       'INTERFACES\n'+(t.interfaces||'(none)')+'\n\nROUTES\n'+(t.routes||'(none)')+
+       '</div>';
+  }
   const clock=(t.steps||[]).find(s=>s.name==='System clock');
   h+='<div style="margin-top:8px;display:flex;gap:8px">'+
      '<button class="btn gho sm" onclick="loadNetCheck()">Run again</button>'+
