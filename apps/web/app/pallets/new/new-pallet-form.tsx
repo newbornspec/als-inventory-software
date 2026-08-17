@@ -5,13 +5,34 @@ import { createPallet } from '@/lib/actions/pallets';
 import type { ActionState } from '@/lib/actions/assets';
 import type { Location } from '@/lib/data';
 
-export function NewPalletForm({ locations }: { locations: Location[] }) {
+export function NewPalletForm({
+  locations,
+  suggestedNumber = '',
+}: {
+  locations: Location[];
+  suggestedNumber?: string;
+}) {
   const [state, formAction, pending] = useActionState<ActionState, FormData>(createPallet, {
     error: null,
   });
 
   return (
     <form action={formAction} className="mt-6 max-w-sm space-y-3">
+      {/* The number is written on the physical pallet before anyone reaches a
+          keyboard, so it is typed rather than generated. Prefilled with the next
+          one in sequence; clearing it falls back to that same sequence. */}
+      <div className="space-y-1">
+        <label className="text-sm text-neutral-700">Pallet number</label>
+        <input
+          name="palletNumber"
+          defaultValue={suggestedNumber}
+          placeholder="e.g. PALLET-000045"
+          className="w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm outline-none focus:border-neutral-300"
+        />
+        <p className="text-xs text-neutral-500">
+          Use the number on the pallet. Leave blank to number it automatically.
+        </p>
+      </div>
       <div className="space-y-1">
         <label className="text-sm text-neutral-700">Description</label>
         <input

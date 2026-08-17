@@ -87,7 +87,9 @@ export function SoldManager({
   const filteredPallet = useMemo(() => {
     const needle = q.trim().toLowerCase();
     return palletLines.filter((l) => {
-      if (fPallet && (l.palletId ?? l.palletNumber) !== fPallet) return false;
+      // Same key shape as palletOptions below, or filtering to a deleted
+      // pallet would match nothing.
+      if (fPallet && (l.palletId ?? `deleted:${l.palletNumber}`) !== fPallet) return false;
       if (fSoldBy && (l.soldBy?.name ?? '') !== fSoldBy) return false;
       if (!inDates(l.soldAt)) return false;
       if (!needle) return true;
@@ -121,12 +123,20 @@ export function SoldManager({
   }, [filteredAssets]);
 
   const palletGroups = useMemo(() => {
-    const byPallet = new Map<string, { label: string; items: SoldPalletLine[] }>();
+    const byPallet = new Map<string, { label: string; items: SoldPalletLine[]; last: number }>();
     for (const l of filteredPallet) {
-      const key = l.palletId ?? l.palletNumber;
+      // Namespace the fallback key. pallet_sold_lines.pallet_id is ON DELETE SET
+      // NULL, so a deleted pallet's rows survive with only their number — and
+      // numbers are typed by the operator now, so one can legitimately be reused.
+      // Keying a live pallet on a bare number would merge the dead pallet's
+      // history into it.
+      const key = l.palletId ?? `deleted:${l.palletNumber}`;
       const label = l.palletNumber + (l.palletId ? '' : ' (pallet deleted)');
-      if (!byPallet.has(key)) byPallet.set(key, { label, items: [] });
-      byPallet.get(key)!.items.push(l);
+      const at = Date.parse(l.soldAt ?? '') || 0;
+      if (!byPallet.has(key)) byPallet.set(key, { label, items: [], last: at });
+      const g = byPallet.get(key)!;
+      g.items.push(l);
+      if (at > g.last) g.last = at;
     }
     return [...byPallet.entries()]
       .map(([key, g]) => ({
@@ -134,8 +144,12 @@ export function SoldManager({
         label: g.label,
         units: g.items.reduce((s, x) => s + x.quantity, 0),
         items: g.items,
+        last: g.last,
       }))
-      .sort((x, y) => y.label.localeCompare(x.label));
+      // Most recently sold first. Sorting on the label was only chronological
+      // because generated numbers were zero-padded; with typed numbers "10"
+      // sorts before "9".
+      .sort((x, y) => y.last - x.last);
   }, [filteredPallet]);
 
   // Filter dropdown options come from the full (unfiltered) data.
@@ -155,7 +169,7 @@ export function SoldManager({
   );
   const palletOptions = useMemo(() => {
     const m = new Map<string, string>();
-    for (const l of palletLines) m.set(l.palletId ?? l.palletNumber, l.palletNumber);
+    for (const l of palletLines) m.set(l.palletId ?? `deleted:${l.palletNumber}`, l.palletNumber);
     return [...m.entries()].sort((x, y) => y[1].localeCompare(x[1]));
   }, [palletLines]);
 

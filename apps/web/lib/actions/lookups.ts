@@ -12,13 +12,17 @@ export interface LookupValue {
   sortOrder: number;
 }
 
+// Must match LOOKUP_CATEGORIES in the API's lookup-value.entity.ts. 'gen' was
+// missing here, so the admin screen could not manage it.
 export const LOOKUP_CATEGORIES = [
   'manufacturer',
   'model',
   'chassis',
   'cpu',
+  'gen',
   'ram',
   'storage',
+  'size',
 ] as const;
 
 export async function addLookup(

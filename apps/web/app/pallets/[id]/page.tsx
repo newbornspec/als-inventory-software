@@ -26,7 +26,14 @@ async function loadPallet(id: string): Promise<Pallet> {
 
 export default async function PalletDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const [pallet, user] = await Promise.all([loadPallet(id), getSessionUser()]);
+  const [pallet, user, lookups] = await Promise.all([
+    loadPallet(id),
+    getSessionUser(),
+    // Both layouts draw their dropdowns from here now. Failing soft keeps the
+    // pallet readable if the lookup endpoint is down — the inputs simply offer
+    // no suggestions rather than the page 500ing.
+    apiFetch<LookupValue[]>('/lookups').catch(() => [] as LookupValue[]),
+  ]);
   const canManage =
     user?.role === 'admin' || user?.role === 'manager' || user?.role === 'technician';
   const canDelete = user?.role === 'admin';
@@ -35,10 +42,7 @@ export default async function PalletDetailPage({ params }: { params: Promise<{ i
   // spec pallets are edited as a grid for their whole life, not just at
   // creation. Layout 1 pallets keep the variant view below.
   if (pallet.entryLayout === 'spec') {
-    const [locations, lookups] = await Promise.all([
-      getLocations(),
-      apiFetch<LookupValue[]>('/lookups').catch(() => [] as LookupValue[]),
-    ]);
+    const locations = await getLocations();
     const initialRows = (pallet.lines ?? []).map((l) => ({
       lineId: l.id,
       manufacturer: l.product?.manufacturer ?? '',
@@ -226,7 +230,12 @@ export default async function PalletDetailPage({ params }: { params: Promise<{ i
 
         <section className="mt-8 max-w-5xl">
           <h2 className="text-sm font-medium text-neutral-500">Contents by variant</h2>
-          <PalletLines palletId={pallet.id} lines={pallet.lines ?? []} canManage={canManage} />
+          <PalletLines
+            palletId={pallet.id}
+            lines={pallet.lines ?? []}
+            canManage={canManage}
+            lookups={lookups}
+          />
         </section>
       </div>
     </main>

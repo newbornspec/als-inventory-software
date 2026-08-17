@@ -19,6 +19,17 @@ export const STOCK_STATUSES = [
 
 export const CONDITION_GRADES = ['grade_a', 'grade_b', 'grade_c', 'grade_d', 'for_parts', 'scrap'];
 
+// What a pallet line's Grade dropdown OFFERS. Deliberately narrower than
+// CONDITION_GRADES: pallet stock is graded A-D, and for_parts/scrap are
+// serialized-asset dispositions. Lines created before this still hold those
+// values and must keep them — the editor appends a row's own grade when it is
+// not in this list, or the select would render blank and save that blank.
+export const PALLET_LINE_GRADES = ['grade_a', 'grade_b', 'grade_c', 'grade_d'];
+
+// Monitor bezel style. Two values, so a const rather than a lookup category.
+// Mirrors PALLET_VARIANT_TYPES in the API's create-pallet-line.dto.ts.
+export const PALLET_VARIANT_TYPES = ['normal', 'frameless'];
+
 // Sale tiers for pallet variant lines. Slugs so formatLabel renders "Tier 1" etc.
 // Extend here (e.g. 'tier_3') without any schema change — the column is free text.
 export const PALLET_TIERS = ['tier_1', 'tier_2'];

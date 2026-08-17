@@ -10,7 +10,15 @@ export type PalletStatus = 'open' | 'ready' | 'shipped';
 export interface PalletLine {
   id: string;
   palletId: string;
+  // Server-composed display label ("Dell · P2419H · 24\" · Frameless · Stand").
+  // Not edited directly any more — it is rebuilt from the fields below.
   variant: string;
+  manufacturer: string | null;
+  model: string | null;
+  size: string | null;
+  variantType: string | null;
+  // true = Yes, false = No, null = not recorded.
+  stand: boolean | null;
   tier: string | null;
   quantity: number;
   grade: string | null;
@@ -48,6 +56,7 @@ export interface Pallet {
 
 export async function createPallet(_prev: ActionState, formData: FormData): Promise<ActionState> {
   const dto = {
+    palletNumber: str(formData.get('palletNumber')),
     description: str(formData.get('description')),
     supplier: str(formData.get('supplier')),
     buyer: str(formData.get('buyer')),
@@ -162,26 +171,43 @@ export async function deletePallet(id: string): Promise<void> {
   redirect('/pallets');
 }
 
+// One row of the Layout 1 table. Every field optional so an edit can send just
+// the one that changed — the API recomposes the display label from the merged
+// row, so a partial patch never blanks the rest.
+export interface PalletLinePatch {
+  manufacturer?: string | null;
+  model?: string | null;
+  size?: string | null;
+  variantType?: string | null;
+  stand?: boolean | null;
+  quantity?: number;
+  grade?: string | null;
+  unitCost?: number | null;
+  tier?: string | null;
+}
+
+// Blank strings mean "not set" and must reach the API as null, not "" — an
+// empty string would fail @IsIn on variantType and store '' as a manufacturer.
+function clean(patch: PalletLinePatch): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(patch)) {
+    if (v === undefined) continue;
+    out[k] = typeof v === 'string' && v.trim() === '' ? null : v;
+  }
+  if (typeof out.quantity === 'number') {
+    out.quantity = Math.max(0, Math.trunc(out.quantity) || 0);
+  }
+  return out;
+}
+
 export async function addPalletLine(
   palletId: string,
-  variant: string,
-  quantity: number,
-  unitCost: number | null,
-  grade: string,
-  tier: string,
+  patch: PalletLinePatch,
 ): Promise<{ error?: string }> {
-  const v = variant.trim();
-  if (!v) return { error: 'Variant is required.' };
   try {
     await apiFetch(`/pallets/${palletId}/lines`, {
       method: 'POST',
-      body: JSON.stringify({
-        variant: v,
-        tier: tier || undefined,
-        quantity: Math.max(0, Math.trunc(quantity) || 0),
-        grade: grade || undefined,
-        unitCost: unitCost ?? undefined,
-      }),
+      body: JSON.stringify(clean(patch)),
     });
   } catch (err) {
     return { error: err instanceof ApiError ? err.message : 'Failed to add line.' };
@@ -194,24 +220,25 @@ export async function addPalletLine(
 export async function updatePalletLine(
   palletId: string,
   lineId: string,
-  variant: string,
-  quantity: number,
-  unitCost: number | null,
-  grade: string,
-  tier: string,
+  patch: PalletLinePatch,
 ): Promise<void> {
   await apiFetch(`/pallets/${palletId}/lines/${lineId}`, {
     method: 'PATCH',
-    body: JSON.stringify({
-      variant: variant.trim(),
-      tier: tier || null,
-      quantity: Math.max(0, Math.trunc(quantity) || 0),
-      grade: grade || null,
-      unitCost: unitCost ?? undefined,
-    }),
+    body: JSON.stringify(clean(patch)),
   });
   revalidatePath(`/pallets/${palletId}`);
   revalidatePath('/pallets');
+}
+
+// The suggested number for a new pallet. The operator can overwrite it; a blank
+// field falls back to the same sequence server-side.
+export async function getNextPalletNumber(): Promise<string> {
+  try {
+    const r = await apiFetch<{ palletNumber: string }>('/pallets/next-number');
+    return r.palletNumber;
+  } catch {
+    return '';
+  }
 }
 
 export async function deletePalletLine(palletId: string, lineId: string): Promise<void> {
