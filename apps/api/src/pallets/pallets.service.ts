@@ -57,18 +57,28 @@ export class PalletsService {
   }
 
   async create(dto: CreatePalletDto): Promise<Pallet> {
-    const palletNumber = await this.nextPalletNumber();
-    return this.pallets.save(this.pallets.create({ ...dto, palletNumber }));
+    // Destructure the typed number OUT of the dto before spreading. Spreading
+    // the dto and then overriding palletNumber (as this did) silently discards
+    // whatever the operator typed — the whole feature looks wired up and every
+    // pallet still comes out PALLET-000xxx.
+    const { palletNumber: typed, ...rest } = dto;
+    const palletNumber = (typed ?? '').trim() || (await this.nextPalletNumber());
+    return this.saveUnique(() => this.pallets.save(this.pallets.create({ ...rest, palletNumber })),
+                           palletNumber);
   }
 
   // Layout 2 create: one pallet + a line per spec row. Each row find-or-creates
   // a catalogue Product (so specs are reusable and searchable), and the line
   // carries a composed "variant" label so it displays/reports like any other.
   async createFromSpec(dto: CreatePalletSpecDto): Promise<Pallet> {
-    const { rows, ...meta } = dto;
-    const palletNumber = await this.nextPalletNumber();
-    const pallet = await this.pallets.save(
-      this.pallets.create({ ...meta, palletNumber, entryLayout: PalletEntryLayout.SPEC }),
+    const { rows, palletNumber: typed, ...meta } = dto;
+    const palletNumber = (typed ?? '').trim() || (await this.nextPalletNumber());
+    const pallet = await this.saveUnique(
+      () =>
+        this.pallets.save(
+          this.pallets.create({ ...meta, palletNumber, entryLayout: PalletEntryLayout.SPEC }),
+        ),
+      palletNumber,
     );
     await this.createLinesFromSpec(pallet.id, rows ?? []);
     return pallet;
@@ -369,17 +379,29 @@ export class PalletsService {
     const wb = new ExcelJS.Workbook();
     wb.creator = 'ALS Trade Wholesales';
     const ws = wb.addWorksheet('Pallet Report');
-    ws.columns = [
-      { width: 40 }, // Variant / size (wider so long names fit)
-      { width: 10 }, // Tier
-      { width: 12 }, // Quantity
-      { width: 14 }, // Grade
-      { width: 14 }, // Unit cost
-      { width: 16 }, // Line total
+
+    // One entry per column, and everything else derives from these — the title
+    // merge and the total-row cells used to be hardcoded to F/3/6, which is
+    // silently wrong the moment the column count changes. Same idiom as
+    // batches.service.ts.
+    const headers = [
+      'Pallet number',
+      'Manufacturer',
+      'Model',
+      'Size',
+      'Variant',
+      'Stand',
+      'Quantity',
+      'Grade',
+      'Unit cost (£)',
+      'Line total (£)',
     ];
+    const widths = [16, 16, 22, 10, 14, 8, 10, 12, 14, 16];
+    ws.columns = widths.map((width) => ({ width }));
+    const lastCol = ws.getColumn(headers.length).letter;
 
     const title = (row: number, text: string, size: number) => {
-      ws.mergeCells(`A${row}:F${row}`);
+      ws.mergeCells(`A${row}:${lastCol}${row}`);
       const cell = ws.getCell(`A${row}`);
       cell.value = text;
       cell.font = { size, bold: true };
@@ -407,14 +429,7 @@ export class PalletsService {
 
     const headerRowIndex = r + 1;
     const headerRow = ws.getRow(headerRowIndex);
-    headerRow.values = [
-      'Variant / size',
-      'Tier',
-      'Quantity',
-      'Grade',
-      'Unit cost (£)',
-      'Line total (£)',
-    ];
+    headerRow.values = headers;
     headerRow.font = { bold: true };
     headerRow.eachCell((cell) => {
       cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEFEFEF' } };
@@ -428,9 +443,15 @@ export class PalletsService {
       const lineTotal = cost != null ? cost * line.quantity : null;
       if (lineTotal != null) costTotal += lineTotal;
       const row = ws.getRow(dataRow);
+      // The pallet number repeats on every row: the sheet is filtered and
+      // sorted downstream, and a row that loses its pallet is unusable.
       row.values = [
-        line.variant,
-        slugLabel(line.tier),
+        pallet.palletNumber,
+        line.manufacturer ?? '',
+        line.model ?? '',
+        line.size ?? '',
+        slugLabel(line.variantType),
+        line.stand == null ? '' : line.stand ? 'Yes' : 'No',
         line.quantity,
         gradeLabel(line.grade),
         cost != null ? cost : '',
@@ -441,12 +462,12 @@ export class PalletsService {
 
     const totalRow = ws.getRow(dataRow + 1);
     totalRow.getCell(1).value = 'Total';
-    totalRow.getCell(3).value = pallet.totalQuantity;
-    totalRow.getCell(6).value = costTotal > 0 ? costTotal : '';
+    totalRow.getCell(headers.indexOf('Quantity') + 1).value = pallet.totalQuantity;
+    totalRow.getCell(headers.length).value = costTotal > 0 ? costTotal : '';
     totalRow.font = { bold: true };
 
     const buffer = Buffer.from(await wb.xlsx.writeBuffer());
-    return { buffer, filename: `${pallet.palletNumber}-report.xlsx` };
+    return { buffer, filename: `${safeFilePart(pallet.palletNumber, pallet.id)}-report.xlsx` };
   }
 
   // Layout 2 export: each spec attribute in its own column, pulled from the
@@ -545,7 +566,7 @@ export class PalletsService {
     totalRow.font = { bold: true };
 
     const buffer = Buffer.from(await wb.xlsx.writeBuffer());
-    return { buffer, filename: `${pallet.palletNumber}-report.xlsx` };
+    return { buffer, filename: `${safeFilePart(pallet.palletNumber, pallet.id)}-report.xlsx` };
   }
 
   async remove(id: string): Promise<void> {
@@ -557,13 +578,25 @@ export class PalletsService {
 
   async addLine(palletId: string, dto: CreatePalletLineDto): Promise<PalletLine> {
     await this.assertPallet(palletId);
-    return this.lines.save(this.lines.create({ ...dto, palletId }));
+    await this.persistLineLookups(dto);
+    // `variant` is NOT NULL and is what the report, the sold snapshot and
+    // sold-return matching read, so it is always composed — never left to the
+    // client, which no longer sends it.
+    const variant = (dto.variant ?? '').trim() || composeLineVariant(dto);
+    return this.lines.save(this.lines.create({ ...dto, variant, palletId }));
   }
 
   async updateLine(palletId: string, lineId: string, dto: UpdatePalletLineDto): Promise<PalletLine> {
     const line = await this.lines.findOne({ where: { id: lineId, palletId } });
     if (!line) throw new NotFoundException(`Line ${lineId} not found on pallet ${palletId}`);
-    await this.lines.update(lineId, dto);
+    await this.persistLineLookups(dto);
+    // Recompose from the MERGED row, not the dto: the web sends only the field
+    // that changed, so composing from the dto alone would blank every other
+    // part of the label.
+    const merged = { ...line, ...dto };
+    const patch: Record<string, unknown> = { ...dto };
+    if (dto.variant === undefined) patch.variant = composeLineVariant(merged);
+    await this.lines.update(lineId, patch);
     return this.lines.findOneOrFail({ where: { id: lineId } });
   }
 
@@ -593,7 +626,41 @@ export class PalletsService {
     }));
   }
 
-  private async nextPalletNumber(): Promise<string> {
+  // Save any manufacturer/model/size the operator typed so it is offered next
+  // time. Model is scoped to its manufacturer, which is what makes picking Dell
+  // narrow the model list to Dell's. Mirrors persistLookups for Layout 2.
+  private async persistLineLookups(dto: {
+    manufacturer?: string | null;
+    model?: string | null;
+    size?: string | null;
+  }): Promise<void> {
+    const manufacturer = (dto.manufacturer ?? '').trim();
+    const manLookup = manufacturer
+      ? await this.lookupsService.findOrCreate('manufacturer', manufacturer)
+      : null;
+    const model = (dto.model ?? '').trim();
+    if (model) await this.lookupsService.findOrCreate('model', model, manLookup?.id ?? null);
+    const size = (dto.size ?? '').trim();
+    if (size) await this.lookupsService.findOrCreate('size', size);
+  }
+
+  // A duplicate pallet number is a user error, not a server fault. Postgres
+  // raises 23505 on the unique constraint; without this it surfaced as an
+  // opaque 500 with nothing to act on.
+  private async saveUnique<T>(save: () => Promise<T>, palletNumber: string): Promise<T> {
+    try {
+      return await save();
+    } catch (err: unknown) {
+      const code = (err as { code?: string })?.code;
+      if (code === '23505') {
+        throw new ConflictException(`Pallet number "${palletNumber}" is already in use.`);
+      }
+      throw err;
+    }
+  }
+
+  // Public so the New Pallet form can prefill the next number as a suggestion.
+  async nextPalletNumber(): Promise<string> {
     const result = await this.pallets.query(`SELECT nextval('pallet_number_seq') AS n`);
     const n = String(result[0].n).padStart(6, '0');
     return `PALLET-${n}`;
@@ -670,6 +737,40 @@ function composeVariant(row: {
     .map((x) => (x ?? '').trim())
     .filter(Boolean)
     .join(' · ');
+}
+
+// Pallet numbers are typed now, and the report filename is interpolated straight
+// into an HTTP Content-Disposition header. A quote truncates that header, a
+// slash or semicolon corrupts it, and a newline makes Node throw
+// ERR_INVALID_CHAR — a 500 on export for a pallet that is otherwise fine.
+export function safeFilePart(value: string, fallback: string): string {
+  const clean = (value ?? '').replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
+  return clean || fallback;
+}
+
+// The display label for a Layout 1 line, built from its spec fields. Same
+// ' · ' join as composeVariant so both layouts read alike in the sold archive.
+// Falls back to 'Unspecified' because pallet_lines.variant is NOT NULL and a
+// row with nothing filled in yet must still save.
+export function composeLineVariant(line: {
+  manufacturer?: string | null;
+  model?: string | null;
+  size?: string | null;
+  variantType?: string | null;
+  stand?: boolean | null;
+}): string {
+  return (
+    [
+      line.manufacturer,
+      line.model,
+      line.size,
+      slugLabel(line.variantType ?? null),
+      line.stand === true ? 'Stand' : line.stand === false ? 'No stand' : null,
+    ]
+      .map((x) => (x ?? '').trim())
+      .filter(Boolean)
+      .join(' · ') || 'Unspecified'
+  );
 }
 
 // e.g. "grade_a" -> "Grade A", "for_parts" -> "For Parts".

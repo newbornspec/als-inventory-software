@@ -3,6 +3,9 @@ import {
   IsArray,
   IsInt,
   IsOptional,
+  Matches,
+  MaxLength,
+  MinLength,
   IsString,
   IsUUID,
   Min,
@@ -28,6 +31,18 @@ export class SpecRowDto {
 // are optional so picking Layout 2 can create the pallet immediately (empty
 // grid) and the editor can fill it in afterwards.
 export class CreatePalletSpecDto {
+  // Same operator-entered number as Layout 1. Layout 2 usually creates its
+  // pallet before there is anywhere to type one, so blank falls back to the
+  // sequence. See CreatePalletDto for why the character class is here.
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(40)
+  @Matches(/^[A-Za-z0-9][A-Za-z0-9 ._/-]*$/, {
+    message: 'Pallet number may use letters, numbers, spaces and . _ / -',
+  })
+  palletNumber?: string;
+
   @IsOptional() @IsString() description?: string;
   @IsOptional() @IsString() supplier?: string;
   @IsOptional() @IsString() buyer?: string;

@@ -20,6 +20,8 @@ export const LOOKUP_CATEGORIES = [
   'gen',
   'ram',
   'storage',
+  // Monitor screen sizes for Layout 1 pallet lines.
+  'size',
 ] as const;
 export type LookupCategory = (typeof LOOKUP_CATEGORIES)[number];
 

@@ -39,6 +39,14 @@ export class PalletsController {
     return this.pallets.findSoldLines();
   }
 
+  // Declared before ':id' for the same reason as 'sold' above. The suggested
+  // number for a new pallet — the operator can overwrite it. No @Roles: anyone
+  // who can reach the New Pallet form needs it, and it exposes nothing.
+  @Get('next-number')
+  async nextNumber(): Promise<{ palletNumber: string }> {
+    return { palletNumber: await this.pallets.nextPalletNumber() };
+  }
+
   @Get(':id')
   findOne(@Param('id') id: string) {
     return this.pallets.findOne(id);

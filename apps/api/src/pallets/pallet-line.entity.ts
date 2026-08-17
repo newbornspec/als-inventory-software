@@ -27,8 +27,35 @@ export class PalletLine {
   @JoinColumn({ name: 'pallet_id' })
   pallet: Pallet;
 
+  // A composed display label ("Dell · P2419H · 24\" · Frameless · Stand").
+  // NOT NULL and load-bearing — the report, the sold snapshot and sold-return
+  // matching all read it — so the server composes it from the fields below
+  // rather than asking the operator to type it.
   @Column({ type: 'varchar' })
   variant: string;
+
+  // --- Layout 1 spec columns -------------------------------------------------
+  // One pallet line is one product/variant combination, mirroring the sheet the
+  // warehouse keeps by hand. All nullable: rows created before these existed
+  // simply have none, and a half-filled row is still worth saving.
+  @Column({ type: 'varchar', nullable: true })
+  manufacturer: string | null;
+
+  @Column({ type: 'varchar', nullable: true })
+  model: string | null;
+
+  // Screen size as the label the dropdown offers, e.g. '24"' or '19/20"'.
+  @Column({ type: 'varchar', nullable: true })
+  size: string | null;
+
+  // 'normal' | 'frameless'. Named variantType because `variant` above is taken.
+  @Column({ name: 'variant_type', type: 'varchar', nullable: true })
+  variantType: string | null;
+
+  // true = Yes, false = No, NULL = not recorded. Nullable rather than defaulting
+  // to false so an old row reads "unknown" instead of asserting "no stand".
+  @Column({ type: 'boolean', nullable: true })
+  stand: boolean | null;
 
   // Sale tier for this variant (e.g. "tier_1", "tier_2"); NULL means none.
   // Free text so new tiers need no schema change.
