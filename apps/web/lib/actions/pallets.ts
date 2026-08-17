@@ -200,6 +200,28 @@ function clean(patch: PalletLinePatch): Record<string, unknown> {
   return out;
 }
 
+// The same label the API composes, computed here as well so a create still
+// works against an API that has not deployed yet. The web and the API ship on
+// one push but build separately, so there is a window where this page is live
+// and the old API is still up — and its DTO still requires `variant`, which
+// this page no longer sends. Without this, adding a line 400s for those few
+// minutes. The new API prefers a supplied variant, so the value is identical
+// either way.
+function composeVariantLabel(p: PalletLinePatch): string {
+  return (
+    [
+      p.manufacturer,
+      p.model,
+      p.size,
+      p.variantType ? p.variantType.replace(/\b\w/g, (c) => c.toUpperCase()) : '',
+      p.stand === true ? 'Stand' : p.stand === false ? 'No stand' : '',
+    ]
+      .map((x) => (x ?? '').trim())
+      .filter(Boolean)
+      .join(' · ') || 'Unspecified'
+  );
+}
+
 export async function addPalletLine(
   palletId: string,
   patch: PalletLinePatch,
@@ -207,7 +229,7 @@ export async function addPalletLine(
   try {
     await apiFetch(`/pallets/${palletId}/lines`, {
       method: 'POST',
-      body: JSON.stringify(clean(patch)),
+      body: JSON.stringify({ ...clean(patch), variant: composeVariantLabel(patch) }),
     });
   } catch (err) {
     return { error: err instanceof ApiError ? err.message : 'Failed to add line.' };
