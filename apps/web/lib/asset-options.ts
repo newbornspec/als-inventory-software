@@ -26,6 +26,20 @@ export const CONDITION_GRADES = ['grade_a', 'grade_b', 'grade_c', 'grade_d', 'fo
 // not in this list, or the select would render blank and save that blank.
 export const PALLET_LINE_GRADES = ['grade_a', 'grade_b', 'grade_c', 'grade_d'];
 
+// The Manufacturer dropdown for pallet lines. A fixed list by request: the
+// warehouse wants these seven and nothing else on screen. Kept here so adding an
+// eighth is a one-line change; the lookup table still records whatever gets
+// saved, so switching this back to the admin-managed list later loses nothing.
+export const PALLET_MANUFACTURERS = [
+  'Dell',
+  'HP',
+  'Lenovo',
+  'Samsung',
+  'Tier 1',
+  'Tier 2',
+  'Mixed',
+];
+
 // Monitor bezel style. Two values, so a const rather than a lookup category.
 // Mirrors PALLET_VARIANT_TYPES in the API's create-pallet-line.dto.ts.
 export const PALLET_VARIANT_TYPES = ['normal', 'frameless'];

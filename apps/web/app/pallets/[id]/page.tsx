@@ -228,7 +228,11 @@ export default async function PalletDetailPage({ params }: { params: Promise<{ i
           </div>
         </div>
 
-        <section className="mt-8 max-w-5xl">
+        {/* Was max-w-5xl, which capped this at 1024px. That was comfortable for
+            the old six-column table; with nine it squeezed every control until
+            "Frameless" read "Fram". The cards above already span the full width,
+            so removing the cap also lines this section up with them. */}
+        <section className="mt-8">
           <h2 className="text-sm font-medium text-neutral-500">Contents by variant</h2>
           <PalletLines
             palletId={pallet.id}
