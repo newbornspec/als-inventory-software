@@ -61,15 +61,17 @@ export class AddPalletLineSpecColumns1752450000000 implements MigrationInterface
     // warehouse uses. "Tier 1"/"Tier 2"/"Mixed" are not manufacturers, but they
     // are what the operator picks in that column on the real sheet, and the
     // lookup table exists precisely so the business can shape its own lists.
+    // VALUES, not SELECT. Postgres infers a parameter's type from the column it
+    // is being inserted into; in a bare `SELECT $1,$2,$3` there is no such
+    // context and it raises 42P08 "could not determine data type of parameter".
+    // ON CONFLICT is enough on its own: UQ_lookup_top is already a unique index
+    // on (category, lower(value)) for top-level values, so this is
+    // case-insensitively idempotent without a hand-written existence check.
     const seed = async (category: string, values: string[], from = 0) => {
       for (let i = 0; i < values.length; i++) {
         await queryRunner.query(
-          `INSERT INTO "lookup_values" ("category","value","sort_order")
-           SELECT $1,$2,$3
-           WHERE NOT EXISTS (
-             SELECT 1 FROM "lookup_values"
-             WHERE "category" = $1 AND LOWER("value") = LOWER($2)
-           )`,
+          `INSERT INTO "lookup_values" ("category","value","sort_order") VALUES ($1,$2,$3)
+           ON CONFLICT DO NOTHING`,
           [category, values[i], from + i],
         );
       }
