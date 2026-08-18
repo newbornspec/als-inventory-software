@@ -5,7 +5,7 @@ import { deletePallet, type Pallet } from '@/lib/actions/pallets';
 import type { LookupValue } from '@/lib/actions/lookups';
 import { getLocations } from '@/lib/data';
 import { Nav } from '@/app/components/nav';
-import { formatLabel } from '@/lib/asset-options';
+import { formatLabel, ramCell } from '@/lib/asset-options';
 import { money } from '@/lib/money';
 import { PalletStatusSelect } from './status-select';
 import { PalletLines } from './pallet-lines';
@@ -50,10 +50,9 @@ export default async function PalletDetailPage({ params }: { params: Promise<{ i
       chassis: l.product?.chassis ?? '',
       cpu: l.product?.cpu ?? '',
       gen: l.product?.gen ?? '',
-      // No space, matching SPEC_RAM's options and the editor's own rebuild after
-      // a save. With a space here, a row loaded from the server showed "16 GB"
-      // as an extra option beside the identical "16GB" in the dropdown.
-      ram: l.product?.ramGb != null ? `${l.product.ramGb}GB` : '',
+      // Matches SPEC_RAM's options and the editor's own rebuild after a save;
+      // they disagreed once and put "16 GB" beside an identical "16GB".
+      ram: ramCell(l.product?.ramGb),
       storage: l.product?.storage ?? '',
       quantity: String(l.quantity),
     }));

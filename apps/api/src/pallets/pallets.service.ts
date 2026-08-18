@@ -701,7 +701,7 @@ function specColumns(
       chassis: product.chassis ?? '',
       cpu: product.cpu ?? '',
       gen: product.gen ?? '',
-      ram: product.ramGb != null ? `${product.ramGb} GB` : '',
+      ram: ramLabel(product.ramGb),
       storage: product.storage ?? '',
     };
   }
@@ -717,9 +717,24 @@ function specColumns(
 }
 
 // "8 GB" / "16GB" -> 8 / 16; null when there's no number.
-function parseRamGb(ram: string | null | undefined): number | null {
-  const m = (ram ?? '').match(/\d+/);
+// products.ram_gb is an int, so "None" cannot be stored as text the way
+// products.cpu stores it. 0 is the sentinel for "explicitly no RAM"; NULL keeps
+// its existing meaning of "not specified". That distinction is why 'None' is
+// checked before the digits — "None" contains no digits, but neither does an
+// empty cell, and they are not the same answer.
+export const RAM_NONE = 0;
+
+export function parseRamGb(ram: string | null | undefined): number | null {
+  const raw = (ram ?? '').trim();
+  if (/^none$/i.test(raw)) return RAM_NONE;
+  const m = raw.match(/\d+/);
   return m ? parseInt(m[0], 10) : null;
+}
+
+// The inverse of parseRamGb, for anything rendering a stored value back.
+export function ramLabel(ramGb: number | null | undefined, unit = ' GB'): string {
+  if (ramGb == null) return '';
+  return ramGb === RAM_NONE ? 'None' : `${ramGb}${unit}`;
 }
 
 // A readable one-line label for a spec row, used as the pallet line's variant

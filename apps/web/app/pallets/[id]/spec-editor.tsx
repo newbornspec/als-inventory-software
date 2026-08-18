@@ -6,7 +6,7 @@ import { savePalletSpec, type PalletLine, type SpecRow } from '@/lib/actions/pal
 import { sellPalletLine } from '@/lib/actions/sold';
 import type { LookupValue } from '@/lib/actions/lookups';
 import type { Location } from '@/lib/data';
-import { PALLET_MANUFACTURERS, SPEC_CPUS, SPEC_RAM } from '@/lib/asset-options';
+import { PALLET_MANUFACTURERS, SPEC_CPUS, SPEC_RAM, ramCell } from '@/lib/asset-options';
 
 type Field = 'manufacturer' | 'model' | 'chassis' | 'cpu' | 'gen' | 'ram' | 'storage' | 'quantity';
 // lineId ties a row to its saved pallet line (''=not saved yet) — needed to
@@ -89,9 +89,7 @@ export function SpecEditor({
       chassis: l.product?.chassis ?? '',
       cpu: l.product?.cpu ?? '',
       gen: l.product?.gen ?? '',
-      // No space, so a saved row's RAM matches an option in SPEC_RAM instead of
-      // appearing beside it as a near-duplicate.
-      ram: l.product?.ramGb != null ? `${l.product.ramGb}GB` : '',
+      ram: ramCell(l.product?.ramGb),
       storage: l.product?.storage ?? '',
       quantity: String(l.quantity),
     }));

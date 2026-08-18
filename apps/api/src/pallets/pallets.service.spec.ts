@@ -1,4 +1,4 @@
-import { composeLineVariant, safeFilePart } from './pallets.service';
+import { RAM_NONE, composeLineVariant, parseRamGb, ramLabel, safeFilePart } from './pallets.service';
 
 // composeLineVariant fills pallet_lines.variant, which is NOT NULL and is read
 // by the report, the sold snapshot and sold-return matching. safeFilePart
@@ -59,5 +59,41 @@ describe('safeFilePart', () => {
 
   it('does not leave stray separators at the ends', () => {
     expect(safeFilePart(' PALLET 45 ', 'x')).toBe('PALLET-45');
+  });
+});
+
+// RAM round-trip. products.ram_gb is an int, so "None" cannot be stored as text
+// the way products.cpu is; 0 is the sentinel and NULL still means "not said".
+// The grid reads its value back through this, so if the pair disagreed, picking
+// None would silently come back blank.
+describe('RAM None round-trip', () => {
+  it('stores None as the 0 sentinel, not as null', () => {
+    expect(parseRamGb('None')).toBe(RAM_NONE);
+    expect(parseRamGb('none')).toBe(0);
+  });
+
+  it('keeps "not specified" distinct from "None"', () => {
+    expect(parseRamGb('')).toBeNull();
+    expect(parseRamGb(null)).toBeNull();
+    expect(parseRamGb(undefined)).toBeNull();
+  });
+
+  it('still parses real capacities, with or without a space', () => {
+    expect(parseRamGb('16GB')).toBe(16);
+    expect(parseRamGb('16 GB')).toBe(16);
+    expect(parseRamGb('128GB')).toBe(128);
+  });
+
+  it('renders each case back the way it went in', () => {
+    expect(ramLabel(parseRamGb('None'))).toBe('None');
+    expect(ramLabel(parseRamGb('16GB'))).toBe('16 GB');
+    expect(ramLabel(parseRamGb(''))).toBe('');
+  });
+
+  it('round-trips through the grid format too', () => {
+    const gridCell = (n: number | null) => (n == null ? '' : n === 0 ? 'None' : `${n}GB`);
+    for (const typed of ['None', '2GB', '8GB', '128GB']) {
+      expect(gridCell(parseRamGb(typed))).toBe(typed);
+    }
   });
 });

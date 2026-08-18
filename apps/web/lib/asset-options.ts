@@ -90,3 +90,12 @@ export function formatLabel(value: string): string {
   if (value === 'ber') return 'Beyond Economic Repair (BER)';
   return value.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 }
+
+// How a stored product RAM value appears in the Layout 2 grid. 0 is the
+// sentinel the API writes for "None" (products.ram_gb is an int, so it cannot
+// hold the word the way products.cpu does); null means nobody said.
+// No space before GB, so the value matches an option in SPEC_RAM exactly.
+export function ramCell(ramGb: number | null | undefined): string {
+  if (ramGb == null) return '';
+  return ramGb === 0 ? 'None' : `${ramGb}GB`;
+}
