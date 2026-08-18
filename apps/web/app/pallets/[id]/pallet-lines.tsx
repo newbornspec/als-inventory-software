@@ -27,6 +27,12 @@ import {
 // No line total on screen by request. Quantity x unit cost is still computed in
 // the Excel export, which is where it is actually used.
 
+// Sentinel for the Size dropdown. Not a size, so it can never collide with a
+// real one, and never saved — picking it only reveals the manual input.
+const CUSTOM_SIZE = '__custom__';
+// Stands in for the new-row form in the per-row custom-size maps.
+const ADD_ROW = '__add__';
+
 export function PalletLines({
   palletId,
   lines,
@@ -44,6 +50,40 @@ export function PalletLines({
 
   // The new-row form.
   const [add, setAdd] = useState<PalletLinePatch>({});
+
+  // Which rows have switched their Size dropdown to manual entry. Keyed by line
+  // id, with ADD_ROW standing in for the new-row form at the bottom. Panel
+  // sizes are not all whole inches — 23.8" and 21.5" are ordinary — and the
+  // managed list cannot practically hold every one.
+  const [customSize, setCustomSize] = useState<Record<string, boolean>>({});
+  const [sizeError, setSizeError] = useState<Record<string, string>>({});
+
+  function chooseSize(key: string, value: string, commit: (size: string) => void) {
+    if (value === CUSTOM_SIZE) {
+      setCustomSize((c) => ({ ...c, [key]: true }));
+      return; // nothing saved yet — the operator has not typed a size
+    }
+    setCustomSize((c) => ({ ...c, [key]: false }));
+    setSizeError((e) => ({ ...e, [key]: '' }));
+    commit(value);
+  }
+
+  // Accepts 23.8 and stores 23.8" so a typed size is indistinguishable from a
+  // listed one everywhere downstream — the grid, the exports and the invoice.
+  function commitCustomSize(key: string, raw: string, commit: (size: string) => void) {
+    const n = Number(raw);
+    if (raw.trim() === '' || Number.isNaN(n)) {
+      setSizeError((e) => ({ ...e, [key]: 'Enter a number, e.g. 23.8' }));
+      return;
+    }
+    if (n <= 0) {
+      setSizeError((e) => ({ ...e, [key]: 'Size must be greater than 0.' }));
+      return;
+    }
+    setSizeError((e) => ({ ...e, [key]: '' }));
+    setCustomSize((c) => ({ ...c, [key]: false }));
+    commit(`${n}"`);
+  }
 
   // Sizes stay admin-managed at /lookups; manufacturers are a fixed list.
   const sizes = useMemo(
@@ -191,18 +231,52 @@ export function PalletLines({
                 </td>
                 <td className="px-3 py-2">
                   {canManage ? (
-                    <select
-                      defaultValue={l.size ?? ''}
-                      onChange={(e) => save(l, { size: e.target.value })}
-                      className={field}
-                    >
-                      <option value="">—</option>
-                      {sizeOptions(sizes, l.size).map((s) => (
-                        <option key={s} value={s} className="bg-white">
-                          {s}
+                    <>
+                      <select
+                        value={customSize[l.id] ? CUSTOM_SIZE : (l.size ?? '')}
+                        onChange={(e) =>
+                          chooseSize(l.id, e.target.value, (size) => save(l, { size }))
+                        }
+                        className={field}
+                      >
+                        <option value="">—</option>
+                        {/* First, so it is obvious a size can be typed. */}
+                        <option value={CUSTOM_SIZE} className="bg-white">
+                          Custom / Enter manually
                         </option>
-                      ))}
-                    </select>
+                        {sizeOptions(sizes, l.size).map((s) => (
+                          <option key={s} value={s} className="bg-white">
+                            {s}
+                          </option>
+                        ))}
+                      </select>
+                      {customSize[l.id] && (
+                        <div className="mt-1">
+                          <div className="flex items-center gap-1">
+                            <input
+                              type="number"
+                              min={0}
+                              step="0.1"
+                              autoFocus
+                              placeholder="23.8"
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') e.currentTarget.blur();
+                              }}
+                              onBlur={(e) =>
+                                commitCustomSize(l.id, e.target.value, (size) =>
+                                  save(l, { size }),
+                                )
+                              }
+                              className="w-20 rounded border border-neutral-200 bg-white px-2 py-1.5"
+                            />
+                            <span className="text-xs text-neutral-500">inches</span>
+                          </div>
+                          {sizeError[l.id] && (
+                            <p className="mt-0.5 text-xs text-red-600">{sizeError[l.id]}</p>
+                          )}
+                        </div>
+                      )}
+                    </>
                   ) : (
                     <span className="text-neutral-700">{l.size ?? '—'}</span>
                   )}
@@ -361,17 +435,50 @@ export function PalletLines({
               </td>
               <td className="px-3 py-2">
                 <select
-                  value={add.size ?? ''}
-                  onChange={(e) => setAdd((a) => ({ ...a, size: e.target.value }))}
+                  value={customSize[ADD_ROW] ? CUSTOM_SIZE : (add.size ?? '')}
+                  onChange={(e) =>
+                    chooseSize(ADD_ROW, e.target.value, (size) =>
+                      setAdd((a) => ({ ...a, size })),
+                    )
+                  }
                   className={field}
                 >
                   <option value="">—</option>
-                  {sizes.map((s) => (
-                    <option key={s.id} value={s.value} className="bg-white">
-                      {s.value}
+                  <option value={CUSTOM_SIZE} className="bg-white">
+                    Custom / Enter manually
+                  </option>
+                  {sizeOptions(sizes, add.size ?? null).map((s) => (
+                    <option key={s} value={s} className="bg-white">
+                      {s}
                     </option>
                   ))}
                 </select>
+                {customSize[ADD_ROW] && (
+                  <div className="mt-1">
+                    <div className="flex items-center gap-1">
+                      <input
+                        type="number"
+                        min={0}
+                        step="0.1"
+                        autoFocus
+                        placeholder="23.8"
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') e.currentTarget.blur();
+                        }}
+                        onBlur={(e) =>
+                          commitCustomSize(ADD_ROW, e.target.value, (size) =>
+                            setAdd((a) => ({ ...a, size })),
+                          )
+                        }
+                        className="w-20 rounded border border-neutral-200 bg-white px-2 py-1.5"
+                      />
+                      <span className="text-xs text-neutral-500">inches</span>
+                    </div>
+                    {sizeError[ADD_ROW] && (
+                      <p className="mt-0.5 text-xs text-red-600">{sizeError[ADD_ROW]}</p>
+                    )}
+                  </div>
+                )}
               </td>
               <td className="px-3 py-2">
                 <select
