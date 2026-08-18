@@ -12,5 +12,7 @@ import { LookupsModule } from '../lookups/lookups.module';
   imports: [TypeOrmModule.forFeature([Pallet, PalletLine, PalletSoldLine, Product]), LookupsModule],
   controllers: [PalletsController],
   providers: [PalletsService],
+  // Exported so InvoicesModule can snapshot a pallet's lines onto an invoice.
+  exports: [PalletsService],
 })
 export class PalletsModule {}

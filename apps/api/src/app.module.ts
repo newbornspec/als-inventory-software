@@ -36,6 +36,8 @@ import { UsersModule } from './users/users.module';
 import { BatchesModule } from './batches/batches.module';
 import { ProductsModule } from './products/products.module';
 import { PalletsModule } from './pallets/pallets.module';
+import { InvoicesModule } from './invoices/invoices.module';
+import { Invoice } from './invoices/invoice.entity';
 import { StockModule } from './stock/stock.module';
 import { CustomersModule } from './customers/customers.module';
 import { SalesModule } from './sales/sales.module';
@@ -55,7 +57,7 @@ import { DevicesModule } from './devices/devices.module';
         username: config.get('database.username'),
         password: config.get('database.password'),
         database: config.get('database.name'),
-        entities: [User, Location, Asset, AssetHistory, AssetAudit, Batch, Lot, ExpectedLineItem, Product, Pallet, PalletLine, PalletSoldLine, StockLine, StockMovement, Customer, SalesOrder, OrderLine, RepairLog, AssetPhoto, ActivityLog, LookupValue],
+        entities: [User, Location, Asset, AssetHistory, AssetAudit, Batch, Lot, ExpectedLineItem, Product, Pallet, PalletLine, PalletSoldLine, StockLine, StockMovement, Customer, SalesOrder, OrderLine, RepairLog, AssetPhoto, ActivityLog, LookupValue, Invoice],
         // Migrations only — never let the app auto-mutate the schema.
         synchronize: false,
       }),
@@ -72,6 +74,7 @@ import { DevicesModule } from './devices/devices.module';
     BatchesModule,
     ProductsModule,
     PalletsModule,
+    InvoicesModule,
     StockModule,
     CustomersModule,
     SalesModule,
