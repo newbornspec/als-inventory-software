@@ -46,7 +46,7 @@ export const PALLET_MANUFACTURERS = [
 // option, so pasted or historical data is never silently dropped.
 export const SPEC_CPUS = [
   'None',
-  'Intel Pentium Dual-Core',
+  'Intel Pentium',
   'Core 2 Duo',
   'Intel Core i3',
   'Intel Core i5',
