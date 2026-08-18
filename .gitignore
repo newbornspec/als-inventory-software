@@ -10,3 +10,12 @@ dist/
 # Hardware-audit tool config — contains login credentials, never commit
 audit.conf
 tools/audit.conf
+
+# Scratch copies of production environment variables. importact.txt was sitting
+# untracked in the repo root holding DB_PASSWORD, JWT_SECRET and PS_JWT_JWK_K in
+# plain text — never committed, but one `git add .` from being published.
+importact.txt
+*secrets*.txt
+*credentials*.txt
+env-*.txt
+*.env.backup
