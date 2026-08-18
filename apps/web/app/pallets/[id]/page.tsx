@@ -50,7 +50,10 @@ export default async function PalletDetailPage({ params }: { params: Promise<{ i
       chassis: l.product?.chassis ?? '',
       cpu: l.product?.cpu ?? '',
       gen: l.product?.gen ?? '',
-      ram: l.product?.ramGb != null ? `${l.product.ramGb} GB` : '',
+      // No space, matching SPEC_RAM's options and the editor's own rebuild after
+      // a save. With a space here, a row loaded from the server showed "16 GB"
+      // as an extra option beside the identical "16GB" in the dropdown.
+      ram: l.product?.ramGb != null ? `${l.product.ramGb}GB` : '',
       storage: l.product?.storage ?? '',
       quantity: String(l.quantity),
     }));

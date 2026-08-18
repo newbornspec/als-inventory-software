@@ -40,6 +40,24 @@ export const PALLET_MANUFACTURERS = [
   'Mixed',
 ];
 
+// Layout 2 (specification grid) restricted dropdowns. Manufacturer reuses
+// PALLET_MANUFACTURERS above so both layouts always offer the same seven.
+// A row holding something outside these lists keeps its own value as an extra
+// option, so pasted or historical data is never silently dropped.
+export const SPEC_CPUS = [
+  'None',
+  'Intel Pentium Dual-Core',
+  'Core 2 Duo',
+  'Intel Core i3',
+  'Intel Core i5',
+  'Intel Core i7',
+  'Intel Core i9',
+];
+
+// No space before GB, matching how the grid renders a saved row's RAM back —
+// otherwise "16GB" and "16 GB" would both appear in the dropdown after a save.
+export const SPEC_RAM = ['None', '2GB', '4GB', '8GB', '16GB', '32GB', '64GB', '128GB'];
+
 // Monitor bezel style. Two values, so a const rather than a lookup category.
 // Mirrors PALLET_VARIANT_TYPES in the API's create-pallet-line.dto.ts.
 export const PALLET_VARIANT_TYPES = ['normal', 'frameless'];

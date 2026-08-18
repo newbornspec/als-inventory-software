@@ -1,11 +1,12 @@
 'use client';
 
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { savePalletSpec, type PalletLine, type SpecRow } from '@/lib/actions/pallets';
 import { sellPalletLine } from '@/lib/actions/sold';
 import type { LookupValue } from '@/lib/actions/lookups';
 import type { Location } from '@/lib/data';
+import { PALLET_MANUFACTURERS, SPEC_CPUS, SPEC_RAM } from '@/lib/asset-options';
 
 type Field = 'manufacturer' | 'model' | 'chassis' | 'cpu' | 'gen' | 'ram' | 'storage' | 'quantity';
 // lineId ties a row to its saved pallet line (''=not saved yet) — needed to
@@ -18,13 +19,21 @@ type Row = Record<Field, string> & { id: number; lineId: string };
 // pallet's lines with the grid contents.
 
 // Column order — also the order pasted Excel/TSV cells fill into.
-const COLUMNS: { key: Field; label: string; list?: string; width: string }[] = [
-  { key: 'manufacturer', label: 'Manufacturer', list: 'dl-manufacturer', width: 'min-w-[9rem]' },
+// `options` makes a column a restricted dropdown; `list` keeps it a free-text
+// input backed by the admin-managed lookup suggestions.
+const COLUMNS: {
+  key: Field;
+  label: string;
+  list?: string;
+  options?: string[];
+  width: string;
+}[] = [
+  { key: 'manufacturer', label: 'Manufacturer', options: PALLET_MANUFACTURERS, width: 'min-w-[9rem]' },
   { key: 'model', label: 'Model', width: 'min-w-[11rem]' },
   { key: 'chassis', label: 'Chassis', list: 'dl-chassis', width: 'min-w-[8rem]' },
-  { key: 'cpu', label: 'CPU', list: 'dl-cpu', width: 'min-w-[12rem]' },
+  { key: 'cpu', label: 'CPU', options: SPEC_CPUS, width: 'min-w-[12rem]' },
   { key: 'gen', label: 'Gen', list: 'dl-gen', width: 'min-w-[6rem]' },
-  { key: 'ram', label: 'RAM', list: 'dl-ram', width: 'min-w-[7rem]' },
+  { key: 'ram', label: 'RAM', options: SPEC_RAM, width: 'min-w-[7rem]' },
   { key: 'storage', label: 'Storage', list: 'dl-storage', width: 'min-w-[10rem]' },
   { key: 'quantity', label: 'Quantity', width: 'w-24' },
 ];
@@ -80,7 +89,9 @@ export function SpecEditor({
       chassis: l.product?.chassis ?? '',
       cpu: l.product?.cpu ?? '',
       gen: l.product?.gen ?? '',
-      ram: l.product?.ramGb != null ? `${l.product.ramGb} GB` : '',
+      // No space, so a saved row's RAM matches an option in SPEC_RAM instead of
+      // appearing beside it as a near-duplicate.
+      ram: l.product?.ramGb != null ? `${l.product.ramGb}GB` : '',
       storage: l.product?.storage ?? '',
       quantity: String(l.quantity),
     }));
@@ -137,11 +148,30 @@ export function SpecEditor({
     );
   }
 
+  // Paste is handled on the document, not per input. <select> is not editable,
+  // so it never fires a paste event of its own — binding the handler to each
+  // input (as this did) silently killed pasting a block that starts in
+  // Manufacturer, CPU or RAM, which is where a full Excel row starts.
+  //
+  // The target cell is read off the focused element at paste time rather than
+  // tracked as focus moves: one source of truth, and nothing to drift.
+  useEffect(() => {
+    function onDocPaste(e: ClipboardEvent) {
+      const el = document.activeElement as HTMLElement | null;
+      const rowId = Number(el?.dataset?.rowId);
+      const col = Number(el?.dataset?.col);
+      if (!el?.dataset?.rowId || Number.isNaN(rowId) || Number.isNaN(col)) return;
+      const text = e.clipboardData?.getData('text') ?? '';
+      if (!text || (!text.includes('\t') && !text.includes('\n'))) return; // single value → native paste
+      e.preventDefault();
+      pasteGrid(text, rowId, col);
+    }
+    document.addEventListener('paste', onDocPaste);
+    return () => document.removeEventListener('paste', onDocPaste);
+  });
+
   // Paste an Excel/TSV block starting from this cell, growing the grid as needed.
-  function onPaste(rowId: number, startCol: number, e: React.ClipboardEvent) {
-    const text = e.clipboardData.getData('text');
-    if (!text || (!text.includes('\t') && !text.includes('\n'))) return; // single value → native paste
-    e.preventDefault();
+  function pasteGrid(text: string, rowId: number, startCol: number) {
     const grid = text
       .replace(/\r/g, '')
       .split('\n')
@@ -226,11 +256,11 @@ export function SpecEditor({
 
   return (
     <div className="mt-6">
-      <DataList id="dl-manufacturer" values={manufacturers.map((m) => m.value)} />
+      {/* Manufacturer, CPU and RAM are restricted dropdowns now, so their
+          suggestion lists are gone. Chassis, Gen and Storage stay free text
+          backed by the admin-managed lookups. */}
       <DataList id="dl-chassis" values={optsFor('chassis')} />
-      <DataList id="dl-cpu" values={optsFor('cpu')} />
       <DataList id="dl-gen" values={optsFor('gen')} />
-      <DataList id="dl-ram" values={optsFor('ram')} />
       <DataList id="dl-storage" values={optsFor('storage')} />
       {manufacturers.map((m) => (
         <DataList
@@ -288,7 +318,7 @@ export function SpecEditor({
                   </button>
                 </th>
               ))}
-              <th className="w-20 px-3 py-2" />
+              <th className="w-28 px-3 py-2" />
             </tr>
           </thead>
           <tbody>
@@ -298,15 +328,33 @@ export function SpecEditor({
                 <tr key={r.id} className="border-t border-neutral-200">
                   {COLUMNS.map((c, ci) => (
                     <td key={c.key} className="px-2 py-1">
-                      <input
-                        type={c.key === 'quantity' ? 'number' : 'text'}
-                        min={c.key === 'quantity' ? 0 : undefined}
-                        list={c.key === 'model' ? (manId ? `dl-model-${manId}` : undefined) : c.list}
-                        value={r[c.key]}
-                        onChange={(e) => setCell(r.id, c.key, e.target.value)}
-                        onPaste={(e) => onPaste(r.id, ci, e)}
-                        className={cellCls + (c.key === 'quantity' ? ' w-20' : '')}
-                      />
+                      {c.options ? (
+                        <select
+                          data-row-id={r.id}
+                          data-col={ci}
+                          value={r[c.key]}
+                          onChange={(e) => setCell(r.id, c.key, e.target.value)}
+                          className={cellCls}
+                        >
+                          <option value="">—</option>
+                          {withOwnValue(c.options, r[c.key]).map((o) => (
+                            <option key={o} value={o} className="bg-white">
+                              {o}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <input
+                          data-row-id={r.id}
+                          data-col={ci}
+                          type={c.key === 'quantity' ? 'number' : 'text'}
+                          min={c.key === 'quantity' ? 0 : undefined}
+                          list={c.key === 'model' ? (manId ? `dl-model-${manId}` : undefined) : c.list}
+                          value={r[c.key]}
+                          onChange={(e) => setCell(r.id, c.key, e.target.value)}
+                          className={cellCls + (c.key === 'quantity' ? ' w-20' : '')}
+                        />
+                      )}
                     </td>
                   ))}
                   <td className="px-2 py-1">
@@ -320,8 +368,12 @@ export function SpecEditor({
                           Sell…
                         </button>
                       )}
-                      <button onClick={() => removeRow(r.id)} className="text-xs text-red-600 hover:underline" aria-label="Remove row">
-                        ✕
+                      <button
+                        onClick={() => removeRow(r.id)}
+                        className="text-xs text-red-600 hover:underline"
+                        aria-label="Remove row"
+                      >
+                        Remove
                       </button>
                     </div>
                   </td>
@@ -356,6 +408,15 @@ export function SpecEditor({
       </p>
     </div>
   );
+}
+
+// A row may hold something the dropdown no longer offers — pasted from Excel,
+// or saved before the list was narrowed. Show it as an extra option for that row
+// only: a select whose options omit its value renders blank, and the next edit
+// would save that blank over real data.
+function withOwnValue(options: string[], current: string): string[] {
+  const v = (current ?? '').trim();
+  return v && !options.includes(v) ? [...options, v] : options;
 }
 
 function DataList({ id, values }: { id: string; values: string[] }) {
