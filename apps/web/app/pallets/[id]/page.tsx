@@ -184,6 +184,16 @@ export default async function PalletDetailPage({ params }: { params: Promise<{ i
                 Costing sheet
               </a>
             )}
+            {/* A link, not a download: an invoice needs buyer and VAT details
+                collected first, and raising one permanently spends a number. */}
+            {canSeeCosts && (
+              <Link
+                href={`/pallets/${pallet.id}/invoice`}
+                className="rounded-md border border-neutral-200 px-3 py-1.5 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
+              >
+                Invoice…
+              </Link>
+            )}
             {canDelete && (
               <form action={deletePallet.bind(null, pallet.id)}>
                 <button
