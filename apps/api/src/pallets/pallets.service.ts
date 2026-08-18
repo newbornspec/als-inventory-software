@@ -486,19 +486,23 @@ export class PalletsService {
     const wb = new ExcelJS.Workbook();
     wb.creator = 'ALS Trade Wholesales';
     const ws = wb.addWorksheet('Pallet Report');
-    ws.columns = [
-      { width: 16 }, // Manufacturer
-      { width: 22 }, // Model
-      { width: 12 }, // Chassis
-      { width: 20 }, // CPU
-      { width: 10 }, // Gen
-      { width: 10 }, // RAM
-      { width: 16 }, // Storage
-      { width: 12 }, // Quantity
+    const headers = [
+      'Pallet number',
+      'Manufacturer',
+      'Model',
+      'Chassis',
+      'CPU',
+      'Gen',
+      'RAM',
+      'Storage',
+      'Quantity',
     ];
+    const widths = [16, 16, 22, 12, 20, 10, 10, 16, 12];
+    ws.columns = widths.map((width) => ({ width }));
+    const lastCol = ws.getColumn(headers.length).letter;
 
     const title = (row: number, text: string, size: number) => {
-      ws.mergeCells(`A${row}:H${row}`);
+      ws.mergeCells(`A${row}:${lastCol}${row}`);
       const cell = ws.getCell(`A${row}`);
       cell.value = text;
       cell.font = { size, bold: true };
@@ -526,16 +530,7 @@ export class PalletsService {
 
     const headerRowIndex = r + 1;
     const headerRow = ws.getRow(headerRowIndex);
-    headerRow.values = [
-      'Manufacturer',
-      'Model',
-      'Chassis',
-      'CPU',
-      'Gen',
-      'RAM',
-      'Storage',
-      'Quantity',
-    ];
+    headerRow.values = headers;
     headerRow.font = { bold: true };
     headerRow.eachCell((cell) => {
       cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEFEFEF' } };
@@ -547,7 +542,12 @@ export class PalletsService {
     for (const line of lines) {
       const s = specColumns(line.product, line.variant);
       qtyTotal += line.quantity;
+      // The pallet number repeats on every row: the sheet gets filtered and
+      // sorted downstream, and a row separated from its pallet is unusable.
+      // One row per LINE, exactly as before — quantity stays a count, and a
+      // line of 45 is still one row.
       ws.getRow(dataRow).values = [
+        pallet.palletNumber,
         s.manufacturer,
         s.model,
         s.chassis,
@@ -562,7 +562,7 @@ export class PalletsService {
 
     const totalRow = ws.getRow(dataRow + 1);
     totalRow.getCell(1).value = 'Total';
-    totalRow.getCell(8).value = qtyTotal;
+    totalRow.getCell(headers.length).value = qtyTotal;
     totalRow.font = { bold: true };
 
     const buffer = Buffer.from(await wb.xlsx.writeBuffer());
