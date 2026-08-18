@@ -37,6 +37,10 @@ export default async function PalletDetailPage({ params }: { params: Promise<{ i
   const canManage =
     user?.role === 'admin' || user?.role === 'manager' || user?.role === 'technician';
   const canDelete = user?.role === 'admin';
+  // Both downloads carry purchase costs and their endpoints are ADMIN+MANAGER.
+  // The Export button was previously shown to technicians too, so they got a
+  // 403 download page instead of a file.
+  const canSeeCosts = user?.role === 'admin' || user?.role === 'manager';
 
   // A Layout 2 pallet always opens back into its Excel-style grid editor —
   // spec pallets are edited as a grid for their whole life, not just at
@@ -84,7 +88,7 @@ export default async function PalletDetailPage({ params }: { params: Promise<{ i
                   totalQuantity={pallet.totalQuantity}
                 />
               )}
-              {canManage && (
+              {canSeeCosts && (
                 <a
                   href={`/api/pallets/${pallet.id}/report`}
                   className="rounded-md bg-[#2b7fff] hover:bg-blue-600 px-3 py-1.5 text-sm font-medium text-white"
@@ -161,12 +165,23 @@ export default async function PalletDetailPage({ params }: { params: Promise<{ i
                 totalQuantity={pallet.totalQuantity}
               />
             )}
-            {canManage && (
+            {canSeeCosts && (
               <a
                 href={`/api/pallets/${pallet.id}/report`}
                 className="rounded-md bg-[#2b7fff] hover:bg-blue-600 px-3 py-1.5 text-sm font-medium text-white"
               >
                 Export to Excel
+              </a>
+            )}
+            {/* Layout 1 only: the sheet is priced from unit_cost, which Layout 2
+                never captures — its grid has no cost column, so the document
+                would print a page of dashes. */}
+            {canSeeCosts && (
+              <a
+                href={`/api/pallets/${pallet.id}/costing`}
+                className="rounded-md border border-neutral-200 px-3 py-1.5 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
+              >
+                Costing sheet
               </a>
             )}
             {canDelete && (

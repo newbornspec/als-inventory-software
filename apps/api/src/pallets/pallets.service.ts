@@ -7,6 +7,8 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { FindOptionsWhere, IsNull, Repository } from 'typeorm';
 import * as ExcelJS from 'exceljs';
+import PDFDocument from 'pdfkit';
+import { COMPANY } from '../common/company';
 import { Pallet, PalletStatus, PalletEntryLayout } from './pallet.entity';
 import { PalletLine } from './pallet-line.entity';
 import { PalletSoldLine } from './pallet-sold-line.entity';
@@ -473,6 +475,169 @@ export class PalletsService {
   // Layout 2 export: each spec attribute in its own column, pulled from the
   // line's linked catalogue product, with a bold header row. No dotted variant,
   // no cost/tier/grade columns — a separate report from Layout 1's.
+  // A printable costing sheet for a Layout 1 pallet: the same ten columns as
+  // the spreadsheet, priced at what was PAID. Deliberately headed "internal
+  // document" — unit_cost is purchase cost, and a page of your own buy prices
+  // must never be mistaken for something you hand a customer.
+  //
+  // Landscape because ten columns do not fit A4 portrait legibly.
+  async generateCostingSheet(id: string): Promise<{ buffer: Buffer; filename: string }> {
+    const pallet = await this.findOne(id);
+    const buffer = await this.renderCostingSheet(pallet);
+    return {
+      buffer,
+      filename: `costing-${safeFilePart(pallet.palletNumber, pallet.id)}.pdf`,
+    };
+  }
+
+  private renderCostingSheet(
+    pallet: PalletWithTotals & { lines: PalletLine[] },
+  ): Promise<Buffer> {
+    return new Promise((resolve, reject) => {
+      const doc = new PDFDocument({ size: 'A4', layout: 'landscape', margin: 40 });
+      const chunks: Buffer[] = [];
+      doc.on('data', (c: Buffer) => chunks.push(c));
+      doc.on('end', () => resolve(Buffer.concat(chunks)));
+      doc.on('error', reject);
+
+      const left = 40;
+      const right = doc.page.width - 40;
+      const issued = new Date().toLocaleDateString('en-GB', {
+        day: '2-digit',
+        month: 'long',
+        year: 'numeric',
+      });
+
+      doc.font('Helvetica-Bold').fontSize(18).fillColor('#111111').text(COMPANY.name);
+      doc
+        .font('Helvetica')
+        .fontSize(9)
+        .fillColor('#666666')
+        .text(`Company No. ${COMPANY.registration}`);
+      doc.moveDown(0.8);
+      doc
+        .font('Helvetica-Bold')
+        .fontSize(14)
+        .fillColor('#111111')
+        .text('Pallet Costing Sheet');
+      doc
+        .font('Helvetica')
+        .fontSize(9)
+        .fillColor('#b45309')
+        .text('Internal document — prices shown are purchase cost, not a sale price.');
+      doc.moveDown(0.4);
+      doc
+        .font('Helvetica')
+        .fontSize(10)
+        .fillColor('#222222')
+        .text(`Pallet: ${pallet.palletNumber}     Issued: ${issued}`)
+        .text(
+          `Supplier: ${pallet.supplier ?? '—'}     Location: ${pallet.location?.name ?? '—'}` +
+            `     Status: ${pallet.status}`,
+        );
+      if (pallet.description) doc.text(`Description: ${pallet.description}`);
+      doc.moveDown(0.6);
+
+      // Sums to the printable width of landscape A4 (842pt less two 40pt
+      // margins = 762). Model and Manufacturer take the slack: model numbers
+      // vary most in length, and a table that stops two thirds across the page
+      // looks like something failed to render.
+      const w = [86, 100, 150, 58, 74, 44, 44, 62, 74, 70];
+      const labels = [
+        'Pallet',
+        'Manufacturer',
+        'Model',
+        'Size',
+        'Variant',
+        'Stand',
+        'Qty',
+        'Grade',
+        'Unit cost',
+        'Line total',
+      ];
+      let x = left;
+      const cols = labels.map((label, i) => {
+        const col = { label, x, w: w[i], right: i >= 6 };
+        x += w[i];
+        return col;
+      });
+      const bottom = doc.page.height - doc.page.margins.bottom - 60;
+
+      const header = () => {
+        const y = doc.y;
+        doc.font('Helvetica-Bold').fontSize(8).fillColor('#111111');
+        for (const c of cols) {
+          doc.text(c.label, c.x, y, { width: c.w - 4, align: c.right ? 'right' : 'left' });
+        }
+        doc.moveDown(0.15);
+        doc.strokeColor('#999999').lineWidth(0.5).moveTo(left, doc.y).lineTo(right, doc.y).stroke();
+        doc.moveDown(0.2);
+      };
+      header();
+
+      let costTotal = 0;
+      for (const line of pallet.lines) {
+        const lineTotal = line.unitCost != null ? line.unitCost * line.quantity : null;
+        if (lineTotal != null) costTotal += lineTotal;
+        // The pallet number repeats on every row for the same reason it does in
+        // the spreadsheet: a row separated from its pallet is unusable.
+        const vals = [
+          pallet.palletNumber,
+          line.manufacturer ?? '—',
+          line.model ?? '—',
+          line.size ?? '—',
+          slugLabel(line.variantType) || '—',
+          line.stand == null ? '—' : line.stand ? 'Yes' : 'No',
+          String(line.quantity),
+          gradeLabel(line.grade) || '—',
+          line.unitCost != null ? money(line.unitCost) : '—',
+          lineTotal != null ? money(lineTotal) : '—',
+        ];
+        doc.font('Helvetica').fontSize(8).fillColor('#222222');
+        const h = Math.max(
+          ...cols.map((c, i) => doc.heightOfString(vals[i], { width: c.w - 4 })),
+        );
+        if (doc.y + h > bottom) {
+          doc.addPage();
+          header();
+          // header() leaves the document bold; without this the first row of
+          // every continuation page is drawn in the header's font.
+          doc.font('Helvetica').fontSize(8).fillColor('#222222');
+        }
+        const y = doc.y;
+        cols.forEach((c, i) => {
+          doc.text(vals[i], c.x, y, { width: c.w - 4, align: c.right ? 'right' : 'left' });
+        });
+        doc.y = y + h + 3;
+        doc
+          .strokeColor('#eeeeee')
+          .lineWidth(0.5)
+          .moveTo(left, doc.y - 1)
+          .lineTo(right, doc.y - 1)
+          .stroke();
+      }
+
+      if (doc.y + 60 > doc.page.height - doc.page.margins.bottom) doc.addPage();
+      doc.moveDown(0.4);
+      const ty = doc.y;
+      doc.strokeColor('#999999').lineWidth(0.5).moveTo(left, ty).lineTo(right, ty).stroke();
+      doc.moveDown(0.3);
+      const yy = doc.y;
+      doc.font('Helvetica-Bold').fontSize(9).fillColor('#111111');
+      doc.text('Total', cols[0].x, yy, { width: cols[0].w - 4 });
+      doc.text(String(pallet.totalQuantity), cols[6].x, yy, {
+        width: cols[6].w - 4,
+        align: 'right',
+      });
+      doc.text(costTotal > 0 ? money(costTotal) : '—', cols[9].x, yy, {
+        width: cols[9].w - 4,
+        align: 'right',
+      });
+
+      doc.end();
+    });
+  }
+
   private async generateSpecReport(
     pallet: PalletWithTotals & { lines: PalletLine[] },
   ): Promise<{ buffer: Buffer; filename: string }> {
@@ -786,6 +951,12 @@ export function composeLineVariant(line: {
       .filter(Boolean)
       .join(' · ') || 'Unspecified'
   );
+}
+
+// £1,234.50 — the same shape the web shows, so a printed sheet and the screen
+// never disagree about a figure.
+function money(n: number): string {
+  return `£${n.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
 // e.g. "grade_a" -> "Grade A", "for_parts" -> "For Parts".

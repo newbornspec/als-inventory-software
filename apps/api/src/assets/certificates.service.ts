@@ -5,6 +5,7 @@ import PDFDocument from 'pdfkit';
 import { Asset } from './asset.entity';
 import { AssetAudit, DataWipeStatus } from './asset-audit.entity';
 import { Batch } from '../batches/batch.entity';
+import { COMPANY } from '../common/company';
 import {
   assertOwnsBatch,
   isScopedManager,
@@ -12,12 +13,7 @@ import {
   type RequestUser,
 } from '../common/ownership';
 
-// Issuer details for compliance documents. Overridable via env so the same
-// codebase can be white-labelled without a code change.
-const COMPANY = {
-  name: process.env.COMPANY_NAME || 'ALS Trade Wholesales',
-  registration: process.env.COMPANY_REG || '11269566',
-};
+
 
 function pretty(value: string | null | undefined): string {
   if (!value) return '—';
@@ -342,6 +338,9 @@ export class CertificatesService {
         if (doc.y + h > bottom) {
           doc.addPage();
           header();
+          // header() leaves the document bold, so the first row of every
+          // continuation page was drawn in the header's font.
+          doc.font('Helvetica').fontSize(8).fillColor('#222222');
         }
         const y = doc.y;
         for (const c of cols) doc.text(vals[c.key], c.x, y, { width: c.w - 4 });

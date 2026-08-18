@@ -3,6 +3,7 @@ import {
   Controller,
   Delete,
   Get,
+  Header,
   Param,
   Patch,
   Post,
@@ -58,6 +59,18 @@ export class PalletsController {
     const { buffer, filename } = await this.pallets.generateReport(id);
     return new StreamableFile(buffer, {
       type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      disposition: `attachment; filename="${filename}"`,
+    });
+  }
+
+  // Purchase costs, so admin/manager only — the same gate as the xlsx report.
+  @Roles(UserRole.ADMIN, UserRole.MANAGER)
+  @Get(':id/costing.pdf')
+  @Header('Cache-Control', 'no-store')
+  async costing(@Param('id') id: string): Promise<StreamableFile> {
+    const { buffer, filename } = await this.pallets.generateCostingSheet(id);
+    return new StreamableFile(buffer, {
+      type: 'application/pdf',
       disposition: `attachment; filename="${filename}"`,
     });
   }
