@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!--
+    ALS Inventory mark: a white wireframe cube on a blue rounded square.
+
+    Vector rather than a downscaled PNG. A favicon is drawn at 16px more often
+    than anywhere else, and a raster shrunk that far loses the cube's thin
+    edges entirely; strokes this thick stay legible at any size.
+  -->
+  <defs>
+    <!-- Body: brighter at the top-left, deeper toward the bottom-right. -->
+    <linearGradient id="body" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#3d8bff"/>
+      <stop offset="0.55" stop-color="#2b7fff"/>
+      <stop offset="1" stop-color="#1a5fe0"/>
+    </linearGradient>
+
+    <!-- Light pooling behind the cube, so the mark reads as lit rather than flat. -->
+    <radialGradient id="glow" cx="0.5" cy="0.42" r="0.62">
+      <stop offset="0" stop-color="#7fb4ff" stop-opacity="0.55"/>
+      <stop offset="0.6" stop-color="#4f93ff" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#2b7fff" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- A soft sheen across the top third. -->
+    <linearGradient id="sheen" x1="0" y1="0" x2="0.35" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.20"/>
+      <stop offset="0.45" stop-color="#ffffff" stop-opacity="0.05"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+
+    <clipPath id="squircle">
+      <rect x="0" y="0" width="512" height="512" rx="118" ry="118"/>
+    </clipPath>
+  </defs>
+
+  <g clip-path="url(#squircle)">
+    <rect width="512" height="512" fill="url(#body)"/>
+    <rect width="512" height="512" fill="url(#glow)"/>
+    <rect width="512" height="512" fill="url(#sheen)"/>
+  </g>
+
+  <!--
+    Isometric cube. Outer hexagon, then three spokes from the centre: up-left
+    and up-right close the top face, and the vertical one down to the bottom
+    vertex divides the two side faces.
+
+    Drawn as strokes with round joins so nothing looks clipped at small sizes.
+  -->
+  <g fill="none" stroke="#ffffff" stroke-width="40"
+     stroke-linejoin="round" stroke-linecap="round">
+    <path d="M256 94 L401 178 L401 346 L256 430 L111 346 L111 178 Z"/>
+    <path d="M256 262 L111 178"/>
+    <path d="M256 262 L401 178"/>
+    <path d="M256 262 L256 430"/>
+  </g>
+</svg>

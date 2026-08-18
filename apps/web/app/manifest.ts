@@ -11,8 +11,12 @@ export default function manifest(): MetadataRoute.Manifest {
     description: 'Scan and manage IT assets, online or offline.',
     start_url: '/scan',
     display: 'standalone',
-    background_color: '#0a0a0a',
-    theme_color: '#0a0a0a',
+    // Both were #0a0a0a, left over from the dark theme — an installed app
+    // opened to a black splash behind a blue icon. Matched to the light app,
+    // and to the themeColor the root layout already declares, rather than
+    // introducing a third colour.
+    background_color: '#ffffff',
+    theme_color: '#ffffff',
     orientation: 'portrait',
     icons: [
       { src: '/icons/icon-192.png', sizes: '192x192', type: 'image/png' },

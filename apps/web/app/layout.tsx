@@ -16,6 +16,17 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "Als Inventory",
   description: "Scan and manage IT assets, online or offline.",
+  // Declared explicitly because Next gives app/favicon.ico precedence and never
+  // emits a link for app/icon.svg when both exist — which threw away the whole
+  // point of the vector: staying sharp at the 16px a browser tab actually uses.
+  // Modern browsers take the SVG; the .ico is the fallback, and is still what
+  // anything requesting /favicon.ico by convention gets.
+  // Only the SVG is listed: Next still emits its own link for app/favicon.ico
+  // from the file convention, so naming it here as well just linked it twice.
+  icons: {
+    icon: [{ url: "/icon.svg", type: "image/svg+xml" }],
+    apple: "/apple-icon.png",
+  },
   appleWebApp: {
     capable: true,
     statusBarStyle: "black-translucent",
