@@ -1,11 +1,14 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { randomUUID } from 'crypto';
+import { IsNull, Repository } from 'typeorm';
 import { StockLine } from './stock-line.entity';
 import { StockMovement, StockMovementReason } from './stock-movement.entity';
 import { CreateStockLineDto } from './dto/create-stock-line.dto';
 import { UpdateStockLineDto } from './dto/update-stock-line.dto';
 import { AdjustStockDto } from './dto/adjust-stock.dto';
+import { TransferStockDto } from './dto/transfer-stock.dto';
+import { Location } from '../locations/location.entity';
 
 // Consumable stock status is DERIVED from on-hand quantity (never stored, so it
 // can't drift): 0 → out of stock, below the threshold → low, otherwise in stock.
@@ -114,6 +117,90 @@ export class StockService {
         }),
       );
       return line;
+    });
+  }
+
+  // Move stock between locations. A StockLine is (item, location), so a move is
+  // not one row changing its location — that would take the whole line and its
+  // entire movement history with it, including the part that happened at the
+  // old place. It is a quantity leaving one line and arriving at another.
+  //
+  // The destination line is created if the item has never been held there. It
+  // copies the identity fields (name/sku/category/product) so the two lines are
+  // recognisably the same item, and opens at zero so the +n movement below is
+  // its whole history rather than an unexplained opening balance.
+  //
+  // One transaction: a half-applied transfer would invent or destroy stock.
+  async transfer(id: string, dto: TransferStockDto, userId: string): Promise<StockLine> {
+    return this.lines.manager.transaction(async (tx) => {
+      const repo = tx.getRepository(StockLine);
+      const source = await repo.findOne({ where: { id }, relations: ['location'] });
+      if (!source) throw new NotFoundException(`Stock line ${id} not found`);
+
+      if (source.locationId === dto.toLocationId) {
+        throw new BadRequestException('That is already where this stock is.');
+      }
+      if (source.quantity < dto.quantity) {
+        throw new BadRequestException(
+          `Only ${source.quantity} in stock — cannot move ${dto.quantity}.`,
+        );
+      }
+
+      const to = await tx.getRepository(Location).findOne({ where: { id: dto.toLocationId } });
+      if (!to) throw new NotFoundException('Destination location not found.');
+
+      // Match on the item's identity, not its name alone: two lines can share a
+      // name and differ by SKU.
+      let dest = await repo.findOne({
+        where: {
+          locationId: dto.toLocationId,
+          name: source.name,
+          // A null SKU is a real value here — plenty of consumables have none —
+          // and TypeORM will not match null through a plain where clause.
+          sku: source.sku === null ? IsNull() : source.sku,
+        },
+      });
+      if (!dest) {
+        dest = await repo.save(
+          repo.create({
+            name: source.name,
+            sku: source.sku,
+            category: source.category,
+            productId: source.productId,
+            locationId: dto.toLocationId,
+            quantity: 0,
+            // Deliberately NOT copied: notes are commentary about this line at
+            // this site ("shelf 3, reorder from Acme"), which would be a false
+            // statement about the destination.
+            notes: null,
+          }),
+        );
+      }
+
+      source.quantity -= dto.quantity;
+      dest.quantity += dto.quantity;
+      await repo.save(source);
+      await repo.save(dest);
+
+      // One id shared by both halves, so the pair is retrievable as the single
+      // event it is. The location ids are recorded structurally; the note stays
+      // free text for whatever the operator wants to say about the move.
+      const transferId = randomUUID();
+      const movements = tx.getRepository(StockMovement);
+      const shared = {
+        reason: StockMovementReason.TRANSFERRED,
+        note: dto.note ?? null,
+        userId,
+        transferId,
+        fromLocationId: source.locationId,
+        toLocationId: dto.toLocationId,
+      };
+      await movements.save([
+        movements.create({ ...shared, stockLineId: source.id, delta: -dto.quantity }),
+        movements.create({ ...shared, stockLineId: dest.id, delta: dto.quantity }),
+      ]);
+
+      return source;
     });
   }
 

@@ -18,6 +18,7 @@ import { StockService } from './stock.service';
 import { CreateStockLineDto } from './dto/create-stock-line.dto';
 import { UpdateStockLineDto } from './dto/update-stock-line.dto';
 import { AdjustStockDto } from './dto/adjust-stock.dto';
+import { TransferStockDto } from './dto/transfer-stock.dto';
 
 @Controller('stock')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -50,6 +51,13 @@ export class StockController {
   @Post(':id/adjust')
   adjust(@Param('id') id: string, @Body() dto: AdjustStockDto, @Req() req: any) {
     return this.stock.adjust(id, dto, req.user.userId);
+  }
+
+  // Same gate as adjust — moving stock changes what two locations hold.
+  @Roles(UserRole.ADMIN, UserRole.MANAGER)
+  @Post(':id/transfer')
+  transfer(@Param('id') id: string, @Body() dto: TransferStockDto, @Req() req: any) {
+    return this.stock.transfer(id, dto, req.user.userId);
   }
 
   @Roles(UserRole.ADMIN)

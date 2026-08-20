@@ -14,6 +14,10 @@ export enum StockMovementReason {
   ADJUSTED = 'adjusted', // manual correction / recount
   RETURNED = 'returned',
   SCRAPPED = 'scrapped',
+  // One move writes TWO of these: -n on the source line, +n on the destination.
+  // Not 'adjusted', or a transfer would read as stock vanishing at one location
+  // and appearing at another rather than moving between them.
+  TRANSFERRED = 'transferred',
 }
 
 // Append-only log of every quantity change on a stock line: +delta in, -delta
@@ -42,6 +46,20 @@ export class StockMovement {
 
   @Column({ name: 'user_id', type: 'uuid', nullable: true })
   userId: string | null;
+
+  // --- Transfers only. Null on every other reason, and on all history. ---
+  // Shared by both halves of one move, so the -n and the +n can be shown as the
+  // single event they are rather than two unrelated rows.
+  @Column({ name: 'transfer_id', type: 'uuid', nullable: true })
+  transferId: string | null;
+
+  // Where it went, recorded as IDs rather than names so renaming a location
+  // cannot make history lie about it.
+  @Column({ name: 'from_location_id', type: 'uuid', nullable: true })
+  fromLocationId: string | null;
+
+  @Column({ name: 'to_location_id', type: 'uuid', nullable: true })
+  toLocationId: string | null;
 
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;

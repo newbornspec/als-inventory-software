@@ -1,5 +1,7 @@
 import Link from 'next/link';
 import {
+  ArrowLeftRight,
+  Banknote,
   ClipboardCheck,
   Droplet,
   Grid3x3,
@@ -12,19 +14,14 @@ import {
 // The jobs a warehouse actually starts from a cold open, each pointing at a
 // screen that exists.
 //
-// Three of the actions in the brief are deliberately absent rather than
-// stubbed:
-//   * Transfer stock — the app has no transfer anywhere. Changing a device's
-//     location on its edit page is not a transfer: it writes no movement row,
-//     so a button called "Transfer" would imply an audit trail that isn't kept.
-//   * Record sale — selling always starts from something already chosen (a
-//     device, a lot, a pallet line). There is no "sell something" entry point
-//     to link to, only the Sold archive of what has already gone.
-//   * Start stocktake — there is no stocktake or cycle-count anywhere in the
-//     system. The nearest real thing is reconciling a lot against its manifest,
-//     which is offered below under its own name.
-// A button that goes somewhere unrelated is worse than no button: it costs a
-// click and teaches people the dashboard lies.
+// Transfer and Record sale were both absent until they were built; each is a
+// real screen now, not a button pointing at something adjacent.
+//
+// Start stocktake is still missing on purpose: there is no stocktake or
+// cycle-count in the system. The nearest real thing is reconciling a lot
+// against its manifest, offered below under its own name. A button that goes
+// somewhere unrelated is worse than no button — it costs a click and teaches
+// people the dashboard lies.
 const ACTIONS: {
   href: string;
   label: string;
@@ -37,6 +34,8 @@ const ACTIONS: {
   { href: '/assets/new', label: 'Add device', hint: 'One serialised unit by hand', icon: Zap },
   { href: '/stock/new', label: 'Add consumable', hint: 'Cables, keyboards, boxes', icon: Droplet },
   { href: '/pallets/new', label: 'New pallet', hint: 'Build a pallet for sale', icon: Grid3x3 },
+  { href: '/transfer', label: 'Transfer stock', hint: 'Move items between locations', icon: ArrowLeftRight, managerOnly: true },
+  { href: '/sell', label: 'Record a sale', hint: 'Sell a device in your hand', icon: Banknote, managerOnly: true },
   { href: '/batches', label: 'Reconcile a lot', hint: 'Check scanned against manifest', icon: ClipboardCheck },
 ];
 

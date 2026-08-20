@@ -14,6 +14,8 @@ const PROTECTED_PREFIXES = [
   '/sold',
   '/activity',
   '/lookups',
+  '/transfer',
+  '/sell',
 ];
 
 const ACCESS_MAX_AGE = 60 * 60 * 12; // 12h
@@ -110,5 +112,7 @@ export const config = {
     '/sold/:path*',
     '/activity/:path*',
     '/lookups/:path*',
+    '/transfer/:path*',
+    '/sell/:path*',
   ],
 };

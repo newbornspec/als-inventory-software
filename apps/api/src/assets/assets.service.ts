@@ -199,23 +199,35 @@ export class AssetsService {
         `${before.conditionGrade ?? 'ungraded'} -> ${after.conditionGrade}`,
       );
     }
-    if (userId && dto.locationId && dto.locationId !== before.locationId) {
+    // `locationId in dto` rather than a truthiness test: clearing a location
+    // back to Unassigned is a move too, and a falsy check silently skipped it.
+    if (userId && 'locationId' in dto && dto.locationId !== before.locationId) {
       await this.logEvent(
         id,
         AssetEventType.TRANSFERRED,
         userId,
-        `location ${before.locationId ?? 'none'} -> ${after.locationId}`,
+        // Names, not ids — this string is read by a human on the History list,
+        // where "location 8f3c… -> 91ab…" told them nothing.
+        `Moved from ${before.location?.name ?? 'no location'} to ${after.location?.name ?? 'no location'}`,
       );
     }
 
     // High-level feed entry. If the batch changed, call it a move; else an edit.
-    const moved = dto.batchId !== undefined && dto.batchId !== before.batchId;
+    // Two different kinds of move, and neither should read as "Edited" in the
+    // activity feed. A location change used to, because `moved` only looked at
+    // the lot — so a transfer was invisible on the dashboard's Recent activity.
+    const movedLot = dto.batchId !== undefined && dto.batchId !== before.batchId;
+    const movedSite = 'locationId' in dto && dto.locationId !== before.locationId;
     await this.activity.record({
       userId,
-      action: moved ? 'asset.moved' : 'asset.updated',
+      action: movedLot || movedSite ? 'asset.moved' : 'asset.updated',
       entityType: 'asset',
       entityId: id,
-      summary: moved ? `Moved ${after.name} to another lot` : `Edited ${after.name}`,
+      summary: movedLot
+        ? `Moved ${after.name} to another lot`
+        : movedSite
+          ? `Moved ${after.name} to ${after.location?.name ?? 'no location'}`
+          : `Edited ${after.name}`,
     });
 
     return after;
