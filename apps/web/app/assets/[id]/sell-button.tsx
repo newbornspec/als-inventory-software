@@ -31,11 +31,11 @@ export function SellAssetButton({ assetId, name }: { assetId: string; name: stri
       <button
         onClick={sell}
         disabled={busy}
-        className="rounded-md bg-emerald-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-600 disabled:opacity-50"
+        className="rounded-md bg-emerald-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
       >
         {busy ? 'Selling…' : 'Mark as Sold'}
       </button>
-      {error && <span className="text-xs text-red-600">{error}</span>}
+      {error && <span role="alert" className="text-xs text-red-700">{error}</span>}
     </span>
   );
 }

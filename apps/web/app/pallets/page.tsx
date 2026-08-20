@@ -9,15 +9,16 @@ function PalletTable({ pallets, shipped }: { pallets: Pallet[]; shipped: boolean
   return (
     <div role="region" aria-label="Pallets" tabIndex={0} className="mt-3 overflow-x-auto rounded-lg border border-neutral-200">
       <table className="w-full text-left text-sm">
+          <caption className="sr-only">Pallets with their status, location and unit counts</caption>
         <thead className="bg-neutral-50 text-neutral-500">
           <tr>
-            <th className="px-4 py-3">Pallet #</th>
-            <th className="px-4 py-3">Description</th>
-            <th className="px-4 py-3">Supplier</th>
-            <th className="px-4 py-3">{shipped ? 'Shipped on' : 'Status'}</th>
-            <th className="px-4 py-3">Total units</th>
-            <th className="px-4 py-3">Variants</th>
-            <th className="px-4 py-3">Location</th>
+            <th scope="col" className="px-4 py-3">Pallet #</th>
+            <th scope="col" className="px-4 py-3">Description</th>
+            <th scope="col" className="px-4 py-3">Supplier</th>
+            <th scope="col" className="px-4 py-3">{shipped ? 'Shipped on' : 'Status'}</th>
+            <th scope="col" className="px-4 py-3">Total units</th>
+            <th scope="col" className="px-4 py-3">Variants</th>
+            <th scope="col" className="px-4 py-3">Location</th>
           </tr>
         </thead>
         <tbody>
@@ -68,9 +69,9 @@ export default async function PalletsPage() {
   const shipped = pallets.filter((p) => p.status === 'shipped');
 
   return (
-    <main className="min-h-screen bg-white text-neutral-950">
+    <>
       <Nav />
-      <div id="main-content" tabIndex={-1} className="p-8">
+      <main id="main-content" tabIndex={-1} className="min-h-screen bg-white text-neutral-950 px-4 py-6 sm:p-8">
         <div className="flex items-center justify-between">
           <h1 className="text-2xl font-semibold">Pallets</h1>
           {canCreate && <NewPalletButton />}
@@ -87,7 +88,7 @@ export default async function PalletsPage() {
             <PalletTable pallets={shipped} shipped />
           </section>
         )}
-      </div>
-    </main>
+      </main>
+  </>
   );
 }

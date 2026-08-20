@@ -218,9 +218,9 @@ export default function ScanPage() {
   const selectedBatch = openBatches.find((b) => b.id === selectedBatchId);
 
   return (
-    <main className="min-h-screen bg-white text-neutral-950">
+    <>
       <Nav />
-      <div id="main-content" tabIndex={-1} className="p-8">
+      <main id="main-content" tabIndex={-1} className="min-h-screen bg-white text-neutral-950 px-4 py-6 sm:p-8">
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-semibold">Scan Asset</h1>
@@ -254,11 +254,14 @@ export default function ScanPage() {
         </div>
 
         <div className="mt-6 max-w-sm rounded-md border border-neutral-200 bg-neutral-50 p-3">
-          <label className="text-xs text-neutral-500">Receiving into lot (optional)</label>
+          <label htmlFor="scan-lot" className="block text-xs text-neutral-700">
+            Receiving into lot (optional)
+          </label>
           <select
+            id="scan-lot"
             value={selectedBatchId}
             onChange={(e) => setSelectedBatchId(e.target.value)}
-            className="mt-1 w-full rounded-md border border-neutral-200 bg-white px-2 py-1.5 text-sm"
+            className="mt-1 w-full rounded-md border border-[var(--field-border)] bg-white px-2 py-1.5 text-sm"
           >
             <option value="">Not receiving — scan only</option>
             {openBatches.map((b) => (
@@ -283,13 +286,17 @@ export default function ScanPage() {
 
         {mode === 'keyboard' ? (
           <form onSubmit={handleFormScan} className="mt-6 max-w-sm">
+            <label htmlFor="scan-tag" className="sr-only">
+              Asset tag — scan or type
+            </label>
             <input
+              id="scan-tag"
               ref={inputRef}
               value={tag}
               onChange={(e) => setTag(e.target.value)}
               placeholder="Scan or type asset tag…"
               autoComplete="off"
-              className="w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-neutral-950 focus:border-neutral-300"
+              className="w-full rounded-md border border-[var(--field-border)] bg-white px-3 py-2 text-neutral-950 focus:border-[var(--field-border)]"
             />
           </form>
         ) : (
@@ -306,6 +313,7 @@ export default function ScanPage() {
           </div>
         )}
 
+        <div aria-live="polite" aria-atomic="true">
         {result?.status === 'ok' && (
           <div className="mt-4 max-w-sm space-y-3">
             <div className="rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm">
@@ -359,7 +367,7 @@ export default function ScanPage() {
           </div>
         )}
         {result?.status === 'not_on_list' && (
-          <div className="mt-4 max-w-sm rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-600">
+          <div className="mt-4 max-w-sm rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
             &quot;{result.tag}&quot; is not on the uploaded inventory list for this lot — ignored.
           </div>
         )}
@@ -368,6 +376,7 @@ export default function ScanPage() {
             <strong>{result.asset.tag}</strong> is already received in this lot — not counted again.
           </div>
         )}
+        </div>
 
         {recent.length > 0 && (
           <div className="mt-8 max-w-sm">
@@ -382,7 +391,7 @@ export default function ScanPage() {
             </ul>
           </div>
         )}
-      </div>
-    </main>
+      </main>
+  </>
   );
 }

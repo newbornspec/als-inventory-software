@@ -138,7 +138,7 @@ export function ImportExpected({ batchId, hasExisting }: { batchId: string; hasE
     <div className="rounded-md border border-neutral-200 p-3">
       <div className="flex items-center justify-between gap-3">
         <div>
-          <div className="text-sm font-medium text-neutral-900">Import supplier list</div>
+          <h3 className="text-sm font-medium text-neutral-900">Import supplier list</h3>
           <div className="text-xs text-neutral-500">
             CSV or Excel. {hasExisting ? 'Re-importing replaces the current expected list.' : ''}
           </div>
@@ -162,7 +162,7 @@ export function ImportExpected({ batchId, hasExisting }: { batchId: string; hasE
             columns:
           </div>
 
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             {TARGET_FIELDS.map((f) => (
               <label key={f.key} className="flex items-center justify-between gap-2 text-xs">
                 <span className="text-neutral-500">{f.label}</span>
@@ -171,7 +171,7 @@ export function ImportExpected({ batchId, hasExisting }: { batchId: string; hasE
                   onChange={(e) =>
                     setMapping((m) => ({ ...m, [f.key]: e.target.value || undefined }))
                   }
-                  className="min-w-0 flex-1 rounded border border-neutral-200 bg-white px-1.5 py-1 text-neutral-900"
+                  className="min-w-0 flex-1 rounded border border-[var(--field-border)] bg-white px-1.5 py-1 text-neutral-900"
                 >
                   <option value="">— none —</option>
                   {columns.map((c) => (
@@ -186,10 +186,11 @@ export function ImportExpected({ batchId, hasExisting }: { batchId: string; hasE
 
           <div role="region" aria-label="Import preview" tabIndex={0} className="overflow-x-auto rounded border border-neutral-200">
             <table className="w-full text-left text-[11px]">
+          <caption className="sr-only">Preview of the imported supplier list</caption>
               <thead className="bg-neutral-50 text-neutral-500">
                 <tr>
                   {TARGET_FIELDS.filter((f) => mapping[f.key]).map((f) => (
-                    <th key={f.key} className="px-2 py-1 font-normal">
+                    <th scope="col" key={f.key} className="px-2 py-1 font-normal">
                       {f.label}
                     </th>
                   ))}
@@ -212,16 +213,18 @@ export function ImportExpected({ batchId, hasExisting }: { batchId: string; hasE
           <button
             onClick={onImport}
             disabled={busy}
-            className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50"
+            className="rounded-md bg-emerald-700 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50"
           >
             {busy ? 'Importing…' : `Import ${rows.length} rows`}
           </button>
         </div>
       )}
 
-      {error && <p className="mt-2 text-xs text-red-600">{error}</p>}
+      {error && <p role="alert" className="mt-2 text-xs text-red-700">{error}</p>}
       {done != null && (
-        <p className="mt-2 text-xs text-emerald-700">Imported {done} expected line items.</p>
+        <p role="status" className="mt-2 text-xs text-emerald-800">
+          Imported {done} expected line items.
+        </p>
       )}
     </div>
   );

@@ -36,19 +36,21 @@ export function AdjustStock({ lineId }: { lineId: string }) {
 
   return (
     <div className="space-y-3 rounded-lg border border-neutral-200 p-4">
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <input
           type="number"
           min={1}
+          aria-label="Amount to adjust by"
           value={amount}
           onChange={(e) => setAmount(e.target.value)}
           placeholder="Amount"
-          className="w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm"
+          className="w-full rounded-md border border-[var(--field-border)] bg-white px-3 py-2 text-sm"
         />
         <select
+          aria-label="Reason for the adjustment"
           value={reason}
           onChange={(e) => setReason(e.target.value as StockMovementReason)}
-          className="w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm"
+          className="w-full rounded-md border border-[var(--field-border)] bg-white px-3 py-2 text-sm"
         >
           {REASONS.map((r) => (
             <option key={r} value={r}>
@@ -58,16 +60,17 @@ export function AdjustStock({ lineId }: { lineId: string }) {
         </select>
       </div>
       <input
+        aria-label="Note (optional)"
         value={note}
         onChange={(e) => setNote(e.target.value)}
         placeholder="Note (optional)"
-        className="w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm"
+        className="w-full rounded-md border border-[var(--field-border)] bg-white px-3 py-2 text-sm"
       />
       <div className="flex gap-2">
         <button
           onClick={() => apply(1)}
           disabled={busy}
-          className="rounded-md bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
+          className="rounded-md bg-emerald-700 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
         >
           + Add
         </button>
@@ -79,7 +82,7 @@ export function AdjustStock({ lineId }: { lineId: string }) {
           − Remove
         </button>
       </div>
-      {error && <p className="text-xs text-red-600">{error}</p>}
+      {error && <p role="alert" className="text-xs text-red-700">{error}</p>}
     </div>
   );
 }

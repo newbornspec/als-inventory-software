@@ -9,7 +9,7 @@ import type { Location } from '@/lib/data';
 // <label> elements sitting next to an input, which reads as an unlabelled text
 // field to a screen reader and gives no click target.
 const FIELD =
-  'w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm focus:border-neutral-300';
+  'w-full rounded-md border border-[var(--field-border)] bg-white px-3 py-2 text-sm focus:border-[var(--field-border)]';
 const LABEL = 'block text-sm text-neutral-700';
 
 export function NewBatchForm({ locations }: { locations: Location[] }) {
@@ -30,7 +30,7 @@ export function NewBatchForm({ locations }: { locations: Location[] }) {
           className={FIELD}
         />
       </div>
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <div className="space-y-1">
           <label htmlFor="batch-po" className={LABEL}>
             Purchase order
@@ -44,7 +44,7 @@ export function NewBatchForm({ locations }: { locations: Location[] }) {
           <input id="batch-dn" name="deliveryNote" placeholder="DN-4471" className={FIELD} />
         </div>
       </div>
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <div className="space-y-1">
           <label htmlFor="batch-purchase-date" className={LABEL}>
             Purchase date

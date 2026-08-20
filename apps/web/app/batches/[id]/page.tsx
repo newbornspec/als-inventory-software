@@ -62,9 +62,9 @@ export default async function BatchDetailPage({ params }: { params: Promise<{ id
   const ungroupedCount = Math.max(0, assets.length - groupedCount);
 
   return (
-    <main className="min-h-screen bg-white text-neutral-950">
+    <>
       <Nav />
-      <div id="main-content" tabIndex={-1} className="p-8">
+      <main id="main-content" tabIndex={-1} className="min-h-screen bg-white text-neutral-950 px-4 py-6 sm:p-8">
         <Breadcrumbs
           items={[
             { label: 'Dashboard', href: '/dashboard' },
@@ -72,7 +72,7 @@ export default async function BatchDetailPage({ params }: { params: Promise<{ id
             { label: batch.batchNumber },
           ]}
         />
-        <div className="mt-3 flex items-start justify-between">
+        <div className="mt-3 flex flex-wrap items-start justify-between gap-3">
           <div>
             <h1 className="text-2xl font-semibold">{batch.batchNumber}</h1>
             <p className="mt-1 text-sm text-neutral-500">
@@ -80,15 +80,17 @@ export default async function BatchDetailPage({ params }: { params: Promise<{ id
             </p>
           </div>
           {canManage && (
-            <div className="flex shrink-0 gap-2">
+            <div className="flex flex-wrap gap-2">
               <a
                 href={`/api/batches/${batch.id}/erasure-certificate`}
+                aria-label={`Download the erasure certificate for ${batch.batchNumber}`}
                 className="rounded-md border border-emerald-200 px-3 py-1.5 text-sm text-emerald-700 hover:bg-emerald-50"
               >
                 Erasure certificate (PDF)
               </a>
               <a
                 href={`/api/batches/${batch.id}/report`}
+                aria-label={`Export ${batch.batchNumber} to Excel`}
                 className="rounded-md bg-[#1a6ef5] hover:bg-blue-600 px-3 py-1.5 text-sm font-medium text-white"
               >
                 Export to Excel
@@ -215,7 +217,7 @@ export default async function BatchDetailPage({ params }: { params: Promise<{ id
                 <span className="rounded-full bg-amber-50 px-2 py-0.5 text-amber-700">
                   {recon.summary.missing} missing
                 </span>
-                <span className="rounded-full bg-red-50 px-2 py-0.5 text-red-600">
+                <span className="rounded-full bg-red-50 px-2 py-0.5 text-red-700">
                   {recon.summary.extra} extra
                 </span>
               </div>
@@ -225,16 +227,17 @@ export default async function BatchDetailPage({ params }: { params: Promise<{ id
           {recon.lines.length > 0 || recon.quantityOnly.length > 0 ? (
             <div role="region" aria-label="Expected inventory" tabIndex={0} className="mt-3 overflow-x-auto rounded-lg border border-neutral-200">
               <table className="w-full text-left text-sm">
+          <caption className="sr-only">Expected inventory from the supplier manifest, compared with what was scanned in</caption>
                 <thead className="bg-neutral-50 text-neutral-500">
                   <tr>
-                    <th className="px-3 py-2">Serial / Tag</th>
-                    <th className="px-3 py-2">Manufacturer</th>
-                    <th className="px-3 py-2">Model</th>
-                    <th className="px-3 py-2">CPU</th>
-                    <th className="px-3 py-2">RAM</th>
-                    <th className="px-3 py-2">Grade</th>
-                    <th className="px-3 py-2">Qty</th>
-                    <th className="px-3 py-2">Received</th>
+                    <th scope="col" className="px-3 py-2">Serial / Tag</th>
+                    <th scope="col" className="px-3 py-2">Manufacturer</th>
+                    <th scope="col" className="px-3 py-2">Model</th>
+                    <th scope="col" className="px-3 py-2">CPU</th>
+                    <th scope="col" className="px-3 py-2">RAM</th>
+                    <th scope="col" className="px-3 py-2">Grade</th>
+                    <th scope="col" className="px-3 py-2">Qty</th>
+                    <th scope="col" className="px-3 py-2">Received</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -283,9 +286,9 @@ export default async function BatchDetailPage({ params }: { params: Promise<{ id
 
           {recon.summary.expectedSerialized > 0 && recon.extras.length > 0 && (
             <div className="mt-3">
-              <div className="text-xs text-red-600">
+              <h3 className="text-xs font-medium text-red-700">
                 Extra — scanned but not on the supplier list ({recon.extras.length})
-              </div>
+              </h3>
               <ul className="mt-1 flex flex-wrap gap-2">
                 {recon.extras.map((e) => (
                   <li
@@ -397,9 +400,10 @@ export default async function BatchDetailPage({ params }: { params: Promise<{ id
                     )}
                     <Link
                       href={`/batches/${batch.id}/sublots/${lot.id}`}
-                      className="mt-2 inline-block text-xs text-neutral-500 underline"
+                      aria-label={`View contents of ${lot.lotNumber}`}
+                      className="mt-2 inline-block text-xs text-neutral-700 underline"
                     >
-                      View contents →
+                      View contents <span aria-hidden="true">→</span>
                     </Link>
                   </li>
                 );
@@ -413,7 +417,7 @@ export default async function BatchDetailPage({ params }: { params: Promise<{ id
             {canManage && <NewLotForm batchId={batch.id} />}
           </section>
         </div>
-      </div>
-    </main>
+      </main>
+  </>
   );
 }

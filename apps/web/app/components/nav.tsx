@@ -101,7 +101,7 @@ export function Nav() {
   }
 
   return (
-    <header className="sticky top-0 z-30 border-b border-neutral-200 bg-white/95 px-4 py-3 backdrop-blur-sm sm:px-8 sm:py-4">
+    <header className="sticky top-0 z-30 border-b border-[var(--field-border)] bg-white/95 px-4 py-3 backdrop-blur-sm sm:px-8 sm:py-4">
       <div className="flex items-center gap-4 lg:gap-6">
         <Link href="/dashboard" className="flex shrink-0 items-center gap-3">
           <div className="flex size-10 items-center justify-center rounded-xl bg-[#1a6ef5] text-white shadow-sm shadow-blue-500/15">
@@ -179,7 +179,7 @@ export function Nav() {
         id="main-menu"
         aria-label="Main"
         hidden={!open}
-        className="mt-2 grid gap-1 border-t border-neutral-200 pt-2 lg:hidden"
+        className="mt-2 grid max-h-[70svh] gap-1 overflow-y-auto border-t border-neutral-200 pt-2 lg:hidden"
       >
         {links.map(({ href, label, icon: Icon }) => {
           const active = pathname.startsWith(href);

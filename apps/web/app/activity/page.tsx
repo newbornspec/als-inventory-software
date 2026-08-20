@@ -30,9 +30,9 @@ export default async function ActivityPage() {
     : [];
 
   return (
-    <main className="min-h-screen bg-white text-neutral-950">
+    <>
       <Nav />
-      <div id="main-content" tabIndex={-1} className="p-8">
+      <main id="main-content" tabIndex={-1} className="min-h-screen bg-white text-neutral-950 px-4 py-6 sm:p-8">
         <Breadcrumbs items={[{ label: 'Dashboard', href: '/dashboard' }, { label: 'Activity' }]} />
         <h1 className="mt-3 text-2xl font-semibold">Activity log</h1>
         <p className="mt-1 text-sm text-neutral-500">
@@ -48,11 +48,12 @@ export default async function ActivityPage() {
         ) : (
           <div role="region" aria-label="Activity log" tabIndex={0} className="mt-6 overflow-x-auto rounded-lg border border-neutral-200">
             <table className="w-full text-left text-sm">
+          <caption className="sr-only">System activity: what was done, by whom and when</caption>
               <thead className="bg-neutral-50 text-neutral-500">
                 <tr>
-                  <th className="px-4 py-2">When</th>
-                  <th className="px-4 py-2">User</th>
-                  <th className="px-4 py-2">Action</th>
+                  <th scope="col" className="px-4 py-2">When</th>
+                  <th scope="col" className="px-4 py-2">User</th>
+                  <th scope="col" className="px-4 py-2">Action</th>
                 </tr>
               </thead>
               <tbody>
@@ -82,7 +83,7 @@ export default async function ActivityPage() {
             </table>
           </div>
         )}
-      </div>
-    </main>
+      </main>
+  </>
   );
 }

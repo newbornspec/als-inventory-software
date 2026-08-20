@@ -159,7 +159,7 @@ export function PalletLines({
 
   const totalUnits = lines.reduce((sum, l) => sum + l.quantity, 0);
 
-  const field = 'w-full rounded border border-neutral-200 bg-white px-2 py-1.5';
+  const field = 'w-full rounded border border-[var(--field-border)] bg-white px-2 py-1.5';
   const cols = canManage ? 9 : 8;
 
   return (
@@ -170,17 +170,18 @@ export function PalletLines({
           A floor plus the existing horizontal scroll keeps every control
           readable at any width. */}
       <table className="w-full min-w-[64rem] table-fixed text-left text-sm">
+          <caption className="sr-only">Pallet contents, one row per product variant</caption>
         <thead className="bg-neutral-50 text-neutral-500">
           <tr>
-            <th className="w-[8.5rem] px-3 py-2">Manufacturer</th>
-            <th className="w-[11rem] px-3 py-2">Model</th>
-            <th className="w-[6rem] px-3 py-2">Size</th>
-            <th className="w-[7.5rem] px-3 py-2">Variant</th>
-            <th className="w-[5.5rem] px-3 py-2">Stand</th>
-            <th className="w-[6rem] px-3 py-2">Quantity</th>
-            <th className="w-[7.5rem] px-3 py-2">Grade</th>
-            <th className="w-[7.5rem] px-3 py-2">Unit cost (£)</th>
-            {canManage && <th className="w-[6.5rem] px-3 py-2" />}
+            <th scope="col" className="w-[8.5rem] px-3 py-2">Manufacturer</th>
+            <th scope="col" className="w-[11rem] px-3 py-2">Model</th>
+            <th scope="col" className="w-[6rem] px-3 py-2">Size</th>
+            <th scope="col" className="w-[7.5rem] px-3 py-2">Variant</th>
+            <th scope="col" className="w-[5.5rem] px-3 py-2">Stand</th>
+            <th scope="col" className="w-[6rem] px-3 py-2">Quantity</th>
+            <th scope="col" className="w-[7.5rem] px-3 py-2">Grade</th>
+            <th scope="col" className="w-[7.5rem] px-3 py-2">Unit cost (£)</th>
+            {canManage && <th scope="col" className="w-[6.5rem] px-3 py-2" />}
           </tr>
         </thead>
         <tbody>
@@ -271,12 +272,12 @@ export function PalletLines({
                                   save(l, { size }),
                                 )
                               }
-                              className="w-20 rounded border border-neutral-200 bg-white px-2 py-1.5"
+                              className="w-20 rounded border border-[var(--field-border)] bg-white px-2 py-1.5"
                             />
                             <span className="text-xs text-neutral-500">inches</span>
                           </div>
                           {sizeError[l.id] && (
-                            <p className="mt-0.5 text-xs text-red-600">{sizeError[l.id]}</p>
+                            <p role="alert" className="mt-0.5 text-xs text-red-700">{sizeError[l.id]}</p>
                           )}
                         </div>
                       )}
@@ -391,14 +392,16 @@ export function PalletLines({
                       {l.quantity > 0 && (
                         <button
                           onClick={() => void sell(l)}
-                          className="text-xs text-emerald-700 hover:underline"
+                          aria-label={`Sell from ${l.variant}`}
+                          className="text-xs text-emerald-800 hover:underline"
                         >
                           Sell…
                         </button>
                       )}
                       <button
                         onClick={() => remove(l)}
-                        className="text-xs text-red-600 hover:underline"
+                        aria-label={`Remove ${l.variant}`}
+                        className="text-xs text-red-700 hover:underline"
                       >
                         Remove
                       </button>
@@ -483,12 +486,12 @@ export function PalletLines({
                             setAdd((a) => ({ ...a, size })),
                           )
                         }
-                        className="w-20 rounded border border-neutral-200 bg-white px-2 py-1.5"
+                        className="w-20 rounded border border-[var(--field-border)] bg-white px-2 py-1.5"
                       />
                       <span className="text-xs text-neutral-500">inches</span>
                     </div>
                     {sizeError[ADD_ROW] && (
-                      <p className="mt-0.5 text-xs text-red-600">{sizeError[ADD_ROW]}</p>
+                      <p role="alert" className="mt-0.5 text-xs text-red-700">{sizeError[ADD_ROW]}</p>
                     )}
                   </div>
                 )}
@@ -601,7 +604,7 @@ export function PalletLines({
           </tfoot>
         )}
       </table>
-      {error && <p className="px-3 py-2 text-xs text-red-600">{error}</p>}
+      {error && <p role="alert" className="px-3 py-2 text-xs text-red-700">{error}</p>}
     </div>
   );
 }

@@ -7,13 +7,13 @@ export default async function NewStockPage() {
   const locations = await getLocations();
 
   return (
-    <main className="min-h-screen bg-white text-neutral-950">
+    <>
       <Nav />
-      <div id="main-content" tabIndex={-1} className="p-8">
+      <main id="main-content" tabIndex={-1} className="min-h-screen bg-white text-neutral-950 px-4 py-6 sm:p-8">
         <BackLink href="/stock" label="Back to Consumables" />
         <h1 className="mt-3 text-2xl font-semibold">New Consumable</h1>
         <NewStockForm locations={locations} />
-      </div>
-    </main>
+      </main>
+  </>
   );
 }

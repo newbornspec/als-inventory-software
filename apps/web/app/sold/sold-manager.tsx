@@ -265,7 +265,7 @@ export function SoldManager({
 
   const chk = 'h-4 w-4 accent-emerald-600';
   const btn =
-    'rounded-md border border-neutral-300 px-2.5 py-1 text-xs text-neutral-900 hover:bg-neutral-100 disabled:opacity-50';
+    'rounded-md border border-[var(--field-border)] px-2.5 py-1 text-xs text-neutral-900 hover:bg-neutral-100 disabled:opacity-50';
 
   function BulkBar({
     count,
@@ -296,7 +296,7 @@ export function SoldManager({
               {busy ? 'Working…' : 'Return to original location'}
             </button>
             <span className="flex items-center gap-1">
-              <select value={dest} onChange={(e) => setDest(e.target.value)} className={filterCls + ' py-1 text-xs'}>
+              <select aria-label="Return destination" value={dest} onChange={(e) => setDest(e.target.value)} className={filterCls + ' py-1 text-xs'}>
                 <option value="">— other destination —</option>
                 {dests.map((d) => (
                   <option key={d.id} value={d.id}>{d.label}</option>
@@ -323,40 +323,41 @@ export function SoldManager({
       {/* Filters */}
       <div className="flex flex-wrap items-center gap-2">
         <input
+          aria-label="Search sold items"
           value={q}
           onChange={(e) => setQ(e.target.value)}
           placeholder="Search tag, serial, name, make, model, lot…"
-          className={filterCls + ' min-w-[16rem] flex-1'}
+          className={filterCls + ' w-full min-w-0 flex-1 sm:w-auto sm:min-w-[16rem]'}
         />
-        <select value={fBatch} onChange={(e) => setFBatch(e.target.value)} className={filterCls}>
+        <select aria-label="Filter by lot" value={fBatch} onChange={(e) => setFBatch(e.target.value)} className={filterCls}>
           <option value="">All lots</option>
           {batchOptions.map(([id, label]) => (
             <option key={id} value={id}>{label}</option>
           ))}
         </select>
-        <select value={fPallet} onChange={(e) => setFPallet(e.target.value)} className={filterCls}>
+        <select aria-label="Filter by pallet" value={fPallet} onChange={(e) => setFPallet(e.target.value)} className={filterCls}>
           <option value="">All pallets</option>
           {palletOptions.map(([id, label]) => (
             <option key={id} value={id}>{label}</option>
           ))}
         </select>
-        <select value={fMan} onChange={(e) => setFMan(e.target.value)} className={filterCls}>
+        <select aria-label="Filter by manufacturer" value={fMan} onChange={(e) => setFMan(e.target.value)} className={filterCls}>
           <option value="">All manufacturers</option>
           {manOptions.map((m) => (
             <option key={m} value={m}>{m}</option>
           ))}
         </select>
-        <select value={fSoldBy} onChange={(e) => setFSoldBy(e.target.value)} className={filterCls}>
+        <select aria-label="Filter by who sold it" value={fSoldBy} onChange={(e) => setFSoldBy(e.target.value)} className={filterCls}>
           <option value="">Sold by anyone</option>
           {soldByOptions.map((s) => (
             <option key={s} value={s}>{s}</option>
           ))}
         </select>
         <label className="flex items-center gap-1 text-xs text-neutral-500">
-          from <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} className={filterCls} />
+          from <input type="date" aria-label="Sold from date" value={from} onChange={(e) => setFrom(e.target.value)} className={filterCls} />
         </label>
         <label className="flex items-center gap-1 text-xs text-neutral-500">
-          to <input type="date" value={to} onChange={(e) => setTo(e.target.value)} className={filterCls} />
+          to <input type="date" aria-label="Sold to date" value={to} onChange={(e) => setTo(e.target.value)} className={filterCls} />
         </label>
         {hasFilters && (
           <button
@@ -369,12 +370,17 @@ export function SoldManager({
       </div>
 
       {(notice || error) && (
-        <p className={`mt-3 text-sm ${error ? 'text-red-600' : 'text-emerald-700'}`}>{error ?? notice}</p>
+        <p
+          role={error ? 'alert' : 'status'}
+          className={`mt-3 text-sm ${error ? 'text-red-700' : 'text-emerald-800'}`}
+        >
+          {error ?? notice}
+        </p>
       )}
 
       {/* ============ Serialized devices: Batch → Sub-lot → device ============ */}
       <section className="mt-6">
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <label className="flex items-center gap-2 text-sm font-medium text-neutral-700">
             <input
               type="checkbox"
@@ -383,8 +389,8 @@ export function SoldManager({
               onChange={(e) => setSelA(toggleIn(selA, filteredAssets.map((a) => a.id), e.target.checked))}
               aria-label="Select all devices"
             />
-            Serialized devices
           </label>
+          <h2 className="text-sm font-medium text-neutral-800">Serialized devices</h2>
           <span className="text-sm text-neutral-500">
             {filteredAssets.length}{hasFilters ? ` of ${assets.length}` : ''} sold
           </span>
@@ -408,8 +414,13 @@ export function SoldManager({
             return (
               <div key={g.key} className="rounded-lg border border-neutral-200">
                 <div className="flex items-center gap-2 bg-white px-3 py-2">
-                  <button onClick={() => toggleCollapse(g.key)} className="w-5 text-neutral-500 hover:text-neutral-900" aria-label={open ? 'Collapse' : 'Expand'}>
-                    {open ? '▾' : '▸'}
+                  <button
+                    onClick={() => toggleCollapse(g.key)}
+                    aria-expanded={open}
+                    aria-label={`${open ? 'Collapse' : 'Expand'} ${g.label}`}
+                    className="w-5 text-neutral-600 hover:text-neutral-900"
+                  >
+                    <span aria-hidden="true">{open ? '▾' : '▸'}</span>
                   </button>
                   <input
                     type="checkbox"
@@ -418,7 +429,7 @@ export function SoldManager({
                     onChange={(e) => setSelA(toggleIn(selA, gIds, e.target.checked))}
                     aria-label={`Select all in ${g.label}`}
                   />
-                  <span className="font-medium text-neutral-950">{g.label}</span>
+                  <h3 className="font-medium text-neutral-950">{g.label}</h3>
                   <span className="text-xs text-neutral-500">
                     {g.count} item{g.count === 1 ? '' : 's'} sold
                   </span>
@@ -431,8 +442,13 @@ export function SoldManager({
                     return (
                       <div key={l.key} className="border-t border-neutral-200">
                         <div className="flex items-center gap-2 px-3 py-1.5 pl-8">
-                          <button onClick={() => toggleCollapse(l.key)} className="w-5 text-neutral-500 hover:text-neutral-700" aria-label={lOpen ? 'Collapse' : 'Expand'}>
-                            {lOpen ? '▾' : '▸'}
+                          <button
+                            onClick={() => toggleCollapse(l.key)}
+                            aria-expanded={lOpen}
+                            aria-label={`${lOpen ? 'Collapse' : 'Expand'} ${l.label}`}
+                            className="w-5 text-neutral-600 hover:text-neutral-900"
+                          >
+                            <span aria-hidden="true">{lOpen ? '▾' : '▸'}</span>
                           </button>
                           <input
                             type="checkbox"
@@ -445,18 +461,24 @@ export function SoldManager({
                           <span className="text-xs text-neutral-500">{l.items.length} item{l.items.length === 1 ? '' : 's'}</span>
                         </div>
                         {lOpen && (
-                          <div role="region" aria-label="Sold devices" tabIndex={0} className="overflow-x-auto">
+                          <div role="region" aria-label="Sold devices by lot" tabIndex={0} className="overflow-x-auto">
                             <table className="w-full text-left text-xs">
+                      <caption className="sr-only">
+                        Sold pallet lines with quantity, sale price and who sold them
+                      </caption>
+                              <caption className="sr-only">
+                                Sold devices with tag, specification, sale price and who sold them
+                              </caption>
                               <thead className="text-neutral-500">
                                 <tr>
-                                  <th className="w-10 px-3 py-1.5" />
-                                  <th className={cellCls}>Name</th>
-                                  <th className={cellCls}>Manufacturer</th>
-                                  <th className={cellCls}>Model</th>
-                                  <th className={cellCls}>Serial</th>
-                                  <th className={cellCls}>Tag</th>
-                                  <th className={cellCls}>Date sold</th>
-                                  <th className={cellCls}>Sold by</th>
+                                  <th scope="col" className="w-10 px-3 py-1.5" />
+                                  <th scope="col" className={cellCls}>Name</th>
+                                  <th scope="col" className={cellCls}>Manufacturer</th>
+                                  <th scope="col" className={cellCls}>Model</th>
+                                  <th scope="col" className={cellCls}>Serial</th>
+                                  <th scope="col" className={cellCls}>Tag</th>
+                                  <th scope="col" className={cellCls}>Date sold</th>
+                                  <th scope="col" className={cellCls}>Sold by</th>
                                 </tr>
                               </thead>
                               <tbody>
@@ -491,7 +513,7 @@ export function SoldManager({
             );
           })}
           {assetGroups.length === 0 && (
-            <p className="rounded-lg border border-neutral-200 px-4 py-6 text-center text-sm text-neutral-500">
+            <p className="rounded-lg border border-[var(--field-border)] px-4 py-6 text-center text-sm text-neutral-500">
               {hasFilters ? 'No sold devices match the filters.' : 'No sold devices yet.'}
             </p>
           )}
@@ -500,7 +522,7 @@ export function SoldManager({
 
       {/* ============ Pallet goods: grouped by pallet ============ */}
       <section className="mt-8">
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <label className="flex items-center gap-2 text-sm font-medium text-neutral-700">
             <input
               type="checkbox"
@@ -509,8 +531,8 @@ export function SoldManager({
               onChange={(e) => setSelP(toggleIn(selP, filteredPallet.map((l) => l.id), e.target.checked))}
               aria-label="Select all pallet goods"
             />
-            Pallet goods
           </label>
+          <h2 className="text-sm font-medium text-neutral-800">Pallet goods</h2>
           <span className="text-sm text-neutral-500">
             {filteredPallet.reduce((s, l) => s + l.quantity, 0)} units
             {hasFilters ? ` shown of ${palletLines.reduce((s, l) => s + l.quantity, 0)}` : ''}
@@ -535,8 +557,13 @@ export function SoldManager({
             return (
               <div key={g.key} className="rounded-lg border border-neutral-200">
                 <div className="flex items-center gap-2 bg-white px-3 py-2">
-                  <button onClick={() => toggleCollapse(g.key)} className="w-5 text-neutral-500 hover:text-neutral-900" aria-label={open ? 'Collapse' : 'Expand'}>
-                    {open ? '▾' : '▸'}
+                  <button
+                    onClick={() => toggleCollapse(g.key)}
+                    aria-expanded={open}
+                    aria-label={`${open ? 'Collapse' : 'Expand'} ${g.label}`}
+                    className="w-5 text-neutral-600 hover:text-neutral-900"
+                  >
+                    <span aria-hidden="true">{open ? '▾' : '▸'}</span>
                   </button>
                   <input
                     type="checkbox"
@@ -545,21 +572,21 @@ export function SoldManager({
                     onChange={(e) => setSelP(toggleIn(selP, gIds, e.target.checked))}
                     aria-label={`Select all from ${g.label}`}
                   />
-                  <span className="font-medium text-neutral-950">{g.label}</span>
+                  <h3 className="font-medium text-neutral-950">{g.label}</h3>
                   <span className="text-xs text-neutral-500">
                     {g.units} unit{g.units === 1 ? '' : 's'} · {g.items.length} row{g.items.length === 1 ? '' : 's'}
                   </span>
                 </div>
                 {open && (
-                  <div role="region" aria-label="Sold devices" tabIndex={0} className="overflow-x-auto">
+                  <div role="region" aria-label="Sold pallet lines" tabIndex={0} className="overflow-x-auto">
                     <table className="w-full text-left text-xs">
                       <thead className="text-neutral-500">
                         <tr>
-                          <th className="w-10 px-3 py-1.5" />
-                          <th className={cellCls}>Item</th>
-                          <th className={cellCls}>Qty</th>
-                          <th className={cellCls}>Date sold</th>
-                          <th className={cellCls}>Sold by</th>
+                          <th scope="col" className="w-10 px-3 py-1.5" />
+                          <th scope="col" className={cellCls}>Item</th>
+                          <th scope="col" className={cellCls}>Qty</th>
+                          <th scope="col" className={cellCls}>Date sold</th>
+                          <th scope="col" className={cellCls}>Sold by</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -588,7 +615,7 @@ export function SoldManager({
             );
           })}
           {palletGroups.length === 0 && (
-            <p className="rounded-lg border border-neutral-200 px-4 py-6 text-center text-sm text-neutral-500">
+            <p className="rounded-lg border border-[var(--field-border)] px-4 py-6 text-center text-sm text-neutral-500">
               {hasFilters ? 'No sold pallet goods match the filters.' : 'No sold pallet goods yet.'}
             </p>
           )}

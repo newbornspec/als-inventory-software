@@ -14,9 +14,9 @@ export default async function UsersPage() {
   const users = await apiFetch<AppUser[]>('/users');
 
   return (
-    <main className="min-h-screen bg-white text-neutral-950">
+    <>
       <Nav />
-      <div id="main-content" tabIndex={-1} className="p-8">
+      <main id="main-content" tabIndex={-1} className="min-h-screen bg-white text-neutral-950 px-4 py-6 sm:p-8">
         <div className="flex items-center justify-between">
           <h1 className="text-2xl font-semibold">Users</h1>
           <Link
@@ -29,12 +29,13 @@ export default async function UsersPage() {
 
         <div role="region" aria-label="Users" tabIndex={0} className="mt-6 overflow-x-auto rounded-lg border border-neutral-200">
           <table className="w-full text-left text-sm">
+          <caption className="sr-only">User accounts and their roles</caption>
             <thead className="bg-neutral-50 text-neutral-500">
               <tr>
-                <th className="px-4 py-3">Name</th>
-                <th className="px-4 py-3">Email</th>
-                <th className="px-4 py-3">Role</th>
-                <th className="px-4 py-3"></th>
+                <th scope="col" className="px-4 py-3">Name</th>
+                <th scope="col" className="px-4 py-3">Email</th>
+                <th scope="col" className="px-4 py-3">Role</th>
+                <th scope="col" className="px-4 py-3"></th>
               </tr>
             </thead>
             <tbody>
@@ -46,9 +47,10 @@ export default async function UsersPage() {
                     <form action={updateUserRole.bind(null, user.id)} className="flex gap-2">
                       <select
                         name="role"
+                        aria-label={`Role for ${user.name}`}
                         defaultValue={user.role}
                         disabled={user.id === session.userId}
-                        className="rounded-md border border-neutral-200 bg-white px-2 py-1 text-sm disabled:opacity-50"
+                        className="rounded-md border border-[var(--field-border)] bg-white px-2 py-1 text-sm disabled:opacity-50"
                       >
                         {ROLES.map((r) => (
                           <option key={r} value={r}>
@@ -59,7 +61,8 @@ export default async function UsersPage() {
                       {user.id !== session.userId && (
                         <button
                           type="submit"
-                          className="rounded-md border border-neutral-200 px-2 py-1 text-xs text-neutral-700"
+                          aria-label={`Save the role for ${user.name}`}
+                          className="rounded-md border border-[var(--field-border)] px-2 py-1 text-xs text-neutral-700"
                         >
                           Save
                         </button>
@@ -71,7 +74,8 @@ export default async function UsersPage() {
                       <form action={deleteUser.bind(null, user.id)}>
                         <button
                           type="submit"
-                          className="text-xs text-red-600 hover:underline"
+                          aria-label={`Delete the account for ${user.name}`}
+                          className="text-xs text-red-700 hover:underline"
                         >
                           Delete
                         </button>
@@ -80,10 +84,17 @@ export default async function UsersPage() {
                   </td>
                 </tr>
               ))}
+              {users.length === 0 && (
+                <tr>
+                  <td colSpan={4} className="px-4 py-8 text-center text-sm text-neutral-600">
+                    No user accounts yet.
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>
-      </div>
-    </main>
+      </main>
+  </>
   );
 }

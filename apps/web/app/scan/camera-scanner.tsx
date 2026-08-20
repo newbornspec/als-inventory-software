@@ -279,7 +279,7 @@ export function CameraScanner({ onDecode, onReadText, cooldownMs = 1500 }: Camer
 
   if (error) {
     return (
-      <div className="max-w-sm rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-600">
+      <div role="alert" className="max-w-sm rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
         {error}
       </div>
     );
@@ -296,7 +296,7 @@ export function CameraScanner({ onDecode, onReadText, cooldownMs = 1500 }: Camer
             aria-pressed={torchOn}
             className={
               'absolute right-2 top-2 rounded-full px-3 py-1.5 text-xs font-medium ' +
-              (torchOn ? 'bg-amber-400 text-neutral-900' : 'bg-black/60 text-neutral-950')
+              (torchOn ? 'bg-amber-400 text-neutral-900' : 'bg-black/60 text-white')
             }
           >
             {torchOn ? '⚡ Flash on' : '⚡ Flash'}
@@ -328,8 +328,16 @@ export function CameraScanner({ onDecode, onReadText, cooldownMs = 1500 }: Camer
             : 'starting…'}
         {torchFailed ? ' · flash not supported here' : ''}
       </p>
-      {ocrBusy && ocrStatus && <p className="text-xs text-neutral-500">{ocrStatus}</p>}
-      {ocrError && <p className="text-xs text-amber-700">{ocrError}</p>}
+      {ocrBusy && ocrStatus && (
+        <p role="status" className="text-xs text-neutral-700">
+          {ocrStatus}
+        </p>
+      )}
+      {ocrError && (
+        <p role="alert" className="text-xs text-amber-800">
+          {ocrError}
+        </p>
+      )}
     </div>
   );
 }

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { AuditForm } from '@/app/components/audit-form';
 import { formatLabel } from '@/lib/asset-options';
@@ -18,6 +18,8 @@ export interface AssetAuditRecord {
 export function AuditSection({ assetId, audits }: { assetId: string; audits: AssetAuditRecord[] }) {
   const [showForm, setShowForm] = useState(false);
   const router = useRouter();
+  const addRef = useRef<HTMLButtonElement>(null);
+  const [saved, setSaved] = useState(false);
   const hasWipe = audits.some((a) => a.dataWipeStatus === 'wiped');
 
   return (
@@ -25,7 +27,15 @@ export function AuditSection({ assetId, audits }: { assetId: string; audits: Ass
       <div className="flex items-center justify-between">
         <h2 className="text-sm font-medium text-neutral-500">ITAD Audits</h2>
         {!showForm && (
-          <button onClick={() => setShowForm(true)} className="text-xs text-neutral-500 underline">
+          <button
+            ref={addRef}
+            onClick={() => {
+              setSaved(false);
+              setShowForm(true);
+            }}
+            aria-expanded={showForm}
+            className="text-xs text-neutral-700 underline"
+          >
             + Record audit
           </button>
         )}
@@ -46,6 +56,10 @@ export function AuditSection({ assetId, audits }: { assetId: string; audits: Ass
             assetId={assetId}
             onSaved={() => {
               setShowForm(false);
+              // Say it happened, and put focus somewhere real — the button that
+              // opened the form — rather than losing it with the unmounted DOM.
+              setSaved(true);
+              addRef.current?.focus();
               // Re-fetches the server-rendered audit list. Only reflects the
               // new record once it's actually synced — offline, that's
               // expected: the audit itself already saved locally via
@@ -55,6 +69,10 @@ export function AuditSection({ assetId, audits }: { assetId: string; audits: Ass
           />
         </div>
       )}
+
+      <p role="status" className="sr-only">
+        {saved ? 'Audit saved.' : ''}
+      </p>
 
       <ul className="mt-4 space-y-3">
         {audits.map((a) => (

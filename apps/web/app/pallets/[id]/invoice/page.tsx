@@ -32,9 +32,9 @@ export default async function GenerateInvoicePage({
   const today = new Date().toISOString().slice(0, 10);
 
   return (
-    <main className="min-h-screen bg-white text-neutral-950">
+    <>
       <Nav />
-      <div id="main-content" tabIndex={-1} className="p-8">
+      <main id="main-content" tabIndex={-1} className="min-h-screen bg-white text-neutral-950 px-4 py-6 sm:p-8">
         <BackLink href={`/pallets/${id}`} label={`Back to ${pallet.palletNumber}`} />
         <h1 className="mt-3 text-2xl font-semibold">Generate invoice</h1>
         <p className="mt-1 text-sm text-neutral-500">
@@ -48,7 +48,7 @@ export default async function GenerateInvoicePage({
           nextNumber={nextNumber}
           today={today}
         />
-      </div>
-    </main>
+      </main>
+  </>
   );
 }

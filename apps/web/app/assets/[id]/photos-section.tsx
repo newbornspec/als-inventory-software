@@ -89,13 +89,15 @@ export function PhotosSection({
 
       <div className="mt-3 flex flex-wrap items-center gap-2">
         <input
+          aria-label="Photo caption"
           value={caption}
           onChange={(e) => setCaption(e.target.value)}
           placeholder="caption (optional)"
-          className="w-48 rounded border border-neutral-200 bg-white px-2 py-1 text-sm"
+          className="w-48 rounded border border-[var(--field-border)] bg-white px-2 py-1 text-sm"
         />
         <input
           ref={fileRef}
+          aria-label="Photo file"
           type="file"
           accept="image/*"
           capture="environment"
@@ -109,7 +111,7 @@ export function PhotosSection({
         >
           {busy ? 'Uploading…' : '+ Add photo'}
         </button>
-        {error && <span className="text-xs text-red-600">{error}</span>}
+        {error && <span role="alert" className="text-xs text-red-700">{error}</span>}
       </div>
 
       {photos.length > 0 ? (

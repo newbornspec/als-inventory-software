@@ -54,6 +54,7 @@ export function BatchStatusSelect({ batchId, status }: { batchId: string; status
       <select
         ref={selectRef}
         name="status"
+        aria-label="Lot status"
         defaultValue={status}
         disabled={busy}
         onChange={onChange}
@@ -65,7 +66,7 @@ export function BatchStatusSelect({ batchId, status }: { batchId: string; status
           </option>
         ))}
       </select>
-      {error && <p className="mt-1 text-xs text-red-600">{error}</p>}
+      {error && <p role="alert" className="mt-1 text-xs text-red-700">{error}</p>}
     </form>
   );
 }

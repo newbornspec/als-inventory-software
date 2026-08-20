@@ -13,14 +13,15 @@ type LotAssets = { loading: boolean; error: string | null; assets: Asset[] };
 function AssetRows({ assets }: { assets: Asset[] }) {
   return (
     <table className="w-full text-left text-sm">
+          <caption className="sr-only">Devices in this lot</caption>
       <thead className="bg-neutral-50 text-neutral-500">
         <tr>
-          <th className="px-4 py-2">Name</th>
-          <th className="px-4 py-2">Category</th>
-          <th className="px-4 py-2">Stock Status</th>
-          <th className="px-4 py-2">Grade</th>
-          <th className="px-4 py-2">Audit Status</th>
-          <th className="px-4 py-2">Location</th>
+          <th scope="col" className="px-4 py-2">Name</th>
+          <th scope="col" className="px-4 py-2">Category</th>
+          <th scope="col" className="px-4 py-2">Stock Status</th>
+          <th scope="col" className="px-4 py-2">Grade</th>
+          <th scope="col" className="px-4 py-2">Audit Status</th>
+          <th scope="col" className="px-4 py-2">Location</th>
         </tr>
       </thead>
       <tbody>
@@ -33,7 +34,7 @@ function AssetRows({ assets }: { assets: Asset[] }) {
             </td>
             <td className="px-4 py-2 text-neutral-500">{a.category}</td>
             <td className="px-4 py-2">
-              <span className="rounded-full border border-neutral-200 px-2 py-0.5 text-xs">
+              <span className="rounded-full border border-[var(--field-border)] px-2 py-0.5 text-xs">
                 {formatLabel(a.stockStatus)}
               </span>
             </td>
@@ -93,29 +94,44 @@ export function AssetsGrouped({ batches, unassigned }: { batches: Batch[]; unass
         const data = cache[b.id];
         return (
           <div key={b.id} className="rounded-lg border border-neutral-200 bg-neutral-50">
-            <div className="flex items-center gap-3 px-4 py-3">
-              <button
-                onClick={() => toggle(b.id)}
-                className="flex flex-1 items-center gap-3 text-left"
-              >
-                <span className="text-neutral-500">{isOpen ? '▼' : '▶'}</span>
-                <span className="font-semibold text-neutral-950">{b.batchNumber}</span>
-                {b.source && <span className="text-sm text-neutral-500">{b.source}</span>}
-                <span className="ml-auto text-xs text-neutral-500">{b.actualUnitCount} items</span>
-              </button>
+            <div className="flex flex-wrap items-center gap-3 px-4 py-3">
+              <h2 className="flex min-w-0 flex-1">
+                <button
+                  onClick={() => toggle(b.id)}
+                  aria-expanded={isOpen}
+                  aria-controls={`lot-devices-${b.id}`}
+                  className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1 text-left"
+                >
+                  <span aria-hidden="true" className="text-neutral-600">
+                    {isOpen ? '▼' : '▶'}
+                  </span>
+                  <span className="font-semibold text-neutral-950">{b.batchNumber}</span>
+                  {b.source && <span className="text-sm text-neutral-600">{b.source}</span>}
+                  <span className="ml-auto text-xs text-neutral-600">
+                    {b.actualUnitCount} items
+                  </span>
+                </button>
+              </h2>
               <Link
                 href={`/batches/${b.id}`}
-                className="shrink-0 text-xs text-neutral-500 underline"
+                aria-label={`Open ${b.batchNumber}`}
+                className="shrink-0 text-xs text-neutral-700 underline"
               >
-                Open lot →
+                Open lot <span aria-hidden="true">→</span>
               </Link>
             </div>
             {isOpen && (
-              <div role="region" aria-label="Devices" tabIndex={0} className="overflow-x-auto border-t border-neutral-200">
+              <div
+                id={`lot-devices-${b.id}`}
+                role="region"
+                aria-label={`Devices in ${b.batchNumber}`}
+                tabIndex={0}
+                className="overflow-x-auto border-t border-neutral-200"
+              >
                 {!data || data.loading ? (
-                  <p className="px-4 py-3 text-xs text-neutral-500">Loading devices…</p>
+                  <p role="status" className="px-4 py-3 text-xs text-neutral-600">Loading devices…</p>
                 ) : data.error ? (
-                  <p className="px-4 py-3 text-xs text-red-600">{data.error}</p>
+                  <p role="alert" className="px-4 py-3 text-xs text-red-700">{data.error}</p>
                 ) : data.assets.length === 0 ? (
                   <p className="px-4 py-3 text-xs text-neutral-500">No devices.</p>
                 ) : (
@@ -136,17 +152,29 @@ function UnassignedGroup({ assets }: { assets: Asset[] }) {
   const [open, setOpen] = useState(false);
   return (
     <div className="rounded-lg border border-neutral-200 bg-neutral-50">
-      <button
-        onClick={() => setOpen(!open)}
-        className="flex w-full items-center gap-3 px-4 py-3 text-left"
-      >
-        <span className="text-neutral-500">{open ? '▼' : '▶'}</span>
-        <span className="font-semibold text-neutral-950">No lot</span>
-        <span className="text-sm text-neutral-500">devices not assigned to a lot</span>
-        <span className="ml-auto text-xs text-neutral-500">{assets.length} items</span>
-      </button>
+      <h2>
+        <button
+          onClick={() => setOpen(!open)}
+          aria-expanded={open}
+          aria-controls="devices-no-lot"
+          className="flex w-full items-center gap-3 px-4 py-3 text-left"
+        >
+          <span aria-hidden="true" className="text-neutral-600">
+            {open ? '▼' : '▶'}
+          </span>
+          <span className="font-semibold text-neutral-950">No lot</span>
+          <span className="text-sm text-neutral-600">devices not assigned to a lot</span>
+          <span className="ml-auto text-xs text-neutral-600">{assets.length} items</span>
+        </button>
+      </h2>
       {open && (
-        <div role="region" aria-label="Devices" tabIndex={0} className="overflow-x-auto border-t border-neutral-200">
+        <div
+          id="devices-no-lot"
+          role="region"
+          aria-label="Devices not assigned to a lot"
+          tabIndex={0}
+          className="overflow-x-auto border-t border-neutral-200"
+        >
           <AssetRows assets={assets} />
         </div>
       )}

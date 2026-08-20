@@ -55,10 +55,21 @@ export function InvoiceForm({
 
   const err = (name: string) => state.fieldErrors?.[name];
   const field = (name: string) =>
-    'w-full rounded-md border bg-white px-3 py-2 text-sm outline-none ' +
-    (err(name) ? 'border-red-400 focus:border-red-500' : 'border-neutral-200 focus:border-neutral-300');
+    'w-full rounded-md border bg-white px-3 py-2 text-sm ' +
+    (err(name)
+      ? 'border-red-600 focus:border-red-700'
+      : 'border-[var(--field-border)] focus:border-neutral-500');
+  // Spread onto each control: announces the invalid state and ties the field to
+  // its own message, so the reason is read out with the field rather than being
+  // a red line someone has to go and find.
+  const invalid = (name: string) =>
+    err(name) ? { 'aria-invalid': true as const, 'aria-describedby': `${name}-error` } : {};
   const Msg = ({ name }: { name: string }) =>
-    err(name) ? <p className="mt-1 text-xs text-red-600">{err(name)}</p> : null;
+    err(name) ? (
+      <p id={`${name}-error`} role="alert" className="mt-1 text-xs text-red-700">
+        {err(name)}
+      </p>
+    ) : null;
 
   // Raised successfully: the number is spent and the invoice exists, so the
   // form is replaced rather than left in a state that invites a second submit.
@@ -100,7 +111,7 @@ export function InvoiceForm({
             <input
               value={nextNumber || '—'}
               readOnly
-              className="w-full rounded-md border border-neutral-200 bg-neutral-50 px-3 py-2 text-sm text-neutral-700"
+              className="w-full rounded-md border border-[var(--field-border)] bg-neutral-50 px-3 py-2 text-sm text-neutral-700"
             />
             <span className="block text-xs text-neutral-500">
               Allocated automatically when you generate. If someone else invoices first, you get
@@ -109,7 +120,7 @@ export function InvoiceForm({
           </label>
           <label className="space-y-1">
             <span className="text-sm text-neutral-700">Invoice date</span>
-            <input type="date" name="invoiceDate" defaultValue={today} className={field('invoiceDate')} />
+            <input type="date" name="invoiceDate" defaultValue={today} {...invalid('invoiceDate')} className={field('invoiceDate')} />
             <Msg name="invoiceDate" />
           </label>
         </div>
@@ -124,30 +135,30 @@ export function InvoiceForm({
         <div className="mt-3 grid max-w-2xl gap-4 sm:grid-cols-2">
           <label className="space-y-1 sm:col-span-2">
             <span className="text-sm text-neutral-700">
-              Buyer name <span className="text-red-600">*</span>
+              Buyer name <span aria-hidden="true" className="text-red-700">*</span>
             </span>
-            <input name="buyerName" placeholder="e.g. Acme Refurb Ltd" className={field('buyerName')} />
+            <input name="buyerName" placeholder="e.g. Acme Refurb Ltd" {...invalid('buyerName')} className={field('buyerName')} />
             <Msg name="buyerName" />
           </label>
           <label className="space-y-1 sm:col-span-2">
             <span className="text-sm text-neutral-700">Address line 1</span>
-            <input name="buyerAddress1" className={field('buyerAddress1')} />
+            <input name="buyerAddress1" {...invalid('buyerAddress1')} className={field('buyerAddress1')} />
           </label>
           <label className="space-y-1 sm:col-span-2">
             <span className="text-sm text-neutral-700">Address line 2</span>
-            <input name="buyerAddress2" className={field('buyerAddress2')} />
+            <input name="buyerAddress2" {...invalid('buyerAddress2')} className={field('buyerAddress2')} />
           </label>
           <label className="space-y-1">
             <span className="text-sm text-neutral-700">City / town</span>
-            <input name="buyerCity" className={field('buyerCity')} />
+            <input name="buyerCity" {...invalid('buyerCity')} className={field('buyerCity')} />
           </label>
           <label className="space-y-1">
             <span className="text-sm text-neutral-700">Postcode</span>
-            <input name="buyerPostcode" className={field('buyerPostcode')} />
+            <input name="buyerPostcode" {...invalid('buyerPostcode')} className={field('buyerPostcode')} />
           </label>
           <label className="space-y-1">
             <span className="text-sm text-neutral-700">Country</span>
-            <input name="buyerCountry" defaultValue="United Kingdom" className={field('buyerCountry')} />
+            <input name="buyerCountry" defaultValue="United Kingdom" {...invalid('buyerCountry')} className={field('buyerCountry')} />
           </label>
         </div>
       </section>
@@ -182,14 +193,14 @@ export function InvoiceForm({
             <div className="grid gap-4 sm:grid-cols-2">
               <label className="space-y-1">
                 <span className="text-sm text-neutral-700">
-                  VAT registration number <span className="text-red-600">*</span>
+                  VAT registration number <span aria-hidden="true" className="text-red-700">*</span>
                 </span>
-                <input name="vatNumber" placeholder="e.g. GB123456789" className={field('vatNumber')} />
+                <input name="vatNumber" placeholder="e.g. GB123456789" {...invalid('vatNumber')} className={field('vatNumber')} />
                 <Msg name="vatNumber" />
               </label>
               <label className="space-y-1">
                 <span className="text-sm text-neutral-700">
-                  VAT rate (%) <span className="text-red-600">*</span>
+                  VAT rate (%) <span aria-hidden="true" className="text-red-700">*</span>
                 </span>
                 <input
                   name="vatRate"
@@ -200,7 +211,7 @@ export function InvoiceForm({
                   value={rate}
                   onChange={(e) => setRate(e.target.value)}
                   placeholder="e.g. 20"
-                  className={field('vatRate')}
+                  {...invalid('vatRate')} className={field('vatRate')}
                 />
                 <Msg name="vatRate" />
               </label>
@@ -208,7 +219,7 @@ export function InvoiceForm({
           ) : (
             // Nothing is assumed when not registered: no rate is applied and the
             // invoice says so rather than silently showing a zero VAT line.
-            <p className="rounded-md border border-neutral-200 bg-neutral-50 px-3 py-2 text-sm text-neutral-600">
+            <p className="rounded-md border border-[var(--field-border)] bg-neutral-50 px-3 py-2 text-sm text-neutral-600">
               Registration number and rate are not applicable. No VAT will be added, and the
               invoice will state that.
             </p>
@@ -226,15 +237,16 @@ export function InvoiceForm({
         </p>
         <div role="region" aria-label="Invoice items" tabIndex={0} className="mt-3 overflow-x-auto rounded-lg border border-neutral-200">
           <table className="w-full min-w-[52rem] text-left text-sm">
+          <caption className="sr-only">Invoice item lines</caption>
             <thead className="bg-neutral-50 text-neutral-500">
               <tr>
-                <th className="px-3 py-2">Manufacturer</th>
-                <th className="px-3 py-2">Model</th>
-                <th className="px-3 py-2">Size</th>
-                <th className="px-3 py-2">Variant</th>
-                <th className="px-3 py-2 text-right">Qty</th>
-                <th className="px-3 py-2 text-right">Price</th>
-                <th className="px-3 py-2 text-right">Amount</th>
+                <th scope="col" className="px-3 py-2">Manufacturer</th>
+                <th scope="col" className="px-3 py-2">Model</th>
+                <th scope="col" className="px-3 py-2">Size</th>
+                <th scope="col" className="px-3 py-2">Variant</th>
+                <th scope="col" className="px-3 py-2 text-right">Qty</th>
+                <th scope="col" className="px-3 py-2 text-right">Price</th>
+                <th scope="col" className="px-3 py-2 text-right">Amount</th>
               </tr>
             </thead>
             <tbody>
@@ -289,14 +301,16 @@ export function InvoiceForm({
       </section>
 
       {state.error && (
-        <p className="max-w-2xl text-sm text-red-600">{state.error}</p>
+        <p role="alert" className="max-w-2xl text-sm text-red-700">{state.error}</p>
       )}
 
       <div className="flex flex-wrap items-center gap-3">
         <button
           type="button"
           onClick={() => setShowPreview((v) => !v)}
-          className="rounded-md border border-neutral-200 px-4 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
+          aria-expanded={showPreview}
+          aria-controls="invoice-preview"
+          className="rounded-md border border-[var(--field-border)] px-4 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
         >
           {showPreview ? 'Hide preview' : 'Preview invoice'}
         </button>
@@ -312,7 +326,11 @@ export function InvoiceForm({
         </span>
       </div>
 
-      {showPreview && <Preview palletNumber={palletNumber} nextNumber={nextNumber} t={t} vatRegistered={vatRegistered} rate={rateNum} />}
+      {showPreview && (
+        <div id="invoice-preview">
+          <Preview palletNumber={palletNumber} nextNumber={nextNumber} t={t} vatRegistered={vatRegistered} rate={rateNum} />
+        </div>
+      )}
     </form>
   );
 }
@@ -333,7 +351,12 @@ function Preview({
   rate: number | null;
 }) {
   return (
-    <pre className="max-w-2xl overflow-x-auto rounded-lg border border-neutral-200 bg-neutral-50 p-4 text-xs text-neutral-700">
+    <pre
+      role="region"
+      aria-label="Invoice preview"
+      tabIndex={0}
+      className="max-w-2xl overflow-x-auto rounded-lg border border-neutral-200 bg-neutral-50 p-4 text-xs text-neutral-700"
+    >
 {`INVOICE            ${nextNumber || '(next available)'}
 Pallet             ${palletNumber}
 

@@ -29,9 +29,9 @@ export default async function SoldPage() {
     soldAssets.length + soldPalletLines.reduce((s, l) => s + l.quantity, 0);
 
   return (
-    <main className="min-h-screen bg-white text-neutral-950">
+    <>
       <Nav />
-      <div id="main-content" tabIndex={-1} className="p-8">
+      <main id="main-content" tabIndex={-1} className="min-h-screen bg-white text-neutral-950 px-4 py-6 sm:p-8">
         <div className="flex flex-wrap items-end justify-between gap-4">
           <div>
             <h1 className="text-2xl font-semibold">Sold</h1>
@@ -56,7 +56,7 @@ export default async function SoldPage() {
           palletDests={palletDests}
           isAdmin={isAdmin}
         />
-      </div>
-    </main>
+      </main>
+  </>
   );
 }

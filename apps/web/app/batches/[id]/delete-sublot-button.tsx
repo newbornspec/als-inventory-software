@@ -39,7 +39,7 @@ export function DeleteSubLotButton({
     <button
       onClick={onDelete}
       disabled={pending}
-      className="rounded-md border border-red-200 px-2 py-0.5 text-xs text-red-600 hover:bg-red-50 disabled:opacity-50"
+      className="rounded-md border border-red-200 px-2 py-0.5 text-xs text-red-700 hover:bg-red-50 disabled:opacity-50"
     >
       {pending ? 'Deleting…' : 'Delete'}
     </button>

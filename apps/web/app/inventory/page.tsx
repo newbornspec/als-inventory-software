@@ -31,9 +31,9 @@ export default async function InventoryPage() {
   const num = (n: number) => n.toLocaleString('en-GB');
 
   return (
-    <main className="min-h-screen bg-white text-neutral-950">
+    <>
       <Nav />
-      <div id="main-content" tabIndex={-1} className="p-8">
+      <main id="main-content" tabIndex={-1} className="min-h-screen bg-white text-neutral-950 px-4 py-6 sm:p-8">
         <div className="flex flex-wrap items-end justify-between gap-4">
           <div>
             <h1 className="text-2xl font-semibold">All Inventory</h1>
@@ -99,8 +99,8 @@ export default async function InventoryPage() {
               ))}
           </Table>
         </Section>
-      </div>
-    </main>
+      </main>
+  </>
   );
 }
 
@@ -138,8 +138,16 @@ function Section({
           <span className="ml-2 text-neutral-500">· {units.toLocaleString('en-GB')} units</span>
           <span className="ml-2 text-xs text-neutral-500">({hint})</span>
         </h2>
-        <Link href={href} className="shrink-0 text-sm text-neutral-500 hover:text-neutral-900">
-          View all →
+        {/* Rendered three times on this page — Assets, Pallets, Consumables —
+            so without the section name in the accessible name a screen reader's
+            link list reads "View all" three times with three destinations. The
+            arrow is decoration; unhidden it is announced as "right arrow". */}
+        <Link
+          href={href}
+          aria-label={`View all ${title}`}
+          className="shrink-0 text-sm text-neutral-700 hover:text-neutral-950"
+        >
+          View all <span aria-hidden="true">→</span>
         </Link>
       </div>
       {children}
@@ -153,10 +161,11 @@ function Table({ head, empty, children }: { head: string[]; empty: string; child
   return (
     <div role="region" aria-label="Inventory breakdown" tabIndex={0} className="mt-3 overflow-x-auto rounded-lg border border-neutral-200">
       <table className="w-full text-left text-sm">
+          <caption className="sr-only">Inventory broken down by type</caption>
         <thead className="bg-neutral-50 text-neutral-500">
           <tr>
             {head.map((h, i) => (
-              <th key={h} className={`px-4 py-3 ${i === head.length - 1 ? 'text-right' : ''}`}>
+              <th scope="col" key={h} className={`px-4 py-3 ${i === head.length - 1 ? 'text-right' : ''}`}>
                 {h}
               </th>
             ))}

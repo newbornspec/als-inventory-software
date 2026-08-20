@@ -16,40 +16,40 @@ export function NewStockForm({ locations }: { locations: Location[] }) {
         <label htmlFor="stock-new-new-stock-form-name" className="text-sm text-neutral-700">Item name</label>
         <input id="stock-new-new-stock-form-name" name="name"
           placeholder="USB keyboard"
-          className="w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm focus:border-neutral-300"
+          className="w-full rounded-md border border-[var(--field-border)] bg-white px-3 py-2 text-sm focus:border-[var(--field-border)]"
         />
       </div>
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <div className="space-y-1">
           <label htmlFor="stock-new-new-stock-form-sku" className="text-sm text-neutral-700">SKU</label>
           <input id="stock-new-new-stock-form-sku" name="sku"
             placeholder="KB-USB-01"
-            className="w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm focus:border-neutral-300"
+            className="w-full rounded-md border border-[var(--field-border)] bg-white px-3 py-2 text-sm focus:border-[var(--field-border)]"
           />
         </div>
         <div className="space-y-1">
           <label htmlFor="stock-new-new-stock-form-category" className="text-sm text-neutral-700">Category</label>
           <input id="stock-new-new-stock-form-category" name="category"
             placeholder="Peripherals"
-            className="w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm focus:border-neutral-300"
+            className="w-full rounded-md border border-[var(--field-border)] bg-white px-3 py-2 text-sm focus:border-[var(--field-border)]"
           />
         </div>
       </div>
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <div className="space-y-1">
           <label htmlFor="stock-new-new-stock-form-quantity" className="text-sm text-neutral-700">Opening quantity</label>
           <input id="stock-new-new-stock-form-quantity" type="number"
             min={0}
             name="quantity"
             placeholder="0"
-            className="w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm focus:border-neutral-300"
+            className="w-full rounded-md border border-[var(--field-border)] bg-white px-3 py-2 text-sm focus:border-[var(--field-border)]"
           />
         </div>
         <div className="space-y-1">
           <label htmlFor="stock-new-new-stock-form-locationId" className="text-sm text-neutral-700">Location</label>
           <select id="stock-new-new-stock-form-locationId" name="locationId"
             defaultValue=""
-            className="w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm"
+            className="w-full rounded-md border border-[var(--field-border)] bg-white px-3 py-2 text-sm"
           >
             <option value="">Unassigned</option>
             {locations.map((l) => (
@@ -64,11 +64,11 @@ export function NewStockForm({ locations }: { locations: Location[] }) {
         <label htmlFor="stock-new-new-stock-form-notes" className="text-sm text-neutral-700">Notes</label>
         <textarea id="stock-new-new-stock-form-notes" name="notes"
           rows={2}
-          className="w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm focus:border-neutral-300"
+          className="w-full rounded-md border border-[var(--field-border)] bg-white px-3 py-2 text-sm focus:border-[var(--field-border)]"
         />
       </div>
 
-      {state.error && <p className="text-sm text-red-600">{state.error}</p>}
+      {state.error && <p role="alert" className="text-sm text-red-700">{state.error}</p>}
 
       <button
         type="submit"

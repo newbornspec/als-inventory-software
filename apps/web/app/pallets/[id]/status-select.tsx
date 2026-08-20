@@ -11,6 +11,7 @@ export function PalletStatusSelect({ palletId, status }: { palletId: string; sta
     <form action={boundUpdate}>
       <select
         name="status"
+        aria-label="Pallet status"
         defaultValue={status}
         onChange={(e) => e.currentTarget.form?.requestSubmit()}
         className="w-full bg-transparent text-lg font-semibold"

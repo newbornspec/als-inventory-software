@@ -39,9 +39,9 @@ const COLUMNS: {
 ];
 
 const inputCls =
-  'w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm focus:border-neutral-300';
+  'w-full rounded-md border border-[var(--field-border)] bg-white px-3 py-2 text-sm focus:border-[var(--field-border)]';
 const cellCls =
-  'w-full rounded border border-neutral-200 bg-white px-2 py-1.5 text-sm focus:border-neutral-300';
+  'w-full rounded border border-[var(--field-border)] bg-white px-2 py-1.5 text-sm focus:border-[var(--field-border)]';
 
 export interface SpecEditorMeta {
   description: string;
@@ -298,7 +298,7 @@ export function SpecEditor({
           value={q}
           onChange={(e) => setQ(e.target.value)}
           placeholder="Search rows…"
-          className="w-full max-w-xs rounded-md border border-neutral-200 bg-white px-3 py-1.5 text-sm focus:border-neutral-300"
+          className="w-full max-w-xs rounded-md border border-[var(--field-border)] bg-white px-3 py-1.5 text-sm focus:border-[var(--field-border)]"
         />
         <span className="shrink-0 text-xs text-neutral-500">
           {q ? `${visible.length} of ${rows.length}` : `${rows.length} rows`}
@@ -307,17 +307,35 @@ export function SpecEditor({
 
       <div role="region" aria-label="Specification grid" tabIndex={0} className="mt-2 overflow-x-auto rounded-lg border border-neutral-200">
         <table className="w-full text-left text-sm">
+          <caption className="sr-only">Pallet specification grid</caption>
           <thead className="bg-neutral-50 text-neutral-500">
             <tr>
               {COLUMNS.map((c) => (
-                <th key={c.key} className={`${c.width} px-3 py-2`}>
-                  <button onClick={() => sortBy(c.key)} className="hover:text-neutral-900">
+                <th
+                  scope="col"
+                  key={c.key}
+                  aria-sort={
+                    sort?.col === c.key
+                      ? sort.dir === 'asc'
+                        ? 'ascending'
+                        : 'descending'
+                      : 'none'
+                  }
+                  className={`${c.width} px-3 py-2`}
+                >
+                  <button
+                    onClick={() => sortBy(c.key)}
+                    aria-label={`Sort by ${c.label}`}
+                    className="hover:text-neutral-900"
+                  >
                     {c.label}
-                    {arrow(c.key)}
+                    <span aria-hidden="true">{arrow(c.key)}</span>
                   </button>
                 </th>
               ))}
-              <th className="w-28 px-3 py-2" />
+              <th scope="col" className="w-28 px-3 py-2">
+                <span className="sr-only">Row actions</span>
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -393,14 +411,18 @@ export function SpecEditor({
       </div>
 
       <div className="mt-3 flex flex-wrap items-center gap-3">
-        <button onClick={() => setRows((rs) => [...rs, blank()])} className="rounded-md border border-neutral-200 px-3 py-1.5 text-sm text-neutral-700 hover:bg-white">
+        <button onClick={() => setRows((rs) => [...rs, blank()])} className="rounded-md border border-[var(--field-border)] px-3 py-1.5 text-sm text-neutral-700 hover:bg-white">
           + Add row
         </button>
         <button onClick={save} disabled={busy} className="rounded-md bg-[#1a6ef5] hover:bg-blue-600 px-4 py-1.5 text-sm font-medium text-white disabled:opacity-50">
           {busy ? 'Saving…' : 'Save changes'}
         </button>
-        {saved && <span className="text-xs text-emerald-700">✓ Saved</span>}
-        {error && <span className="text-xs text-red-600">{error}</span>}
+        {saved && (
+          <span role="status" className="text-xs text-emerald-800">
+            <span aria-hidden="true">✓ </span>Saved
+          </span>
+        )}
+        {error && <span role="alert" className="text-xs text-red-700">{error}</span>}
       </div>
       <p className="mt-2 text-xs text-neutral-500">
         Tip: copy cells from Excel and paste into any cell to fill the grid. Click a column header to

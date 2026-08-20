@@ -106,7 +106,7 @@ export function DeleteBatchButton({
       >
         {pending ? 'Deleting…' : 'Delete lot'}
       </button>
-      {error && <span className="text-xs text-red-600">{error}</span>}
+      {error && <span role="alert" className="text-xs text-red-700">{error}</span>}
     </>
   );
 }

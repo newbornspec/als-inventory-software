@@ -63,16 +63,41 @@ export function LookupsManager({ all }: { all: LookupValue[] }) {
 
   return (
     <div className="mt-6">
-      <div className="flex flex-wrap gap-2">
+      {/* A tablist promises Left/Right to move between tabs and one Tab stop
+          for the whole set; without that it announces itself as a tab list and
+          then behaves like seven separate buttons. */}
+      <div
+        role="tablist"
+        aria-label="Lookup category"
+        onKeyDown={(e) => {
+          const keys = CATEGORIES.map((c) => c.key);
+          const i = keys.indexOf(tab);
+          let next: string | null = null;
+          if (e.key === 'ArrowRight') next = keys[(i + 1) % keys.length];
+          else if (e.key === 'ArrowLeft') next = keys[(i - 1 + keys.length) % keys.length];
+          else if (e.key === 'Home') next = keys[0];
+          else if (e.key === 'End') next = keys[keys.length - 1];
+          if (!next) return;
+          e.preventDefault();
+          setTab(next as typeof tab);
+          document.getElementById(`lookup-tab-${next}`)?.focus();
+        }}
+        className="flex flex-wrap gap-2"
+      >
         {CATEGORIES.map((c) => (
           <button
             key={c.key}
+            role="tab"
+            id={`lookup-tab-${c.key}`}
+            aria-selected={tab === c.key}
+            aria-controls="lookup-panel"
+            tabIndex={tab === c.key ? 0 : -1}
             onClick={() => setTab(c.key)}
             className={
               'rounded-md px-3 py-1.5 text-sm ' +
               (tab === c.key
-                ? 'bg-neutral-100 text-neutral-900'
-                : 'border border-neutral-200 text-neutral-700 hover:bg-white')
+                ? 'bg-neutral-100 font-semibold text-neutral-900 ring-1 ring-neutral-400'
+                : 'border border-[var(--field-border)] text-neutral-700 hover:bg-white')
             }
           >
             {c.label}
@@ -80,13 +105,17 @@ export function LookupsManager({ all }: { all: LookupValue[] }) {
         ))}
       </div>
 
+      <div id="lookup-panel" role="tabpanel" aria-labelledby={`lookup-tab-${tab}`} tabIndex={0}>
       {tab === 'model' && (
         <div className="mt-4 flex items-center gap-2 text-sm">
-          <span className="text-neutral-500">Models for</span>
+          <label htmlFor="lookup-manufacturer" className="text-neutral-700">
+            Models for
+          </label>
           <select
+            id="lookup-manufacturer"
             value={manufacturerId}
             onChange={(e) => setManufacturerId(e.target.value)}
-            className="rounded-md border border-neutral-200 bg-white px-2 py-1.5 text-sm"
+            className="rounded-md border border-[var(--field-border)] bg-white px-2 py-1.5 text-sm"
           >
             <option value="">— Select manufacturer —</option>
             {manufacturers.map((m) => (
@@ -99,16 +128,17 @@ export function LookupsManager({ all }: { all: LookupValue[] }) {
         </div>
       )}
 
-      <div className={'mt-4 max-w-2xl ' + (pending ? 'opacity-60' : '')}>
+      <div aria-busy={pending} className={'mt-4 max-w-2xl ' + (pending ? 'cursor-progress' : '')}>
         {/* Add row */}
         {(tab !== 'model' || manufacturerId) && (
           <div className="flex items-center gap-2">
             <input
+              aria-label="New lookup value"
               value={newValue}
               onChange={(e) => setNewValue(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && onAdd()}
               placeholder={`Add a ${tab} value…`}
-              className="w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm focus:border-neutral-300"
+              className="w-full rounded-md border border-[var(--field-border)] bg-white px-3 py-2 text-sm focus:border-[var(--field-border)]"
             />
             <button
               onClick={onAdd}
@@ -122,15 +152,16 @@ export function LookupsManager({ all }: { all: LookupValue[] }) {
 
         <ul className="mt-3 divide-y divide-neutral-200 rounded-lg border border-neutral-200">
           {rows.map((l) => (
-            <li key={l.id} className="flex items-center gap-3 px-3 py-2">
+            <li key={l.id} className="flex flex-wrap items-center gap-3 px-3 py-2">
               <input
+                aria-label={`Rename ${l.value}`}
                 defaultValue={l.value}
                 onBlur={(e) => {
                   const next = e.target.value.trim();
                   if (next && next !== l.value) run(() => updateLookup(l.id, { value: next }));
                 }}
                 className={
-                  'w-full rounded border border-transparent bg-transparent px-1 py-1 text-sm hover:border-neutral-200 focus:border-neutral-300 ' +
+                  'w-full rounded border border-transparent bg-transparent px-1 py-1 text-sm hover:border-[var(--field-border)] focus:border-[var(--field-border)] ' +
                   (l.active ? 'text-neutral-950' : 'text-neutral-500 line-through')
                 }
               />
@@ -147,7 +178,8 @@ export function LookupsManager({ all }: { all: LookupValue[] }) {
                   if (confirm(`Delete "${l.value}"?${l.category === 'manufacturer' ? ' Its models will be removed too.' : ''}`))
                     run(() => deleteLookup(l.id));
                 }}
-                className="shrink-0 text-xs text-red-600 hover:underline"
+                aria-label={`Delete ${l.value}`}
+                className="shrink-0 text-xs text-red-700 hover:underline"
               >
                 Delete
               </button>
@@ -161,7 +193,8 @@ export function LookupsManager({ all }: { all: LookupValue[] }) {
             </li>
           )}
         </ul>
-        {error && <p className="mt-2 text-xs text-red-600">{error}</p>}
+        {error && <p role="alert" className="mt-2 text-xs text-red-700">{error}</p>}
+      </div>
       </div>
     </div>
   );

@@ -22,7 +22,7 @@ export function AddAssetForm({ batchId, subLots }: { batchId: string; subLots: L
     }
   }, [pending, state]);
 
-  const field = 'w-full rounded-md border border-neutral-200 bg-white px-2 py-1.5 text-sm';
+  const field = 'w-full rounded-md border border-[var(--field-border)] bg-white px-2 py-1.5 text-sm';
   const specOf = (l: Lot) =>
     [l.manufacturer, l.model, l.cpu, l.ramGb ? `${l.ramGb}GB` : null, l.storage]
       .filter(Boolean)
@@ -32,7 +32,8 @@ export function AddAssetForm({ batchId, subLots }: { batchId: string; subLots: L
     return (
       <button
         onClick={() => setOpen(true)}
-        className="mt-3 rounded-md border border-neutral-200 px-3 py-1.5 text-xs text-neutral-700 hover:bg-white"
+        aria-expanded={open}
+        className="mt-3 rounded-md border border-[var(--field-border)] px-3 py-1.5 text-xs text-neutral-700 hover:bg-white"
       >
         + Add asset
       </button>
@@ -47,7 +48,7 @@ export function AddAssetForm({ batchId, subLots }: { batchId: string; subLots: L
       }}
       className="mt-3 space-y-2 rounded-md border border-neutral-200 p-3"
     >
-      <p className="text-xs font-medium text-neutral-500">Add asset manually</p>
+      <h3 className="text-xs font-medium text-neutral-700">Add asset manually</h3>
 
       {subLots.length > 0 && (
         <select
@@ -68,7 +69,7 @@ export function AddAssetForm({ batchId, subLots }: { batchId: string; subLots: L
       )}
 
       <div key={resetKey} className="space-y-2">
-        <div className="grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
           <input name="manufacturer" aria-label="Manufacturer" placeholder="Manufacturer, e.g. Dell" className={field} />
           <input name="model" aria-label="Model" placeholder="Model, e.g. Latitude 5420" className={field} />
           <input name="deviceType" aria-label="Device type" placeholder="Device type, e.g. Laptop" className={field} />
@@ -82,7 +83,7 @@ export function AddAssetForm({ batchId, subLots }: { batchId: string; subLots: L
         <input name="notes" aria-label="Notes" placeholder="Notes (optional)" className={field} />
       </div>
 
-      {state.error && <p className="text-xs text-red-600">{state.error}</p>}
+      {state.error && <p role="alert" className="text-xs text-red-700">{state.error}</p>}
       <div className="flex gap-2">
         <button
           type="submit"
@@ -94,7 +95,7 @@ export function AddAssetForm({ batchId, subLots }: { batchId: string; subLots: L
         <button
           type="button"
           onClick={() => setOpen(false)}
-          className="rounded-md border border-neutral-200 px-3 py-1.5 text-xs text-neutral-500"
+          className="rounded-md border border-[var(--field-border)] px-3 py-1.5 text-xs text-neutral-500"
         >
           Cancel
         </button>

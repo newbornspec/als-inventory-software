@@ -13,9 +13,9 @@ export default async function LookupsPage() {
     : [];
 
   return (
-    <main className="min-h-screen bg-white text-neutral-950">
+    <>
       <Nav />
-      <div id="main-content" tabIndex={-1} className="p-8">
+      <main id="main-content" tabIndex={-1} className="min-h-screen bg-white text-neutral-950 px-4 py-6 sm:p-8">
         <Breadcrumbs items={[{ label: 'Dashboard', href: '/dashboard' }, { label: 'Lookups' }]} />
         <h1 className="mt-3 text-2xl font-semibold">Lookup values</h1>
         <p className="mt-1 max-w-2xl text-sm text-neutral-500">
@@ -29,7 +29,7 @@ export default async function LookupsPage() {
         ) : (
           <p className="mt-6 text-sm text-neutral-500">Managing lookup values is admin-only.</p>
         )}
-      </div>
-    </main>
+      </main>
+  </>
   );
 }

@@ -9,16 +9,17 @@ export function LotCost({ batchId, totalCost }: { batchId: string; totalCost: nu
       <span className="text-neutral-500">£</span>
       <input
         name="totalCost"
+        aria-label="Lot cost in pounds"
         type="number"
         min={0}
         step="0.01"
         defaultValue={totalCost ?? ''}
         placeholder="lot cost"
-        className="w-32 rounded border border-neutral-200 bg-white px-2 py-1 text-sm"
+        className="w-32 rounded border border-[var(--field-border)] bg-white px-2 py-1 text-sm"
       />
       <button
         type="submit"
-        className="rounded border border-neutral-300 px-2 py-1 text-xs text-neutral-950"
+        className="rounded border border-[var(--field-border)] px-2 py-1 text-xs text-neutral-950"
       >
         Save
       </button>

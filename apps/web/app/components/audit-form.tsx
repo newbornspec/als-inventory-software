@@ -87,14 +87,14 @@ export function AuditForm({ assetId, onSaved }: { assetId: string; onSaved?: () 
 
   return (
     <form onSubmit={handleSubmit} className="space-y-3 rounded-md border border-neutral-200 p-4">
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <div className="space-y-1">
           <label htmlFor={`${uid}-audit-status`} className="block text-xs text-neutral-600">Audit status</label>
           <select
             id={`${uid}-audit-status`}
             value={auditStatus}
             onChange={(e) => setAuditStatus(e.target.value)}
-            className="w-full rounded-md border border-neutral-200 bg-white px-2 py-1.5 text-sm"
+            className="w-full rounded-md border border-[var(--field-border)] bg-white px-2 py-1.5 text-sm"
           >
             <option value="">—</option>
             {AUDIT_STATUSES.map((s) => (
@@ -110,7 +110,7 @@ export function AuditForm({ assetId, onSaved }: { assetId: string; onSaved?: () 
             id={`${uid}-cosmetic-grade`}
             value={cosmeticGrade}
             onChange={(e) => setCosmeticGrade(e.target.value)}
-            className="w-full rounded-md border border-neutral-200 bg-white px-2 py-1.5 text-sm"
+            className="w-full rounded-md border border-[var(--field-border)] bg-white px-2 py-1.5 text-sm"
           >
             <option value="">—</option>
             {CONDITION_GRADES.map((g) => (
@@ -126,7 +126,7 @@ export function AuditForm({ assetId, onSaved }: { assetId: string; onSaved?: () 
         <legend className="text-xs text-neutral-600">Functional tests</legend>
         <div className="mt-1 grid grid-cols-2 gap-2 sm:grid-cols-3">
           {TEST_FIELDS.map((field) => (
-            <div key={field} className="flex items-center justify-between rounded-md border border-neutral-200 px-2 py-1">
+            <div key={field} className="flex items-center justify-between rounded-md border border-[var(--field-border)] px-2 py-1">
               <label htmlFor={`${uid}-test-${field}`} className="text-xs capitalize text-neutral-700">
                 {field}
               </label>
@@ -146,14 +146,14 @@ export function AuditForm({ assetId, onSaved }: { assetId: string; onSaved?: () 
         </div>
       </fieldset>
 
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <div className="space-y-1">
           <label htmlFor={`${uid}-wipe-status`} className="block text-xs text-neutral-600">Data wipe status</label>
           <select
             id={`${uid}-wipe-status`}
             value={dataWipeStatus}
             onChange={(e) => setDataWipeStatus(e.target.value)}
-            className="w-full rounded-md border border-neutral-200 bg-white px-2 py-1.5 text-sm"
+            className="w-full rounded-md border border-[var(--field-border)] bg-white px-2 py-1.5 text-sm"
           >
             <option value="">—</option>
             {DATA_WIPE_STATUSES.map((s) => (
@@ -169,7 +169,7 @@ export function AuditForm({ assetId, onSaved }: { assetId: string; onSaved?: () 
             id={`${uid}-disposition`}
             value={finalDisposition}
             onChange={(e) => setFinalDisposition(e.target.value)}
-            className="w-full rounded-md border border-neutral-200 bg-white px-2 py-1.5 text-sm"
+            className="w-full rounded-md border border-[var(--field-border)] bg-white px-2 py-1.5 text-sm"
           >
             <option value="">—</option>
             {FINAL_DISPOSITIONS.map((d) => (
@@ -191,7 +191,7 @@ export function AuditForm({ assetId, onSaved }: { assetId: string; onSaved?: () 
           value={dataWipeMethod}
           onChange={(e) => setDataWipeMethod(e.target.value)}
           placeholder="e.g. NIST SP 800-88, DBAN, ATA Secure Erase, Physical destruction"
-          className="w-full rounded-md border border-neutral-200 bg-white px-2 py-1.5 text-sm"
+          className="w-full rounded-md border border-[var(--field-border)] bg-white px-2 py-1.5 text-sm"
         />
         <p id={`${uid}-wipe-method-hint`} className="text-xs text-neutral-600">
           Appears on the data-erasure certificate.
@@ -207,7 +207,7 @@ export function AuditForm({ assetId, onSaved }: { assetId: string; onSaved?: () 
           value={notes}
           onChange={(e) => setNotes(e.target.value)}
           rows={2}
-          className="w-full rounded-md border border-neutral-200 bg-white px-2 py-1.5 text-sm"
+          className="w-full rounded-md border border-[var(--field-border)] bg-white px-2 py-1.5 text-sm"
         />
       </div>
 

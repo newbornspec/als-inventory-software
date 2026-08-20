@@ -32,9 +32,9 @@ export default async function StockPage({
   const filterLabel = active ? STATUS_LABELS[status as StockStatus] : null;
 
   return (
-    <main className="min-h-screen bg-white text-neutral-950">
+    <>
       <Nav />
-      <div id="main-content" tabIndex={-1} className="px-4 py-6 sm:p-8">
+      <main id="main-content" tabIndex={-1} className="min-h-screen bg-white text-neutral-950 px-4 py-6 sm:p-8">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h1 className="text-2xl font-semibold">Consumables</h1>
@@ -64,7 +64,7 @@ export default async function StockPage({
               name="search"
               defaultValue={search ?? ''}
               placeholder="Name, SKU, category…"
-              className="mt-1 w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm"
+              className="mt-1 w-full rounded-md border border-[var(--field-border)] bg-white px-3 py-2 text-sm"
             />
           </div>
           <div>
@@ -75,7 +75,7 @@ export default async function StockPage({
               id="stock-status"
               name="status"
               defaultValue={active ? status : ''}
-              className="mt-1 rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm"
+              className="mt-1 rounded-md border border-[var(--field-border)] bg-white px-3 py-2 text-sm"
             >
               <option value="">All statuses</option>
               <option value="in_stock">In stock</option>
@@ -85,7 +85,7 @@ export default async function StockPage({
           </div>
           <button
             type="submit"
-            className="rounded-md border border-neutral-300 px-4 py-2 text-sm font-medium text-neutral-800 hover:bg-neutral-50"
+            className="rounded-md border border-[var(--field-border)] px-4 py-2 text-sm font-medium text-neutral-800 hover:bg-neutral-50"
           >
             Filter
           </button>
@@ -145,7 +145,7 @@ export default async function StockPage({
             </tbody>
           </table>
         </div>
-      </div>
-    </main>
+      </main>
+  </>
   );
 }

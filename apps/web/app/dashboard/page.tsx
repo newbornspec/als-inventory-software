@@ -44,9 +44,9 @@ export default async function DashboardPage() {
         : 'Action required';
 
   return (
-    <main className="min-h-screen bg-white text-neutral-950">
+    <>
       <Nav />
-      <div id="main-content" tabIndex={-1} className="px-4 py-6 sm:px-8 sm:py-8">
+      <main id="main-content" tabIndex={-1} className="min-h-screen bg-white text-neutral-950 px-4 py-6 sm:px-8 sm:py-8">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <h1 className="text-2xl font-semibold">Dashboard</h1>
@@ -72,7 +72,7 @@ export default async function DashboardPage() {
             name="search"
             type="search"
             placeholder="Search devices…"
-            className="min-w-0 flex-1 rounded-lg border border-neutral-300 bg-white px-3 py-2 text-sm"
+            className="min-w-0 flex-1 rounded-lg border border-[var(--field-border)] bg-white px-3 py-2 text-sm"
           />
           <button
             type="submit"
@@ -499,7 +499,7 @@ export default async function DashboardPage() {
             )}
           </Section>
         </div>
-      </div>
-    </main>
+      </main>
+  </>
   );
 }

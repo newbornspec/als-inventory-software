@@ -115,36 +115,47 @@ export function LotAssets({
     <div className="mt-3">
       <div className="flex items-center justify-between gap-3">
         <input
+          aria-label="Search devices in this sub-lot"
           value={q}
           onChange={(e) => setQ(e.target.value)}
           placeholder="Search this lot — name, make, model, serial, service tag…"
-          className="w-full max-w-md rounded-md border border-neutral-200 bg-white px-3 py-1.5 text-sm focus:border-neutral-300"
+          className="w-full max-w-md rounded-md border border-[var(--field-border)] bg-white px-3 py-1.5 text-sm focus:border-[var(--field-border)]"
         />
         <span className="shrink-0 text-xs text-neutral-500">
           {filtered.length} of {assets.length}
         </span>
       </div>
 
-      <div className={'mt-3 overflow-x-auto rounded-lg border border-neutral-200 ' + (pending ? 'opacity-60' : '')}>
+      <div
+        role="region"
+        aria-label="Devices in this lot"
+        tabIndex={0}
+        aria-busy={pending}
+        className={
+          'mt-3 overflow-x-auto rounded-lg border border-neutral-200 ' +
+          (pending ? 'cursor-progress' : '')
+        }
+      >
         <table className="w-full text-left text-xs">
+          <caption className="sr-only">Devices in this sub-lot</caption>
           <thead className="bg-neutral-50 text-neutral-500">
             <tr>
-              <th className="px-3 py-2">Unit ID</th>
-              <th className="px-3 py-2">Name</th>
-              <th className="px-3 py-2">Manufacturer</th>
-              <th className="px-3 py-2">Model</th>
-              <th className="px-3 py-2">Type</th>
-              <th className="px-3 py-2">Serial</th>
-              <th className="px-3 py-2">Service tag</th>
-              <th className="px-3 py-2">Grade</th>
-              <th className="px-3 py-2">Audit</th>
-              <th className="px-3 py-2">Stock</th>
-              <th className="px-3 py-2">Location</th>
-              {canManage && subLots.length > 0 && <th className="px-3 py-2">Sub-lot</th>}
-              {canManage && otherBatches.length > 0 && <th className="px-3 py-2">Move to</th>}
-              {canManage && <th className="px-3 py-2" />}
-              <th className="px-3 py-2" />
-              {canDelete && <th className="px-3 py-2" />}
+              <th scope="col" className="px-3 py-2">Unit ID</th>
+              <th scope="col" className="px-3 py-2">Name</th>
+              <th scope="col" className="px-3 py-2">Manufacturer</th>
+              <th scope="col" className="px-3 py-2">Model</th>
+              <th scope="col" className="px-3 py-2">Type</th>
+              <th scope="col" className="px-3 py-2">Serial</th>
+              <th scope="col" className="px-3 py-2">Service tag</th>
+              <th scope="col" className="px-3 py-2">Grade</th>
+              <th scope="col" className="px-3 py-2">Audit</th>
+              <th scope="col" className="px-3 py-2">Stock</th>
+              <th scope="col" className="px-3 py-2">Location</th>
+              {canManage && subLots.length > 0 && <th scope="col" className="px-3 py-2">Sub-lot</th>}
+              {canManage && otherBatches.length > 0 && <th scope="col" className="px-3 py-2">Move to</th>}
+              {canManage && <th scope="col" className="px-3 py-2" />}
+              <th scope="col" className="px-3 py-2" />
+              {canDelete && <th scope="col" className="px-3 py-2" />}
             </tr>
           </thead>
           <tbody>
@@ -176,7 +187,7 @@ export function LotAssets({
                       value={a.lotId ?? ''}
                       onChange={(e) => onAssign(a.id, e.target.value)}
                       disabled={pending}
-                      className="max-w-[10rem] rounded-md border border-neutral-200 bg-white px-2 py-1 text-xs text-neutral-700"
+                      className="max-w-[10rem] rounded-md border border-[var(--field-border)] bg-white px-2 py-1 text-xs text-neutral-700"
                       aria-label={`Sub-lot for ${a.name}`}
                     >
                       <option value="">— None —</option>
@@ -195,7 +206,7 @@ export function LotAssets({
                       value=""
                       onChange={(e) => onMove(a.id, e.target.value)}
                       disabled={pending}
-                      className="max-w-[10rem] rounded-md border border-neutral-200 bg-white px-2 py-1 text-xs text-neutral-700"
+                      className="max-w-[10rem] rounded-md border border-[var(--field-border)] bg-white px-2 py-1 text-xs text-neutral-700"
                       aria-label={`Move ${a.name} to another lot`}
                     >
                       <option value="">Move…</option>
@@ -214,7 +225,8 @@ export function LotAssets({
                     <button
                       onClick={() => onSell(a)}
                       disabled={pending}
-                      className="text-emerald-700 hover:underline"
+                      aria-label={`Sell ${a.tag}`}
+                      className="text-emerald-800 hover:underline"
                     >
                       Sell
                     </button>
@@ -225,6 +237,7 @@ export function LotAssets({
                   <Link
                     href={`/assets/${a.id}/label`}
                     target="_blank"
+                    aria-label={`Print the label for ${a.tag} (opens in a new tab)`}
                     className="text-[#1a6ef5] hover:underline"
                   >
                     Print
@@ -236,7 +249,8 @@ export function LotAssets({
                     <button
                       onClick={() => onDelete(a)}
                       disabled={pending}
-                      className="text-red-600 hover:underline"
+                      aria-label={`Delete ${a.tag}`}
+                      className="text-red-700 hover:underline"
                     >
                       Delete
                     </button>
@@ -254,7 +268,7 @@ export function LotAssets({
           </tbody>
         </table>
       </div>
-      {error && <p className="mt-2 text-xs text-red-600">{error}</p>}
+      {error && <p role="alert" className="mt-2 text-xs text-red-700">{error}</p>}
     </div>
   );
 }

@@ -51,7 +51,7 @@ export function BatchAnalyticsTable({ rows }: { rows: BatchAnalytics[] }) {
 
   if (rows.length === 0) {
     return (
-      <p className="mt-3 rounded-lg border border-neutral-200 px-4 py-6 text-center text-sm text-neutral-500">
+      <p className="mt-3 rounded-lg border border-[var(--field-border)] px-4 py-6 text-center text-sm text-neutral-500">
         No purchase lots yet.
       </p>
     );
@@ -60,20 +60,21 @@ export function BatchAnalyticsTable({ rows }: { rows: BatchAnalytics[] }) {
   return (
     <div role="region" aria-label="Lot analytics" tabIndex={0} className="mt-3 overflow-x-auto rounded-lg border border-neutral-200">
       <table className="w-full text-left text-sm">
+          <caption className="sr-only">Lot analytics</caption>
         <thead className="bg-neutral-50 text-neutral-500">
           <tr>
-            <th className="w-8 px-2 py-2" />
-            <th className="px-3 py-2">Lot</th>
-            <th className="px-3 py-2">Supplier</th>
-            <th className="px-3 py-2">Owner</th>
-            <th className="px-3 py-2">Status</th>
-            <th className="px-3 py-2 text-right">Sub-lots</th>
-            <th className="px-3 py-2 text-right">Assets</th>
-            <th className="px-3 py-2 text-right">Sold</th>
-            <th className="px-3 py-2 text-right">Cost</th>
-            <th className="px-3 py-2 text-right">Revenue</th>
-            <th className="px-3 py-2 text-right">Profit</th>
-            <th className="px-3 py-2 text-right">Margin</th>
+            <th scope="col" className="w-8 px-2 py-2" />
+            <th scope="col" className="px-3 py-2">Lot</th>
+            <th scope="col" className="px-3 py-2">Supplier</th>
+            <th scope="col" className="px-3 py-2">Owner</th>
+            <th scope="col" className="px-3 py-2">Status</th>
+            <th scope="col" className="px-3 py-2 text-right">Sub-lots</th>
+            <th scope="col" className="px-3 py-2 text-right">Assets</th>
+            <th scope="col" className="px-3 py-2 text-right">Sold</th>
+            <th scope="col" className="px-3 py-2 text-right">Cost</th>
+            <th scope="col" className="px-3 py-2 text-right">Revenue</th>
+            <th scope="col" className="px-3 py-2 text-right">Profit</th>
+            <th scope="col" className="px-3 py-2 text-right">Margin</th>
           </tr>
         </thead>
         <tbody>
@@ -118,7 +119,7 @@ function FragmentRow({
           {b.owner ?? '—'}
         </td>
         <td className="px-3 py-2">
-          <span className="rounded-full border border-neutral-200 px-2 py-0.5 text-xs text-neutral-700">
+          <span className="rounded-full border border-[var(--field-border)] px-2 py-0.5 text-xs text-neutral-700">
             {formatLabel(b.status)}
           </span>
         </td>

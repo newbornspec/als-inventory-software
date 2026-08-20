@@ -42,7 +42,7 @@ export function LastUpdated({ generatedAt }: { generatedAt: string }) {
         type="button"
         onClick={() => startTransition(() => router.refresh())}
         disabled={pending}
-        className="inline-flex items-center gap-2 rounded-lg border border-neutral-300 px-3 py-1.5 text-sm font-medium text-neutral-800 transition-colors hover:bg-neutral-50 disabled:opacity-60"
+        className="inline-flex items-center gap-2 rounded-lg border border-[var(--field-border)] px-3 py-1.5 text-sm font-medium text-neutral-800 transition-colors hover:bg-neutral-50 disabled:opacity-60"
       >
         <RotateCw className={pending ? 'size-4 animate-spin' : 'size-4'} aria-hidden="true" />
         {pending ? 'Refreshing…' : 'Refresh'}

@@ -62,9 +62,9 @@ export default async function AssetsPage({
   }
 
   return (
-    <main className="min-h-screen bg-white text-neutral-950">
+    <>
       <Nav />
-      <div id="main-content" tabIndex={-1} className="p-8">
+      <main id="main-content" tabIndex={-1} className="min-h-screen bg-white text-neutral-950 px-4 py-6 sm:p-8">
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-semibold">Assets</h1>
@@ -99,7 +99,7 @@ export default async function AssetsPage({
             name="search"
             defaultValue={params.search}
             placeholder="Search by tag, serial or name…"
-            className="w-full min-w-0 flex-1 rounded-md sm:w-auto sm:min-w-[18rem] border border-neutral-200 bg-white px-3 py-2 text-sm focus:border-neutral-300"
+            className="w-full min-w-0 flex-1 rounded-md sm:w-auto sm:min-w-[18rem] border border-[var(--field-border)] bg-white px-3 py-2 text-sm focus:border-[var(--field-border)]"
           />
           <label htmlFor="assets-stock-status" className="sr-only">
             Stock status
@@ -108,7 +108,7 @@ export default async function AssetsPage({
             id="assets-stock-status"
             name="stockStatus"
             defaultValue={params.stockStatus ?? ''}
-            className="rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm"
+            className="rounded-md border border-[var(--field-border)] bg-white px-3 py-2 text-sm"
           >
             <option value="">All stock statuses</option>
             {STOCK_STATUSES.map((s) => (
@@ -124,7 +124,7 @@ export default async function AssetsPage({
             id="assets-grade"
             name="conditionGrade"
             defaultValue={params.conditionGrade ?? ''}
-            className="rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm"
+            className="rounded-md border border-[var(--field-border)] bg-white px-3 py-2 text-sm"
           >
             <option value="">All condition grades</option>
             {CONDITION_GRADES.map((g) => (
@@ -140,7 +140,7 @@ export default async function AssetsPage({
             id="assets-audit-status"
             name="auditStatus"
             defaultValue={params.auditStatus ?? ''}
-            className="rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm"
+            className="rounded-md border border-[var(--field-border)] bg-white px-3 py-2 text-sm"
           >
             <option value="">All audit statuses</option>
             {AUDIT_STATUSES.map((s) => (
@@ -151,7 +151,7 @@ export default async function AssetsPage({
           </select>
           <button
             type="submit"
-            className="rounded-md border border-neutral-200 px-4 py-2 text-sm text-neutral-700"
+            className="rounded-md border border-[var(--field-border)] px-4 py-2 text-sm text-neutral-700"
           >
             Filter
           </button>
@@ -168,14 +168,15 @@ export default async function AssetsPage({
         {isSearching ? (
           <div role="region" aria-label="Devices" tabIndex={0} className="mt-6 overflow-x-auto rounded-lg border border-neutral-200">
             <table className="w-full text-left text-sm">
+          <caption className="sr-only">Devices matching the current search and filters</caption>
               <thead className="bg-neutral-50 text-neutral-500">
                 <tr>
-                  <th className="px-4 py-3">Name</th>
-                  <th className="px-4 py-3">Category</th>
-                  <th className="px-4 py-3">Stock Status</th>
-                  <th className="px-4 py-3">Grade</th>
-                  <th className="px-4 py-3">Audit Status</th>
-                  <th className="px-4 py-3">Location</th>
+                  <th scope="col" className="px-4 py-3">Name</th>
+                  <th scope="col" className="px-4 py-3">Category</th>
+                  <th scope="col" className="px-4 py-3">Stock Status</th>
+                  <th scope="col" className="px-4 py-3">Grade</th>
+                  <th scope="col" className="px-4 py-3">Audit Status</th>
+                  <th scope="col" className="px-4 py-3">Location</th>
                 </tr>
               </thead>
               <tbody>
@@ -188,7 +189,7 @@ export default async function AssetsPage({
                     </td>
                     <td className="px-4 py-3 text-neutral-500">{asset.category}</td>
                     <td className="px-4 py-3">
-                      <span className="rounded-full border border-neutral-200 px-2 py-0.5 text-xs">
+                      <span className="rounded-full border border-[var(--field-border)] px-2 py-0.5 text-xs">
                         {formatLabel(asset.stockStatus)}
                       </span>
                     </td>
@@ -214,7 +215,7 @@ export default async function AssetsPage({
         ) : (
           <AssetsGrouped batches={batches} unassigned={unassigned} />
         )}
-      </div>
-    </main>
+      </main>
+  </>
   );
 }

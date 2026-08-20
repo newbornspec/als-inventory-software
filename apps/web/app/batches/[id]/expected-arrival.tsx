@@ -25,11 +25,11 @@ export function ExpectedArrival({
         name="expectedArrivalDate"
         type="date"
         defaultValue={expectedArrivalDate ?? ''}
-        className="rounded border border-neutral-200 bg-white px-2 py-1 text-sm"
+        className="rounded border border-[var(--field-border)] bg-white px-2 py-1 text-sm"
       />
       <button
         type="submit"
-        className="rounded border border-neutral-300 px-2 py-1 text-xs text-neutral-950"
+        className="rounded border border-[var(--field-border)] px-2 py-1 text-xs text-neutral-950"
       >
         Save
       </button>

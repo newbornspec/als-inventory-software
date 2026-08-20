@@ -107,9 +107,9 @@ export default async function AssetDetailPage({
   }
 
   return (
-    <main className="min-h-screen bg-white text-neutral-950">
+    <>
       <Nav />
-      <div id="main-content" tabIndex={-1} className="p-8">
+      <main id="main-content" tabIndex={-1} className="min-h-screen bg-white text-neutral-950 px-4 py-6 sm:p-8">
         <Breadcrumbs items={crumbs} />
 
         <div className="mt-3 flex items-start justify-between">
@@ -128,7 +128,7 @@ export default async function AssetDetailPage({
               <form action={deleteAsset.bind(null, asset.id)}>
                 <button
                   type="submit"
-                  className="rounded-md border border-red-200 px-3 py-1.5 text-sm text-red-600 hover:bg-red-50"
+                  className="rounded-md border border-red-200 px-3 py-1.5 text-sm text-red-700 hover:bg-red-50"
                 >
                   Delete
                 </button>
@@ -288,7 +288,7 @@ export default async function AssetDetailPage({
             </Link>
           </section>
         </div>
-      </div>
-    </main>
+      </main>
+  </>
   );
 }

@@ -17,28 +17,28 @@ export function NewAssetForm({ locations }: { locations: Location[] }) {
         <input id="assets-new-new-asset-form-tag" name="tag"
           required
           placeholder="AST-0006"
-          className="w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm focus:border-neutral-300"
+          className="w-full rounded-md border border-[var(--field-border)] bg-white px-3 py-2 text-sm focus:border-[var(--field-border)]"
         />
       </div>
       <div className="space-y-1">
         <label htmlFor="assets-new-new-asset-form-name" className="text-sm text-neutral-700">Name</label>
         <input id="assets-new-new-asset-form-name" name="name"
           required
-          className="w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm focus:border-neutral-300"
+          className="w-full rounded-md border border-[var(--field-border)] bg-white px-3 py-2 text-sm focus:border-[var(--field-border)]"
         />
       </div>
       <div className="space-y-1">
         <label htmlFor="assets-new-new-asset-form-category" className="text-sm text-neutral-700">Category</label>
         <input id="assets-new-new-asset-form-category" name="category"
           required
-          className="w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm focus:border-neutral-300"
+          className="w-full rounded-md border border-[var(--field-border)] bg-white px-3 py-2 text-sm focus:border-[var(--field-border)]"
         />
       </div>
       <div className="space-y-1">
         <label htmlFor="assets-new-new-asset-form-stockStatus" className="text-sm text-neutral-700">Stock status</label>
         <select id="assets-new-new-asset-form-stockStatus" name="stockStatus"
           defaultValue="received"
-          className="w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm"
+          className="w-full rounded-md border border-[var(--field-border)] bg-white px-3 py-2 text-sm"
         >
           {STOCK_STATUSES.map((s) => (
             <option key={s} value={s}>
@@ -51,7 +51,7 @@ export function NewAssetForm({ locations }: { locations: Location[] }) {
         <label htmlFor="assets-new-new-asset-form-conditionGrade" className="text-sm text-neutral-700">Condition grade (optional)</label>
         <select id="assets-new-new-asset-form-conditionGrade" name="conditionGrade"
           defaultValue=""
-          className="w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm"
+          className="w-full rounded-md border border-[var(--field-border)] bg-white px-3 py-2 text-sm"
         >
           <option value="">Ungraded</option>
           {CONDITION_GRADES.map((g) => (
@@ -65,7 +65,7 @@ export function NewAssetForm({ locations }: { locations: Location[] }) {
         <label htmlFor="assets-new-new-asset-form-locationId" className="text-sm text-neutral-700">Location</label>
         <select id="assets-new-new-asset-form-locationId" name="locationId"
           defaultValue=""
-          className="w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm"
+          className="w-full rounded-md border border-[var(--field-border)] bg-white px-3 py-2 text-sm"
         >
           <option value="">Unassigned</option>
           {locations.map((l) => (
@@ -75,7 +75,7 @@ export function NewAssetForm({ locations }: { locations: Location[] }) {
           ))}
         </select>
       </div>
-      {state.error && <p className="text-sm text-red-600">{state.error}</p>}
+      {state.error && <p role="alert" className="text-sm text-red-700">{state.error}</p>}
 
       <button
         type="submit"

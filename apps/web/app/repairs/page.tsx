@@ -22,9 +22,9 @@ export default async function RepairsPage() {
   const repairs = await apiFetch<OpenRepair[]>('/repairs');
 
   return (
-    <main className="min-h-screen bg-white text-neutral-950">
+    <>
       <Nav />
-      <div id="main-content" tabIndex={-1} className="px-4 py-6 sm:p-8">
+      <main id="main-content" tabIndex={-1} className="min-h-screen bg-white text-neutral-950 px-4 py-6 sm:p-8">
         <h1 className="text-2xl font-semibold">Open repairs</h1>
         <p className="mt-1 text-sm text-neutral-600">
           Repair jobs logged but not yet finished, newest first. Completed and written-off jobs stay
@@ -98,7 +98,7 @@ export default async function RepairsPage() {
             </table>
           </div>
         )}
-      </div>
-    </main>
+      </main>
+  </>
   );
 }

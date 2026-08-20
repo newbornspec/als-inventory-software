@@ -9,7 +9,7 @@ const LABEL: Record<StockStatus, string> = {
 const STYLE: Record<StockStatus, string> = {
   in_stock: 'border-emerald-200 bg-emerald-50 text-emerald-700',
   low_stock: 'border-amber-200 bg-amber-50 text-amber-700',
-  out_of_stock: 'border-red-200 bg-red-50 text-red-600',
+  out_of_stock: 'border-red-200 bg-red-50 text-red-700',
 };
 
 export function StockStatusBadge({ status }: { status: StockStatus }) {

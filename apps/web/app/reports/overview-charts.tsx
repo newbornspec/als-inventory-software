@@ -143,7 +143,7 @@ export function CategoryDonut({ data }: { data: LabelCount[] }) {
       </div>
       {/* The legend beside the donut already carries every label, count and
           share as text, so this chart needs no separate data table. */}
-      <ul className="min-w-[10rem] flex-1 space-y-1 text-sm">
+      <ul className="min-w-0 basis-full space-y-1 text-sm sm:flex-1 sm:basis-0">
         {rows.map((r, i) => (
           <li key={r.label} className="flex items-center gap-2">
             <span
@@ -153,9 +153,9 @@ export function CategoryDonut({ data }: { data: LabelCount[] }) {
                   r.label === 'Other' ? OTHER_GRAY : CATEGORICAL[i % CATEGORICAL.length],
               }}
             />
-            <span className="flex-1 truncate text-neutral-700">{r.label}</span>
-            <span className="tabular-nums text-neutral-500">{r.count}</span>
-            <span className="w-12 text-right text-xs tabular-nums text-neutral-500">
+            <span className="min-w-0 flex-1 truncate text-neutral-700">{r.label}</span>
+            <span className="shrink-0 tabular-nums text-neutral-600">{r.count}</span>
+            <span className="w-10 shrink-0 text-right text-xs tabular-nums text-neutral-600">
               {total > 0 ? `${((r.count / total) * 100).toFixed(0)}%` : ''}
             </span>
           </li>
@@ -352,7 +352,7 @@ export function CountBars({
           <YAxis
             type="category"
             dataKey="label"
-            width={130}
+            width={96}
             stroke={GRID}
             tick={{ fill: INK_MUTED, fontSize: 11 }}
             tickLine={false}

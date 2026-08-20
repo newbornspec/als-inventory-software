@@ -232,15 +232,15 @@ export default async function ReportsPage({
 
   if (!canSee || !overview) {
     return (
-      <main className="min-h-screen bg-white text-neutral-950">
+      <>
         <Nav />
-        <div id="main-content" tabIndex={-1} className="p-8">
+        <main id="main-content" tabIndex={-1} className="min-h-screen bg-white text-neutral-950 px-4 py-6 sm:p-8">
           <h1 className="text-2xl font-semibold">Reports</h1>
           <p className="mt-4 text-sm text-neutral-500">
             {canSee ? 'Reports are temporarily unavailable — try again shortly.' : 'Reports are available to managers and admins.'}
           </p>
-        </div>
-      </main>
+        </main>
+    </>
     );
   }
 
@@ -291,9 +291,9 @@ export default async function ReportsPage({
   ];
 
   return (
-    <main className="min-h-screen bg-white text-neutral-950">
+    <>
       <Nav />
-      <div id="main-content" tabIndex={-1} className="p-8">
+      <main id="main-content" tabIndex={-1} className="min-h-screen bg-white text-neutral-950 px-4 py-6 sm:p-8">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h1 className="text-2xl font-semibold">Reports</h1>
           <div className="flex flex-wrap items-center gap-3 text-sm">
@@ -305,7 +305,7 @@ export default async function ReportsPage({
             </a>
             <a
               href={`/api/reports/export-pdf?${deviceQs.toString()}`}
-              className="rounded-md border border-neutral-200 px-3 py-1.5 text-neutral-900 hover:bg-white"
+              className="rounded-md border border-[var(--field-border)] px-3 py-1.5 text-neutral-900 hover:bg-white"
             >
               Export PDF
             </a>
@@ -328,26 +328,27 @@ export default async function ReportsPage({
               <Link
                 key={p.key}
                 href={href}
+                aria-current={range === p.key ? 'true' : undefined}
                 className={
                   'rounded-md px-3 py-1.5 text-xs ' +
                   (range === p.key
-                    ? 'bg-neutral-100 font-medium text-neutral-900'
-                    : 'border border-neutral-200 text-neutral-700 hover:bg-white')
+                    ? 'bg-neutral-100 font-semibold text-neutral-900 ring-1 ring-neutral-500'
+                    : 'border border-[var(--field-border)] text-neutral-700 hover:bg-white')
                 }
               >
                 {p.label}
               </Link>
             );
           })}
-          <form action="/reports" className="flex items-center gap-1 text-xs text-neutral-500">
+          <form action="/reports" className="flex flex-wrap items-center gap-1 text-xs text-neutral-700">
             <input type="hidden" name="range" value="custom" />
             {(['batchId', 'supplier', 'manufacturer', 'category', 'grade'] as const).map((k) =>
               params[k] ? <input key={k} type="hidden" name={k} value={params[k]} /> : null,
             )}
-            <input type="date" name="from" defaultValue={params.from ?? ''} className="rounded-md border border-neutral-200 bg-white px-2 py-1 text-xs" />
-            <span>–</span>
-            <input type="date" name="to" defaultValue={params.to ?? ''} className="rounded-md border border-neutral-200 bg-white px-2 py-1 text-xs" />
-            <button type="submit" className="rounded-md border border-neutral-200 px-2 py-1 text-neutral-700 hover:bg-white">
+            <input type="date" name="from" aria-label="From date" defaultValue={params.from ?? ''} className="rounded-md border border-[var(--field-border)] bg-white px-2 py-1 text-xs" />
+            <span aria-hidden="true">–</span>
+            <input type="date" name="to" aria-label="To date" defaultValue={params.to ?? ''} className="rounded-md border border-[var(--field-border)] bg-white px-2 py-1 text-xs" />
+            <button type="submit" className="rounded-md border border-[var(--field-border)] px-2 py-1 text-neutral-700 hover:bg-white">
               Apply
             </button>
           </form>
@@ -385,7 +386,7 @@ export default async function ReportsPage({
             Inventory analytics <span className="text-neutral-500">(active inventory)</span>
           </h2>
           <div className="mt-3 grid gap-4 lg:grid-cols-2">
-            <div className="rounded-lg border border-neutral-200 bg-white p-4">
+            <div className="min-w-0 rounded-lg border border-neutral-200 bg-white p-4">
               <h3 className="text-sm font-medium text-neutral-700">By category</h3>
               <div className="mt-3">
                 {overview.byCategory.length > 0 ? (
@@ -396,19 +397,20 @@ export default async function ReportsPage({
               </div>
             </div>
 
-            <div className="rounded-lg border border-neutral-200 bg-white p-4">
+            <div className="min-w-0 rounded-lg border border-neutral-200 bg-white p-4">
               <h3 className="text-sm font-medium text-neutral-700">By manufacturer</h3>
               <div className="mt-3">
                 {overview.byManufacturer.length > 0 ? (
                   <>
                     <CountBars data={overview.byManufacturer} color="blue" />
                     <table className="mt-3 w-full text-left text-xs">
+                <caption className="sr-only">Units and average grade by manufacturer</caption>
                       <thead className="text-neutral-500">
                         <tr>
-                          <th className="py-1">Manufacturer</th>
-                          <th className="py-1 text-right">Units</th>
-                          <th className="py-1 text-right">Share</th>
-                          <th className="py-1 text-right">Avg grade</th>
+                          <th scope="col" className="py-1">Manufacturer</th>
+                          <th scope="col" className="py-1 text-right">Units</th>
+                          <th scope="col" className="py-1 text-right">Share</th>
+                          <th scope="col" className="py-1 text-right">Avg grade</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -429,7 +431,7 @@ export default async function ReportsPage({
               </div>
             </div>
 
-            <div className="rounded-lg border border-neutral-200 bg-white p-4">
+            <div className="min-w-0 rounded-lg border border-neutral-200 bg-white p-4">
               <h3 className="text-sm font-medium text-neutral-700">By condition grade</h3>
               <div className="mt-3">
                 {byGradeOrdered.length > 0 ? (
@@ -440,7 +442,7 @@ export default async function ReportsPage({
               </div>
             </div>
 
-            <div className="rounded-lg border border-neutral-200 bg-white p-4">
+            <div className="min-w-0 rounded-lg border border-neutral-200 bg-white p-4">
               <h3 className="text-sm font-medium text-neutral-700">By audit status</h3>
               <div className="mt-3">
                 {byAuditLabelled.length > 0 ? (
@@ -483,7 +485,7 @@ export default async function ReportsPage({
             </div>
 
             <div className="mt-4 grid gap-4 lg:grid-cols-3">
-              <div className="rounded-lg border border-neutral-200 bg-white p-4 lg:col-span-2">
+              <div className="min-w-0 rounded-lg border border-neutral-200 bg-white p-4 lg:col-span-2">
                 <h3 className="text-sm font-medium text-neutral-700">
                   Revenue &amp; profit <span className="text-neutral-500">(last 12 months)</span>
                 </h3>
@@ -499,7 +501,7 @@ export default async function ReportsPage({
                 </div>
               </div>
 
-              <div className="rounded-lg border border-neutral-200 bg-white p-4">
+              <div className="min-w-0 rounded-lg border border-neutral-200 bg-white p-4">
                 <h3 className="text-sm font-medium text-neutral-700">Top manufacturers</h3>
                 <div className="mt-3">
                   {sales.topManufacturers.length > 0 ? (
@@ -520,16 +522,17 @@ export default async function ReportsPage({
               <TopTable title="Best-selling categories" rows={sales.topCategories} />
             </div>
 
-            <div role="region" aria-label="Report table" tabIndex={0} className="mt-4 overflow-x-auto rounded-lg border border-neutral-200">
+            <div role="region" aria-label="Units by manufacturer" tabIndex={0} className="mt-4 overflow-x-auto rounded-lg border border-neutral-200">
               <table className="w-full text-left text-sm">
+                <caption className="sr-only">Sales performance by supplier</caption>
                 <thead className="bg-neutral-50 text-neutral-500">
                   <tr>
-                    <th className="px-3 py-2">Supplier</th>
-                    <th className="px-3 py-2 text-right">Units</th>
-                    <th className="px-3 py-2 text-right">Revenue</th>
-                    <th className="px-3 py-2 text-right">Cost</th>
-                    <th className="px-3 py-2 text-right">Profit</th>
-                    <th className="px-3 py-2 text-right">Margin</th>
+                    <th scope="col" className="px-3 py-2">Supplier</th>
+                    <th scope="col" className="px-3 py-2 text-right">Units</th>
+                    <th scope="col" className="px-3 py-2 text-right">Revenue</th>
+                    <th scope="col" className="px-3 py-2 text-right">Cost</th>
+                    <th scope="col" className="px-3 py-2 text-right">Profit</th>
+                    <th scope="col" className="px-3 py-2 text-right">Margin</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -575,18 +578,19 @@ export default async function ReportsPage({
             <h2 className="text-sm font-medium text-neutral-500">
               Supplier performance <span className="text-neutral-500">(revenue/profit: {rangeLabel})</span>
             </h2>
-            <div role="region" aria-label="Report table" tabIndex={0} className="mt-3 overflow-x-auto rounded-lg border border-neutral-200">
+            <div role="region" aria-label="Sales by supplier" tabIndex={0} className="mt-3 overflow-x-auto rounded-lg border border-neutral-200">
               <table className="w-full text-left text-sm">
+                <caption className="sr-only">Supplier performance: lots, assets, grade, sales and returns</caption>
                 <thead className="bg-neutral-50 text-neutral-500">
                   <tr>
-                    <th className="px-3 py-2">Supplier</th>
-                    <th className="px-3 py-2 text-right">Lots</th>
-                    <th className="px-3 py-2 text-right">Assets</th>
-                    <th className="px-3 py-2 text-right">Avg grade</th>
-                    <th className="px-3 py-2 text-right">Sold</th>
-                    <th className="px-3 py-2 text-right">Revenue</th>
-                    <th className="px-3 py-2 text-right">Profit</th>
-                    <th className="px-3 py-2 text-right">Return rate</th>
+                    <th scope="col" className="px-3 py-2">Supplier</th>
+                    <th scope="col" className="px-3 py-2 text-right">Lots</th>
+                    <th scope="col" className="px-3 py-2 text-right">Assets</th>
+                    <th scope="col" className="px-3 py-2 text-right">Avg grade</th>
+                    <th scope="col" className="px-3 py-2 text-right">Sold</th>
+                    <th scope="col" className="px-3 py-2 text-right">Revenue</th>
+                    <th scope="col" className="px-3 py-2 text-right">Profit</th>
+                    <th scope="col" className="px-3 py-2 text-right">Return rate</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -661,20 +665,21 @@ export default async function ReportsPage({
                 {palletAnalytics.summary.unitsSold.toLocaleString('en-GB')} sold {rangeLabel})
               </span>
             </h2>
-            <div role="region" aria-label="Report table" tabIndex={0} className="mt-3 overflow-x-auto rounded-lg border border-neutral-200">
+            <div role="region" aria-label="Supplier performance" tabIndex={0} className="mt-3 overflow-x-auto rounded-lg border border-neutral-200">
               <table className="w-full text-left text-sm">
+                <caption className="sr-only">Consumable stock lines and their status</caption>
                 <thead className="bg-neutral-50 text-neutral-500">
                   <tr>
-                    <th className="px-3 py-2">Pallet</th>
-                    <th className="px-3 py-2">Description</th>
-                    <th className="px-3 py-2">Status</th>
-                    <th className="px-3 py-2">Entry</th>
-                    <th className="px-3 py-2 text-right">Variants</th>
-                    <th className="px-3 py-2 text-right">Units</th>
-                    <th className="px-3 py-2 text-right">Sold</th>
-                    <th className="px-3 py-2 text-right">Revenue</th>
-                    <th className="px-3 py-2">Location</th>
-                    <th className="px-3 py-2">Created</th>
+                    <th scope="col" className="px-3 py-2">Pallet</th>
+                    <th scope="col" className="px-3 py-2">Description</th>
+                    <th scope="col" className="px-3 py-2">Status</th>
+                    <th scope="col" className="px-3 py-2">Entry</th>
+                    <th scope="col" className="px-3 py-2 text-right">Variants</th>
+                    <th scope="col" className="px-3 py-2 text-right">Units</th>
+                    <th scope="col" className="px-3 py-2 text-right">Sold</th>
+                    <th scope="col" className="px-3 py-2 text-right">Revenue</th>
+                    <th scope="col" className="px-3 py-2">Location</th>
+                    <th scope="col" className="px-3 py-2">Created</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -806,7 +811,7 @@ export default async function ReportsPage({
             </div>
 
             <div className="mt-4 grid gap-4 lg:grid-cols-3">
-              <div className="rounded-lg border border-neutral-200 bg-white p-4 lg:col-span-2">
+              <div className="min-w-0 rounded-lg border border-neutral-200 bg-white p-4 lg:col-span-2">
                 <h3 className="text-sm font-medium text-neutral-700">
                   Consumption &amp; replenishment <span className="text-neutral-500">(last 12 months)</span>
                 </h3>
@@ -823,7 +828,7 @@ export default async function ReportsPage({
                 </div>
               </div>
 
-              <div className="rounded-lg border border-neutral-200 bg-white p-4">
+              <div className="min-w-0 rounded-lg border border-neutral-200 bg-white p-4">
                 <h3 className="text-sm font-medium text-neutral-700">Highest usage</h3>
                 <div className="mt-3">
                   {consumables.topUsage.length > 0 ? (
@@ -838,13 +843,13 @@ export default async function ReportsPage({
             {(consumables.topOrdered.length > 0 || consumables.lowOrOut.length > 0) && (
               <div className="mt-4 grid gap-4 lg:grid-cols-2">
                 <TopTable title="Most ordered (received)" rows={consumables.topOrdered.map((o) => ({ label: o.label, units: o.qty, revenue: 0 }))} hideRevenue />
-                <div className="rounded-lg border border-neutral-200 bg-white p-4">
+                <div className="min-w-0 rounded-lg border border-neutral-200 bg-white p-4">
                   <h3 className="text-sm font-medium text-neutral-700">Low / out of stock</h3>
                   {consumables.lowOrOut.length > 0 ? (
                     <ul className="mt-3 space-y-1.5 text-sm">
                       {consumables.lowOrOut.map((l) => (
                         <li key={l.id} className="flex items-center gap-2">
-                          <span className="flex-1 truncate text-neutral-700">
+                          <span className="min-w-0 flex-1 truncate text-neutral-700">
                             {l.name}
                             {l.sku && <span className="ml-1 text-xs text-neutral-500">{l.sku}</span>}
                           </span>
@@ -852,7 +857,7 @@ export default async function ReportsPage({
                             className={
                               'rounded-full px-2 py-0.5 text-xs ' +
                               (l.status === 'out_of_stock'
-                                ? 'bg-red-50 text-red-600'
+                                ? 'bg-red-50 text-red-700'
                                 : 'bg-amber-50 text-amber-700')
                             }
                           >
@@ -880,19 +885,20 @@ export default async function ReportsPage({
             <h2 className="text-sm font-medium text-neutral-500">
               User performance <span className="text-neutral-500">({rangeLabel})</span>
             </h2>
-            <div role="region" aria-label="Report table" tabIndex={0} className="mt-3 overflow-x-auto rounded-lg border border-neutral-200">
+            <div role="region" aria-label="Consumable stock" tabIndex={0} className="mt-3 overflow-x-auto rounded-lg border border-neutral-200">
               <table className="w-full text-left text-sm">
+                <caption className="sr-only">Per-user activity</caption>
                 <thead className="bg-neutral-50 text-neutral-500">
                   <tr>
-                    <th className="px-3 py-2">User</th>
-                    <th className="px-3 py-2">Role</th>
-                    <th className="px-3 py-2 text-right">Lots created</th>
-                    <th className="px-3 py-2 text-right">Assets added</th>
-                    <th className="px-3 py-2 text-right">Audited</th>
-                    <th className="px-3 py-2 text-right">Items sold</th>
-                    <th className="px-3 py-2 text-right">Returned</th>
-                    <th className="px-3 py-2 text-right">Avg processing</th>
-                    <th className="px-3 py-2">Last activity</th>
+                    <th scope="col" className="px-3 py-2">User</th>
+                    <th scope="col" className="px-3 py-2">Role</th>
+                    <th scope="col" className="px-3 py-2 text-right">Lots created</th>
+                    <th scope="col" className="px-3 py-2 text-right">Assets added</th>
+                    <th scope="col" className="px-3 py-2 text-right">Audited</th>
+                    <th scope="col" className="px-3 py-2 text-right">Items sold</th>
+                    <th scope="col" className="px-3 py-2 text-right">Returned</th>
+                    <th scope="col" className="px-3 py-2 text-right">Avg processing</th>
+                    <th scope="col" className="px-3 py-2">Last activity</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -966,8 +972,8 @@ export default async function ReportsPage({
             </ol>
           </section>
         )}
-      </div>
-    </main>
+      </main>
+  </>
   );
 }
 
@@ -1016,7 +1022,7 @@ function TopTable({
 }) {
   const max = Math.max(1, ...rows.map((r) => r.units));
   return (
-    <div className="rounded-lg border border-neutral-200 bg-white p-4">
+    <div className="min-w-0 rounded-lg border border-neutral-200 bg-white p-4">
       <h3 className="text-sm font-medium text-neutral-700">{title}</h3>
       {rows.length > 0 ? (
         <ul className="mt-3 space-y-2 text-sm">

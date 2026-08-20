@@ -43,10 +43,11 @@ export default function LoginPage() {
           <input
             id="email"
             type="email"
+            autoComplete="username"
             required
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            className="w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-neutral-950 focus:border-neutral-300"
+            className="w-full rounded-md border border-[var(--field-border)] bg-white px-3 py-2 text-neutral-950 focus:border-[var(--field-border)]"
           />
         </div>
 
@@ -57,15 +58,16 @@ export default function LoginPage() {
           <input
             id="password"
             type="password"
+            autoComplete="current-password"
             required
             minLength={8}
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            className="w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-neutral-950 focus:border-neutral-300"
+            className="w-full rounded-md border border-[var(--field-border)] bg-white px-3 py-2 text-neutral-950 focus:border-[var(--field-border)]"
           />
         </div>
 
-        {error && <p className="text-sm text-red-600">{error}</p>}
+        {error && <p role="alert" className="text-sm text-red-700">{error}</p>}
 
         <button
           type="submit"

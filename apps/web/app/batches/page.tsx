@@ -79,9 +79,9 @@ export default async function LotsPage({
   const copy = filter ? FILTER_COPY[filter] : null;
 
   return (
-    <main className="min-h-screen bg-white text-neutral-950">
+    <>
       <Nav />
-      <div id="main-content" tabIndex={-1} className="p-8">
+      <main id="main-content" tabIndex={-1} className="min-h-screen bg-white text-neutral-950 px-4 py-6 sm:p-8">
         <div className="flex items-center gap-2 text-sm leading-5 text-neutral-500">
           <Link href="/dashboard" className="transition-colors hover:text-neutral-900">
             Dashboard
@@ -90,9 +90,9 @@ export default async function LotsPage({
           <span className="font-medium text-neutral-950">Lots</span>
         </div>
 
-        <div className="mt-8 flex items-start justify-between gap-6">
-          <div className="max-w-3xl">
-            <h1 className="text-4xl leading-10 font-semibold tracking-tight text-neutral-950">
+        <div className="mt-8 flex flex-wrap items-start justify-between gap-4 sm:gap-6">
+          <div className="min-w-0 max-w-3xl">
+            <h1 className="text-3xl leading-9 font-semibold tracking-tight text-neutral-950 sm:text-4xl sm:leading-10">
               {copy ? copy.title : 'Lots'}
             </h1>
             <p className="mt-3 max-w-2xl text-sm leading-6 text-neutral-600">
@@ -155,7 +155,7 @@ export default async function LotsPage({
           activeAuditLotId={auditTarget?.batchId ?? null}
         />
         )}
-      </div>
-    </main>
+      </main>
+  </>
   );
 }

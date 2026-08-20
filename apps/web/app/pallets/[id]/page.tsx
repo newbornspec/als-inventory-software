@@ -62,14 +62,14 @@ export default async function PalletDetailPage({ params }: { params: Promise<{ i
     }));
 
     return (
-      <main className="min-h-screen bg-white text-neutral-950">
+      <>
         <Nav />
-        <div id="main-content" tabIndex={-1} className="p-8">
-          <Link href="/pallets" className="text-sm text-neutral-500 hover:text-neutral-900">
-            ← Back to Pallets
+        <main id="main-content" tabIndex={-1} className="min-h-screen bg-white text-neutral-950 px-4 py-6 sm:p-8">
+          <Link href="/pallets" className="text-sm text-neutral-700 hover:text-neutral-950">
+            <span aria-hidden="true">← </span>Back to Pallets
           </Link>
 
-          <div className="mt-3 flex items-start justify-between gap-3">
+          <div className="mt-3 flex flex-wrap items-start justify-between gap-3">
             <div>
               <h1 className="text-2xl font-semibold">{pallet.palletNumber}</h1>
               <p className="mt-1 text-sm text-neutral-500">
@@ -77,7 +77,7 @@ export default async function PalletDetailPage({ params }: { params: Promise<{ i
                 {formatLabel(pallet.status)}
               </p>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               {canManage && (
                 <PalletStatusSelect palletId={pallet.id} status={pallet.status} />
               )}
@@ -100,7 +100,7 @@ export default async function PalletDetailPage({ params }: { params: Promise<{ i
                 <form action={deletePallet.bind(null, pallet.id)}>
                   <button
                     type="submit"
-                    className="rounded-md border border-red-200 px-3 py-1.5 text-sm text-red-600 hover:bg-red-50"
+                    className="rounded-md border border-red-200 px-3 py-1.5 text-sm text-red-700 hover:bg-red-50"
                   >
                     Delete
                   </button>
@@ -127,8 +127,8 @@ export default async function PalletDetailPage({ params }: { params: Promise<{ i
               You have read-only access — ask a manager to edit this pallet.
             </p>
           )}
-        </div>
-      </main>
+        </main>
+    </>
     );
   }
 
@@ -138,14 +138,14 @@ export default async function PalletDetailPage({ params }: { params: Promise<{ i
   );
 
   return (
-    <main className="min-h-screen bg-white text-neutral-950">
+    <>
       <Nav />
-      <div id="main-content" tabIndex={-1} className="p-8">
-        <Link href="/pallets" className="text-sm text-neutral-500 hover:text-neutral-900">
-          ← Back to Pallets
+      <main id="main-content" tabIndex={-1} className="min-h-screen bg-white text-neutral-950 px-4 py-6 sm:p-8">
+        <Link href="/pallets" className="text-sm text-neutral-700 hover:text-neutral-950">
+          <span aria-hidden="true">← </span>Back to Pallets
         </Link>
 
-        <div className="mt-3 flex items-start justify-between">
+        <div className="mt-3 flex flex-wrap items-start justify-between gap-3">
           <div>
             <h1 className="text-2xl font-semibold">{pallet.palletNumber}</h1>
             <p className="mt-1 text-sm text-neutral-500">
@@ -157,7 +157,7 @@ export default async function PalletDetailPage({ params }: { params: Promise<{ i
               </p>
             )}
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             {canManage && (
               <SellPalletButton
                 palletId={pallet.id}
@@ -179,7 +179,7 @@ export default async function PalletDetailPage({ params }: { params: Promise<{ i
             {canSeeCosts && (
               <a
                 href={`/api/pallets/${pallet.id}/costing`}
-                className="rounded-md border border-neutral-200 px-3 py-1.5 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
+                className="rounded-md border border-[var(--field-border)] px-3 py-1.5 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
               >
                 Costing sheet
               </a>
@@ -189,7 +189,7 @@ export default async function PalletDetailPage({ params }: { params: Promise<{ i
             {canSeeCosts && (
               <Link
                 href={`/pallets/${pallet.id}/invoice`}
-                className="rounded-md border border-neutral-200 px-3 py-1.5 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
+                className="rounded-md border border-[var(--field-border)] px-3 py-1.5 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
               >
                 Invoice…
               </Link>
@@ -198,7 +198,7 @@ export default async function PalletDetailPage({ params }: { params: Promise<{ i
               <form action={deletePallet.bind(null, pallet.id)}>
                 <button
                   type="submit"
-                  className="rounded-md border border-red-200 px-3 py-1.5 text-sm text-red-600 hover:bg-red-50"
+                  className="rounded-md border border-red-200 px-3 py-1.5 text-sm text-red-700 hover:bg-red-50"
                 >
                   Delete
                 </button>
@@ -208,7 +208,7 @@ export default async function PalletDetailPage({ params }: { params: Promise<{ i
         </div>
 
         <div className="mt-4 space-y-2 text-sm">
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
             <span className="w-16 shrink-0 text-xs uppercase tracking-wide text-neutral-500">
               Supplier
             </span>
@@ -217,9 +217,9 @@ export default async function PalletDetailPage({ params }: { params: Promise<{ i
             ) : (
               <span className="text-neutral-900">{pallet.supplier || '—'}</span>
             )}
-            <span className="text-xs text-neutral-500">who this pallet was bought from</span>
+            <span className="text-xs text-neutral-600">who this pallet was bought from</span>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
             <span className="w-16 shrink-0 text-xs uppercase tracking-wide text-neutral-500">
               Buyer
             </span>
@@ -228,7 +228,7 @@ export default async function PalletDetailPage({ params }: { params: Promise<{ i
             ) : (
               <span className="text-neutral-900">{pallet.buyer || '—'}</span>
             )}
-            <span className="text-xs text-neutral-500">who this pallet is being sold to</span>
+            <span className="text-xs text-neutral-600">who this pallet is being sold to</span>
           </div>
         </div>
 
@@ -268,7 +268,7 @@ export default async function PalletDetailPage({ params }: { params: Promise<{ i
             lookups={lookups}
           />
         </section>
-      </div>
-    </main>
+      </main>
+  </>
   );
 }

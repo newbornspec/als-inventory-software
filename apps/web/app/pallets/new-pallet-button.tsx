@@ -86,6 +86,7 @@ export function NewPalletButton() {
       <button
         ref={openerRef}
         onClick={() => setOpen(true)}
+        aria-haspopup="dialog"
         className="rounded-md bg-[#1a6ef5] hover:bg-blue-600 px-4 py-2 text-sm font-medium text-white"
       >
         New Pallet
@@ -93,7 +94,7 @@ export function NewPalletButton() {
 
       {open && (
         <div
-          className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/60 p-4 sm:items-center"
+          className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/60 p-4"
           onClick={() => setOpen(false)}
         >
           <div
@@ -126,6 +127,7 @@ export function NewPalletButton() {
                   <input
                     type="radio"
                     name="layout"
+                    aria-label={l.title}
                     value={l.key}
                     checked={choice === l.key}
                     onChange={() => setChoice(l.key)}
@@ -147,7 +149,7 @@ export function NewPalletButton() {
               )}
               <button
                 onClick={() => setOpen(false)}
-                className="rounded-md border border-neutral-200 px-3 py-1.5 text-sm text-neutral-700 hover:bg-white"
+                className="rounded-md border border-[var(--field-border)] px-3 py-1.5 text-sm text-neutral-700 hover:bg-white"
               >
                 Cancel
               </button>

@@ -55,9 +55,9 @@ export default async function SubLotDetailPage({
       : null;
 
   return (
-    <main className="min-h-screen bg-white text-neutral-950">
+    <>
       <Nav />
-      <div id="main-content" tabIndex={-1} className="p-8">
+      <main id="main-content" tabIndex={-1} className="min-h-screen bg-white text-neutral-950 px-4 py-6 sm:p-8">
         <Breadcrumbs
           items={[
             { label: 'Dashboard', href: '/dashboard' },
@@ -67,7 +67,7 @@ export default async function SubLotDetailPage({
           ]}
         />
 
-        <div className="mt-3 flex items-start justify-between gap-3">
+        <div className="mt-3 flex flex-wrap items-start justify-between gap-3">
           <div>
             <h1 className="text-2xl font-semibold">{lot.lotNumber}</h1>
             <p className="mt-1 text-sm text-neutral-500">
@@ -78,7 +78,7 @@ export default async function SubLotDetailPage({
               {spec ? ` · ${spec}` : ''}
             </p>
           </div>
-          <div className="flex shrink-0 items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <span className="rounded-full border border-neutral-200 px-2 py-0.5 text-xs text-neutral-500">
               {formatLabel(lot.status)}
             </span>
@@ -125,7 +125,7 @@ export default async function SubLotDetailPage({
             canDelete={canDelete}
           />
         </section>
-      </div>
-    </main>
+      </main>
+  </>
   );
 }

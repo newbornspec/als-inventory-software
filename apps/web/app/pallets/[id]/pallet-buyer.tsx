@@ -11,16 +11,17 @@ export function PalletBuyer({
 }) {
   const boundUpdate = updatePalletBuyer.bind(null, palletId);
   return (
-    <form action={boundUpdate} className="flex items-center gap-2">
+    <form action={boundUpdate} className="flex flex-wrap items-center gap-2">
       <input
         name="buyer"
+        aria-label="Buyer"
         defaultValue={buyer ?? ''}
         placeholder="buyer"
-        className="w-48 rounded border border-neutral-200 bg-white px-2 py-1 text-sm"
+        className="w-full min-w-0 rounded sm:w-48 border border-[var(--field-border)] bg-white px-2 py-1 text-sm"
       />
       <button
         type="submit"
-        className="rounded border border-neutral-300 px-2 py-1 text-xs text-neutral-950"
+        className="rounded border border-[var(--field-border)] px-2 py-1 text-xs text-neutral-950"
       >
         Save
       </button>

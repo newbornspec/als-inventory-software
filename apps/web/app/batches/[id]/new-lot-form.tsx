@@ -11,21 +11,22 @@ export function NewLotForm({ batchId }: { batchId: string }) {
   });
 
   const field =
-    'w-full rounded-md border border-neutral-200 bg-white px-2 py-1.5 text-sm';
+    'w-full rounded-md border border-[var(--field-border)] bg-white px-2 py-1.5 text-sm';
 
   return (
     <form action={formAction} className="mt-3 space-y-2 rounded-md border border-neutral-200 p-3">
-      <p className="text-xs font-medium text-neutral-500">New sub-lot (spec bucket)</p>
-      <div className="grid grid-cols-2 gap-2">
-        <input name="manufacturer" placeholder="Manufacturer, e.g. Dell" className={field} />
-        <input name="model" placeholder="Model, e.g. OptiPlex 5050" className={field} />
-        <input name="cpu" placeholder="CPU, e.g. i5-7500" className={field} />
-        <input type="number" min={0} name="ramGb" placeholder="RAM (GB)" className={field} />
-        <input name="storage" placeholder="Storage, e.g. 256GB SSD" className={field} />
-        <input name="screenSize" placeholder='Screen, e.g. 14"' className={field} />
+      <h3 className="text-xs font-medium text-neutral-700">New sub-lot (spec bucket)</h3>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+        <input name="manufacturer" aria-label="Manufacturer" placeholder="Manufacturer, e.g. Dell" className={field} />
+        <input name="model" aria-label="Model" placeholder="Model, e.g. OptiPlex 5050" className={field} />
+        <input name="cpu" aria-label="CPU" placeholder="CPU, e.g. i5-7500" className={field} />
+        <input type="number" min={0} name="ramGb" aria-label="RAM in GB" placeholder="RAM (GB)" className={field} />
+        <input name="storage" aria-label="Storage" placeholder="Storage, e.g. 256GB SSD" className={field} />
+        <input name="screenSize" aria-label="Screen size" placeholder='Screen, e.g. 14"' className={field} />
       </div>
       <input
         name="description"
+        aria-label="Label or notes"
         placeholder="Label / notes (optional)"
         className={field}
       />
@@ -33,10 +34,11 @@ export function NewLotForm({ batchId }: { batchId: string }) {
         type="number"
         min={0}
         name="expectedUnitCount"
+        aria-label="Expected units"
         placeholder="Expected units"
         className={field}
       />
-      {state.error && <p className="text-xs text-red-600">{state.error}</p>}
+      {state.error && <p role="alert" className="text-xs text-red-700">{state.error}</p>}
       <button
         type="submit"
         disabled={pending}

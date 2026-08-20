@@ -13,16 +13,16 @@ export default async function NewPalletPage() {
   ]);
 
   return (
-    <main className="min-h-screen bg-white text-neutral-950">
+    <>
       <Nav />
-      <div id="main-content" tabIndex={-1} className="p-8">
+      <main id="main-content" tabIndex={-1} className="min-h-screen bg-white text-neutral-950 px-4 py-6 sm:p-8">
         <BackLink href="/pallets" label="Back to Pallets" />
         <h1 className="mt-3 text-2xl font-semibold">New Pallet</h1>
         <p className="mt-1 text-sm text-neutral-500">
           Create the pallet, then add its contents item by item on the next screen.
         </p>
         <NewPalletForm locations={locations} suggestedNumber={suggestedNumber} />
-      </div>
-    </main>
+      </main>
+  </>
   );
 }

@@ -129,11 +129,12 @@ export default async function AssetLabelPage({ params }: { params: Promise<{ id:
       `}</style>
 
       <div className="no-print mx-auto mb-4 max-w-md">
+        <h1 className="mb-2 text-lg font-semibold">Label for {unit}</h1>
         <Link
           href={`/assets/${asset.id}`}
-          className="text-sm text-neutral-500 hover:text-neutral-900"
+          className="text-sm text-neutral-700 hover:text-neutral-950"
         >
-          ← Back to device
+          <span aria-hidden="true">← </span>Back to device
         </Link>
       </div>
 

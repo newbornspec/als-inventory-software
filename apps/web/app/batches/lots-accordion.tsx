@@ -78,28 +78,28 @@ export function LotsAccordion({
               onClick={() => toggle(lot.id)}
               aria-expanded={isOpen}
               aria-controls={`lot-panel-${lot.id}`}
-              className="flex w-full items-start justify-between gap-4 text-left"
+              className="flex w-full flex-wrap items-start justify-between gap-x-4 gap-y-2 text-left"
             >
-              <div className="flex items-center gap-3">
+              <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
                 {isOpen ? (
-                  <ChevronDown className="size-4 shrink-0 text-neutral-500" />
+                  <ChevronDown className="size-4 shrink-0 text-neutral-600" aria-hidden="true" />
                 ) : (
-                  <ChevronRight className="size-4 shrink-0 text-neutral-500" />
+                  <ChevronRight className="size-4 shrink-0 text-neutral-600" aria-hidden="true" />
                 )}
-                <span className="text-lg leading-7 font-semibold tracking-tight text-neutral-950">
+                <h2 className="text-lg leading-7 font-semibold tracking-tight text-neutral-950">
                   {lot.batchNumber}
-                </span>
+                </h2>
                 <span className="rounded-full border border-blue-200 bg-blue-50 px-2.5 py-0.5 text-xs leading-4 font-medium text-blue-700">
                   {formatLabel(lot.status)}
                 </span>
                 {isTarget && (
                   <span className="flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-0.5 text-xs leading-4 font-medium text-emerald-700">
-                    <Check className="size-3" />
+                    <Check className="size-3" aria-hidden="true" />
                     Audit target
                   </span>
                 )}
               </div>
-              <span className="shrink-0 text-sm leading-5 text-neutral-500">
+              <span className="text-sm leading-5 text-neutral-600">
                 {scanned}
                 {expected != null ? ` / ${expected}` : ''} items
               </span>
@@ -121,7 +121,7 @@ export function LotsAccordion({
             {pct != null && (
               <div className="mt-4">
                 <div className="h-2 w-full overflow-hidden rounded-full bg-neutral-100">
-                  <div className="h-full rounded-full bg-emerald-500" style={{ width: `${pct}%` }} />
+                  <div className="h-full rounded-full bg-emerald-700" style={{ width: `${pct}%` }} />
                 </div>
                 <div className="mt-1.5 text-xs text-neutral-500">
                   {scanned} / {expected} scanned · {lot.audited} audited
@@ -155,7 +155,7 @@ export function LotsAccordion({
             <div className="mt-4 flex flex-wrap items-center justify-end gap-6 text-sm leading-5">
               {isTarget ? (
                 <span className="flex items-center gap-2 font-medium text-neutral-950">
-                  <Check className="size-4" />
+                  <Check className="size-4" aria-hidden="true" />
                   Audit target
                 </span>
               ) : (
@@ -169,17 +169,19 @@ export function LotsAccordion({
               {canExport && (
                 <a
                   href={`/api/batches/${lot.id}/report`}
-                  className="font-medium text-neutral-500 transition-colors hover:text-neutral-950"
+                  aria-label={`Export ${lot.batchNumber} to Excel`}
+                  className="font-medium text-neutral-700 transition-colors hover:text-neutral-950"
                 >
                   Export to Excel
                 </a>
               )}
               <Link
                 href={`/batches/${lot.id}`}
-                className="flex items-center gap-1 font-medium text-neutral-500 transition-colors hover:text-neutral-950"
+                aria-label={`Open ${lot.batchNumber}`}
+                className="flex items-center gap-1 font-medium text-neutral-700 transition-colors hover:text-neutral-950"
               >
                 Open lot
-                <ArrowRight className="size-4" />
+                <ArrowRight className="size-4" aria-hidden="true" />
               </Link>
               {canDelete && (
                 <DeleteBatchButton
@@ -206,21 +208,22 @@ export function LotsAccordion({
             {isOpen && (
               <div role="region" aria-label="Lot devices" tabIndex={0} className="mt-4 overflow-x-auto rounded-xl border border-neutral-200">
                 {!data || data.loading ? (
-                  <p className="px-4 py-3 text-xs text-neutral-500">Loading assets…</p>
+                  <p role="status" className="px-4 py-3 text-xs text-neutral-600">Loading assets…</p>
                 ) : data.error ? (
-                  <p className="px-4 py-3 text-xs text-red-600">{data.error}</p>
+                  <p role="alert" className="px-4 py-3 text-xs text-red-700">{data.error}</p>
                 ) : data.assets.length === 0 ? (
                   <p className="px-4 py-3 text-xs text-neutral-500">
                     No assets scanned into this lot yet.
                   </p>
                 ) : (
                   <table className="w-full text-left text-xs">
+          <caption className="sr-only">Devices scanned into this lot</caption>
                     <thead className="bg-neutral-50 text-neutral-500">
                       <tr>
-                        <th className="px-4 py-2 font-medium">Name</th>
-                        <th className="px-4 py-2 font-medium">Category</th>
-                        <th className="px-4 py-2 font-medium">Status</th>
-                        <th className="px-4 py-2 font-medium">Grade</th>
+                        <th scope="col" className="px-4 py-2 font-medium">Name</th>
+                        <th scope="col" className="px-4 py-2 font-medium">Category</th>
+                        <th scope="col" className="px-4 py-2 font-medium">Status</th>
+                        <th scope="col" className="px-4 py-2 font-medium">Grade</th>
                       </tr>
                     </thead>
                     <tbody>
