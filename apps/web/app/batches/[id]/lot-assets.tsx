@@ -119,7 +119,7 @@ export function LotAssets({
           value={q}
           onChange={(e) => setQ(e.target.value)}
           placeholder="Search this lot — name, make, model, serial, service tag…"
-          className="w-full max-w-md rounded-md border border-[var(--field-border)] bg-white px-3 py-1.5 text-sm focus:border-[var(--field-border)]"
+          className="field-underline w-full max-w-md px-3 py-1.5 text-sm"
         />
         <span className="shrink-0 text-xs text-neutral-500">
           {filtered.length} of {assets.length}
@@ -187,7 +187,7 @@ export function LotAssets({
                       value={a.lotId ?? ''}
                       onChange={(e) => onAssign(a.id, e.target.value)}
                       disabled={pending}
-                      className="max-w-[10rem] rounded-md border border-[var(--field-border)] bg-white px-2 py-1 text-xs text-neutral-700"
+                      className="field-inline max-w-[10rem] px-2 py-1 text-xs text-neutral-700"
                       aria-label={`Sub-lot for ${a.name}`}
                     >
                       <option value="">— None —</option>
@@ -206,7 +206,7 @@ export function LotAssets({
                       value=""
                       onChange={(e) => onMove(a.id, e.target.value)}
                       disabled={pending}
-                      className="max-w-[10rem] rounded-md border border-[var(--field-border)] bg-white px-2 py-1 text-xs text-neutral-700"
+                      className="field-underline max-w-[10rem] px-2 py-1 text-xs text-neutral-700"
                       aria-label={`Move ${a.name} to another lot`}
                     >
                       <option value="">Move…</option>

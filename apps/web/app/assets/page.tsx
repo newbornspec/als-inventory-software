@@ -99,7 +99,7 @@ export default async function AssetsPage({
             name="search"
             defaultValue={params.search}
             placeholder="Search by tag, serial or name…"
-            className="w-full min-w-0 flex-1 rounded-md sm:w-auto sm:min-w-[18rem] border border-[var(--field-border)] bg-white px-3 py-2 text-sm focus:border-[var(--field-border)]"
+            className="field-underline w-full min-w-0 flex-1 sm:w-auto sm:min-w-[18rem] px-3 py-2 text-sm"
           />
           <label htmlFor="assets-stock-status" className="sr-only">
             Stock status
@@ -108,7 +108,7 @@ export default async function AssetsPage({
             id="assets-stock-status"
             name="stockStatus"
             defaultValue={params.stockStatus ?? ''}
-            className="rounded-md border border-[var(--field-border)] bg-white px-3 py-2 text-sm"
+            className="field-underline px-3 py-2 text-sm"
           >
             <option value="">All stock statuses</option>
             {STOCK_STATUSES.map((s) => (
@@ -124,7 +124,7 @@ export default async function AssetsPage({
             id="assets-grade"
             name="conditionGrade"
             defaultValue={params.conditionGrade ?? ''}
-            className="rounded-md border border-[var(--field-border)] bg-white px-3 py-2 text-sm"
+            className="field-underline px-3 py-2 text-sm"
           >
             <option value="">All condition grades</option>
             {CONDITION_GRADES.map((g) => (
@@ -140,7 +140,7 @@ export default async function AssetsPage({
             id="assets-audit-status"
             name="auditStatus"
             defaultValue={params.auditStatus ?? ''}
-            className="rounded-md border border-[var(--field-border)] bg-white px-3 py-2 text-sm"
+            className="field-underline px-3 py-2 text-sm"
           >
             <option value="">All audit statuses</option>
             {AUDIT_STATUSES.map((s) => (

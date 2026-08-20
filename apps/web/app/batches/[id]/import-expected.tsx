@@ -171,7 +171,7 @@ export function ImportExpected({ batchId, hasExisting }: { batchId: string; hasE
                   onChange={(e) =>
                     setMapping((m) => ({ ...m, [f.key]: e.target.value || undefined }))
                   }
-                  className="min-w-0 flex-1 rounded border border-[var(--field-border)] bg-white px-1.5 py-1 text-neutral-900"
+                  className="field-underline min-w-0 flex-1 px-1.5 py-1 text-neutral-900"
                 >
                   <option value="">— none —</option>
                   {columns.map((c) => (

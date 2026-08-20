@@ -261,7 +261,7 @@ export default function ScanPage() {
             id="scan-lot"
             value={selectedBatchId}
             onChange={(e) => setSelectedBatchId(e.target.value)}
-            className="mt-1 w-full rounded-md border border-[var(--field-border)] bg-white px-2 py-1.5 text-sm"
+            className="field-underline mt-1 w-full px-2 py-1.5 text-sm"
           >
             <option value="">Not receiving — scan only</option>
             {openBatches.map((b) => (
@@ -296,7 +296,7 @@ export default function ScanPage() {
               onChange={(e) => setTag(e.target.value)}
               placeholder="Scan or type asset tag…"
               autoComplete="off"
-              className="w-full rounded-md border border-[var(--field-border)] bg-white px-3 py-2 text-neutral-950 focus:border-[var(--field-border)]"
+              className="field-underline w-full px-3 py-2 text-neutral-950"
             />
           </form>
         ) : (

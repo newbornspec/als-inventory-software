@@ -58,7 +58,7 @@ export function BatchStatusSelect({ batchId, status }: { batchId: string; status
         defaultValue={status}
         disabled={busy}
         onChange={onChange}
-        className="w-full bg-transparent text-lg font-semibold disabled:opacity-50"
+        className="field-inline w-full px-1 text-lg font-semibold disabled:opacity-50"
       >
         {BATCH_STATUSES.map((s) => (
           <option key={s} value={s} className="bg-white">

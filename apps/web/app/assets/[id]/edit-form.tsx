@@ -17,21 +17,21 @@ export function AssetEditForm({ asset, locations }: { asset: Asset; locations: L
         <label htmlFor="assets-id-edit-form-name" className="text-sm text-neutral-700">Name</label>
         <input id="assets-id-edit-form-name" name="name"
           defaultValue={asset.name}
-          className="w-full rounded-md border border-[var(--field-border)] bg-white px-3 py-2 text-sm focus:border-[var(--field-border)]"
+          className="field-underline w-full px-3 py-2 text-sm"
         />
       </div>
       <div className="space-y-1">
         <label htmlFor="assets-id-edit-form-category" className="text-sm text-neutral-700">Category</label>
         <input id="assets-id-edit-form-category" name="category"
           defaultValue={asset.category}
-          className="w-full rounded-md border border-[var(--field-border)] bg-white px-3 py-2 text-sm focus:border-[var(--field-border)]"
+          className="field-underline w-full px-3 py-2 text-sm"
         />
       </div>
       <div className="space-y-1">
         <label htmlFor="assets-id-edit-form-stockStatus" className="text-sm text-neutral-700">Stock status</label>
         <select id="assets-id-edit-form-stockStatus" name="stockStatus"
           defaultValue={asset.stockStatus}
-          className="w-full rounded-md border border-[var(--field-border)] bg-white px-3 py-2 text-sm"
+          className="field-underline w-full px-3 py-2 text-sm"
         >
           {STOCK_STATUSES.map((s) => (
             <option key={s} value={s}>
@@ -44,7 +44,7 @@ export function AssetEditForm({ asset, locations }: { asset: Asset; locations: L
         <label htmlFor="assets-id-edit-form-conditionGrade" className="text-sm text-neutral-700">Condition grade</label>
         <select id="assets-id-edit-form-conditionGrade" name="conditionGrade"
           defaultValue={asset.conditionGrade ?? ''}
-          className="w-full rounded-md border border-[var(--field-border)] bg-white px-3 py-2 text-sm"
+          className="field-underline w-full px-3 py-2 text-sm"
         >
           <option value="">Ungraded</option>
           {CONDITION_GRADES.map((g) => (
@@ -58,7 +58,7 @@ export function AssetEditForm({ asset, locations }: { asset: Asset; locations: L
         <label htmlFor="assets-id-edit-form-locationId" className="text-sm text-neutral-700">Location</label>
         <select id="assets-id-edit-form-locationId" name="locationId"
           defaultValue={asset.locationId ?? ''}
-          className="w-full rounded-md border border-[var(--field-border)] bg-white px-3 py-2 text-sm"
+          className="field-underline w-full px-3 py-2 text-sm"
         >
           <option value="">Unassigned</option>
           {locations.map((l) => (
@@ -76,7 +76,7 @@ export function AssetEditForm({ asset, locations }: { asset: Asset; locations: L
           name="purchaseCost"
           defaultValue={asset.purchaseCost ?? ''}
           placeholder="leave blank to use even split of lot cost"
-          className="w-full rounded-md border border-[var(--field-border)] bg-white px-3 py-2 text-sm focus:border-[var(--field-border)]"
+          className="field-underline w-full px-3 py-2 text-sm"
         />
       </div>
 

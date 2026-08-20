@@ -54,11 +54,9 @@ export function InvoiceForm({
   );
 
   const err = (name: string) => state.fieldErrors?.[name];
-  const field = (name: string) =>
-    'w-full rounded-md border bg-white px-3 py-2 text-sm ' +
-    (err(name)
-      ? 'border-red-600 focus:border-red-700'
-      : 'border-[var(--field-border)] focus:border-neutral-500');
+  // The invalid state is carried by .field-underline[aria-invalid] — a thicker,
+  // darker rule — so it is not a colour swap here and not colour alone there.
+  const field = (_name: string) => 'field-underline w-full px-3 py-2 text-sm';
   // Spread onto each control: announces the invalid state and ties the field to
   // its own message, so the reason is read out with the field rather than being
   // a red line someone has to go and find.
@@ -111,7 +109,7 @@ export function InvoiceForm({
             <input
               value={nextNumber || '—'}
               readOnly
-              className="w-full rounded-md border border-[var(--field-border)] bg-neutral-50 px-3 py-2 text-sm text-neutral-700"
+              className="field-underline w-full bg-neutral-50 px-3 py-2 text-sm text-neutral-700"
             />
             <span className="block text-xs text-neutral-500">
               Allocated automatically when you generate. If someone else invoices first, you get

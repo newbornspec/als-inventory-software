@@ -17,11 +17,11 @@ export function PalletSupplier({
         aria-label="Supplier"
         defaultValue={supplier ?? ''}
         placeholder="supplier"
-        className="w-full min-w-0 rounded sm:w-48 border border-[var(--field-border)] bg-white px-2 py-1 text-sm"
+        className="field-inline w-full min-w-0 px-2 py-1 text-sm sm:w-48"
       />
       <button
         type="submit"
-        className="rounded border border-[var(--field-border)] px-2 py-1 text-xs text-neutral-950"
+        className="field-inline px-2 py-1 text-xs font-medium text-neutral-800 hover:bg-neutral-100"
       >
         Save
       </button>

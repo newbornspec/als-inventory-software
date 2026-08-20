@@ -93,7 +93,7 @@ export function PhotosSection({
           value={caption}
           onChange={(e) => setCaption(e.target.value)}
           placeholder="caption (optional)"
-          className="w-48 rounded border border-[var(--field-border)] bg-white px-2 py-1 text-sm"
+          className="field-underline w-48 px-2 py-1 text-sm"
         />
         <input
           ref={fileRef}

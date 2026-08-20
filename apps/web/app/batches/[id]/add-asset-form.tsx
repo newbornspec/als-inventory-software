@@ -22,7 +22,7 @@ export function AddAssetForm({ batchId, subLots }: { batchId: string; subLots: L
     }
   }, [pending, state]);
 
-  const field = 'w-full rounded-md border border-[var(--field-border)] bg-white px-2 py-1.5 text-sm';
+  const field = 'field-underline w-full px-2 py-1.5 text-sm';
   const specOf = (l: Lot) =>
     [l.manufacturer, l.model, l.cpu, l.ramGb ? `${l.ramGb}GB` : null, l.storage]
       .filter(Boolean)

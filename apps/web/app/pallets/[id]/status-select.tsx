@@ -14,7 +14,7 @@ export function PalletStatusSelect({ palletId, status }: { palletId: string; sta
         aria-label="Pallet status"
         defaultValue={status}
         onChange={(e) => e.currentTarget.form?.requestSubmit()}
-        className="w-full bg-transparent text-lg font-semibold"
+        className="field-inline w-full px-1 text-lg font-semibold"
       >
         {PALLET_STATUSES.map((s) => (
           <option key={s} value={s} className="bg-white">

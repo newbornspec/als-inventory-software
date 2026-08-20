@@ -44,13 +44,13 @@ export function AdjustStock({ lineId }: { lineId: string }) {
           value={amount}
           onChange={(e) => setAmount(e.target.value)}
           placeholder="Amount"
-          className="w-full rounded-md border border-[var(--field-border)] bg-white px-3 py-2 text-sm"
+          className="field-underline w-full px-3 py-2 text-sm"
         />
         <select
           aria-label="Reason for the adjustment"
           value={reason}
           onChange={(e) => setReason(e.target.value as StockMovementReason)}
-          className="w-full rounded-md border border-[var(--field-border)] bg-white px-3 py-2 text-sm"
+          className="field-underline w-full px-3 py-2 text-sm"
         >
           {REASONS.map((r) => (
             <option key={r} value={r}>
@@ -64,7 +64,7 @@ export function AdjustStock({ lineId }: { lineId: string }) {
         value={note}
         onChange={(e) => setNote(e.target.value)}
         placeholder="Note (optional)"
-        className="w-full rounded-md border border-[var(--field-border)] bg-white px-3 py-2 text-sm"
+        className="field-underline w-full px-3 py-2 text-sm"
       />
       <div className="flex gap-2">
         <button

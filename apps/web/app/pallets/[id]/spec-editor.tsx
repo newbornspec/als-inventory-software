@@ -38,8 +38,7 @@ const COLUMNS: {
   { key: 'quantity', label: 'Quantity', width: 'w-24' },
 ];
 
-const inputCls =
-  'w-full rounded-md border border-[var(--field-border)] bg-white px-3 py-2 text-sm focus:border-[var(--field-border)]';
+const inputCls = 'field-underline w-full px-3 py-2 text-sm';
 // Grid cells draw no box of their own — the table draws the grid (see
 // --grid-line in globals.css). inputCls above is the meta form, which is a
 // normal standalone field and keeps its border.
@@ -300,7 +299,7 @@ export function SpecEditor({
           value={q}
           onChange={(e) => setQ(e.target.value)}
           placeholder="Search rows…"
-          className="w-full max-w-xs rounded-md border border-[var(--field-border)] bg-white px-3 py-1.5 text-sm focus:border-[var(--field-border)]"
+          className="field-underline w-full max-w-xs px-3 py-1.5 text-sm"
         />
         <span className="shrink-0 text-xs text-neutral-500">
           {q ? `${visible.length} of ${rows.length}` : `${rows.length} rows`}

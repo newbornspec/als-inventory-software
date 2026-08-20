@@ -16,7 +16,7 @@ export function NewUserForm() {
         <label htmlFor="users-new-new-user-form-name" className="text-sm text-neutral-700">Name</label>
         <input id="users-new-new-user-form-name" name="name"
           required
-          className="w-full rounded-md border border-[var(--field-border)] bg-white px-3 py-2 text-sm focus:border-[var(--field-border)]"
+          className="field-underline w-full px-3 py-2 text-sm"
         />
       </div>
       <div className="space-y-1">
@@ -24,7 +24,7 @@ export function NewUserForm() {
         <input id="users-new-new-user-form-email" name="email"
           type="email"
           required
-          className="w-full rounded-md border border-[var(--field-border)] bg-white px-3 py-2 text-sm focus:border-[var(--field-border)]"
+          className="field-underline w-full px-3 py-2 text-sm"
         />
       </div>
       <div className="space-y-1">
@@ -33,14 +33,14 @@ export function NewUserForm() {
           type="password"
           required
           minLength={8}
-          className="w-full rounded-md border border-[var(--field-border)] bg-white px-3 py-2 text-sm focus:border-[var(--field-border)]"
+          className="field-underline w-full px-3 py-2 text-sm"
         />
       </div>
       <div className="space-y-1">
         <label htmlFor="users-new-new-user-form-role" className="text-sm text-neutral-700">Role</label>
         <select id="users-new-new-user-form-role" name="role"
           defaultValue="technician"
-          className="w-full rounded-md border border-[var(--field-border)] bg-white px-3 py-2 text-sm"
+          className="field-underline w-full px-3 py-2 text-sm"
         >
           {ROLES.map((r) => (
             <option key={r} value={r}>

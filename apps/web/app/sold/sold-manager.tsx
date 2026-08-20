@@ -21,8 +21,7 @@ interface Dest {
 }
 
 const cellCls = 'px-3 py-2';
-const filterCls =
-  'rounded-md border border-neutral-200 bg-white px-2 py-1.5 text-sm focus:border-neutral-300';
+const filterCls = 'field-underline px-2 py-1.5 text-sm';
 
 export function SoldManager({
   assets,

@@ -94,7 +94,7 @@ export function AuditForm({ assetId, onSaved }: { assetId: string; onSaved?: () 
             id={`${uid}-audit-status`}
             value={auditStatus}
             onChange={(e) => setAuditStatus(e.target.value)}
-            className="w-full rounded-md border border-[var(--field-border)] bg-white px-2 py-1.5 text-sm"
+            className="field-underline w-full px-2 py-1.5 text-sm"
           >
             <option value="">—</option>
             {AUDIT_STATUSES.map((s) => (
@@ -110,7 +110,7 @@ export function AuditForm({ assetId, onSaved }: { assetId: string; onSaved?: () 
             id={`${uid}-cosmetic-grade`}
             value={cosmeticGrade}
             onChange={(e) => setCosmeticGrade(e.target.value)}
-            className="w-full rounded-md border border-[var(--field-border)] bg-white px-2 py-1.5 text-sm"
+            className="field-underline w-full px-2 py-1.5 text-sm"
           >
             <option value="">—</option>
             {CONDITION_GRADES.map((g) => (
@@ -153,7 +153,7 @@ export function AuditForm({ assetId, onSaved }: { assetId: string; onSaved?: () 
             id={`${uid}-wipe-status`}
             value={dataWipeStatus}
             onChange={(e) => setDataWipeStatus(e.target.value)}
-            className="w-full rounded-md border border-[var(--field-border)] bg-white px-2 py-1.5 text-sm"
+            className="field-underline w-full px-2 py-1.5 text-sm"
           >
             <option value="">—</option>
             {DATA_WIPE_STATUSES.map((s) => (
@@ -169,7 +169,7 @@ export function AuditForm({ assetId, onSaved }: { assetId: string; onSaved?: () 
             id={`${uid}-disposition`}
             value={finalDisposition}
             onChange={(e) => setFinalDisposition(e.target.value)}
-            className="w-full rounded-md border border-[var(--field-border)] bg-white px-2 py-1.5 text-sm"
+            className="field-underline w-full px-2 py-1.5 text-sm"
           >
             <option value="">—</option>
             {FINAL_DISPOSITIONS.map((d) => (
@@ -191,7 +191,7 @@ export function AuditForm({ assetId, onSaved }: { assetId: string; onSaved?: () 
           value={dataWipeMethod}
           onChange={(e) => setDataWipeMethod(e.target.value)}
           placeholder="e.g. NIST SP 800-88, DBAN, ATA Secure Erase, Physical destruction"
-          className="w-full rounded-md border border-[var(--field-border)] bg-white px-2 py-1.5 text-sm"
+          className="field-underline w-full px-2 py-1.5 text-sm"
         />
         <p id={`${uid}-wipe-method-hint`} className="text-xs text-neutral-600">
           Appears on the data-erasure certificate.
@@ -207,7 +207,7 @@ export function AuditForm({ assetId, onSaved }: { assetId: string; onSaved?: () 
           value={notes}
           onChange={(e) => setNotes(e.target.value)}
           rows={2}
-          className="w-full rounded-md border border-[var(--field-border)] bg-white px-2 py-1.5 text-sm"
+          className="field-underline w-full px-2 py-1.5 text-sm"
         />
       </div>
 

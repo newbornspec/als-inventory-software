@@ -43,6 +43,11 @@
   /* What the boundary becomes under the pointer — see the hover rule below. */
   --field-border-hover: #6f6f6f;
 
+  /* The single edge under a form field. One line instead of four is what buys
+     the contrast: at #949494 it is 3.03:1 and satisfies WCAG 1.4.11, while a
+     form still reads lighter than it did with faint boxes round every input. */
+  --field-underline: #949494;
+
   /* Gridline for the dense editing grids (the two pallet layouts). Those cells
      used to draw a rounded box PER CONTROL: eight boxes a row, 32 border edges
      a row, 640 across a 20-row pallet. That is what made them feel heavy, and
@@ -54,6 +59,59 @@
      still read far calmer than the faint boxes it replaces. Fewer lines, each
      one honest. */
   --grid-line: #949494;
+}
+
+/* Edit in place — a value sitting inline in content that you click to change,
+   as opposed to a field in a form. The value IS the content here, so a
+   permanent box round it is noise; the boundary appears when you hover or focus,
+   which is exactly when you are about to use it.
+   The border is `transparent` rather than absent so nothing shifts by a pixel
+   when it appears. Lifted from the rename field on /lookups, which had already
+   worked this out and was the only place in the app doing it.
+
+   Deliberately NOT used on create/edit forms: there the fields are the content,
+   and a form whose inputs are invisible until you find them is a worse problem
+   than a heavy one. */
+.field-inline {
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  transition: border-color 120ms ease;
+}
+.field-inline:hover:not(:disabled),
+.field-inline:focus {
+  border-color: var(--field-border-hover);
+}
+
+/* Form fields and filters — an underline rather than a box.
+   Same insight that fixed the grids: one edge instead of four. A create form
+   with eight fields drew 32 border edges; it now draws 8 lines, so each line
+   can afford the compliant #949494 (3.03:1) and the page still reads far
+   lighter than the faint boxes it replaces.
+   This is why forms do NOT get .field-inline: on an inline editor the
+   surrounding content tells you a value is there, but on a form the fields ARE
+   the content, and a form whose inputs are invisible until you hover them is a
+   worse problem than a heavy one — especially on a warehouse monitor.
+   All four borders are declared so the box does not resize when the underline
+   darkens; only the bottom one is ever visible. */
+.field-underline {
+  border: 1px solid transparent;
+  border-bottom-color: var(--field-underline);
+  border-radius: 0;
+  background: transparent;
+  transition: border-color 120ms ease;
+}
+.field-underline:hover:not(:disabled),
+.field-underline:focus {
+  border-bottom-color: var(--field-border-hover);
+}
+/* An invalid field says so with more than colour: the underline thickens AND
+   darkens, so the state is never carried by hue alone (WCAG 1.4.1). The width
+   change is the part that does not depend on seeing the red.
+   Written as the `border-bottom` shorthand to mirror the base rule above —
+   equivalent to overriding the two longhands, just easier to read next to it. */
+.field-underline[aria-invalid='true'] {
+  border-bottom: 2px solid #b91c1c;
 }
 
 /* Dense grids: the focus ring draws INSIDE the cell.

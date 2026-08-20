@@ -10,8 +10,7 @@ export function NewLotForm({ batchId }: { batchId: string }) {
     error: null,
   });
 
-  const field =
-    'w-full rounded-md border border-[var(--field-border)] bg-white px-2 py-1.5 text-sm';
+  const field = 'field-underline w-full px-2 py-1.5 text-sm';
 
   return (
     <form action={formAction} className="mt-3 space-y-2 rounded-md border border-neutral-200 p-3">

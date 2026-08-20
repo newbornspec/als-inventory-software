@@ -115,7 +115,7 @@ export function LookupsManager({ all }: { all: LookupValue[] }) {
             id="lookup-manufacturer"
             value={manufacturerId}
             onChange={(e) => setManufacturerId(e.target.value)}
-            className="rounded-md border border-[var(--field-border)] bg-white px-2 py-1.5 text-sm"
+            className="field-underline px-2 py-1.5 text-sm"
           >
             <option value="">— Select manufacturer —</option>
             {manufacturers.map((m) => (
@@ -138,7 +138,7 @@ export function LookupsManager({ all }: { all: LookupValue[] }) {
               onChange={(e) => setNewValue(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && onAdd()}
               placeholder={`Add a ${tab} value…`}
-              className="w-full rounded-md border border-[var(--field-border)] bg-white px-3 py-2 text-sm focus:border-[var(--field-border)]"
+              className="field-underline w-full px-3 py-2 text-sm"
             />
             <button
               onClick={onAdd}
@@ -161,7 +161,7 @@ export function LookupsManager({ all }: { all: LookupValue[] }) {
                   if (next && next !== l.value) run(() => updateLookup(l.id, { value: next }));
                 }}
                 className={
-                  'w-full rounded border border-transparent bg-transparent px-1 py-1 text-sm hover:border-[var(--field-border)] focus:border-[var(--field-border)] ' +
+                  'field-inline w-full px-1 py-1 text-sm ' +
                   (l.active ? 'text-neutral-950' : 'text-neutral-500 line-through')
                 }
               />

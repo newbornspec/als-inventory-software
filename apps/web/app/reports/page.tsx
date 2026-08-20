@@ -345,9 +345,9 @@ export default async function ReportsPage({
             {(['batchId', 'supplier', 'manufacturer', 'category', 'grade'] as const).map((k) =>
               params[k] ? <input key={k} type="hidden" name={k} value={params[k]} /> : null,
             )}
-            <input type="date" name="from" aria-label="From date" defaultValue={params.from ?? ''} className="rounded-md border border-[var(--field-border)] bg-white px-2 py-1 text-xs" />
+            <input type="date" name="from" aria-label="From date" defaultValue={params.from ?? ''} className="field-underline px-2 py-1 text-xs" />
             <span aria-hidden="true">–</span>
-            <input type="date" name="to" aria-label="To date" defaultValue={params.to ?? ''} className="rounded-md border border-[var(--field-border)] bg-white px-2 py-1 text-xs" />
+            <input type="date" name="to" aria-label="To date" defaultValue={params.to ?? ''} className="field-underline px-2 py-1 text-xs" />
             <button type="submit" className="rounded-md border border-[var(--field-border)] px-2 py-1 text-neutral-700 hover:bg-white">
               Apply
             </button>

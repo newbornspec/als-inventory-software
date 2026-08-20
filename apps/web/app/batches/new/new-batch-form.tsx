@@ -8,8 +8,7 @@ import type { Location } from '@/lib/data';
 // Every label is tied to its control with htmlFor/id. They used to be bare
 // <label> elements sitting next to an input, which reads as an unlabelled text
 // field to a screen reader and gives no click target.
-const FIELD =
-  'w-full rounded-md border border-[var(--field-border)] bg-white px-3 py-2 text-sm focus:border-[var(--field-border)]';
+const FIELD = 'field-underline w-full px-3 py-2 text-sm';
 const LABEL = 'block text-sm text-neutral-700';
 
 export function NewBatchForm({ locations }: { locations: Location[] }) {

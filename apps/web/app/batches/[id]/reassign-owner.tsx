@@ -18,7 +18,7 @@ export function ReassignOwner({
       <select
         name="ownerId"
         defaultValue={currentOwnerId ?? ''}
-        className="rounded border border-[var(--field-border)] bg-white px-2 py-1 text-xs text-neutral-900"
+        className="field-inline px-2 py-1 text-xs text-neutral-900"
         aria-label="Reassign owner"
       >
         {users.map((u) => (

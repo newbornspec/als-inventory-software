@@ -50,7 +50,7 @@ export default async function UsersPage() {
                         aria-label={`Role for ${user.name}`}
                         defaultValue={user.role}
                         disabled={user.id === session.userId}
-                        className="rounded-md border border-[var(--field-border)] bg-white px-2 py-1 text-sm disabled:opacity-50"
+                        className="field-inline px-2 py-1 text-sm disabled:opacity-50"
                       >
                         {ROLES.map((r) => (
                           <option key={r} value={r}>
@@ -62,7 +62,7 @@ export default async function UsersPage() {
                         <button
                           type="submit"
                           aria-label={`Save the role for ${user.name}`}
-                          className="rounded-md border border-[var(--field-border)] px-2 py-1 text-xs text-neutral-700"
+                          className="field-inline px-2 py-1 text-xs font-medium text-neutral-800 hover:bg-neutral-100"
                         >
                           Save
                         </button>

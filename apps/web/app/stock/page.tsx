@@ -64,7 +64,7 @@ export default async function StockPage({
               name="search"
               defaultValue={search ?? ''}
               placeholder="Name, SKU, category…"
-              className="mt-1 w-full rounded-md border border-[var(--field-border)] bg-white px-3 py-2 text-sm"
+              className="field-underline mt-1 w-full px-3 py-2 text-sm"
             />
           </div>
           <div>
@@ -75,7 +75,7 @@ export default async function StockPage({
               id="stock-status"
               name="status"
               defaultValue={active ? status : ''}
-              className="mt-1 rounded-md border border-[var(--field-border)] bg-white px-3 py-2 text-sm"
+              className="field-underline mt-1 px-3 py-2 text-sm"
             >
               <option value="">All statuses</option>
               <option value="in_stock">In stock</option>

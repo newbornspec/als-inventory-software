@@ -26,7 +26,7 @@ export function NewPalletForm({
         <input id="pallets-new-new-pallet-form-palletNumber" name="palletNumber"
           defaultValue={suggestedNumber}
           placeholder="e.g. PALLET-000045"
-          className="w-full rounded-md border border-[var(--field-border)] bg-white px-3 py-2 text-sm focus:border-[var(--field-border)]"
+          className="field-underline w-full px-3 py-2 text-sm"
         />
         <p className="text-xs text-neutral-500">
           Use the number on the pallet. Leave blank to number it automatically.
@@ -36,28 +36,28 @@ export function NewPalletForm({
         <label htmlFor="pallets-new-new-pallet-form-description" className="text-sm text-neutral-700">Description</label>
         <input id="pallets-new-new-pallet-form-description" name="description"
           placeholder="e.g. Mixed Dell monitors"
-          className="w-full rounded-md border border-[var(--field-border)] bg-white px-3 py-2 text-sm focus:border-[var(--field-border)]"
+          className="field-underline w-full px-3 py-2 text-sm"
         />
       </div>
       <div className="space-y-1">
         <label htmlFor="pallets-new-new-pallet-form-supplier" className="text-sm text-neutral-700">Supplier</label>
         <input id="pallets-new-new-pallet-form-supplier" name="supplier"
           placeholder="e.g. XYZ Recycling"
-          className="w-full rounded-md border border-[var(--field-border)] bg-white px-3 py-2 text-sm focus:border-[var(--field-border)]"
+          className="field-underline w-full px-3 py-2 text-sm"
         />
       </div>
       <div className="space-y-1">
         <label htmlFor="pallets-new-new-pallet-form-buyer" className="text-sm text-neutral-700">Buyer</label>
         <input id="pallets-new-new-pallet-form-buyer" name="buyer"
           placeholder="e.g. ABC Traders"
-          className="w-full rounded-md border border-[var(--field-border)] bg-white px-3 py-2 text-sm focus:border-[var(--field-border)]"
+          className="field-underline w-full px-3 py-2 text-sm"
         />
       </div>
       <div className="space-y-1">
         <label htmlFor="pallets-new-new-pallet-form-locationId" className="text-sm text-neutral-700">Location</label>
         <select id="pallets-new-new-pallet-form-locationId" name="locationId"
           defaultValue=""
-          className="w-full rounded-md border border-[var(--field-border)] bg-white px-3 py-2 text-sm"
+          className="field-underline w-full px-3 py-2 text-sm"
         >
           <option value="">Unassigned</option>
           {locations.map((l) => (
@@ -71,7 +71,7 @@ export function NewPalletForm({
         <label htmlFor="pallets-new-new-pallet-form-notes" className="text-sm text-neutral-700">Notes</label>
         <textarea id="pallets-new-new-pallet-form-notes" name="notes"
           rows={2}
-          className="w-full rounded-md border border-[var(--field-border)] bg-white px-3 py-2 text-sm focus:border-[var(--field-border)]"
+          className="field-underline w-full px-3 py-2 text-sm"
         />
       </div>
 
