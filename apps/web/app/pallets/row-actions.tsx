@@ -40,7 +40,6 @@ export function RowActions({
   const isMerged = pallet.status === 'merged';
   const isShipped = pallet.status === 'shipped';
   const isEmpty = (pallet.totalQuantity ?? 0) <= 0;
-  const isLayout2 = (pallet.entryLayout ?? 'variant') === 'spec';
 
   const actions: Action[] = [
     { label: 'View pallet', onSelect: () => router.push(`/pallets/${pallet.id}`) },
@@ -59,14 +58,6 @@ export function RowActions({
       label: 'Export to Excel',
       onSelect: () => window.open(`/api/pallets/${pallet.id}/report`, '_self'),
     });
-    // Layout 2 has no unit cost anywhere in its grid, so its costing sheet
-    // would print a page of dashes. Same rule the detail page already applies.
-    if (!isLayout2) {
-      actions.push({
-        label: 'Print costing sheet',
-        onSelect: () => window.open(`/api/pallets/${pallet.id}/costing`, '_self'),
-      });
-    }
   }
   if (canManage && !isMerged && !isShipped && !isEmpty) {
     actions.push({

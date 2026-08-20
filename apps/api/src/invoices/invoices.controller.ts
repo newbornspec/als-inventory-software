@@ -1,11 +1,8 @@
 import {
-  Body,
   Controller,
   Get,
   Header,
   Param,
-  Post,
-  Req,
   StreamableFile,
   UseGuards,
 } from '@nestjs/common';
@@ -14,7 +11,6 @@ import { Roles } from '../auth/guards/roles.decorator';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { UserRole } from '../users/user.entity';
 import { InvoicesService } from './invoices.service';
-import { CreateInvoiceDto } from './dto/create-invoice.dto';
 import { renderInvoice } from './invoice-pdf';
 import { safeFilePart } from '../pallets/pallets.service';
 
@@ -33,15 +29,11 @@ export class InvoicesController {
     return this.invoices.peekNextNumber();
   }
 
-  @Get('pallets/:id/invoices')
-  listForPallet(@Param('id') id: string) {
-    return this.invoices.findForPallet(id);
-  }
-
-  @Post('pallets/:id/invoices')
-  create(@Param('id') id: string, @Body() dto: CreateInvoiceDto, @Req() req: any) {
-    return this.invoices.createForPallet(id, dto, req.user.userId);
-  }
+  // The pallets/:id/invoices routes were removed. Invoicing is being rebuilt as
+  // one general system rather than a document raised from a pallet, so nothing
+  // can now create or list an invoice against a pallet. The read routes below
+  // stay: invoices already raised remain fetchable and printable, and the
+  // service keeps its numbering and snapshot logic for the replacement to use.
 
   @Get('invoices/:id')
   findOne(@Param('id') id: string) {

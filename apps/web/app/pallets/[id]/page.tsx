@@ -191,27 +191,11 @@ export default async function PalletDetailPage({ params }: { params: Promise<{ i
                 Export to Excel
               </a>
             )}
-            {/* Layout 1 only: the sheet is priced from unit_cost, which Layout 2
-                never captures — its grid has no cost column, so the document
-                would print a page of dashes. */}
-            {canSeeCosts && (
-              <a
-                href={`/api/pallets/${pallet.id}/costing`}
-                className="rounded-md border border-[var(--control-border)] px-3 py-1.5 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
-              >
-                Costing sheet
-              </a>
-            )}
-            {/* A link, not a download: an invoice needs buyer and VAT details
-                collected first, and raising one permanently spends a number. */}
-            {canSeeCosts && (
-              <Link
-                href={`/pallets/${pallet.id}/invoice`}
-                className="rounded-md border border-[var(--control-border)] px-3 py-1.5 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
-              >
-                Invoice…
-              </Link>
-            )}
+            {/* Costing sheet and Invoice… deliberately absent. Both are being
+                rebuilt as one general costing/invoicing system rather than
+                per-pallet documents, so the pallet-scoped versions were
+                removed rather than left to diverge from their replacements.
+                Existing invoices are untouched and still readable by id. */}
             {canDelete && (
               <form action={deletePallet.bind(null, pallet.id)}>
                 <button

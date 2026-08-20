@@ -57,7 +57,9 @@ export class PalletsController {
   @Post('export.xlsx')
   @Header('Cache-Control', 'no-store')
   async exportMany(@Body() dto: ExportPalletsDto): Promise<StreamableFile> {
-    const { buffer, filename } = await this.pallets.generateMultiReport(dto.ids);
+    const { buffer, filename } = await this.pallets.generateMultiReport(
+      dto.ids,
+    );
     return new StreamableFile(buffer, {
       type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       disposition: `attachment; filename="${filename}"`,
@@ -77,7 +79,10 @@ export class PalletsController {
 
   @Roles(UserRole.ADMIN, UserRole.MANAGER)
   @Post('merge')
-  merge(@Body() dto: MergePalletsDto, @Req() req: { user?: { userId?: string } }) {
+  merge(
+    @Body() dto: MergePalletsDto,
+    @Req() req: { user?: { userId?: string } },
+  ) {
     return this.pallets.mergePallets(dto, req.user?.userId ?? null);
   }
 
@@ -92,18 +97,6 @@ export class PalletsController {
     const { buffer, filename } = await this.pallets.generateReport(id);
     return new StreamableFile(buffer, {
       type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      disposition: `attachment; filename="${filename}"`,
-    });
-  }
-
-  // Purchase costs, so admin/manager only — the same gate as the xlsx report.
-  @Roles(UserRole.ADMIN, UserRole.MANAGER)
-  @Get(':id/costing.pdf')
-  @Header('Cache-Control', 'no-store')
-  async costing(@Param('id') id: string): Promise<StreamableFile> {
-    const { buffer, filename } = await this.pallets.generateCostingSheet(id);
-    return new StreamableFile(buffer, {
-      type: 'application/pdf',
       disposition: `attachment; filename="${filename}"`,
     });
   }
@@ -146,7 +139,11 @@ export class PalletsController {
   // Selling is normal warehouse work — any role may do it.
   @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.TECHNICIAN)
   @Post(':id/sell')
-  sellPallet(@Param('id') id: string, @Body() body: { saleTotal?: number }, @Req() req: any) {
+  sellPallet(
+    @Param('id') id: string,
+    @Body() body: { saleTotal?: number },
+    @Req() req: any,
+  ) {
     return this.pallets.sellPallet(id, req.user.userId, body?.saleTotal);
   }
 
@@ -158,15 +155,28 @@ export class PalletsController {
     @Body() body: { quantity?: number; salePrice?: number },
     @Req() req: any,
   ) {
-    return this.pallets.sellLine(id, lineId, body?.quantity, req.user.userId, body?.salePrice);
+    return this.pallets.sellLine(
+      id,
+      lineId,
+      body?.quantity,
+      req.user.userId,
+      body?.salePrice,
+    );
   }
 
   // Bulk return from the Sold page — admin only. No palletId -> each row
   // returns to its own original pallet.
   @Roles(UserRole.ADMIN)
   @Post('sold/return-bulk')
-  bulkReturnSoldLines(@Body() body: { soldIds: string[]; palletId?: string }, @Req() req: any) {
-    return this.pallets.bulkReturnSoldLines(body?.soldIds ?? [], body?.palletId, req.user.userId);
+  bulkReturnSoldLines(
+    @Body() body: { soldIds: string[]; palletId?: string },
+    @Req() req: any,
+  ) {
+    return this.pallets.bulkReturnSoldLines(
+      body?.soldIds ?? [],
+      body?.palletId,
+      req.user.userId,
+    );
   }
 
   // Returning sold goods to inventory is admin-only.

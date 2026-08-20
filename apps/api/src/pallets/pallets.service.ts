@@ -5,10 +5,14 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { EntityManager, FindOptionsWhere, In, IsNull, Repository } from 'typeorm';
+import {
+  EntityManager,
+  FindOptionsWhere,
+  In,
+  IsNull,
+  Repository,
+} from 'typeorm';
 import * as ExcelJS from 'exceljs';
-import PDFDocument from 'pdfkit';
-import { COMPANY } from '../common/company';
 import { Pallet, PalletStatus, PalletEntryLayout } from './pallet.entity';
 import { PalletLine } from './pallet-line.entity';
 import { PalletSoldLine } from './pallet-sold-line.entity';
@@ -56,14 +60,16 @@ const MAX_EXPORT_PALLETS = 500;
 
 // Ids arrive from a request body, and an id that isn't a uuid reaches Postgres
 // as a failed cast — a 500 for what is really a bad request.
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 @Injectable()
 export class PalletsService {
   constructor(
     @InjectRepository(Pallet) private pallets: Repository<Pallet>,
     @InjectRepository(PalletLine) private lines: Repository<PalletLine>,
-    @InjectRepository(PalletSoldLine) private soldLines: Repository<PalletSoldLine>,
+    @InjectRepository(PalletSoldLine)
+    private soldLines: Repository<PalletSoldLine>,
     @InjectRepository(PalletMerge) private merges: Repository<PalletMerge>,
     @InjectRepository(Product) private products: Repository<Product>,
     private lookupsService: LookupsService,
@@ -79,7 +85,10 @@ export class PalletsService {
   }
 
   async findOne(id: string): Promise<PalletDetail> {
-    const pallet = await this.pallets.findOne({ where: { id }, relations: ['location'] });
+    const pallet = await this.pallets.findOne({
+      where: { id },
+      relations: ['location'],
+    });
     if (!pallet) throw new NotFoundException(`Pallet ${id} not found`);
     const [withTotals] = await this.withTotals([pallet]);
     // product is included so the Layout 2 grid editor can rebuild its rows
@@ -95,8 +104,14 @@ export class PalletsService {
     // moment the last line originating from PALLET-a is sold. Two indexed
     // point-lookups, and both return nothing for the ordinary unmerged pallet.
     const [from, into] = await Promise.all([
-      this.merges.find({ where: { resultPalletId: id }, order: { mergedAt: 'ASC' } }),
-      this.merges.findOne({ where: { sourcePalletId: id }, relations: ['resultPallet'] }),
+      this.merges.find({
+        where: { resultPalletId: id },
+        order: { mergedAt: 'ASC' },
+      }),
+      this.merges.findOne({
+        where: { sourcePalletId: id },
+        relations: ['resultPallet'],
+      }),
     ]);
 
     // What this pallet contributed, now living on the pallet that replaced it.
@@ -137,9 +152,12 @@ export class PalletsService {
     // whatever the operator typed — the whole feature looks wired up and every
     // pallet still comes out PALLET-000xxx.
     const { palletNumber: typed, ...rest } = dto;
-    const palletNumber = (typed ?? '').trim() || (await this.nextPalletNumber());
-    return this.saveUnique(() => this.pallets.save(this.pallets.create({ ...rest, palletNumber })),
-                           palletNumber);
+    const palletNumber =
+      (typed ?? '').trim() || (await this.nextPalletNumber());
+    return this.saveUnique(
+      () => this.pallets.save(this.pallets.create({ ...rest, palletNumber })),
+      palletNumber,
+    );
   }
 
   // Layout 2 create: one pallet + a line per spec row. Each row find-or-creates
@@ -147,11 +165,16 @@ export class PalletsService {
   // carries a composed "variant" label so it displays/reports like any other.
   async createFromSpec(dto: CreatePalletSpecDto): Promise<Pallet> {
     const { rows, palletNumber: typed, ...meta } = dto;
-    const palletNumber = (typed ?? '').trim() || (await this.nextPalletNumber());
+    const palletNumber =
+      (typed ?? '').trim() || (await this.nextPalletNumber());
     const pallet = await this.saveUnique(
       () =>
         this.pallets.save(
-          this.pallets.create({ ...meta, palletNumber, entryLayout: PalletEntryLayout.SPEC }),
+          this.pallets.create({
+            ...meta,
+            palletNumber,
+            entryLayout: PalletEntryLayout.SPEC,
+          }),
         ),
       palletNumber,
     );
@@ -170,7 +193,13 @@ export class PalletsService {
     await this.assertPallet(id);
     const { rows, ...meta } = dto;
     const patch: Record<string, unknown> = {};
-    for (const key of ['description', 'supplier', 'buyer', 'locationId', 'notes'] as const) {
+    for (const key of [
+      'description',
+      'supplier',
+      'buyer',
+      'locationId',
+      'notes',
+    ] as const) {
       if (meta[key] !== undefined) patch[key] = meta[key];
     }
     if (Object.keys(patch).length > 0) await this.pallets.update(id, patch);
@@ -194,10 +223,15 @@ export class PalletsService {
   ): Promise<PalletSoldLine> {
     const pallet = await this.assertPallet(palletId);
     const line = await this.lines.findOne({ where: { id: lineId, palletId } });
-    if (!line) throw new NotFoundException(`Line ${lineId} not found on this pallet`);
-    if (line.quantity <= 0) throw new ConflictException('This line has no quantity left to sell.');
+    if (!line)
+      throw new NotFoundException(`Line ${lineId} not found on this pallet`);
+    if (line.quantity <= 0)
+      throw new ConflictException('This line has no quantity left to sell.');
 
-    const qty = Math.min(Math.max(1, Math.trunc(quantity ?? line.quantity)), line.quantity);
+    const qty = Math.min(
+      Math.max(1, Math.trunc(quantity ?? line.quantity)),
+      line.quantity,
+    );
     const sold = await this.soldLines.save(
       this.soldLines.create({
         palletId: pallet.id,
@@ -228,7 +262,8 @@ export class PalletsService {
     const pallet = await this.assertPallet(palletId);
     const lines = await this.lines.find({ where: { palletId } });
     const withQty = lines.filter((l) => l.quantity > 0);
-    if (withQty.length === 0) throw new ConflictException('This pallet has nothing left to sell.');
+    if (withQty.length === 0)
+      throw new ConflictException('This pallet has nothing left to sell.');
 
     // Optional pallet sale total, split across rows in proportion to quantity
     // (remainder on the last row so the stored sum equals what was entered).
@@ -245,7 +280,8 @@ export class PalletsService {
         rowTotal =
           i === withQty.length - 1
             ? Math.round((saleTotal! - allocated) * 100) / 100
-            : Math.round(((saleTotal! * line.quantity) / totalUnits) * 100) / 100;
+            : Math.round(((saleTotal! * line.quantity) / totalUnits) * 100) /
+              100;
         allocated = Math.round((allocated + rowTotal) * 100) / 100;
       }
       await this.soldLines.save(
@@ -262,7 +298,10 @@ export class PalletsService {
       );
     }
     await this.lines.delete({ palletId });
-    await this.pallets.update(palletId, { status: PalletStatus.SHIPPED, shippedAt: new Date() });
+    await this.pallets.update(palletId, {
+      status: PalletStatus.SHIPPED,
+      shippedAt: new Date(),
+    });
     return { soldLines: withQty.length, soldUnits: units };
   }
 
@@ -274,7 +313,8 @@ export class PalletsService {
       order: { soldAt: 'DESC' },
     });
     return rows.map((r) => {
-      if (r.soldBy) r.soldBy = sanitizeUser(r.soldBy) as PalletSoldLine['soldBy'];
+      if (r.soldBy)
+        r.soldBy = sanitizeUser(r.soldBy) as PalletSoldLine['soldBy'];
       return r;
     });
   }
@@ -287,8 +327,13 @@ export class PalletsService {
     targetPalletId: string | null | undefined,
     userId: string,
   ): Promise<PalletSoldLine> {
-    const sold = await this.soldLines.findOne({ where: { id: soldId, returnedAt: IsNull() } });
-    if (!sold) throw new NotFoundException('Sold record not found (or already returned).');
+    const sold = await this.soldLines.findOne({
+      where: { id: soldId, returnedAt: IsNull() },
+    });
+    if (!sold)
+      throw new NotFoundException(
+        'Sold record not found (or already returned).',
+      );
 
     const palletId = targetPalletId ?? sold.palletId;
     if (!palletId) {
@@ -306,7 +351,9 @@ export class PalletsService {
         : { palletId, variant: sold.variant, productId: IsNull() },
     });
     if (existing) {
-      await this.lines.update(existing.id, { quantity: existing.quantity + sold.quantity });
+      await this.lines.update(existing.id, {
+        quantity: existing.quantity + sold.quantity,
+      });
     } else {
       await this.lines.save(
         this.lines.create({
@@ -320,14 +367,22 @@ export class PalletsService {
     // A shipped pallet that just received returned stock is physically back on
     // the floor — reactivate it so it shows under Active again.
     if (target.status === PalletStatus.SHIPPED) {
-      await this.pallets.update(palletId, { status: PalletStatus.OPEN, shippedAt: null });
+      await this.pallets.update(palletId, {
+        status: PalletStatus.OPEN,
+        shippedAt: null,
+      });
     }
     await this.soldLines.update(soldId, {
       returnedAt: new Date(),
       returnedById: userId,
       returnedToPalletId: palletId,
     });
-    return { ...sold, returnedAt: new Date(), returnedById: userId, returnedToPalletId: palletId };
+    return {
+      ...sold,
+      returnedAt: new Date(),
+      returnedById: userId,
+      returnedToPalletId: palletId,
+    };
   }
 
   // Bulk return for the Sold page: palletId omitted -> each row goes back to
@@ -357,7 +412,10 @@ export class PalletsService {
     return { returned, skipped, reasons: [...reasons] };
   }
 
-  private async createLinesFromSpec(palletId: string, rows: SpecRowDto[]): Promise<void> {
+  private async createLinesFromSpec(
+    palletId: string,
+    rows: SpecRowDto[],
+  ): Promise<void> {
     for (const row of rows) {
       await this.persistLookups(row);
       const product = await this.findOrCreateProduct(row);
@@ -380,7 +438,11 @@ export class PalletsService {
       ? await this.lookupsService.findOrCreate('manufacturer', manufacturer)
       : null;
     if (nz(row.model)) {
-      await this.lookupsService.findOrCreate('model', row.model!, manLookup?.id ?? null);
+      await this.lookupsService.findOrCreate(
+        'model',
+        row.model!,
+        manLookup?.id ?? null,
+      );
     }
     for (const [category, value] of [
       ['chassis', row.chassis],
@@ -445,7 +507,10 @@ export class PalletsService {
     // Stamp the ship time on the transition into 'shipped'; clear it if the
     // pallet is brought back to open/ready.
     const patch: Partial<Pallet> = { ...dto };
-    if (dto.status === PalletStatus.SHIPPED && before.status !== PalletStatus.SHIPPED) {
+    if (
+      dto.status === PalletStatus.SHIPPED &&
+      before.status !== PalletStatus.SHIPPED
+    ) {
       patch.shippedAt = new Date();
     } else if (dto.status && dto.status !== PalletStatus.SHIPPED) {
       patch.shippedAt = null;
@@ -454,7 +519,10 @@ export class PalletsService {
     await this.pallets.update(id, patch);
     return (
       await this.withTotals([
-        await this.pallets.findOneOrFail({ where: { id }, relations: ['location'] }),
+        await this.pallets.findOneOrFail({
+          where: { id },
+          relations: ['location'],
+        }),
       ])
     )[0];
   }
@@ -462,7 +530,9 @@ export class PalletsService {
   // Build a formatted .xlsx pallet report. The columns differ by the layout the
   // pallet was created with: Layout 2 (spec) gets a split-column report, every
   // other pallet keeps the original variant report below.
-  async generateReport(id: string): Promise<{ buffer: Buffer; filename: string }> {
+  async generateReport(
+    id: string,
+  ): Promise<{ buffer: Buffer; filename: string }> {
     const pallet = await this.findOne(id);
     if (pallet.entryLayout === PalletEntryLayout.SPEC) {
       return this.generateSpecReport(pallet);
@@ -513,7 +583,11 @@ export class PalletsService {
     headerRow.values = headers;
     headerRow.font = { bold: true };
     headerRow.eachCell((cell) => {
-      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEFEFEF' } };
+      cell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FFEFEFEF' },
+      };
       cell.border = { bottom: { style: 'thin' } };
     });
 
@@ -528,179 +602,25 @@ export class PalletsService {
 
     const totalRow = ws.getRow(dataRow + 1);
     totalRow.getCell(1).value = 'Total';
-    totalRow.getCell(headers.indexOf('Quantity') + 1).value = pallet.totalQuantity;
+    totalRow.getCell(headers.indexOf('Quantity') + 1).value =
+      pallet.totalQuantity;
     totalRow.getCell(headers.length).value = costTotal > 0 ? costTotal : '';
     totalRow.font = { bold: true };
 
     const buffer = Buffer.from(await wb.xlsx.writeBuffer());
-    return { buffer, filename: `${safeFilePart(pallet.palletNumber, pallet.id)}-report.xlsx` };
+    return {
+      buffer,
+      filename: `${safeFilePart(pallet.palletNumber, pallet.id)}-report.xlsx`,
+    };
   }
 
   // Layout 2 export: each spec attribute in its own column, pulled from the
   // line's linked catalogue product, with a bold header row. No dotted variant,
   // no cost/tier/grade columns — a separate report from Layout 1's.
-  // A printable costing sheet for a Layout 1 pallet: the same ten columns as
-  // the spreadsheet, priced at what was PAID. Deliberately headed "internal
-  // document" — unit_cost is purchase cost, and a page of your own buy prices
-  // must never be mistaken for something you hand a customer.
-  //
-  // Landscape because ten columns do not fit A4 portrait legibly.
-  async generateCostingSheet(id: string): Promise<{ buffer: Buffer; filename: string }> {
-    const pallet = await this.findOne(id);
-    const buffer = await this.renderCostingSheet(pallet);
-    return {
-      buffer,
-      filename: `costing-${safeFilePart(pallet.palletNumber, pallet.id)}.pdf`,
-    };
-  }
-
-  private renderCostingSheet(
-    pallet: PalletWithTotals & { lines: PalletLine[] },
-  ): Promise<Buffer> {
-    return new Promise((resolve, reject) => {
-      const doc = new PDFDocument({ size: 'A4', layout: 'landscape', margin: 40 });
-      const chunks: Buffer[] = [];
-      doc.on('data', (c: Buffer) => chunks.push(c));
-      doc.on('end', () => resolve(Buffer.concat(chunks)));
-      doc.on('error', reject);
-
-      const left = 40;
-      const right = doc.page.width - 40;
-      const issued = new Date().toLocaleDateString('en-GB', {
-        day: '2-digit',
-        month: 'long',
-        year: 'numeric',
-      });
-
-      doc.font('Helvetica-Bold').fontSize(18).fillColor('#111111').text(COMPANY.name);
-      doc
-        .font('Helvetica')
-        .fontSize(9)
-        .fillColor('#666666')
-        .text(`Company No. ${COMPANY.registration}`);
-      doc.moveDown(0.8);
-      doc
-        .font('Helvetica-Bold')
-        .fontSize(14)
-        .fillColor('#111111')
-        .text('Pallet Costing Sheet');
-      doc
-        .font('Helvetica')
-        .fontSize(9)
-        .fillColor('#b45309')
-        .text('Internal document — prices shown are purchase cost, not a sale price.');
-      doc.moveDown(0.4);
-      doc
-        .font('Helvetica')
-        .fontSize(10)
-        .fillColor('#222222')
-        .text(`Pallet: ${pallet.palletNumber}     Issued: ${issued}`)
-        .text(
-          `Supplier: ${pallet.supplier ?? '—'}     Location: ${pallet.location?.name ?? '—'}` +
-            `     Status: ${pallet.status}`,
-        );
-      if (pallet.description) doc.text(`Description: ${pallet.description}`);
-      doc.moveDown(0.6);
-
-      // Sums to the printable width of landscape A4 (842pt less two 40pt
-      // margins = 762). Model and Manufacturer take the slack: model numbers
-      // vary most in length, and a table that stops two thirds across the page
-      // looks like something failed to render.
-      const w = [86, 100, 150, 58, 74, 44, 44, 62, 74, 70];
-      const labels = [
-        'Pallet',
-        'Manufacturer',
-        'Model',
-        'Size',
-        'Variant',
-        'Stand',
-        'Qty',
-        'Grade',
-        'Unit cost',
-        'Line total',
-      ];
-      let x = left;
-      const cols = labels.map((label, i) => {
-        const col = { label, x, w: w[i], right: i >= 6 };
-        x += w[i];
-        return col;
-      });
-      const bottom = doc.page.height - doc.page.margins.bottom - 60;
-
-      const header = () => {
-        const y = doc.y;
-        doc.font('Helvetica-Bold').fontSize(8).fillColor('#111111');
-        for (const c of cols) {
-          doc.text(c.label, c.x, y, { width: c.w - 4, align: c.right ? 'right' : 'left' });
-        }
-        doc.moveDown(0.15);
-        doc.strokeColor('#999999').lineWidth(0.5).moveTo(left, doc.y).lineTo(right, doc.y).stroke();
-        doc.moveDown(0.2);
-      };
-      header();
-
-      let costTotal = 0;
-      for (const line of pallet.lines) {
-        const lineTotal = line.unitCost != null ? line.unitCost * line.quantity : null;
-        if (lineTotal != null) costTotal += lineTotal;
-        // The pallet number repeats on every row for the same reason it does in
-        // the spreadsheet: a row separated from its pallet is unusable.
-        const vals = [
-          pallet.palletNumber,
-          line.manufacturer ?? '—',
-          line.model ?? '—',
-          line.size ?? '—',
-          slugLabel(line.variantType) || '—',
-          line.stand == null ? '—' : line.stand ? 'Yes' : 'No',
-          String(line.quantity),
-          gradeLabel(line.grade) || '—',
-          line.unitCost != null ? money(line.unitCost) : '—',
-          lineTotal != null ? money(lineTotal) : '—',
-        ];
-        doc.font('Helvetica').fontSize(8).fillColor('#222222');
-        const h = Math.max(
-          ...cols.map((c, i) => doc.heightOfString(vals[i], { width: c.w - 4 })),
-        );
-        if (doc.y + h > bottom) {
-          doc.addPage();
-          header();
-          // header() leaves the document bold; without this the first row of
-          // every continuation page is drawn in the header's font.
-          doc.font('Helvetica').fontSize(8).fillColor('#222222');
-        }
-        const y = doc.y;
-        cols.forEach((c, i) => {
-          doc.text(vals[i], c.x, y, { width: c.w - 4, align: c.right ? 'right' : 'left' });
-        });
-        doc.y = y + h + 3;
-        doc
-          .strokeColor('#eeeeee')
-          .lineWidth(0.5)
-          .moveTo(left, doc.y - 1)
-          .lineTo(right, doc.y - 1)
-          .stroke();
-      }
-
-      if (doc.y + 60 > doc.page.height - doc.page.margins.bottom) doc.addPage();
-      doc.moveDown(0.4);
-      const ty = doc.y;
-      doc.strokeColor('#999999').lineWidth(0.5).moveTo(left, ty).lineTo(right, ty).stroke();
-      doc.moveDown(0.3);
-      const yy = doc.y;
-      doc.font('Helvetica-Bold').fontSize(9).fillColor('#111111');
-      doc.text('Total', cols[0].x, yy, { width: cols[0].w - 4 });
-      doc.text(String(pallet.totalQuantity), cols[6].x, yy, {
-        width: cols[6].w - 4,
-        align: 'right',
-      });
-      doc.text(costTotal > 0 ? money(costTotal) : '—', cols[9].x, yy, {
-        width: cols[9].w - 4,
-        align: 'right',
-      });
-
-      doc.end();
-    });
-  }
+  // The per-pallet costing sheet was removed: costing is being rebuilt as one
+  // general system rather than a document hanging off a single pallet. The
+  // landscape renderer is recoverable from git history at 56c23d9 if the new
+  // system wants the same layout.
 
   private async generateSpecReport(
     pallet: PalletWithTotals & { lines: PalletLine[] },
@@ -755,7 +675,11 @@ export class PalletsService {
     headerRow.values = headers;
     headerRow.font = { bold: true };
     headerRow.eachCell((cell) => {
-      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEFEFEF' } };
+      cell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FFEFEFEF' },
+      };
       cell.border = { bottom: { style: 'thin' } };
     });
 
@@ -773,7 +697,10 @@ export class PalletsService {
     totalRow.font = { bold: true };
 
     const buffer = Buffer.from(await wb.xlsx.writeBuffer());
-    return { buffer, filename: `${safeFilePart(pallet.palletNumber, pallet.id)}-report.xlsx` };
+    return {
+      buffer,
+      filename: `${safeFilePart(pallet.palletNumber, pallet.id)}-report.xlsx`,
+    };
   }
 
   // --- multi-pallet export ---
@@ -797,7 +724,9 @@ export class PalletsService {
   //
   // A mixed selection produces both sheets rather than one union sheet padded
   // with blanks; a sheet only appears if the selection contains that layout.
-  async generateMultiReport(ids: string[]): Promise<{ buffer: Buffer; filename: string }> {
+  async generateMultiReport(
+    ids: string[],
+  ): Promise<{ buffer: Buffer; filename: string }> {
     const wanted = [...new Set(ids)].filter((id) => UUID_RE.test(id));
     if (wanted.length === 0) {
       throw new BadRequestException('Select at least one pallet to export.');
@@ -813,7 +742,9 @@ export class PalletsService {
       relations: ['location'],
     });
     if (found.length === 0) {
-      throw new NotFoundException('None of the selected pallets could be found.');
+      throw new NotFoundException(
+        'None of the selected pallets could be found.',
+      );
     }
 
     // Pallet number ascending rather than selection order: a spreadsheet is
@@ -840,7 +771,8 @@ export class PalletsService {
     const wb = new ExcelJS.Workbook();
     wb.creator = 'ALS Trade Wholesales';
     const generated = new Date().toLocaleString('en-GB');
-    const isSpec = (p: PalletWithTotals) => p.entryLayout === PalletEntryLayout.SPEC;
+    const isSpec = (p: PalletWithTotals) =>
+      p.entryLayout === PalletEntryLayout.SPEC;
     const layout1 = pallets.filter((p) => !isSpec(p));
     const layout2 = pallets.filter(isSpec);
 
@@ -864,8 +796,13 @@ export class PalletsService {
     // The column appears only when a line actually carries provenance, so an
     // ordinary export is unchanged and column-for-column identical to the
     // single-pallet report.
-    const withSource = (rows: PalletLine[]) => rows.some((l) => l.sourcePalletNumber);
-    const addSourceCol = <T>(cells: T[], value: T): T[] => [cells[0], value, ...cells.slice(1)];
+    const withSource = (rows: PalletLine[]) =>
+      rows.some((l) => l.sourcePalletNumber);
+    const addSourceCol = <T>(cells: T[], value: T): T[] => [
+      cells[0],
+      value,
+      ...cells.slice(1),
+    ];
 
     // The same furniture the single-pallet reports build: title, subtitle, a
     // short meta block, then a shaded header row.
@@ -902,7 +839,11 @@ export class PalletsService {
       headerRow.values = headers;
       headerRow.font = { bold: true };
       headerRow.eachCell((cell) => {
-        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEFEFEF' } };
+        cell.fill = {
+          type: 'pattern',
+          pattern: 'solid',
+          fgColor: { argb: 'FFEFEFEF' },
+        };
         cell.border = { bottom: { style: 'thin' } };
       });
       return { ws, firstDataRow: headerRowIndex + 1 };
@@ -917,7 +858,9 @@ export class PalletsService {
     if (layout1.length > 0) {
       const rows1 = layout1.flatMap((p) => byPallet.get(p.id) ?? []);
       const src1 = withSource(rows1);
-      const headers = src1 ? addSourceCol(VARIANT_HEADERS, 'Original pallet') : VARIANT_HEADERS;
+      const headers = src1
+        ? addSourceCol(VARIANT_HEADERS, 'Original pallet')
+        : VARIANT_HEADERS;
       const { ws, firstDataRow } = startSheet(
         itemSheet(false),
         'Pallet Export — Layout 1 items',
@@ -956,7 +899,9 @@ export class PalletsService {
     if (layout2.length > 0) {
       const rows2 = layout2.flatMap((p) => byPallet.get(p.id) ?? []);
       const src2 = withSource(rows2);
-      const headers = src2 ? addSourceCol(SPEC_HEADERS, 'Original pallet') : SPEC_HEADERS;
+      const headers = src2
+        ? addSourceCol(SPEC_HEADERS, 'Original pallet')
+        : SPEC_HEADERS;
       const { ws, firstDataRow } = startSheet(
         itemSheet(true),
         'Pallet Export — Layout 2 items',
@@ -988,7 +933,6 @@ export class PalletsService {
       totalRow.font = { bold: true };
     }
 
-
     // Summary — the per-pallet facts, once each.
     {
       const headers = [
@@ -1009,16 +953,22 @@ export class PalletsService {
         ...(layout1.length ? [itemSheet(false)] : []),
         ...(layout2.length ? [itemSheet(true)] : []),
       ];
-      const { ws, firstDataRow } = startSheet('Summary', 'Pallet Export', headers, widths, [
-        ['Date generated', generated],
-        ['Pallets included', pallets.length],
-        // Said outright, because a reader who does not notice the second tab
-        // sees only totals here and reasonably concludes the stock is missing.
+      const { ws, firstDataRow } = startSheet(
+        'Summary',
+        'Pallet Export',
+        headers,
+        widths,
         [
-          'Item detail',
-          `${totalLines} item lines on the ${sheetNames.map((n) => `"${n}"`).join(' and ')} sheet${sheetNames.length > 1 ? 's' : ''}`,
+          ['Date generated', generated],
+          ['Pallets included', pallets.length],
+          // Said outright, because a reader who does not notice the second tab
+          // sees only totals here and reasonably concludes the stock is missing.
+          [
+            'Item detail',
+            `${totalLines} item lines on the ${sheetNames.map((n) => `"${n}"`).join(' and ')} sheet${sheetNames.length > 1 ? 's' : ''}`,
+          ],
         ],
-      ]);
+      );
 
       const createdCol = headers.indexOf('Created') + 1;
       let row = firstDataRow;
@@ -1057,10 +1007,23 @@ export class PalletsService {
 
     // Say which sheet the file opens on rather than leaving it to the reader's
     // Excel to decide.
-    wb.views = [{ activeTab: 0, x: 0, y: 0, width: 20000, height: 20000, firstSheet: 0, visibility: 'visible' }];
+    wb.views = [
+      {
+        activeTab: 0,
+        x: 0,
+        y: 0,
+        width: 20000,
+        height: 20000,
+        firstSheet: 0,
+        visibility: 'visible',
+      },
+    ];
 
     const stamp = new Date().toISOString().slice(0, 10);
-    return { buffer: Buffer.from(await wb.xlsx.writeBuffer()), filename: `pallets-${stamp}.xlsx` };
+    return {
+      buffer: Buffer.from(await wb.xlsx.writeBuffer()),
+      filename: `pallets-${stamp}.xlsx`,
+    };
   }
 
   // --- merge ----------------------------------------------------------------
@@ -1081,7 +1044,10 @@ export class PalletsService {
       return { sources: [], blockers: ['Merge requires exactly 2 pallets.'] };
     }
     if (ids.length > 2) {
-      return { sources: [], blockers: ['Please select exactly 2 pallets to merge.'] };
+      return {
+        sources: [],
+        blockers: ['Please select exactly 2 pallets to merge.'],
+      };
     }
 
     const found = await this.pallets.find({ where: { id: In(ids) } });
@@ -1113,14 +1079,17 @@ export class PalletsService {
     const ids = [...new Set(dto.palletIds)];
     if (ids.length !== 2) {
       throw new BadRequestException(
-        ids.length < 2 ? 'Merge requires exactly 2 pallets.' : 'Please select exactly 2 pallets to merge.',
+        ids.length < 2
+          ? 'Merge requires exactly 2 pallets.'
+          : 'Please select exactly 2 pallets to merge.',
       );
     }
 
     // Taken OUTSIDE the transaction: sequences are non-transactional by design,
     // so a rolled-back merge simply burns a number, exactly as a failed create
     // does today. Reserving it inside would not make it recyclable.
-    const palletNumber = (dto.palletNumber ?? '').trim() || (await this.nextPalletNumber());
+    const palletNumber =
+      (dto.palletNumber ?? '').trim() || (await this.nextPalletNumber());
 
     const newPalletId = await this.pallets.manager.transaction(async (m) => {
       // Lock the sources in a deterministic order. Without this, two people
@@ -1136,7 +1105,9 @@ export class PalletsService {
         .getMany();
 
       if (locked.length !== ids.length) {
-        throw new NotFoundException('One or more of the selected pallets no longer exist.');
+        throw new NotFoundException(
+          'One or more of the selected pallets no longer exist.',
+        );
       }
 
       // Re-validated INSIDE the lock: the preview the operator saw may be
@@ -1221,9 +1192,14 @@ export class PalletsService {
     // own failures, so a call inside the transaction could hide a real error —
     // and a log written before a rollback would record a merge that never
     // happened.
-    const sourceRows = await this.merges.find({ where: { resultPalletId: newPalletId } });
+    const sourceRows = await this.merges.find({
+      where: { resultPalletId: newPalletId },
+    });
     const summary = sourceRows
-      .map((s) => `${s.sourcePalletNumber} (${s.linesContributed} lines, ${s.unitsContributed} units)`)
+      .map(
+        (s) =>
+          `${s.sourcePalletNumber} (${s.linesContributed} lines, ${s.unitsContributed} units)`,
+      )
       .join(' and ');
     await this.activity.record({
       userId,
@@ -1281,7 +1257,10 @@ export class PalletsService {
 
   // --- lines ---
 
-  async addLine(palletId: string, dto: CreatePalletLineDto): Promise<PalletLine> {
+  async addLine(
+    palletId: string,
+    dto: CreatePalletLineDto,
+  ): Promise<PalletLine> {
     await this.assertPallet(palletId);
     await this.persistLineLookups(dto);
     // `variant` is NOT NULL and is what the report, the sold snapshot and
@@ -1291,9 +1270,16 @@ export class PalletsService {
     return this.lines.save(this.lines.create({ ...dto, variant, palletId }));
   }
 
-  async updateLine(palletId: string, lineId: string, dto: UpdatePalletLineDto): Promise<PalletLine> {
+  async updateLine(
+    palletId: string,
+    lineId: string,
+    dto: UpdatePalletLineDto,
+  ): Promise<PalletLine> {
     const line = await this.lines.findOne({ where: { id: lineId, palletId } });
-    if (!line) throw new NotFoundException(`Line ${lineId} not found on pallet ${palletId}`);
+    if (!line)
+      throw new NotFoundException(
+        `Line ${lineId} not found on pallet ${palletId}`,
+      );
     await this.persistLineLookups(dto);
     // Recompose from the MERGED row, not the dto: the web sends only the field
     // that changed, so composing from the dto alone would blank every other
@@ -1307,7 +1293,10 @@ export class PalletsService {
 
   async removeLine(palletId: string, lineId: string): Promise<void> {
     const line = await this.lines.findOne({ where: { id: lineId, palletId } });
-    if (!line) throw new NotFoundException(`Line ${lineId} not found on pallet ${palletId}`);
+    if (!line)
+      throw new NotFoundException(
+        `Line ${lineId} not found on pallet ${palletId}`,
+      );
     await this.lines.delete(lineId);
   }
 
@@ -1344,7 +1333,12 @@ export class PalletsService {
       ? await this.lookupsService.findOrCreate('manufacturer', manufacturer)
       : null;
     const model = (dto.model ?? '').trim();
-    if (model) await this.lookupsService.findOrCreate('model', model, manLookup?.id ?? null);
+    if (model)
+      await this.lookupsService.findOrCreate(
+        'model',
+        model,
+        manLookup?.id ?? null,
+      );
     const size = (dto.size ?? '').trim();
     if (size) await this.lookupsService.findOrCreate('size', size);
   }
@@ -1352,13 +1346,18 @@ export class PalletsService {
   // A duplicate pallet number is a user error, not a server fault. Postgres
   // raises 23505 on the unique constraint; without this it surfaced as an
   // opaque 500 with nothing to act on.
-  private async saveUnique<T>(save: () => Promise<T>, palletNumber: string): Promise<T> {
+  private async saveUnique<T>(
+    save: () => Promise<T>,
+    palletNumber: string,
+  ): Promise<T> {
     try {
       return await save();
     } catch (err: unknown) {
       const code = (err as { code?: string })?.code;
       if (code === '23505') {
-        throw new ConflictException(`Pallet number "${palletNumber}" is already in use.`);
+        throw new ConflictException(
+          `Pallet number "${palletNumber}" is already in use.`,
+        );
       }
       throw err;
     }
@@ -1366,7 +1365,9 @@ export class PalletsService {
 
   // Public so the New Pallet form can prefill the next number as a suggestion.
   async nextPalletNumber(): Promise<string> {
-    const result = await this.pallets.query(`SELECT nextval('pallet_number_seq') AS n`);
+    const result = await this.pallets.query(
+      `SELECT nextval('pallet_number_seq') AS n`,
+    );
     const n = String(result[0].n).padStart(6, '0');
     return `PALLET-${n}`;
   }
@@ -1460,11 +1461,17 @@ export function mergeBlockers(sources: MergeCandidate[]): string[] {
 
   for (const s of sources) {
     if (s.status === PalletStatus.SHIPPED) {
-      blockers.push(`${s.palletNumber} has shipped — those goods have left the warehouse.`);
+      blockers.push(
+        `${s.palletNumber} has shipped — those goods have left the warehouse.`,
+      );
     } else if (s.status === PalletStatus.MERGED) {
-      blockers.push(`${s.palletNumber} was already merged into another pallet.`);
+      blockers.push(
+        `${s.palletNumber} was already merged into another pallet.`,
+      );
     } else if (s.lineCount === 0 || s.totalQuantity <= 0) {
-      blockers.push(`${s.palletNumber} is empty — there is nothing to move off it.`);
+      blockers.push(
+        `${s.palletNumber} is empty — there is nothing to move off it.`,
+      );
     }
   }
 
@@ -1475,9 +1482,13 @@ export function mergeBlockers(sources: MergeCandidate[]): string[] {
   // trap: the spec editor saves by deleting every line and recreating from the
   // grid, so the operator's first routine edit would destroy every unit cost,
   // grade and scrap of merge provenance on the Layout 1 rows.
-  const layouts = new Set(sources.map((s) => s.entryLayout ?? PalletEntryLayout.VARIANT));
+  const layouts = new Set(
+    sources.map((s) => s.entryLayout ?? PalletEntryLayout.VARIANT),
+  );
   if (layouts.size > 1) {
-    const named = sources.map((s) => `${s.palletNumber} is ${layoutName(s.entryLayout)}`);
+    const named = sources.map(
+      (s) => `${s.palletNumber} is ${layoutName(s.entryLayout)}`,
+    );
     blockers.push(
       `${named.join(', ')}. Pallets built with different layouts export different reports and cannot be merged.`,
     );
@@ -1531,7 +1542,10 @@ export function palletLineTotal(line: PalletLine): number | null {
 
 // One Layout 1 row. The pallet number leads every row: the sheet is filtered
 // and sorted downstream, and a row that loses its pallet is unusable.
-export function variantRow(palletNumber: string, line: PalletLine): (string | number)[] {
+export function variantRow(
+  palletNumber: string,
+  line: PalletLine,
+): (string | number)[] {
   const total = palletLineTotal(line);
   return [
     palletNumber,
@@ -1549,7 +1563,10 @@ export function variantRow(palletNumber: string, line: PalletLine): (string | nu
 
 // One Layout 2 row. Same rule about the leading pallet number, and one row per
 // LINE — quantity stays a count, so a line of 45 is still a single row.
-export function specRow(palletNumber: string, line: PalletLine): (string | number)[] {
+export function specRow(
+  palletNumber: string,
+  line: PalletLine,
+): (string | number)[] {
   const s = specColumns(line.product, line.variant);
   return [
     palletNumber,
@@ -1617,7 +1634,10 @@ export function parseRamGb(ram: string | null | undefined): number | null {
 }
 
 // The inverse of parseRamGb, for anything rendering a stored value back.
-export function ramLabel(ramGb: number | null | undefined, unit = ' GB'): string {
+export function ramLabel(
+  ramGb: number | null | undefined,
+  unit = ' GB',
+): string {
   if (ramGb == null) return '';
   return ramGb === RAM_NONE ? 'None' : `${ramGb}${unit}`;
 }
@@ -1633,7 +1653,15 @@ function composeVariant(row: {
   ram?: string | null;
   storage?: string | null;
 }): string {
-  return [row.manufacturer, row.model, row.chassis, row.cpu, row.gen, row.ram, row.storage]
+  return [
+    row.manufacturer,
+    row.model,
+    row.chassis,
+    row.cpu,
+    row.gen,
+    row.ram,
+    row.storage,
+  ]
     .map((x) => (x ?? '').trim())
     .filter(Boolean)
     .join(' · ');
@@ -1644,7 +1672,9 @@ function composeVariant(row: {
 // slash or semicolon corrupts it, and a newline makes Node throw
 // ERR_INVALID_CHAR — a 500 on export for a pallet that is otherwise fine.
 export function safeFilePart(value: string, fallback: string): string {
-  const clean = (value ?? '').replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
+  const clean = (value ?? '')
+    .replace(/[^A-Za-z0-9._-]+/g, '-')
+    .replace(/^-+|-+$/g, '');
   return clean || fallback;
 }
 
