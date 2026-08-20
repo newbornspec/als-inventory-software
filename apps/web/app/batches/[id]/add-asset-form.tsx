@@ -33,7 +33,7 @@ export function AddAssetForm({ batchId, subLots }: { batchId: string; subLots: L
       <button
         onClick={() => setOpen(true)}
         aria-expanded={open}
-        className="mt-3 rounded-md border border-[var(--field-border)] px-3 py-1.5 text-xs text-neutral-700 hover:bg-white"
+        className="mt-3 rounded-md border border-[var(--control-border)] px-3 py-1.5 text-xs text-neutral-700 hover:bg-white"
       >
         + Add asset
       </button>
@@ -95,7 +95,7 @@ export function AddAssetForm({ batchId, subLots }: { batchId: string; subLots: L
         <button
           type="button"
           onClick={() => setOpen(false)}
-          className="rounded-md border border-[var(--field-border)] px-3 py-1.5 text-xs text-neutral-500"
+          className="rounded-md border border-[var(--control-border)] px-3 py-1.5 text-xs text-neutral-500"
         >
           Cancel
         </button>

@@ -264,7 +264,7 @@ export function SoldManager({
 
   const chk = 'h-4 w-4 accent-emerald-600';
   const btn =
-    'rounded-md border border-[var(--field-border)] px-2.5 py-1 text-xs text-neutral-900 hover:bg-neutral-100 disabled:opacity-50';
+    'rounded-md border border-[var(--control-border)] px-2.5 py-1 text-xs text-neutral-900 hover:bg-neutral-100 disabled:opacity-50';
 
   function BulkBar({
     count,

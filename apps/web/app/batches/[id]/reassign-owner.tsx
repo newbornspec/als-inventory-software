@@ -29,7 +29,7 @@ export function ReassignOwner({
       </select>
       <button
         type="submit"
-        className="rounded border border-[var(--field-border)] px-2 py-1 text-xs text-neutral-950 hover:bg-neutral-100"
+        className="rounded border border-[var(--control-border)] px-2 py-1 text-xs text-neutral-950 hover:bg-neutral-100"
       >
         Reassign
       </button>

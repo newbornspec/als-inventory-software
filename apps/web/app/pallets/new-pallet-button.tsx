@@ -149,7 +149,7 @@ export function NewPalletButton() {
               )}
               <button
                 onClick={() => setOpen(false)}
-                className="rounded-md border border-[var(--field-border)] px-3 py-1.5 text-sm text-neutral-700 hover:bg-white"
+                className="rounded-md border border-[var(--control-border)] px-3 py-1.5 text-sm text-neutral-700 hover:bg-white"
               >
                 Cancel
               </button>

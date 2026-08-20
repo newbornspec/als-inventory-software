@@ -85,7 +85,7 @@ export default async function StockPage({
           </div>
           <button
             type="submit"
-            className="rounded-md border border-[var(--field-border)] px-4 py-2 text-sm font-medium text-neutral-800 hover:bg-neutral-50"
+            className="rounded-md border border-[var(--control-border)] px-4 py-2 text-sm font-medium text-neutral-800 hover:bg-neutral-50"
           >
             Filter
           </button>

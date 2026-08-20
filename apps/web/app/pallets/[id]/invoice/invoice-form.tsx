@@ -308,7 +308,7 @@ export function InvoiceForm({
           onClick={() => setShowPreview((v) => !v)}
           aria-expanded={showPreview}
           aria-controls="invoice-preview"
-          className="rounded-md border border-[var(--field-border)] px-4 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
+          className="rounded-md border border-[var(--control-border)] px-4 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
         >
           {showPreview ? 'Hide preview' : 'Preview invoice'}
         </button>

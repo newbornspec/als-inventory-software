@@ -179,7 +179,7 @@ export default async function PalletDetailPage({ params }: { params: Promise<{ i
             {canSeeCosts && (
               <a
                 href={`/api/pallets/${pallet.id}/costing`}
-                className="rounded-md border border-[var(--field-border)] px-3 py-1.5 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
+                className="rounded-md border border-[var(--control-border)] px-3 py-1.5 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
               >
                 Costing sheet
               </a>
@@ -189,7 +189,7 @@ export default async function PalletDetailPage({ params }: { params: Promise<{ i
             {canSeeCosts && (
               <Link
                 href={`/pallets/${pallet.id}/invoice`}
-                className="rounded-md border border-[var(--field-border)] px-3 py-1.5 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
+                className="rounded-md border border-[var(--control-border)] px-3 py-1.5 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
               >
                 Invoice…
               </Link>

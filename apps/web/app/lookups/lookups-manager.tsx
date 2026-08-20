@@ -97,7 +97,7 @@ export function LookupsManager({ all }: { all: LookupValue[] }) {
               'rounded-md px-3 py-1.5 text-sm ' +
               (tab === c.key
                 ? 'bg-neutral-100 font-semibold text-neutral-900 ring-1 ring-neutral-400'
-                : 'border border-[var(--field-border)] text-neutral-700 hover:bg-white')
+                : 'border border-[var(--control-border)] text-neutral-700 hover:bg-white')
             }
           >
             {c.label}

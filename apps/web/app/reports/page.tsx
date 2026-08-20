@@ -305,7 +305,7 @@ export default async function ReportsPage({
             </a>
             <a
               href={`/api/reports/export-pdf?${deviceQs.toString()}`}
-              className="rounded-md border border-[var(--field-border)] px-3 py-1.5 text-neutral-900 hover:bg-white"
+              className="rounded-md border border-[var(--control-border)] px-3 py-1.5 text-neutral-900 hover:bg-white"
             >
               Export PDF
             </a>
@@ -333,7 +333,7 @@ export default async function ReportsPage({
                   'rounded-md px-3 py-1.5 text-xs ' +
                   (range === p.key
                     ? 'bg-neutral-100 font-semibold text-neutral-900 ring-1 ring-neutral-500'
-                    : 'border border-[var(--field-border)] text-neutral-700 hover:bg-white')
+                    : 'border border-[var(--control-border)] text-neutral-700 hover:bg-white')
                 }
               >
                 {p.label}
@@ -348,7 +348,7 @@ export default async function ReportsPage({
             <input type="date" name="from" aria-label="From date" defaultValue={params.from ?? ''} className="field-underline px-2 py-1 text-xs" />
             <span aria-hidden="true">–</span>
             <input type="date" name="to" aria-label="To date" defaultValue={params.to ?? ''} className="field-underline px-2 py-1 text-xs" />
-            <button type="submit" className="rounded-md border border-[var(--field-border)] px-2 py-1 text-neutral-700 hover:bg-white">
+            <button type="submit" className="rounded-md border border-[var(--control-border)] px-2 py-1 text-neutral-700 hover:bg-white">
               Apply
             </button>
           </form>

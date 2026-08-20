@@ -415,7 +415,7 @@ export function SpecEditor({
       </div>
 
       <div className="mt-3 flex flex-wrap items-center gap-3">
-        <button onClick={() => setRows((rs) => [...rs, blank()])} className="rounded-md border border-[var(--field-border)] px-3 py-1.5 text-sm text-neutral-700 hover:bg-white">
+        <button onClick={() => setRows((rs) => [...rs, blank()])} className="rounded-md border border-[var(--control-border)] px-3 py-1.5 text-sm text-neutral-700 hover:bg-white">
           + Add row
         </button>
         <button onClick={save} disabled={busy} className="rounded-md bg-[#1a6ef5] hover:bg-blue-600 px-4 py-1.5 text-sm font-medium text-white disabled:opacity-50">

@@ -17,31 +17,26 @@
   --ink-muted: #737373;      /* secondary text   */
   --brand: #2b7fff;          /* actions, active  */
 
-  /* Form-control boundary — 103 inputs/selects/textareas and 20 outline
-     buttons and links read this one token. Decorative rules (the nav's bottom
-     edge, static panels, badges) deliberately do NOT: they are not controls,
-     nothing has to be identifiable by them, and having them on here meant
-     nudging the fields also nudged the page furniture.
+  /* Outline buttons and links — the ONLY thing that still draws a full box.
+     No input reads this any more: fields moved to .field-underline and grid
+     cells to --grid-line, which is why a box here no longer adds up with rows
+     of others beside it and can afford proper contrast.
 
-     Contrast against white, measured:
-        #e5e5e5  1.26:1   what the app used before the accessibility pass
-     >  #c4c4c4  1.74:1   current
-        #b8b8b8  1.98:1
-        #a3a3a3  2.52:1
-        #949494  3.03:1   the lightest grey that satisfies WCAG 1.4.11
+     A button has no fill, so this border IS the button. #949494 is 3.03:1
+     against white, and is exactly the lightest grey that reaches the 3:1 WCAG
+     1.4.11 wants for a control boundary — not a rounded-up figure, so anything
+     lighter leaves the criterion. For reference: #c4c4c4 is 1.74:1 and the
+     #e5e5e5 this app started with was 1.26:1.
 
-     #949494 is not a rounded-up figure: it is exactly the lightest grey that
-     reaches 3:1, so ANY lighter value leaves that success criterion. #c4c4c4 is
-     a deliberate choice to prioritise how the forms look, made knowingly — it
-     is roughly 40% more contrast than the original #e5e5e5, and well short of
-     the 3:1 bar.
+     Decorative rules (the nav's bottom edge, static panels, badges) deliberately
+     do NOT read this — they are not controls, nothing has to be identifiable by
+     them, and having them on here once meant nudging the buttons also nudged
+     the page furniture. */
+  --control-border: #949494;
 
-     Change this one line to move the whole app. If the heavier look is ever
-     acceptable, #949494 restores compliance with no other edit. */
-  --field-border: #c4c4c4;
-
-  /* What the boundary becomes under the pointer — see the hover rule below. */
-  --field-border-hover: #6f6f6f;
+  /* What any interactive boundary becomes under the pointer — shared by the
+     underline, the inline editors and the outline buttons. */
+  --boundary-hover: #6f6f6f;
 
   /* The single edge under a form field. One line instead of four is what buys
      the contrast: at #949494 it is 3.03:1 and satisfies WCAG 1.4.11, while a
@@ -51,7 +46,7 @@
   /* Gridline for the dense editing grids (the two pallet layouts). Those cells
      used to draw a rounded box PER CONTROL: eight boxes a row, 32 border edges
      a row, 640 across a 20-row pallet. That is what made them feel heavy, and
-     no colour is calm at 640 edges — which is why lightening --field-border
+     no colour is calm at 640 edges — which is why lightening --control-border
      only ever treated the symptom.
      A spreadsheet draws ONE shared line between cells instead. With
      border-collapse that is about 29 lines for the same 20-row grid rather than
@@ -80,7 +75,7 @@
 }
 .field-inline:hover:not(:disabled),
 .field-inline:focus {
-  border-color: var(--field-border-hover);
+  border-color: var(--boundary-hover);
 }
 
 /* Form fields and filters — an underline rather than a box.
@@ -103,7 +98,7 @@
 }
 .field-underline:hover:not(:disabled),
 .field-underline:focus {
-  border-bottom-color: var(--field-border-hover);
+  border-bottom-color: var(--boundary-hover);
 }
 /* An invalid field says so with more than colour: the underline thickens AND
    darkens, so the state is never carried by hue alone (WCAG 1.4.1). The width
@@ -126,22 +121,17 @@
   border-radius: 0;
 }
 
-/* Hover firms the boundary up, which buys back some of what the lighter resting
-   border gives away: on a warehouse monitor the field you are about to type in
-   becomes unambiguous.
-
-   Buttons and links are included deliberately. An outline button has no fill —
-   its border IS the button — so it loses more to a light boundary than a text
-   field does, and a field at least keeps its label and its placeholder.
-   Elements that do not read the token are unaffected by this rule.
+/* Hover firms an outline button's boundary. Scoped to button/a now that no
+   input reads --control-border — .field-underline and .field-inline each carry
+   their own hover rule.
 
    This works by REDEFINING the custom property on the element rather than
    setting border-color: a Tailwind arbitrary-value class is a single class
    selector and would win a border-color fight, but it resolves
-   var(--field-border) against the element itself, so the element-level
+   var(--control-border) against the element itself, so the element-level
    definition below is what it reads. */
-:where(input, select, textarea, button, a):hover:not(:disabled) {
-  --field-border: var(--field-border-hover);
+:where(button, a):hover:not(:disabled) {
+  --control-border: var(--boundary-hover);
 }
 
 @theme inline {
