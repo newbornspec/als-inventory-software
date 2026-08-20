@@ -36,7 +36,18 @@ export async function POST(req: Request) {
   });
 
   if (!res.ok) {
-    return downloadError(res.status, 'pallet export');
+    // Forward the API's own message. Its 400 names the actual remedy ("export
+    // up to 500 at a time"); the generic "please try again" sends the operator
+    // round a loop that can never succeed. 401/403/404 have their own copy in
+    // downloadError, so this only fills the branch that had nothing to say.
+    let detail: string | undefined;
+    try {
+      const body = (await res.json()) as { message?: string | string[] };
+      detail = Array.isArray(body.message) ? body.message.join(' ') : body.message;
+    } catch {
+      // Not JSON — fall back to the generic copy.
+    }
+    return downloadError(res.status, 'pallet export', detail);
   }
 
   return new NextResponse(res.body, {

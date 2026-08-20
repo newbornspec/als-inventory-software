@@ -161,3 +161,9 @@ export function sortPallets(pallets: Pallet[], key: SortKey, dir: SortDir): Pall
     }
   });
 }
+
+// Mirrors MAX_EXPORT_PALLETS in the API's pallets.service.ts. Duplicated rather
+// than shared because the two apps deploy separately; the server is the one
+// that enforces it, and this only exists so the button can explain itself
+// BEFORE the operator loses the page to an error screen.
+export const MAX_EXPORT_PALLETS = 500;
