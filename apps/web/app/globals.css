@@ -17,13 +17,39 @@
   --ink-muted: #737373;      /* secondary text   */
   --brand: #2b7fff;          /* actions, active  */
 
-  /* Form-control boundary. WCAG 1.4.11 wants 3:1 against the adjacent colour
-     for anything needed to identify a control, and these fields are white on
-     white — the border is the only thing that says "this is an input". The old
-     #e5e5e5 was 1.3:1 and #d4d4d4 is 1.9:1; #949494 is 3.03:1, the lightest
-     grey that passes. One knob, so the whole app moves together if you want it
-     lighter or darker. */
-  --field-border: #949494;
+  /* Form-control boundary — the line round every input, select, textarea and
+     outline button. All 144 of them read this one token.
+
+     Contrast against white, measured:
+        #e5e5e5  1.26:1   what the app used before the accessibility pass
+        #c4c4c4  1.74:1
+     >  #b8b8b8  1.98:1   current
+        #a3a3a3  2.52:1
+        #949494  3.03:1   the lightest grey that satisfies WCAG 1.4.11
+
+     #949494 is not a rounded-up figure: it is exactly the lightest grey that
+     reaches 3:1, so ANY lighter value leaves that success criterion. #b8b8b8 is
+     a deliberate choice to prioritise how the forms look, made knowingly — it
+     is still a little over half again the contrast of the original #e5e5e5.
+
+     Change this one line to move the whole app. If the heavier look is ever
+     acceptable, #949494 restores compliance with no other edit. */
+  --field-border: #b8b8b8;
+
+  /* What the boundary becomes under the pointer — see the hover rule below. */
+  --field-border-hover: #6f6f6f;
+}
+
+/* Hover firms the boundary up, which buys back some of what the lighter resting
+   border gives away: on a warehouse monitor the field you are about to type in
+   becomes unambiguous.
+   This works by REDEFINING the custom property on the element rather than
+   setting border-color: a Tailwind arbitrary-value class is a single class
+   selector and would win a border-color fight, but it resolves
+   var(--field-border) against the element itself, so the element-level
+   definition below is what it reads. */
+:where(input, select, textarea):hover:not(:disabled) {
+  --field-border: var(--field-border-hover);
 }
 
 @theme inline {
