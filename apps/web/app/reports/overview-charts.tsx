@@ -49,6 +49,53 @@ const tooltipStyle = {
   boxShadow: '0 8px 24px rgba(15,23,42,0.08)',
 };
 
+// --- Accessible equivalent for every chart ----------------------------------
+// recharts renders an SVG with role="application" and no accessible name: it is
+// a keyboard focus stop that announces nothing, and every value in it is
+// reachable only by hovering a tooltip with a mouse. So each chart is marked
+// aria-hidden and paired with the same numbers as a real table, collapsed
+// behind a "View data" disclosure so the visual design is unchanged.
+function ChartData({
+  caption,
+  columns,
+  rows,
+}: {
+  caption: string;
+  columns: string[];
+  rows: (string | number)[][];
+}) {
+  return (
+    <details className="mt-2">
+      <summary className="cursor-pointer text-xs font-medium text-neutral-700">View data</summary>
+      <div role="region" aria-label={caption} tabIndex={0} className="mt-2 overflow-x-auto">
+        <table className="w-full text-left text-xs">
+          <caption className="sr-only">{caption}</caption>
+          <thead className="text-neutral-600">
+            <tr>
+              {columns.map((c) => (
+                <th key={c} scope="col" className="py-1 pr-4 font-medium">
+                  {c}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r, i) => (
+              <tr key={i} className="border-t border-neutral-200">
+                {r.map((cell, j) => (
+                  <td key={j} className="py-1 pr-4 tabular-nums">
+                    {cell}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </details>
+  );
+}
+
 export interface LabelCount {
   label: string;
   count: number;
@@ -70,7 +117,7 @@ export function CategoryDonut({ data }: { data: LabelCount[] }) {
 
   return (
     <div className="flex flex-wrap items-center gap-4">
-      <div className="h-52 w-52 shrink-0">
+      <div aria-hidden="true" className="h-52 w-52 shrink-0">
         <ResponsiveContainer width="100%" height="100%">
           <PieChart>
             <Pie
@@ -94,6 +141,8 @@ export function CategoryDonut({ data }: { data: LabelCount[] }) {
           </PieChart>
         </ResponsiveContainer>
       </div>
+      {/* The legend beside the donut already carries every label, count and
+          share as text, so this chart needs no separate data table. */}
       <ul className="min-w-[10rem] flex-1 space-y-1 text-sm">
         {rows.map((r, i) => (
           <li key={r.label} className="flex items-center gap-2">
@@ -132,7 +181,8 @@ export function DailyBars({ data }: { data: DayPoint[] }) {
     return `${day}/${mo}`;
   };
   return (
-    <div className="h-48">
+    <div>
+      <div aria-hidden="true" className="h-48">
       <ResponsiveContainer width="100%" height="100%">
         <BarChart data={data} margin={{ left: 4, right: 8, top: 4, bottom: 4 }}>
           <CartesianGrid stroke={GRID} vertical={false} />
@@ -162,6 +212,12 @@ export function DailyBars({ data }: { data: DayPoint[] }) {
           <Bar dataKey="count" fill={SINGLE_BLUE} radius={[3, 3, 0, 0]} isAnimationActive={false} />
         </BarChart>
       </ResponsiveContainer>
+      </div>
+      <ChartData
+        caption="Units per day"
+        columns={['Date', 'Units']}
+        rows={data.map((d) => [d.date, d.count])}
+      />
     </div>
   );
 }
@@ -210,7 +266,7 @@ export function MonthlyTrend({
           </span>
         ))}
       </div>
-      <div className="h-56">
+      <div aria-hidden="true" className="h-56">
         <ResponsiveContainer width="100%" height="100%">
           <LineChart data={data} margin={{ left: 8, right: 16, top: 4, bottom: 4 }}>
             <CartesianGrid stroke={GRID} vertical={false} />
@@ -252,6 +308,14 @@ export function MonthlyTrend({
           </LineChart>
         </ResponsiveContainer>
       </div>
+      <ChartData
+        caption="Monthly trend"
+        columns={['Month', ...series.map((sr) => sr.label)]}
+        rows={data.map((d) => [
+          fmtMonth(String(d.month)),
+          ...series.map((sr) => fmtVal(Number(d[sr.key] ?? 0))),
+        ])}
+      />
     </div>
   );
 }
@@ -273,7 +337,8 @@ export function CountBars({
   const height = Math.max(120, rows.length * 30 + 24);
 
   return (
-    <div style={{ height }}>
+    <div>
+      <div aria-hidden="true" style={{ height }}>
       <ResponsiveContainer width="100%" height="100%">
         <BarChart data={rows} layout="vertical" margin={{ left: 8, right: 24, top: 4, bottom: 4 }}>
           <XAxis
@@ -307,6 +372,12 @@ export function CountBars({
           />
         </BarChart>
       </ResponsiveContainer>
+      </div>
+      <ChartData
+        caption="Units by category"
+        columns={['Category', 'Units']}
+        rows={rows.map((r) => [r.label, r.count])}
+      />
     </div>
   );
 }

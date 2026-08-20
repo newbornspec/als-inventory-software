@@ -14,6 +14,8 @@ const PROTECTED_PREFIXES = [
   '/sold',
   '/activity',
   '/lookups',
+  // Open repairs list — same gate as every other operational page.
+  '/repairs',
 ];
 
 const ACCESS_MAX_AGE = 60 * 60 * 12; // 12h
@@ -110,5 +112,6 @@ export const config = {
     '/sold/:path*',
     '/activity/:path*',
     '/lookups/:path*',
+    '/repairs/:path*',
   ],
 };

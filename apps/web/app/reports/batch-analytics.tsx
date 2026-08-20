@@ -58,7 +58,7 @@ export function BatchAnalyticsTable({ rows }: { rows: BatchAnalytics[] }) {
   }
 
   return (
-    <div className="mt-3 overflow-x-auto rounded-lg border border-neutral-200">
+    <div role="region" aria-label="Lot analytics" tabIndex={0} className="mt-3 overflow-x-auto rounded-lg border border-neutral-200">
       <table className="w-full text-left text-sm">
         <thead className="bg-neutral-50 text-neutral-500">
           <tr>

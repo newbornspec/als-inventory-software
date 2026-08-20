@@ -105,7 +105,7 @@ export function PhotosSection({
         <button
           onClick={() => fileRef.current?.click()}
           disabled={busy}
-          className="rounded bg-[#2b7fff] hover:bg-blue-600 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50"
+          className="rounded bg-[#1a6ef5] hover:bg-blue-600 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50"
         >
           {busy ? 'Uploading…' : '+ Add photo'}
         </button>

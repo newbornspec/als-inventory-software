@@ -64,7 +64,7 @@ export default async function PalletDetailPage({ params }: { params: Promise<{ i
     return (
       <main className="min-h-screen bg-white text-neutral-950">
         <Nav />
-        <div className="p-8">
+        <div id="main-content" tabIndex={-1} className="p-8">
           <Link href="/pallets" className="text-sm text-neutral-500 hover:text-neutral-900">
             ← Back to Pallets
           </Link>
@@ -91,7 +91,7 @@ export default async function PalletDetailPage({ params }: { params: Promise<{ i
               {canSeeCosts && (
                 <a
                   href={`/api/pallets/${pallet.id}/report`}
-                  className="rounded-md bg-[#2b7fff] hover:bg-blue-600 px-3 py-1.5 text-sm font-medium text-white"
+                  className="rounded-md bg-[#1a6ef5] hover:bg-blue-600 px-3 py-1.5 text-sm font-medium text-white"
                 >
                   Export to Excel
                 </a>
@@ -140,7 +140,7 @@ export default async function PalletDetailPage({ params }: { params: Promise<{ i
   return (
     <main className="min-h-screen bg-white text-neutral-950">
       <Nav />
-      <div className="p-8">
+      <div id="main-content" tabIndex={-1} className="p-8">
         <Link href="/pallets" className="text-sm text-neutral-500 hover:text-neutral-900">
           ← Back to Pallets
         </Link>
@@ -168,7 +168,7 @@ export default async function PalletDetailPage({ params }: { params: Promise<{ i
             {canSeeCosts && (
               <a
                 href={`/api/pallets/${pallet.id}/report`}
-                className="rounded-md bg-[#2b7fff] hover:bg-blue-600 px-3 py-1.5 text-sm font-medium text-white"
+                className="rounded-md bg-[#1a6ef5] hover:bg-blue-600 px-3 py-1.5 text-sm font-medium text-white"
               >
                 Export to Excel
               </a>

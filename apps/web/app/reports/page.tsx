@@ -234,7 +234,7 @@ export default async function ReportsPage({
     return (
       <main className="min-h-screen bg-white text-neutral-950">
         <Nav />
-        <div className="p-8">
+        <div id="main-content" tabIndex={-1} className="p-8">
           <h1 className="text-2xl font-semibold">Reports</h1>
           <p className="mt-4 text-sm text-neutral-500">
             {canSee ? 'Reports are temporarily unavailable — try again shortly.' : 'Reports are available to managers and admins.'}
@@ -293,13 +293,13 @@ export default async function ReportsPage({
   return (
     <main className="min-h-screen bg-white text-neutral-950">
       <Nav />
-      <div className="p-8">
+      <div id="main-content" tabIndex={-1} className="p-8">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h1 className="text-2xl font-semibold">Reports</h1>
           <div className="flex flex-wrap items-center gap-3 text-sm">
             <a
               href={`/api/reports/export-xlsx?${deviceQs.toString()}`}
-              className="rounded-md bg-[#2b7fff] hover:bg-blue-600 px-3 py-1.5 font-medium text-white"
+              className="rounded-md bg-[#1a6ef5] hover:bg-blue-600 px-3 py-1.5 font-medium text-white"
             >
               Export Excel
             </a>
@@ -520,7 +520,7 @@ export default async function ReportsPage({
               <TopTable title="Best-selling categories" rows={sales.topCategories} />
             </div>
 
-            <div className="mt-4 overflow-x-auto rounded-lg border border-neutral-200">
+            <div role="region" aria-label="Report table" tabIndex={0} className="mt-4 overflow-x-auto rounded-lg border border-neutral-200">
               <table className="w-full text-left text-sm">
                 <thead className="bg-neutral-50 text-neutral-500">
                   <tr>
@@ -575,7 +575,7 @@ export default async function ReportsPage({
             <h2 className="text-sm font-medium text-neutral-500">
               Supplier performance <span className="text-neutral-500">(revenue/profit: {rangeLabel})</span>
             </h2>
-            <div className="mt-3 overflow-x-auto rounded-lg border border-neutral-200">
+            <div role="region" aria-label="Report table" tabIndex={0} className="mt-3 overflow-x-auto rounded-lg border border-neutral-200">
               <table className="w-full text-left text-sm">
                 <thead className="bg-neutral-50 text-neutral-500">
                   <tr>
@@ -661,7 +661,7 @@ export default async function ReportsPage({
                 {palletAnalytics.summary.unitsSold.toLocaleString('en-GB')} sold {rangeLabel})
               </span>
             </h2>
-            <div className="mt-3 overflow-x-auto rounded-lg border border-neutral-200">
+            <div role="region" aria-label="Report table" tabIndex={0} className="mt-3 overflow-x-auto rounded-lg border border-neutral-200">
               <table className="w-full text-left text-sm">
                 <thead className="bg-neutral-50 text-neutral-500">
                   <tr>
@@ -880,7 +880,7 @@ export default async function ReportsPage({
             <h2 className="text-sm font-medium text-neutral-500">
               User performance <span className="text-neutral-500">({rangeLabel})</span>
             </h2>
-            <div className="mt-3 overflow-x-auto rounded-lg border border-neutral-200">
+            <div role="region" aria-label="Report table" tabIndex={0} className="mt-3 overflow-x-auto rounded-lg border border-neutral-200">
               <table className="w-full text-left text-sm">
                 <thead className="bg-neutral-50 text-neutral-500">
                   <tr>

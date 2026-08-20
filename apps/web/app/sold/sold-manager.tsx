@@ -22,7 +22,7 @@ interface Dest {
 
 const cellCls = 'px-3 py-2';
 const filterCls =
-  'rounded-md border border-neutral-200 bg-white px-2 py-1.5 text-sm outline-none focus:border-neutral-300';
+  'rounded-md border border-neutral-200 bg-white px-2 py-1.5 text-sm focus:border-neutral-300';
 
 export function SoldManager({
   assets,
@@ -445,7 +445,7 @@ export function SoldManager({
                           <span className="text-xs text-neutral-500">{l.items.length} item{l.items.length === 1 ? '' : 's'}</span>
                         </div>
                         {lOpen && (
-                          <div className="overflow-x-auto">
+                          <div role="region" aria-label="Sold devices" tabIndex={0} className="overflow-x-auto">
                             <table className="w-full text-left text-xs">
                               <thead className="text-neutral-500">
                                 <tr>
@@ -551,7 +551,7 @@ export function SoldManager({
                   </span>
                 </div>
                 {open && (
-                  <div className="overflow-x-auto">
+                  <div role="region" aria-label="Sold devices" tabIndex={0} className="overflow-x-auto">
                     <table className="w-full text-left text-xs">
                       <thead className="text-neutral-500">
                         <tr>

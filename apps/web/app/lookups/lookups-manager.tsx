@@ -108,12 +108,12 @@ export function LookupsManager({ all }: { all: LookupValue[] }) {
               onChange={(e) => setNewValue(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && onAdd()}
               placeholder={`Add a ${tab} value…`}
-              className="w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm outline-none focus:border-neutral-300"
+              className="w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm focus:border-neutral-300"
             />
             <button
               onClick={onAdd}
               disabled={pending}
-              className="shrink-0 rounded-md bg-[#2b7fff] hover:bg-blue-600 px-3 py-2 text-sm font-medium text-white disabled:opacity-50"
+              className="shrink-0 rounded-md bg-[#1a6ef5] hover:bg-blue-600 px-3 py-2 text-sm font-medium text-white disabled:opacity-50"
             >
               Add
             </button>
@@ -130,7 +130,7 @@ export function LookupsManager({ all }: { all: LookupValue[] }) {
                   if (next && next !== l.value) run(() => updateLookup(l.id, { value: next }));
                 }}
                 className={
-                  'w-full rounded border border-transparent bg-transparent px-1 py-1 text-sm hover:border-neutral-200 focus:border-neutral-300 focus:outline-none ' +
+                  'w-full rounded border border-transparent bg-transparent px-1 py-1 text-sm hover:border-neutral-200 focus:border-neutral-300 ' +
                   (l.active ? 'text-neutral-950' : 'text-neutral-500 line-through')
                 }
               />

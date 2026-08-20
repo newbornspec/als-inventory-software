@@ -49,6 +49,12 @@ export default function RootLayout({
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col">
+        {/* First thing a keyboard reaches on any page: a way past the nav
+            straight into the content (WCAG 2.4.1). Every page's <main> carries
+            id="main-content" as the target. */}
+        <a href="#main-content" className="skip-link">
+          Skip to main content
+        </a>
         <ServiceWorkerRegister />
         {children}
       </body>

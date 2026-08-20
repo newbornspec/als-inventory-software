@@ -220,7 +220,7 @@ export default function ScanPage() {
   return (
     <main className="min-h-screen bg-white text-neutral-950">
       <Nav />
-      <div className="p-8">
+      <div id="main-content" tabIndex={-1} className="p-8">
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-semibold">Scan Asset</h1>
@@ -234,6 +234,7 @@ export default function ScanPage() {
           <div className="flex rounded-md border border-neutral-200 text-sm">
             <button
               onClick={() => setMode('keyboard')}
+              aria-pressed={mode === 'keyboard'}
               className={
                 'px-3 py-1.5 ' + (mode === 'keyboard' ? 'bg-neutral-100 text-neutral-900' : 'text-neutral-700')
               }
@@ -242,6 +243,7 @@ export default function ScanPage() {
             </button>
             <button
               onClick={() => setMode('camera')}
+              aria-pressed={mode === 'camera'}
               className={
                 'px-3 py-1.5 ' + (mode === 'camera' ? 'bg-neutral-100 text-neutral-900' : 'text-neutral-700')
               }
@@ -287,7 +289,7 @@ export default function ScanPage() {
               onChange={(e) => setTag(e.target.value)}
               placeholder="Scan or type asset tag…"
               autoComplete="off"
-              className="w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-neutral-950 outline-none focus:border-neutral-300"
+              className="w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-neutral-950 focus:border-neutral-300"
             />
           </form>
         ) : (

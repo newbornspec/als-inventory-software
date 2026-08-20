@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { createEmptySpecPallet } from '@/lib/actions/pallets';
 
@@ -48,25 +48,66 @@ export function NewPalletButton() {
     if (layout?.href) router.push(layout.href);
   }
 
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const openerRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    // Move focus into the dialog on open, and keep Tab inside it while it is up.
+    const node = dialogRef.current;
+    node?.focus();
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') {
+        setOpen(false);
+        openerRef.current?.focus();
+        return;
+      }
+      if (e.key !== 'Tab' || !node) return;
+      const focusables = node.querySelectorAll<HTMLElement>(
+        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+      );
+      if (focusables.length === 0) return;
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    }
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [open]);
+
   return (
     <>
       <button
+        ref={openerRef}
         onClick={() => setOpen(true)}
-        className="rounded-md bg-[#2b7fff] hover:bg-blue-600 px-4 py-2 text-sm font-medium text-white"
+        className="rounded-md bg-[#1a6ef5] hover:bg-blue-600 px-4 py-2 text-sm font-medium text-white"
       >
         New Pallet
       </button>
 
       {open && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+          className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/60 p-4 sm:items-center"
           onClick={() => setOpen(false)}
         >
           <div
-            className="w-full max-w-md rounded-xl border border-neutral-200 bg-white p-6 shadow-xl"
+            ref={dialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="new-pallet-title"
+            tabIndex={-1}
+            className="my-8 w-full max-w-md rounded-xl border border-neutral-200 bg-white p-6 shadow-xl"
             onClick={(e) => e.stopPropagation()}
           >
-            <h2 className="text-lg font-semibold">Create New Pallet</h2>
+            <h2 id="new-pallet-title" className="text-lg font-semibold">
+              Create New Pallet
+            </h2>
             <p className="mt-1 text-sm text-neutral-500">
               Choose how you’d like to enter this pallet. Both create the same pallet.
             </p>
@@ -99,7 +140,11 @@ export function NewPalletButton() {
             </div>
 
             <div className="mt-5 flex items-center justify-end gap-2">
-              {error && <span className="mr-auto text-xs text-red-600">{error}</span>}
+              {error && (
+                <span role="alert" className="mr-auto text-xs text-red-700">
+                  {error}
+                </span>
+              )}
               <button
                 onClick={() => setOpen(false)}
                 className="rounded-md border border-neutral-200 px-3 py-1.5 text-sm text-neutral-700 hover:bg-white"
@@ -109,7 +154,7 @@ export function NewPalletButton() {
               <button
                 onClick={go}
                 disabled={busy}
-                className="rounded-md bg-[#2b7fff] hover:bg-blue-600 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
+                className="rounded-md bg-[#1a6ef5] hover:bg-blue-600 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
               >
                 {busy ? 'Creating…' : 'Continue'}
               </button>

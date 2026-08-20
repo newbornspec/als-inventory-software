@@ -74,7 +74,7 @@ export function InvoiceForm({
         <div className="mt-4 flex flex-wrap items-center gap-3">
           <a
             href={`/api/invoices/${state.invoiceId}/pdf`}
-            className="rounded-md bg-[#2b7fff] px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-600"
+            className="rounded-md bg-[#1a6ef5] px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-600"
           >
             Download invoice PDF
           </a>
@@ -224,7 +224,7 @@ export function InvoiceForm({
         <p className="mt-1 text-xs text-neutral-500">
           Taken from the pallet as it stands. Edit the pallet to change them.
         </p>
-        <div className="mt-3 overflow-x-auto rounded-lg border border-neutral-200">
+        <div role="region" aria-label="Invoice items" tabIndex={0} className="mt-3 overflow-x-auto rounded-lg border border-neutral-200">
           <table className="w-full min-w-[52rem] text-left text-sm">
             <thead className="bg-neutral-50 text-neutral-500">
               <tr>
@@ -303,7 +303,7 @@ export function InvoiceForm({
         <button
           type="submit"
           disabled={pending}
-          className="rounded-md bg-[#2b7fff] px-4 py-2 text-sm font-medium text-white hover:bg-blue-600 disabled:opacity-50"
+          className="rounded-md bg-[#1a6ef5] px-4 py-2 text-sm font-medium text-white hover:bg-blue-600 disabled:opacity-50"
         >
           {pending ? 'Generating…' : 'Generate invoice'}
         </button>

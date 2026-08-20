@@ -11,6 +11,7 @@ import { NewLotForm } from './new-lot-form';
 import { BatchStatusSelect } from './status-select';
 import { ImportExpected } from './import-expected';
 import { LotCost } from './lot-cost';
+import { ExpectedArrival } from './expected-arrival';
 import { LotAssets } from './lot-assets';
 import { AddAssetForm } from './add-asset-form';
 import { DeleteSubLotButton } from './delete-sublot-button';
@@ -63,7 +64,7 @@ export default async function BatchDetailPage({ params }: { params: Promise<{ id
   return (
     <main className="min-h-screen bg-white text-neutral-950">
       <Nav />
-      <div className="p-8">
+      <div id="main-content" tabIndex={-1} className="p-8">
         <Breadcrumbs
           items={[
             { label: 'Dashboard', href: '/dashboard' },
@@ -88,7 +89,7 @@ export default async function BatchDetailPage({ params }: { params: Promise<{ id
               </a>
               <a
                 href={`/api/batches/${batch.id}/report`}
-                className="rounded-md bg-[#2b7fff] hover:bg-blue-600 px-3 py-1.5 text-sm font-medium text-white"
+                className="rounded-md bg-[#1a6ef5] hover:bg-blue-600 px-3 py-1.5 text-sm font-medium text-white"
               >
                 Export to Excel
               </a>
@@ -130,6 +131,19 @@ export default async function BatchDetailPage({ params }: { params: Promise<{ id
           <div>
             <dt className="text-xs uppercase tracking-wide text-neutral-500">Purchase date</dt>
             <dd className="text-neutral-900">{batch.purchaseDate ?? '—'}</dd>
+          </div>
+          <div>
+            <dt className="text-xs uppercase tracking-wide text-neutral-500">Expected arrival</dt>
+            <dd className="text-neutral-900">
+              {canManage ? (
+                <ExpectedArrival
+                  batchId={batch.id}
+                  expectedArrivalDate={batch.expectedArrivalDate}
+                />
+              ) : (
+                (batch.expectedArrivalDate ?? '—')
+              )}
+            </dd>
           </div>
           <div>
             <dt className="text-xs uppercase tracking-wide text-neutral-500">Received date</dt>
@@ -209,7 +223,7 @@ export default async function BatchDetailPage({ params }: { params: Promise<{ id
           </div>
 
           {recon.lines.length > 0 || recon.quantityOnly.length > 0 ? (
-            <div className="mt-3 overflow-x-auto rounded-lg border border-neutral-200">
+            <div role="region" aria-label="Expected inventory" tabIndex={0} className="mt-3 overflow-x-auto rounded-lg border border-neutral-200">
               <table className="w-full text-left text-sm">
                 <thead className="bg-neutral-50 text-neutral-500">
                   <tr>

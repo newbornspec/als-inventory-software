@@ -118,7 +118,7 @@ export function LotAssets({
           value={q}
           onChange={(e) => setQ(e.target.value)}
           placeholder="Search this lot — name, make, model, serial, service tag…"
-          className="w-full max-w-md rounded-md border border-neutral-200 bg-white px-3 py-1.5 text-sm outline-none focus:border-neutral-300"
+          className="w-full max-w-md rounded-md border border-neutral-200 bg-white px-3 py-1.5 text-sm focus:border-neutral-300"
         />
         <span className="shrink-0 text-xs text-neutral-500">
           {filtered.length} of {assets.length}
@@ -225,7 +225,7 @@ export function LotAssets({
                   <Link
                     href={`/assets/${a.id}/label`}
                     target="_blank"
-                    className="text-[#2b7fff] hover:underline"
+                    className="text-[#1a6ef5] hover:underline"
                   >
                     Print
                   </Link>

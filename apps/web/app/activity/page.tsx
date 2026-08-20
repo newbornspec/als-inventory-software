@@ -32,7 +32,7 @@ export default async function ActivityPage() {
   return (
     <main className="min-h-screen bg-white text-neutral-950">
       <Nav />
-      <div className="p-8">
+      <div id="main-content" tabIndex={-1} className="p-8">
         <Breadcrumbs items={[{ label: 'Dashboard', href: '/dashboard' }, { label: 'Activity' }]} />
         <h1 className="mt-3 text-2xl font-semibold">Activity log</h1>
         <p className="mt-1 text-sm text-neutral-500">
@@ -46,7 +46,7 @@ export default async function ActivityPage() {
         ) : entries.length === 0 ? (
           <p className="mt-6 text-sm text-neutral-500">No activity recorded yet.</p>
         ) : (
-          <div className="mt-6 overflow-x-auto rounded-lg border border-neutral-200">
+          <div role="region" aria-label="Activity log" tabIndex={0} className="mt-6 overflow-x-auto rounded-lg border border-neutral-200">
             <table className="w-full text-left text-sm">
               <thead className="bg-neutral-50 text-neutral-500">
                 <tr>

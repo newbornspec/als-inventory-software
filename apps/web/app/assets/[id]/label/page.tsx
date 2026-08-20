@@ -114,7 +114,7 @@ export default async function AssetLabelPage({ params }: { params: Promise<{ id:
   const unit = asset.unitId ?? asset.tag;
 
   return (
-    <main className="min-h-screen bg-white p-8 text-neutral-900 print:p-0">
+    <main id="main-content" tabIndex={-1} className="min-h-screen bg-white p-8 text-neutral-900 print:p-0">
       <style>{`
         @page { size: ${LABEL_W} ${LABEL_H}; margin: 0; }
         @media print {

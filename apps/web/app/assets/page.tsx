@@ -15,6 +15,11 @@ export default async function AssetsPage({
     conditionGrade?: string;
     auditStatus?: string;
     category?: string;
+    // Dashboard deep links. Kept as string flags to match the API, where
+    // locationId must be a UUID so "has none" needs a parameter of its own.
+    locationId?: string;
+    noLocation?: string;
+    noAudit?: string;
   }>;
 }) {
   const params = await searchParams;
@@ -28,7 +33,10 @@ export default async function AssetsPage({
       params.stockStatus ||
       params.conditionGrade ||
       params.auditStatus ||
-      params.category,
+      params.category ||
+      params.locationId ||
+      params.noLocation === 'true' ||
+      params.noAudit === 'true',
   );
 
   let flat: Asset[] = [];
@@ -42,6 +50,9 @@ export default async function AssetsPage({
     if (params.conditionGrade) query.set('conditionGrade', params.conditionGrade);
     if (params.auditStatus) query.set('auditStatus', params.auditStatus);
     if (params.category) query.set('category', params.category);
+    if (params.locationId) query.set('locationId', params.locationId);
+    if (params.noLocation === 'true') query.set('noLocation', 'true');
+    if (params.noAudit === 'true') query.set('noAudit', 'true');
     flat = await apiFetch<Asset[]>(`/assets?${query.toString()}`);
   } else {
     [batches, unassigned] = await Promise.all([
@@ -53,7 +64,7 @@ export default async function AssetsPage({
   return (
     <main className="min-h-screen bg-white text-neutral-950">
       <Nav />
-      <div className="p-8">
+      <div id="main-content" tabIndex={-1} className="p-8">
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-semibold">Assets</h1>
@@ -69,7 +80,7 @@ export default async function AssetsPage({
           {canCreate && (
             <Link
               href="/assets/new"
-              className="shrink-0 rounded-md bg-[#2b7fff] hover:bg-blue-600 px-4 py-2 text-sm font-medium text-white"
+              className="shrink-0 rounded-md bg-[#1a6ef5] hover:bg-blue-600 px-4 py-2 text-sm font-medium text-white"
             >
               New Asset
             </Link>
@@ -77,13 +88,24 @@ export default async function AssetsPage({
         </div>
 
         <form className="mt-6 flex flex-wrap gap-3" action="/assets">
+          {params.locationId && <input type="hidden" name="locationId" value={params.locationId} />}
+          {params.noLocation === 'true' && <input type="hidden" name="noLocation" value="true" />}
+          {params.noAudit === 'true' && <input type="hidden" name="noAudit" value="true" />}
+          <label htmlFor="assets-search" className="sr-only">
+            Search by tag, serial or name
+          </label>
           <input
+            id="assets-search"
             name="search"
             defaultValue={params.search}
             placeholder="Search by tag, serial or name…"
-            className="min-w-[18rem] flex-1 rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm outline-none focus:border-neutral-300"
+            className="w-full min-w-0 flex-1 rounded-md sm:w-auto sm:min-w-[18rem] border border-neutral-200 bg-white px-3 py-2 text-sm focus:border-neutral-300"
           />
+          <label htmlFor="assets-stock-status" className="sr-only">
+            Stock status
+          </label>
           <select
+            id="assets-stock-status"
             name="stockStatus"
             defaultValue={params.stockStatus ?? ''}
             className="rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm"
@@ -95,7 +117,11 @@ export default async function AssetsPage({
               </option>
             ))}
           </select>
+          <label htmlFor="assets-grade" className="sr-only">
+            Condition grade
+          </label>
           <select
+            id="assets-grade"
             name="conditionGrade"
             defaultValue={params.conditionGrade ?? ''}
             className="rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm"
@@ -107,7 +133,11 @@ export default async function AssetsPage({
               </option>
             ))}
           </select>
+          <label htmlFor="assets-audit-status" className="sr-only">
+            Audit status
+          </label>
           <select
+            id="assets-audit-status"
             name="auditStatus"
             defaultValue={params.auditStatus ?? ''}
             className="rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm"
@@ -136,7 +166,7 @@ export default async function AssetsPage({
         </form>
 
         {isSearching ? (
-          <div className="mt-6 overflow-x-auto rounded-lg border border-neutral-200">
+          <div role="region" aria-label="Devices" tabIndex={0} className="mt-6 overflow-x-auto rounded-lg border border-neutral-200">
             <table className="w-full text-left text-sm">
               <thead className="bg-neutral-50 text-neutral-500">
                 <tr>

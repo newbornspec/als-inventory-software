@@ -313,7 +313,7 @@ export function CameraScanner({ onDecode, onReadText, cooldownMs = 1500 }: Camer
             type="button"
             onClick={readText}
             disabled={ocrBusy}
-            className="shrink-0 rounded-md bg-[#2b7fff] hover:bg-blue-600 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50"
+            className="shrink-0 rounded-md bg-[#1a6ef5] hover:bg-blue-600 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50"
           >
             {ocrBusy ? 'Reading…' : 'Read text'}
           </button>

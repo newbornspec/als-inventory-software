@@ -76,6 +76,8 @@ export function LotsAccordion({
           >
             <button
               onClick={() => toggle(lot.id)}
+              aria-expanded={isOpen}
+              aria-controls={`lot-panel-${lot.id}`}
               className="flex w-full items-start justify-between gap-4 text-left"
             >
               <div className="flex items-center gap-3">
@@ -200,8 +202,9 @@ export function LotsAccordion({
               )}
             </div>
 
+            <div id={`lot-panel-${lot.id}`} hidden={!isOpen}>
             {isOpen && (
-              <div className="mt-4 overflow-x-auto rounded-xl border border-neutral-200">
+              <div role="region" aria-label="Lot devices" tabIndex={0} className="mt-4 overflow-x-auto rounded-xl border border-neutral-200">
                 {!data || data.loading ? (
                   <p className="px-4 py-3 text-xs text-neutral-500">Loading assets…</p>
                 ) : data.error ? (
@@ -226,7 +229,7 @@ export function LotsAccordion({
                           <td className="px-4 py-2">
                             <Link
                               href={`/assets/${a.id}`}
-                              className="font-medium text-[#2b7fff] hover:underline"
+                              className="font-medium text-[#1a6ef5] hover:underline"
                             >
                               {a.name}
                             </Link>
@@ -245,6 +248,7 @@ export function LotsAccordion({
                 )}
               </div>
             )}
+            </div>
           </div>
         );
       })}

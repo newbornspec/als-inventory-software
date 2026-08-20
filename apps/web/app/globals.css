@@ -30,3 +30,56 @@ body {
   color: var(--foreground);
   font-family: var(--font-geist-sans), system-ui, -apple-system, "Segoe UI", sans-serif;
 }
+
+/* --- WCAG 2.2 AA: focus visibility (2.4.7, 2.4.11) ---------------------------
+   Individual components used to set `outline-none focus:border-neutral-300`,
+   which swaps a clear focus ring for a border one shade darker — invisible in
+   practice, and on a keyboard-only pass you could not tell where you were.
+   One rule here gives every focusable thing the same unmistakable indicator.
+   :focus-visible (not :focus) so a mouse click doesn't ring the control.
+   The 2px offset keeps the ring outside the element's own border, so it stays
+   visible on inputs that already have one. */
+:where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* Windows high-contrast / forced-colours mode paints its own system colours and
+   ignores ours; make sure the ring survives. */
+@media (forced-colors: active) {
+  :where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+    outline: 2px solid Highlight;
+  }
+}
+
+/* Off-screen until focused — the first Tab on any page jumps past the nav
+   straight to the page content (WCAG 2.4.1 Bypass Blocks). */
+.skip-link {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  z-index: 100;
+}
+.skip-link:focus {
+  left: 0.5rem;
+  top: 0.5rem;
+  padding: 0.5rem 0.875rem;
+  background: var(--brand);
+  color: #ffffff;
+  border-radius: 0.5rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+/* Respect the OS "reduce motion" setting (WCAG 2.3.3). */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

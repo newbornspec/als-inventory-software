@@ -7,7 +7,7 @@ import { formatLabel } from '@/lib/asset-options';
 
 function PalletTable({ pallets, shipped }: { pallets: Pallet[]; shipped: boolean }) {
   return (
-    <div className="mt-3 overflow-x-auto rounded-lg border border-neutral-200">
+    <div role="region" aria-label="Pallets" tabIndex={0} className="mt-3 overflow-x-auto rounded-lg border border-neutral-200">
       <table className="w-full text-left text-sm">
         <thead className="bg-neutral-50 text-neutral-500">
           <tr>
@@ -70,7 +70,7 @@ export default async function PalletsPage() {
   return (
     <main className="min-h-screen bg-white text-neutral-950">
       <Nav />
-      <div className="p-8">
+      <div id="main-content" tabIndex={-1} className="p-8">
         <div className="flex items-center justify-between">
           <h1 className="text-2xl font-semibold">Pallets</h1>
           {canCreate && <NewPalletButton />}

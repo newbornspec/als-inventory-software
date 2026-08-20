@@ -14,25 +14,22 @@ export function AssetEditForm({ asset, locations }: { asset: Asset; locations: L
   return (
     <form action={formAction} className="mt-4 max-w-sm space-y-3">
       <div className="space-y-1">
-        <label className="text-sm text-neutral-700">Name</label>
-        <input
-          name="name"
+        <label htmlFor="assets-id-edit-form-name" className="text-sm text-neutral-700">Name</label>
+        <input id="assets-id-edit-form-name" name="name"
           defaultValue={asset.name}
-          className="w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm outline-none focus:border-neutral-300"
+          className="w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm focus:border-neutral-300"
         />
       </div>
       <div className="space-y-1">
-        <label className="text-sm text-neutral-700">Category</label>
-        <input
-          name="category"
+        <label htmlFor="assets-id-edit-form-category" className="text-sm text-neutral-700">Category</label>
+        <input id="assets-id-edit-form-category" name="category"
           defaultValue={asset.category}
-          className="w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm outline-none focus:border-neutral-300"
+          className="w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm focus:border-neutral-300"
         />
       </div>
       <div className="space-y-1">
-        <label className="text-sm text-neutral-700">Stock status</label>
-        <select
-          name="stockStatus"
+        <label htmlFor="assets-id-edit-form-stockStatus" className="text-sm text-neutral-700">Stock status</label>
+        <select id="assets-id-edit-form-stockStatus" name="stockStatus"
           defaultValue={asset.stockStatus}
           className="w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm"
         >
@@ -44,9 +41,8 @@ export function AssetEditForm({ asset, locations }: { asset: Asset; locations: L
         </select>
       </div>
       <div className="space-y-1">
-        <label className="text-sm text-neutral-700">Condition grade</label>
-        <select
-          name="conditionGrade"
+        <label htmlFor="assets-id-edit-form-conditionGrade" className="text-sm text-neutral-700">Condition grade</label>
+        <select id="assets-id-edit-form-conditionGrade" name="conditionGrade"
           defaultValue={asset.conditionGrade ?? ''}
           className="w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm"
         >
@@ -59,9 +55,8 @@ export function AssetEditForm({ asset, locations }: { asset: Asset; locations: L
         </select>
       </div>
       <div className="space-y-1">
-        <label className="text-sm text-neutral-700">Location</label>
-        <select
-          name="locationId"
+        <label htmlFor="assets-id-edit-form-locationId" className="text-sm text-neutral-700">Location</label>
+        <select id="assets-id-edit-form-locationId" name="locationId"
           defaultValue={asset.locationId ?? ''}
           className="w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm"
         >
@@ -74,15 +69,14 @@ export function AssetEditForm({ asset, locations }: { asset: Asset; locations: L
         </select>
       </div>
       <div className="space-y-1">
-        <label className="text-sm text-neutral-700">Unit cost override (£)</label>
-        <input
-          type="number"
+        <label htmlFor="assets-id-edit-form-purchaseCost" className="text-sm text-neutral-700">Unit cost override (£)</label>
+        <input id="assets-id-edit-form-purchaseCost" type="number"
           min={0}
           step="0.01"
           name="purchaseCost"
           defaultValue={asset.purchaseCost ?? ''}
           placeholder="leave blank to use even split of lot cost"
-          className="w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm outline-none focus:border-neutral-300"
+          className="w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm focus:border-neutral-300"
         />
       </div>
 
@@ -91,7 +85,7 @@ export function AssetEditForm({ asset, locations }: { asset: Asset; locations: L
       <button
         type="submit"
         disabled={pending}
-        className="rounded-md bg-[#2b7fff] hover:bg-blue-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+        className="rounded-md bg-[#1a6ef5] hover:bg-blue-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
       >
         {pending ? 'Saving…' : 'Save changes'}
       </button>

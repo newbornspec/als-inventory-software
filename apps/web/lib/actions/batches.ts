@@ -14,6 +14,8 @@ export interface Batch {
   purchaseOrder: string | null;
   deliveryNote: string | null;
   purchaseDate: string | null;
+  // When delivery is due — feeds the dashboard's incoming/overdue counts.
+  expectedArrivalDate: string | null;
   expectedUnitCount: number | null;
   totalCost: number | null;
   status: string;
@@ -105,6 +107,7 @@ export async function createBatch(_prev: ActionState, formData: FormData): Promi
     purchaseOrder: emptyToUndefined(formData.get('purchaseOrder')),
     deliveryNote: emptyToUndefined(formData.get('deliveryNote')),
     purchaseDate: emptyToUndefined(formData.get('purchaseDate')),
+    expectedArrivalDate: emptyToUndefined(formData.get('expectedArrivalDate')),
     expectedUnitCount: toIntOrUndefined(formData.get('expectedUnitCount')),
     // A newly created purchase lot is expected but not yet physically received.
     status: emptyToUndefined(formData.get('status')) ?? 'awaiting_arrival',
@@ -139,6 +142,19 @@ export async function updateBatchStatus(id: string, formData: FormData): Promise
   await apiFetch(`/batches/${id}`, { method: 'PATCH', body: JSON.stringify({ status }) });
   revalidatePath(`/batches/${id}`);
   revalidatePath('/batches');
+}
+
+// Blank clears the date back to "no delivery promised", which is a meaningful
+// state — such a lot is awaiting receipt but can never be counted as overdue.
+export async function updateBatchExpectedArrival(id: string, formData: FormData): Promise<void> {
+  const raw = String(formData.get('expectedArrivalDate') ?? '').trim();
+  await apiFetch(`/batches/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ expectedArrivalDate: raw === '' ? null : raw }),
+  });
+  revalidatePath(`/batches/${id}`);
+  revalidatePath('/batches');
+  revalidatePath('/dashboard');
 }
 
 export async function updateBatchCost(id: string, formData: FormData): Promise<void> {

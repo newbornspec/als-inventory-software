@@ -33,7 +33,7 @@ export default async function InventoryPage() {
   return (
     <main className="min-h-screen bg-white text-neutral-950">
       <Nav />
-      <div className="p-8">
+      <div id="main-content" tabIndex={-1} className="p-8">
         <div className="flex flex-wrap items-end justify-between gap-4">
           <div>
             <h1 className="text-2xl font-semibold">All Inventory</h1>
@@ -151,7 +151,7 @@ function Table({ head, empty, children }: { head: string[]; empty: string; child
   const rows = Array.isArray(children) ? children.flat().filter(Boolean) : children;
   const isEmpty = Array.isArray(rows) && rows.length === 0;
   return (
-    <div className="mt-3 overflow-x-auto rounded-lg border border-neutral-200">
+    <div role="region" aria-label="Inventory breakdown" tabIndex={0} className="mt-3 overflow-x-auto rounded-lg border border-neutral-200">
       <table className="w-full text-left text-sm">
         <thead className="bg-neutral-50 text-neutral-500">
           <tr>

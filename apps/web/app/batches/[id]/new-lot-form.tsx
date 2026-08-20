@@ -40,7 +40,7 @@ export function NewLotForm({ batchId }: { batchId: string }) {
       <button
         type="submit"
         disabled={pending}
-        className="rounded-md bg-[#2b7fff] hover:bg-blue-600 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50"
+        className="rounded-md bg-[#1a6ef5] hover:bg-blue-600 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50"
       >
         {pending ? 'Creating…' : 'Create sub-lot'}
       </button>

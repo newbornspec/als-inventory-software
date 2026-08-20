@@ -76,7 +76,7 @@ export function RepairsSection({
   return (
     <section>
       <h2 className="text-sm font-medium text-neutral-500">Repairs &amp; refurbishment</h2>
-      <div className="mt-3 overflow-x-auto rounded-lg border border-neutral-200">
+      <div role="region" aria-label="Repair log" tabIndex={0} className="mt-3 overflow-x-auto rounded-lg border border-neutral-200">
         <table className="w-full text-left text-sm">
           <thead className="bg-neutral-50 text-neutral-500">
             <tr>
@@ -93,6 +93,7 @@ export function RepairsSection({
               <tr key={r.id} className="border-t border-neutral-200 align-top">
                 <td className="px-3 py-2">
                   <input
+                    aria-label="Work or fault"
                     defaultValue={r.description}
                     onBlur={(e) => e.target.value.trim() && e.target.value !== r.description && save(r, { description: e.target.value })}
                     className="w-full rounded border border-neutral-200 bg-white px-2 py-1"
@@ -100,6 +101,7 @@ export function RepairsSection({
                 </td>
                 <td className="px-3 py-2">
                   <input
+                    aria-label="Parts used"
                     defaultValue={r.partsUsed ?? ''}
                     placeholder="—"
                     onBlur={(e) => e.target.value !== (r.partsUsed ?? '') && save(r, { partsUsed: e.target.value })}
@@ -111,6 +113,7 @@ export function RepairsSection({
                     type="number"
                     min={0}
                     step="0.01"
+                    aria-label="Repair cost in pounds"
                     defaultValue={r.cost ?? ''}
                     placeholder="—"
                     onBlur={(e) => {
@@ -122,6 +125,7 @@ export function RepairsSection({
                 </td>
                 <td className="px-3 py-2">
                   <select
+                    aria-label="Repair status"
                     defaultValue={r.status}
                     onChange={(e) => save(r, { status: e.target.value as RepairStatus })}
                     className="w-full rounded border border-neutral-200 bg-white px-2 py-1"
@@ -162,6 +166,7 @@ export function RepairsSection({
             <tr className="border-t border-neutral-200 bg-neutral-50">
               <td className="px-3 py-2">
                 <input
+                  aria-label="New repair: work or fault"
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
                   placeholder="e.g. Replaced faulty charging port"
@@ -170,6 +175,7 @@ export function RepairsSection({
               </td>
               <td className="px-3 py-2">
                 <input
+                  aria-label="New repair: parts used"
                   value={parts}
                   onChange={(e) => setParts(e.target.value)}
                   placeholder="parts (optional)"
@@ -181,6 +187,7 @@ export function RepairsSection({
                   type="number"
                   min={0}
                   step="0.01"
+                  aria-label="New repair: cost in pounds"
                   value={cost}
                   onChange={(e) => setCost(e.target.value)}
                   placeholder="optional"
@@ -189,6 +196,7 @@ export function RepairsSection({
               </td>
               <td className="px-3 py-2">
                 <select
+                  aria-label="New repair: status"
                   value={status}
                   onChange={(e) => setStatus(e.target.value as RepairStatus)}
                   className="w-full rounded border border-neutral-200 bg-white px-2 py-1"
@@ -205,7 +213,7 @@ export function RepairsSection({
                 <button
                   onClick={add}
                   disabled={busy}
-                  className="rounded bg-[#2b7fff] hover:bg-blue-600 px-2 py-1 text-xs font-medium text-white disabled:opacity-50"
+                  className="rounded bg-[#1a6ef5] hover:bg-blue-600 px-2 py-1 text-xs font-medium text-white disabled:opacity-50"
                 >
                   {busy ? '…' : 'Add'}
                 </button>

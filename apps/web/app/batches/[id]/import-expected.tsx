@@ -143,9 +143,15 @@ export function ImportExpected({ batchId, hasExisting }: { batchId: string; hasE
             CSV or Excel. {hasExisting ? 'Re-importing replaces the current expected list.' : ''}
           </div>
         </div>
-        <label className="cursor-pointer rounded-md bg-[#2b7fff] hover:bg-blue-600 px-3 py-1.5 text-xs font-medium text-white">
+        <label className="cursor-pointer rounded-md bg-[#1a6ef5] hover:bg-blue-600 px-3 py-1.5 text-xs font-medium text-white focus-within:outline focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-[#1a6ef5]">
           Choose file
-          <input type="file" accept=".csv,.xlsx,.xls" onChange={onFile} className="hidden" />
+          <input
+            type="file"
+            accept=".csv,.xlsx,.xls"
+            onChange={onFile}
+            aria-label="Supplier list file, CSV or Excel"
+            className="sr-only"
+          />
         </label>
       </div>
 
@@ -178,7 +184,7 @@ export function ImportExpected({ batchId, hasExisting }: { batchId: string; hasE
             ))}
           </div>
 
-          <div className="overflow-x-auto rounded border border-neutral-200">
+          <div role="region" aria-label="Import preview" tabIndex={0} className="overflow-x-auto rounded border border-neutral-200">
             <table className="w-full text-left text-[11px]">
               <thead className="bg-neutral-50 text-neutral-500">
                 <tr>

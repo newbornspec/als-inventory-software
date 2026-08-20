@@ -111,7 +111,7 @@ export function AssetsGrouped({ batches, unassigned }: { batches: Batch[]; unass
               </Link>
             </div>
             {isOpen && (
-              <div className="overflow-x-auto border-t border-neutral-200">
+              <div role="region" aria-label="Devices" tabIndex={0} className="overflow-x-auto border-t border-neutral-200">
                 {!data || data.loading ? (
                   <p className="px-4 py-3 text-xs text-neutral-500">Loading devices…</p>
                 ) : data.error ? (
@@ -146,7 +146,7 @@ function UnassignedGroup({ assets }: { assets: Asset[] }) {
         <span className="ml-auto text-xs text-neutral-500">{assets.length} items</span>
       </button>
       {open && (
-        <div className="overflow-x-auto border-t border-neutral-200">
+        <div role="region" aria-label="Devices" tabIndex={0} className="overflow-x-auto border-t border-neutral-200">
           <AssetRows assets={assets} />
         </div>
       )}

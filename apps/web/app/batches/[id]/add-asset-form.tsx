@@ -69,17 +69,17 @@ export function AddAssetForm({ batchId, subLots }: { batchId: string; subLots: L
 
       <div key={resetKey} className="space-y-2">
         <div className="grid grid-cols-2 gap-2">
-          <input name="manufacturer" placeholder="Manufacturer, e.g. Dell" className={field} />
-          <input name="model" placeholder="Model, e.g. Latitude 5420" className={field} />
-          <input name="deviceType" placeholder="Device type, e.g. Laptop" className={field} />
-          <input name="serialNumber" placeholder="Serial number" className={field} />
-          <input name="cpu" placeholder="CPU, e.g. i5-1145G7" className={field} />
-          <input type="number" min={0} name="ramGb" placeholder="RAM (GB)" className={field} />
-          <input name="storage" placeholder="Storage, e.g. 256GB SSD" className={field} />
-          <input name="screenSize" placeholder='Screen, e.g. 14"' className={field} />
-          <input name="batteryHealth" placeholder="Battery, e.g. 92%" className={field} />
+          <input name="manufacturer" aria-label="Manufacturer" placeholder="Manufacturer, e.g. Dell" className={field} />
+          <input name="model" aria-label="Model" placeholder="Model, e.g. Latitude 5420" className={field} />
+          <input name="deviceType" aria-label="Device type" placeholder="Device type, e.g. Laptop" className={field} />
+          <input name="serialNumber" aria-label="Serial number" placeholder="Serial number" className={field} />
+          <input name="cpu" aria-label="CPU" placeholder="CPU, e.g. i5-1145G7" className={field} />
+          <input type="number" min={0} name="ramGb" aria-label="RAM in GB" placeholder="RAM (GB)" className={field} />
+          <input name="storage" aria-label="Storage" placeholder="Storage, e.g. 256GB SSD" className={field} />
+          <input name="screenSize" aria-label="Screen size" placeholder='Screen, e.g. 14"' className={field} />
+          <input name="batteryHealth" aria-label="Battery health" placeholder="Battery, e.g. 92%" className={field} />
         </div>
-        <input name="notes" placeholder="Notes (optional)" className={field} />
+        <input name="notes" aria-label="Notes" placeholder="Notes (optional)" className={field} />
       </div>
 
       {state.error && <p className="text-xs text-red-600">{state.error}</p>}
@@ -87,7 +87,7 @@ export function AddAssetForm({ batchId, subLots }: { batchId: string; subLots: L
         <button
           type="submit"
           disabled={pending}
-          className="rounded-md bg-[#2b7fff] hover:bg-blue-600 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50"
+          className="rounded-md bg-[#1a6ef5] hover:bg-blue-600 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50"
         >
           {pending ? 'Adding…' : 'Save asset'}
         </button>

@@ -13,36 +13,32 @@ export function NewUserForm() {
   return (
     <form action={formAction} className="mt-6 max-w-sm space-y-3">
       <div className="space-y-1">
-        <label className="text-sm text-neutral-700">Name</label>
-        <input
-          name="name"
+        <label htmlFor="users-new-new-user-form-name" className="text-sm text-neutral-700">Name</label>
+        <input id="users-new-new-user-form-name" name="name"
           required
-          className="w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm outline-none focus:border-neutral-300"
+          className="w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm focus:border-neutral-300"
         />
       </div>
       <div className="space-y-1">
-        <label className="text-sm text-neutral-700">Email</label>
-        <input
-          name="email"
+        <label htmlFor="users-new-new-user-form-email" className="text-sm text-neutral-700">Email</label>
+        <input id="users-new-new-user-form-email" name="email"
           type="email"
           required
-          className="w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm outline-none focus:border-neutral-300"
+          className="w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm focus:border-neutral-300"
         />
       </div>
       <div className="space-y-1">
-        <label className="text-sm text-neutral-700">Temporary password</label>
-        <input
-          name="password"
+        <label htmlFor="users-new-new-user-form-password" className="text-sm text-neutral-700">Temporary password</label>
+        <input id="users-new-new-user-form-password" name="password"
           type="password"
           required
           minLength={8}
-          className="w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm outline-none focus:border-neutral-300"
+          className="w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm focus:border-neutral-300"
         />
       </div>
       <div className="space-y-1">
-        <label className="text-sm text-neutral-700">Role</label>
-        <select
-          name="role"
+        <label htmlFor="users-new-new-user-form-role" className="text-sm text-neutral-700">Role</label>
+        <select id="users-new-new-user-form-role" name="role"
           defaultValue="technician"
           className="w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm"
         >
@@ -59,7 +55,7 @@ export function NewUserForm() {
       <button
         type="submit"
         disabled={pending}
-        className="rounded-md bg-[#2b7fff] hover:bg-blue-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+        className="rounded-md bg-[#1a6ef5] hover:bg-blue-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
       >
         {pending ? 'Creating…' : 'Create user'}
       </button>

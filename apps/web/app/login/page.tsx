@@ -26,7 +26,7 @@ export default function LoginPage() {
   }
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-white px-4">
+    <main id="main-content" tabIndex={-1} className="flex min-h-screen items-center justify-center bg-white px-4">
       <form
         onSubmit={handleSubmit}
         className="w-full max-w-sm space-y-4 rounded-xl border border-neutral-200 bg-white p-8"
@@ -46,7 +46,7 @@ export default function LoginPage() {
             required
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            className="w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-neutral-950 outline-none focus:border-neutral-300"
+            className="w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-neutral-950 focus:border-neutral-300"
           />
         </div>
 
@@ -61,7 +61,7 @@ export default function LoginPage() {
             minLength={8}
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            className="w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-neutral-950 outline-none focus:border-neutral-300"
+            className="w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-neutral-950 focus:border-neutral-300"
           />
         </div>
 
@@ -70,7 +70,7 @@ export default function LoginPage() {
         <button
           type="submit"
           disabled={submitting}
-          className="w-full rounded-md bg-[#2b7fff] hover:bg-blue-600 py-2 font-medium text-white disabled:opacity-50"
+          className="w-full rounded-md bg-[#1a6ef5] hover:bg-blue-600 py-2 font-medium text-white disabled:opacity-50"
         >
           {submitting ? 'Signing in…' : 'Sign in'}
         </button>

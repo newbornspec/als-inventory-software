@@ -15,7 +15,7 @@ export default async function LookupsPage() {
   return (
     <main className="min-h-screen bg-white text-neutral-950">
       <Nav />
-      <div className="p-8">
+      <div id="main-content" tabIndex={-1} className="p-8">
         <Breadcrumbs items={[{ label: 'Dashboard', href: '/dashboard' }, { label: 'Lookups' }]} />
         <h1 className="mt-3 text-2xl font-semibold">Lookup values</h1>
         <p className="mt-1 max-w-2xl text-sm text-neutral-500">

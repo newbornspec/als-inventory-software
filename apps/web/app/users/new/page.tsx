@@ -11,7 +11,7 @@ export default async function NewUserPage() {
   return (
     <main className="min-h-screen bg-white text-neutral-950">
       <Nav />
-      <div className="p-8">
+      <div id="main-content" tabIndex={-1} className="p-8">
         <BackLink href="/users" label="Back to Users" />
         <h1 className="mt-3 text-2xl font-semibold">New User</h1>
         <NewUserForm />

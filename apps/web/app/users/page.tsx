@@ -16,18 +16,18 @@ export default async function UsersPage() {
   return (
     <main className="min-h-screen bg-white text-neutral-950">
       <Nav />
-      <div className="p-8">
+      <div id="main-content" tabIndex={-1} className="p-8">
         <div className="flex items-center justify-between">
           <h1 className="text-2xl font-semibold">Users</h1>
           <Link
             href="/users/new"
-            className="rounded-md bg-[#2b7fff] hover:bg-blue-600 px-4 py-2 text-sm font-medium text-white"
+            className="rounded-md bg-[#1a6ef5] hover:bg-blue-600 px-4 py-2 text-sm font-medium text-white"
           >
             New User
           </Link>
         </div>
 
-        <div className="mt-6 overflow-x-auto rounded-lg border border-neutral-200">
+        <div role="region" aria-label="Users" tabIndex={0} className="mt-6 overflow-x-auto rounded-lg border border-neutral-200">
           <table className="w-full text-left text-sm">
             <thead className="bg-neutral-50 text-neutral-500">
               <tr>

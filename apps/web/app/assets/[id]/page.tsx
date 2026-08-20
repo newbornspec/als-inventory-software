@@ -109,7 +109,7 @@ export default async function AssetDetailPage({
   return (
     <main className="min-h-screen bg-white text-neutral-950">
       <Nav />
-      <div className="p-8">
+      <div id="main-content" tabIndex={-1} className="p-8">
         <Breadcrumbs items={crumbs} />
 
         <div className="mt-3 flex items-start justify-between">

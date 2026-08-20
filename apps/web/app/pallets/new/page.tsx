@@ -15,7 +15,7 @@ export default async function NewPalletPage() {
   return (
     <main className="min-h-screen bg-white text-neutral-950">
       <Nav />
-      <div className="p-8">
+      <div id="main-content" tabIndex={-1} className="p-8">
         <BackLink href="/pallets" label="Back to Pallets" />
         <h1 className="mt-3 text-2xl font-semibold">New Pallet</h1>
         <p className="mt-1 text-sm text-neutral-500">

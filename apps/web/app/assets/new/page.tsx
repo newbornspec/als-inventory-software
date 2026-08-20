@@ -9,7 +9,7 @@ export default async function NewAssetPage() {
   return (
     <main className="min-h-screen bg-white text-neutral-950">
       <Nav />
-      <div className="p-8">
+      <div id="main-content" tabIndex={-1} className="p-8">
         <BackLink href="/assets" label="Back to Assets" />
         <h1 className="mt-3 text-2xl font-semibold">New Asset</h1>
         <NewAssetForm locations={locations} />

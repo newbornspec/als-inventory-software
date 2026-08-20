@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { getPowerSyncDb } from '@/lib/powersync/client';
 import {
   AUDIT_STATUSES,
@@ -83,12 +83,15 @@ export function AuditForm({ assetId, onSaved }: { assetId: string; onSaved?: () 
     );
   }
 
+  const uid = useId();
+
   return (
     <form onSubmit={handleSubmit} className="space-y-3 rounded-md border border-neutral-200 p-4">
       <div className="grid grid-cols-2 gap-3">
         <div className="space-y-1">
-          <label className="text-xs text-neutral-500">Audit status</label>
+          <label htmlFor={`${uid}-audit-status`} className="block text-xs text-neutral-600">Audit status</label>
           <select
+            id={`${uid}-audit-status`}
             value={auditStatus}
             onChange={(e) => setAuditStatus(e.target.value)}
             className="w-full rounded-md border border-neutral-200 bg-white px-2 py-1.5 text-sm"
@@ -102,8 +105,9 @@ export function AuditForm({ assetId, onSaved }: { assetId: string; onSaved?: () 
           </select>
         </div>
         <div className="space-y-1">
-          <label className="text-xs text-neutral-500">Cosmetic grade</label>
+          <label htmlFor={`${uid}-cosmetic-grade`} className="block text-xs text-neutral-600">Cosmetic grade</label>
           <select
+            id={`${uid}-cosmetic-grade`}
             value={cosmeticGrade}
             onChange={(e) => setCosmeticGrade(e.target.value)}
             className="w-full rounded-md border border-neutral-200 bg-white px-2 py-1.5 text-sm"
@@ -118,13 +122,16 @@ export function AuditForm({ assetId, onSaved }: { assetId: string; onSaved?: () 
         </div>
       </div>
 
-      <div>
-        <label className="text-xs text-neutral-500">Functional tests</label>
+      <fieldset>
+        <legend className="text-xs text-neutral-600">Functional tests</legend>
         <div className="mt-1 grid grid-cols-2 gap-2 sm:grid-cols-3">
           {TEST_FIELDS.map((field) => (
             <div key={field} className="flex items-center justify-between rounded-md border border-neutral-200 px-2 py-1">
-              <span className="text-xs capitalize text-neutral-700">{field}</span>
+              <label htmlFor={`${uid}-test-${field}`} className="text-xs capitalize text-neutral-700">
+                {field}
+              </label>
               <select
+                id={`${uid}-test-${field}`}
                 value={tests[field] ?? ''}
                 onChange={(e) => setTests((prev) => ({ ...prev, [field]: e.target.value }))}
                 className="bg-transparent text-xs"
@@ -137,12 +144,13 @@ export function AuditForm({ assetId, onSaved }: { assetId: string; onSaved?: () 
             </div>
           ))}
         </div>
-      </div>
+      </fieldset>
 
       <div className="grid grid-cols-2 gap-3">
         <div className="space-y-1">
-          <label className="text-xs text-neutral-500">Data wipe status</label>
+          <label htmlFor={`${uid}-wipe-status`} className="block text-xs text-neutral-600">Data wipe status</label>
           <select
+            id={`${uid}-wipe-status`}
             value={dataWipeStatus}
             onChange={(e) => setDataWipeStatus(e.target.value)}
             className="w-full rounded-md border border-neutral-200 bg-white px-2 py-1.5 text-sm"
@@ -156,8 +164,9 @@ export function AuditForm({ assetId, onSaved }: { assetId: string; onSaved?: () 
           </select>
         </div>
         <div className="space-y-1">
-          <label className="text-xs text-neutral-500">Final disposition</label>
+          <label htmlFor={`${uid}-disposition`} className="block text-xs text-neutral-600">Final disposition</label>
           <select
+            id={`${uid}-disposition`}
             value={finalDisposition}
             onChange={(e) => setFinalDisposition(e.target.value)}
             className="w-full rounded-md border border-neutral-200 bg-white px-2 py-1.5 text-sm"
@@ -173,19 +182,28 @@ export function AuditForm({ assetId, onSaved }: { assetId: string; onSaved?: () 
       </div>
 
       <div className="space-y-1">
-        <label className="text-xs text-neutral-500">Data wipe method</label>
+        <label htmlFor={`${uid}-wipe-method`} className="block text-xs text-neutral-600">
+          Data wipe method
+        </label>
         <input
+          id={`${uid}-wipe-method`}
+          aria-describedby={`${uid}-wipe-method-hint`}
           value={dataWipeMethod}
           onChange={(e) => setDataWipeMethod(e.target.value)}
           placeholder="e.g. NIST SP 800-88, DBAN, ATA Secure Erase, Physical destruction"
           className="w-full rounded-md border border-neutral-200 bg-white px-2 py-1.5 text-sm"
         />
-        <p className="text-xs text-neutral-500">Appears on the data-erasure certificate.</p>
+        <p id={`${uid}-wipe-method-hint`} className="text-xs text-neutral-600">
+          Appears on the data-erasure certificate.
+        </p>
       </div>
 
       <div className="space-y-1">
-        <label className="text-xs text-neutral-500">Notes</label>
+        <label htmlFor={`${uid}-notes`} className="block text-xs text-neutral-600">
+          Notes
+        </label>
         <textarea
+          id={`${uid}-notes`}
           value={notes}
           onChange={(e) => setNotes(e.target.value)}
           rows={2}
@@ -196,7 +214,7 @@ export function AuditForm({ assetId, onSaved }: { assetId: string; onSaved?: () 
       <button
         type="submit"
         disabled={saving}
-        className="rounded-md bg-[#2b7fff] hover:bg-blue-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+        className="rounded-md bg-[#1a6ef5] hover:bg-blue-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
       >
         {saving ? 'Saving…' : 'Record Audit'}
       </button>

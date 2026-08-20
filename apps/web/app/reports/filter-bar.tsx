@@ -34,41 +34,41 @@ export function FilterBar({ options }: { options: FilterOptions }) {
     ['batchId', 'supplier', 'manufacturer', 'category', 'grade'].filter((k) => params.get(k)).length;
 
   const cls =
-    'rounded-md border border-neutral-200 bg-white px-2 py-1.5 text-xs outline-none focus:border-neutral-300';
+    'rounded-md border border-neutral-200 bg-white px-2 py-1.5 text-xs focus:border-neutral-300';
 
   return (
     <div className="mt-3 flex flex-wrap items-center gap-2">
       <span className="text-xs text-neutral-500">Filters:</span>
 
-      <select value={params.get('batchId') ?? ''} onChange={(e) => set('batchId', e.target.value)} className={cls}>
+      <select aria-label="Filter by lot" value={params.get('batchId') ?? ''} onChange={(e) => set('batchId', e.target.value)} className={cls}>
         <option value="">All lots</option>
         {options.batches.map((b) => (
           <option key={b.id} value={b.id}>{b.label}</option>
         ))}
       </select>
 
-      <select value={params.get('supplier') ?? ''} onChange={(e) => set('supplier', e.target.value)} className={cls}>
+      <select aria-label="Filter by supplier" value={params.get('supplier') ?? ''} onChange={(e) => set('supplier', e.target.value)} className={cls}>
         <option value="">All suppliers</option>
         {options.suppliers.map((s) => (
           <option key={s} value={s}>{s}</option>
         ))}
       </select>
 
-      <select value={params.get('manufacturer') ?? ''} onChange={(e) => set('manufacturer', e.target.value)} className={cls}>
+      <select aria-label="Filter by manufacturer" value={params.get('manufacturer') ?? ''} onChange={(e) => set('manufacturer', e.target.value)} className={cls}>
         <option value="">All manufacturers</option>
         {options.manufacturers.map((m) => (
           <option key={m} value={m}>{m}</option>
         ))}
       </select>
 
-      <select value={params.get('category') ?? ''} onChange={(e) => set('category', e.target.value)} className={cls}>
+      <select aria-label="Filter by category" value={params.get('category') ?? ''} onChange={(e) => set('category', e.target.value)} className={cls}>
         <option value="">All categories</option>
         {options.categories.map((c) => (
           <option key={c} value={c}>{c}</option>
         ))}
       </select>
 
-      <select value={params.get('grade') ?? ''} onChange={(e) => set('grade', e.target.value)} className={cls}>
+      <select aria-label="Filter by condition grade" value={params.get('grade') ?? ''} onChange={(e) => set('grade', e.target.value)} className={cls}>
         <option value="">All grades</option>
         {options.grades.map((g) => (
           <option key={g.value} value={g.value}>{g.label}</option>

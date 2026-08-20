@@ -39,9 +39,9 @@ const COLUMNS: {
 ];
 
 const inputCls =
-  'w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm outline-none focus:border-neutral-300';
+  'w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm focus:border-neutral-300';
 const cellCls =
-  'w-full rounded border border-neutral-200 bg-white px-2 py-1.5 text-sm outline-none focus:border-neutral-300';
+  'w-full rounded border border-neutral-200 bg-white px-2 py-1.5 text-sm focus:border-neutral-300';
 
 export interface SpecEditorMeta {
   description: string;
@@ -294,17 +294,18 @@ export function SpecEditor({
 
       <div className="mt-6 flex items-center justify-between gap-3">
         <input
+          aria-label="Search rows"
           value={q}
           onChange={(e) => setQ(e.target.value)}
           placeholder="Search rows…"
-          className="w-full max-w-xs rounded-md border border-neutral-200 bg-white px-3 py-1.5 text-sm outline-none focus:border-neutral-300"
+          className="w-full max-w-xs rounded-md border border-neutral-200 bg-white px-3 py-1.5 text-sm focus:border-neutral-300"
         />
         <span className="shrink-0 text-xs text-neutral-500">
           {q ? `${visible.length} of ${rows.length}` : `${rows.length} rows`}
         </span>
       </div>
 
-      <div className="mt-2 overflow-x-auto rounded-lg border border-neutral-200">
+      <div role="region" aria-label="Specification grid" tabIndex={0} className="mt-2 overflow-x-auto rounded-lg border border-neutral-200">
         <table className="w-full text-left text-sm">
           <thead className="bg-neutral-50 text-neutral-500">
             <tr>
@@ -320,7 +321,7 @@ export function SpecEditor({
             </tr>
           </thead>
           <tbody>
-            {visible.map((r) => {
+            {visible.map((r, ri) => {
               const manId = manIdByValue.get(r.manufacturer.trim().toLowerCase());
               return (
                 <tr key={r.id} className="border-t border-neutral-200">
@@ -328,6 +329,7 @@ export function SpecEditor({
                     <td key={c.key} className="px-2 py-1">
                       {c.options ? (
                         <select
+                          aria-label={`${c.label}, row ${ri + 1}`}
                           data-row-id={r.id}
                           data-col={ci}
                           value={r[c.key]}
@@ -343,6 +345,7 @@ export function SpecEditor({
                         </select>
                       ) : (
                         <input
+                          aria-label={`${c.label}, row ${ri + 1}`}
                           data-row-id={r.id}
                           data-col={ci}
                           type={c.key === 'quantity' ? 'number' : 'text'}
@@ -393,7 +396,7 @@ export function SpecEditor({
         <button onClick={() => setRows((rs) => [...rs, blank()])} className="rounded-md border border-neutral-200 px-3 py-1.5 text-sm text-neutral-700 hover:bg-white">
           + Add row
         </button>
-        <button onClick={save} disabled={busy} className="rounded-md bg-[#2b7fff] hover:bg-blue-600 px-4 py-1.5 text-sm font-medium text-white disabled:opacity-50">
+        <button onClick={save} disabled={busy} className="rounded-md bg-[#1a6ef5] hover:bg-blue-600 px-4 py-1.5 text-sm font-medium text-white disabled:opacity-50">
           {busy ? 'Saving…' : 'Save changes'}
         </button>
         {saved && <span className="text-xs text-emerald-700">✓ Saved</span>}

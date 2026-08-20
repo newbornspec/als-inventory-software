@@ -163,7 +163,7 @@ export function PalletLines({
   const cols = canManage ? 9 : 8;
 
   return (
-    <div className="mt-3 overflow-x-auto rounded-lg border border-neutral-200">
+    <div role="region" aria-label="Pallet contents" tabIndex={0} className="mt-3 overflow-x-auto rounded-lg border border-neutral-200">
       {/* min-w matters: w-* on a th is only a hint, and inside overflow-x-auto a
           w-full table compresses to its container instead of holding its
           columns — which squeezed "Frameless" to "Fram" and "Grade B" to "Gra".
@@ -203,6 +203,7 @@ export function PalletLines({
                   {canManage ? (
                     <select
                       defaultValue={l.manufacturer ?? ''}
+                      aria-label={`Manufacturer for ${l.variant}`}
                       onChange={(e) => save(l, { manufacturer: e.target.value })}
                       className={field}
                     >
@@ -222,6 +223,7 @@ export function PalletLines({
                     <input
                       defaultValue={l.model ?? ''}
                       placeholder="—"
+                      aria-label={`Model for ${l.variant}`}
                       onBlur={(e) => save(l, { model: e.target.value })}
                       className={field}
                     />
@@ -233,6 +235,7 @@ export function PalletLines({
                   {canManage ? (
                     <>
                       <select
+                        aria-label={`Size for ${l.variant}`}
                         value={customSize[l.id] ? CUSTOM_SIZE : (l.size ?? '')}
                         onChange={(e) =>
                           chooseSize(l.id, e.target.value, (size) => save(l, { size }))
@@ -258,6 +261,7 @@ export function PalletLines({
                               min={0}
                               step="0.1"
                               autoFocus
+                              aria-label="Screen size in inches"
                               placeholder="23.8"
                               onKeyDown={(e) => {
                                 if (e.key === 'Enter') e.currentTarget.blur();
@@ -285,6 +289,7 @@ export function PalletLines({
                   {canManage ? (
                     <select
                       defaultValue={l.variantType ?? ''}
+                      aria-label={`Variant for ${l.variant}`}
                       onChange={(e) => save(l, { variantType: e.target.value })}
                       className={field}
                     >
@@ -304,6 +309,7 @@ export function PalletLines({
                 <td className="px-3 py-2">
                   {canManage ? (
                     <select
+                      aria-label={`Stand included for ${l.variant}`}
                       defaultValue={l.stand == null ? '' : l.stand ? 'yes' : 'no'}
                       onChange={(e) =>
                         save(l, {
@@ -331,6 +337,7 @@ export function PalletLines({
                     <input
                       type="number"
                       min={0}
+                      aria-label={`Quantity for ${l.variant}`}
                       defaultValue={l.quantity}
                       onBlur={(e) => save(l, { quantity: parseInt(e.target.value || '0', 10) })}
                       className={field}
@@ -343,6 +350,7 @@ export function PalletLines({
                   {canManage ? (
                     <select
                       defaultValue={l.grade ?? ''}
+                      aria-label={`Grade for ${l.variant}`}
                       onChange={(e) => save(l, { grade: e.target.value })}
                       className={field}
                     >
@@ -363,6 +371,7 @@ export function PalletLines({
                       type="number"
                       min={0}
                       step="0.01"
+                      aria-label={`Unit cost for ${l.variant}`}
                       defaultValue={l.unitCost ?? ''}
                       placeholder="—"
                       onBlur={(e) =>
@@ -413,6 +422,7 @@ export function PalletLines({
             <tr className="border-t border-neutral-200 bg-neutral-50">
               <td className="px-3 py-2">
                 <select
+                  aria-label="New row: manufacturer"
                   value={add.manufacturer ?? ''}
                   onChange={(e) => setAdd((a) => ({ ...a, manufacturer: e.target.value }))}
                   className={field}
@@ -427,6 +437,7 @@ export function PalletLines({
               </td>
               <td className="px-3 py-2">
                 <input
+                  aria-label="New row: model"
                   value={add.model ?? ''}
                   onChange={(e) => setAdd((a) => ({ ...a, model: e.target.value }))}
                   placeholder="e.g. P2419H"
@@ -435,6 +446,7 @@ export function PalletLines({
               </td>
               <td className="px-3 py-2">
                 <select
+                  aria-label="New row: size"
                   value={customSize[ADD_ROW] ? CUSTOM_SIZE : (add.size ?? '')}
                   onChange={(e) =>
                     chooseSize(ADD_ROW, e.target.value, (size) =>
@@ -461,6 +473,7 @@ export function PalletLines({
                         min={0}
                         step="0.1"
                         autoFocus
+                        aria-label="Screen size in inches"
                         placeholder="23.8"
                         onKeyDown={(e) => {
                           if (e.key === 'Enter') e.currentTarget.blur();
@@ -482,6 +495,7 @@ export function PalletLines({
               </td>
               <td className="px-3 py-2">
                 <select
+                  aria-label="New row: variant"
                   value={add.variantType ?? ''}
                   onChange={(e) => setAdd((a) => ({ ...a, variantType: e.target.value }))}
                   className={field}
@@ -496,6 +510,7 @@ export function PalletLines({
               </td>
               <td className="px-3 py-2">
                 <select
+                  aria-label="New row: stand included"
                   value={add.stand == null ? '' : add.stand ? 'yes' : 'no'}
                   onChange={(e) =>
                     setAdd((a) => ({
@@ -518,6 +533,7 @@ export function PalletLines({
                 <input
                   type="number"
                   min={0}
+                  aria-label="New row: quantity"
                   value={add.quantity ?? ''}
                   onChange={(e) =>
                     setAdd((a) => ({
@@ -531,6 +547,7 @@ export function PalletLines({
               </td>
               <td className="px-3 py-2">
                 <select
+                  aria-label="New row: grade"
                   value={add.grade ?? ''}
                   onChange={(e) => setAdd((a) => ({ ...a, grade: e.target.value }))}
                   className={field}
@@ -548,6 +565,7 @@ export function PalletLines({
                   type="number"
                   min={0}
                   step="0.01"
+                  aria-label="New row: unit cost"
                   value={add.unitCost ?? ''}
                   onChange={(e) =>
                     setAdd((a) => ({
@@ -563,7 +581,7 @@ export function PalletLines({
                 <button
                   onClick={addRow}
                   disabled={busy}
-                  className="rounded bg-[#2b7fff] px-2 py-1 text-xs font-medium text-white hover:bg-blue-600 disabled:opacity-50"
+                  className="rounded bg-[#1a6ef5] px-2 py-1 text-xs font-medium text-white hover:bg-blue-600 disabled:opacity-50"
                 >
                   {busy ? '…' : 'Add'}
                 </button>
