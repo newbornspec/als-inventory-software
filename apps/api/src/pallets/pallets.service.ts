@@ -844,6 +844,29 @@ export class PalletsService {
     const layout1 = pallets.filter((p) => !isSpec(p));
     const layout2 = pallets.filter(isSpec);
 
+    // The sheet holding the actual stock is called "Items". It used to be named
+    // after the entry layout that built the pallet — an internal idea from the
+    // New Pallet chooser that means nothing to someone opening a spreadsheet,
+    // and it led a reader to conclude the item data was missing entirely when
+    // it was sitting on the next tab.
+    //
+    // The two layouts genuinely cannot share one sheet: Layout 1 keeps its spec
+    // on the line and carries cost, Layout 2 reads its spec off the linked
+    // catalogue product and has no cost column at all. So a mixed selection
+    // gets one named sheet each, and the far more common single-layout
+    // selection gets a sheet called simply "Items".
+    const mixed = layout1.length > 0 && layout2.length > 0;
+    const itemSheet = (spec: boolean) =>
+      mixed ? `Items (${spec ? 'Layout 2' : 'Layout 1'})` : 'Items';
+
+    // A merged pallet's lines remember which pallet they came from, and an
+    // export of one has to show it or the traceability is only in the database.
+    // The column appears only when a line actually carries provenance, so an
+    // ordinary export is unchanged and column-for-column identical to the
+    // single-pallet report.
+    const withSource = (rows: PalletLine[]) => rows.some((l) => l.sourcePalletNumber);
+    const addSourceCol = <T>(cells: T[], value: T): T[] => [cells[0], value, ...cells.slice(1)];
+
     // The same furniture the single-pallet reports build: title, subtitle, a
     // short meta block, then a shaded header row.
     const startSheet = (
@@ -900,15 +923,23 @@ export class PalletsService {
         'Total items',
       ];
       const widths = [16, 14, 10, 20, 20, 32, 18, 12, 8, 12];
+      const totalLines = pallets.reduce((n, p) => n + p.lineCount, 0);
+      const sheetNames = [
+        ...(layout1.length ? [itemSheet(false)] : []),
+        ...(layout2.length ? [itemSheet(true)] : []),
+      ];
       const { ws, firstDataRow } = startSheet('Summary', 'Pallet Export', headers, widths, [
         ['Date generated', generated],
         ['Pallets included', pallets.length],
+        // Said outright, because a reader who does not notice the second tab
+        // sees only totals here and reasonably concludes the stock is missing.
+        [
+          'Item detail',
+          `${totalLines} item lines on the ${sheetNames.map((n) => `"${n}"`).join(' and ')} sheet${sheetNames.length > 1 ? 's' : ''}`,
+        ],
       ]);
 
-      // A real date cell, not a formatted string: the operator's first move on
-      // this sheet is to sort by Created, and text sorts 01/02 before 02/01.
-      ws.getColumn(headers.indexOf('Created') + 1).numFmt = 'dd/mm/yyyy';
-
+      const createdCol = headers.indexOf('Created') + 1;
       let row = firstDataRow;
       for (const p of pallets) {
         ws.getRow(row).values = [
@@ -923,6 +954,10 @@ export class PalletsService {
           p.lineCount,
           p.totalQuantity,
         ];
+        // Format the CELL, not the column. Formatting the whole column also
+        // hit the meta block above, which writes its values into column B —
+        // so "Pallets included: 2" rendered as 02/01/1900.
+        ws.getRow(row).getCell(createdCol).numFmt = 'dd/mm/yyyy';
         row += 1;
       }
 
@@ -940,15 +975,18 @@ export class PalletsService {
     }
 
     if (layout1.length > 0) {
-      const headers = VARIANT_HEADERS;
+      const rows1 = layout1.flatMap((p) => byPallet.get(p.id) ?? []);
+      const src1 = withSource(rows1);
+      const headers = src1 ? addSourceCol(VARIANT_HEADERS, 'Original pallet') : VARIANT_HEADERS;
       const { ws, firstDataRow } = startSheet(
-        'Layout 1',
-        'Pallet Export — Layout 1',
+        itemSheet(false),
+        'Pallet Export — Layout 1 items',
         headers,
-        VARIANT_WIDTHS,
+        src1 ? addSourceCol(VARIANT_WIDTHS, 16) : VARIANT_WIDTHS,
         [
           ['Date generated', generated],
           ['Pallets included', layout1.length],
+          ['Item lines', rows1.length],
         ],
       );
 
@@ -960,7 +998,10 @@ export class PalletsService {
           const lineTotal = palletLineTotal(line);
           if (lineTotal != null) costTotal += lineTotal;
           qtyTotal += line.quantity;
-          ws.getRow(row).values = variantRow(pallet.palletNumber, line);
+          const cells = variantRow(pallet.palletNumber, line);
+          ws.getRow(row).values = src1
+            ? addSourceCol(cells, line.sourcePalletNumber ?? '')
+            : cells;
           row += 1;
         }
       }
@@ -973,15 +1014,18 @@ export class PalletsService {
     }
 
     if (layout2.length > 0) {
-      const headers = SPEC_HEADERS;
+      const rows2 = layout2.flatMap((p) => byPallet.get(p.id) ?? []);
+      const src2 = withSource(rows2);
+      const headers = src2 ? addSourceCol(SPEC_HEADERS, 'Original pallet') : SPEC_HEADERS;
       const { ws, firstDataRow } = startSheet(
-        'Layout 2',
-        'Pallet Export — Layout 2',
+        itemSheet(true),
+        'Pallet Export — Layout 2 items',
         headers,
-        SPEC_WIDTHS,
+        src2 ? addSourceCol(SPEC_WIDTHS, 16) : SPEC_WIDTHS,
         [
           ['Date generated', generated],
           ['Pallets included', layout2.length],
+          ['Item lines', rows2.length],
         ],
       );
 
@@ -990,7 +1034,10 @@ export class PalletsService {
       for (const pallet of layout2) {
         for (const line of byPallet.get(pallet.id) ?? []) {
           qtyTotal += line.quantity;
-          ws.getRow(row).values = specRow(pallet.palletNumber, line);
+          const cells = specRow(pallet.palletNumber, line);
+          ws.getRow(row).values = src2
+            ? addSourceCol(cells, line.sourcePalletNumber ?? '')
+            : cells;
           row += 1;
         }
       }
