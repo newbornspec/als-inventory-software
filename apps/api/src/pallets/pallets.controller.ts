@@ -22,6 +22,7 @@ import { CreatePalletSpecDto } from './dto/create-pallet-spec.dto';
 import { UpdatePalletDto } from './dto/update-pallet.dto';
 import { CreatePalletLineDto } from './dto/create-pallet-line.dto';
 import { UpdatePalletLineDto } from './dto/update-pallet-line.dto';
+import { ExportPalletsDto } from './dto/export-pallets.dto';
 
 @Controller('pallets')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -46,6 +47,20 @@ export class PalletsController {
   @Get('next-number')
   async nextNumber(): Promise<{ palletNumber: string }> {
     return { palletNumber: await this.pallets.nextPalletNumber() };
+  }
+
+  // Declared before ':id' like the two above. A POST because the selection
+  // travels in the body, not the URL — see ExportPalletsDto. Same admin/manager
+  // gate as the per-pallet report below: this carries the same purchase costs.
+  @Roles(UserRole.ADMIN, UserRole.MANAGER)
+  @Post('export.xlsx')
+  @Header('Cache-Control', 'no-store')
+  async exportMany(@Body() dto: ExportPalletsDto): Promise<StreamableFile> {
+    const { buffer, filename } = await this.pallets.generateMultiReport(dto.ids);
+    return new StreamableFile(buffer, {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      disposition: `attachment; filename="${filename}"`,
+    });
   }
 
   @Get(':id')

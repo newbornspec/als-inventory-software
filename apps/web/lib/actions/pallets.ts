@@ -48,6 +48,10 @@ export interface Pallet {
   notes: string | null;
   shippedAt: string | null;
   entryLayout?: string; // 'variant' | 'spec' — which New Pallet layout made it
+  // Stamped by the database when the pallet is created. The API has always sent
+  // it and ordered by it; this type simply never declared it, so the Pallets
+  // page could not show a Created column.
+  createdAt: string;
   totalQuantity: number;
   lineCount: number;
   location?: { id: string; name: string } | null;

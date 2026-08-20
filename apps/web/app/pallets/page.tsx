@@ -1,94 +1,46 @@
-import Link from 'next/link';
 import { apiFetch, getSessionUser } from '@/lib/api-server';
 import type { Pallet } from '@/lib/actions/pallets';
 import { Nav } from '@/app/components/nav';
 import { NewPalletButton } from './new-pallet-button';
-import { formatLabel } from '@/lib/asset-options';
+import { PalletWorkspace } from './pallet-workspace';
 
-function PalletTable({ pallets, shipped }: { pallets: Pallet[]; shipped: boolean }) {
-  return (
-    <div role="region" aria-label="Pallets" tabIndex={0} className="mt-3 overflow-x-auto rounded-lg border border-neutral-200">
-      <table className="w-full text-left text-sm">
-          <caption className="sr-only">Pallets with their status, location and unit counts</caption>
-        <thead className="bg-neutral-50 text-neutral-500">
-          <tr>
-            <th scope="col" className="px-4 py-3">Pallet #</th>
-            <th scope="col" className="px-4 py-3">Description</th>
-            <th scope="col" className="px-4 py-3">Supplier</th>
-            <th scope="col" className="px-4 py-3">{shipped ? 'Shipped on' : 'Status'}</th>
-            <th scope="col" className="px-4 py-3">Total units</th>
-            <th scope="col" className="px-4 py-3">Variants</th>
-            <th scope="col" className="px-4 py-3">Location</th>
-          </tr>
-        </thead>
-        <tbody>
-          {pallets.map((p) => (
-            <tr key={p.id} className="border-t border-neutral-200 hover:bg-white">
-              <td className="px-4 py-3">
-                <Link href={`/pallets/${p.id}`} className="text-neutral-950 underline">
-                  {p.palletNumber}
-                </Link>
-              </td>
-              <td className="px-4 py-3 text-neutral-500">{p.description ?? '—'}</td>
-              <td className="px-4 py-3 text-neutral-500">{p.supplier || '—'}</td>
-              <td className="px-4 py-3">
-                {shipped ? (
-                  <span className="text-neutral-500">
-                    {p.shippedAt ? new Date(p.shippedAt).toLocaleDateString('en-GB') : '—'}
-                  </span>
-                ) : (
-                  <span className="rounded-full border border-neutral-200 px-2 py-0.5 text-xs">
-                    {formatLabel(p.status)}
-                  </span>
-                )}
-              </td>
-              <td className="px-4 py-3 font-medium">{p.totalQuantity}</td>
-              <td className="px-4 py-3 text-neutral-500">{p.lineCount}</td>
-              <td className="px-4 py-3 text-neutral-500">{p.location?.name ?? '—'}</td>
-            </tr>
-          ))}
-          {pallets.length === 0 && (
-            <tr>
-              <td colSpan={7} className="px-4 py-8 text-center text-neutral-500">
-                {shipped ? 'No shipped pallets yet.' : 'No active pallets.'}
-              </td>
-            </tr>
-          )}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
+// A workspace rather than a list: find → filter → select → act, without leaving
+// the page.
+//
+// Filtering, search, sort and selection are all client-side over the loaded
+// list. That is a deliberate call at this scale — the page already fetched every
+// pallet to render the old two-table split, so filtering in the browser costs
+// one render instead of a round trip per keystroke, and typing feels instant.
+// If this ever grows past a few hundred pallets it should move server-side, and
+// that is the point at which pagination earns its place too.
 export default async function PalletsPage() {
-  const [pallets, user] = await Promise.all([apiFetch<Pallet[]>('/pallets'), getSessionUser()]);
+  const [pallets, user] = await Promise.all([
+    apiFetch<Pallet[]>('/pallets'),
+    getSessionUser(),
+  ]);
   const canCreate =
     user?.role === 'admin' || user?.role === 'manager' || user?.role === 'technician';
-
-  const active = pallets.filter((p) => p.status !== 'shipped');
-  const shipped = pallets.filter((p) => p.status === 'shipped');
+  // Selecting and exporting is a manager action, matching the per-pallet export
+  // button that has always been admin/manager only.
+  const canManage = user?.role === 'admin' || user?.role === 'manager';
 
   return (
     <>
       <Nav />
       <main id="main-content" tabIndex={-1} className="min-h-screen bg-white text-neutral-950 px-4 py-6 sm:p-8">
-        <div className="flex items-center justify-between">
-          <h1 className="text-2xl font-semibold">Pallets</h1>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h1 className="text-2xl font-semibold">Pallets</h1>
+            <p className="mt-1 text-sm text-neutral-600">
+              Newest first. Shipped and sold pallets stay here — filter by status
+              to narrow the list.
+            </p>
+          </div>
           {canCreate && <NewPalletButton />}
         </div>
 
-        <section className="mt-6">
-          <h2 className="text-sm font-medium text-neutral-500">Active ({active.length})</h2>
-          <PalletTable pallets={active} shipped={false} />
-        </section>
-
-        {shipped.length > 0 && (
-          <section className="mt-8">
-            <h2 className="text-sm font-medium text-neutral-500">Shipped ({shipped.length})</h2>
-            <PalletTable pallets={shipped} shipped />
-          </section>
-        )}
+        <PalletWorkspace pallets={pallets} canManage={canManage} />
       </main>
-  </>
+    </>
   );
 }

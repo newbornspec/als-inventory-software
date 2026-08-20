@@ -1,4 +1,17 @@
-import { RAM_NONE, composeLineVariant, parseRamGb, ramLabel, safeFilePart } from './pallets.service';
+import {
+  RAM_NONE,
+  SPEC_HEADERS,
+  SPEC_WIDTHS,
+  VARIANT_HEADERS,
+  VARIANT_WIDTHS,
+  composeLineVariant,
+  palletLineTotal,
+  parseRamGb,
+  ramLabel,
+  safeFilePart,
+  specRow,
+  variantRow,
+} from './pallets.service';
 
 // composeLineVariant fills pallet_lines.variant, which is NOT NULL and is read
 // by the report, the sold snapshot and sold-return matching. safeFilePart
@@ -95,5 +108,62 @@ describe('RAM None round-trip', () => {
     for (const typed of ['None', '2GB', '8GB', '128GB']) {
       expect(gridCell(parseRamGb(typed))).toBe(typed);
     }
+  });
+});
+
+// The Layout 1 report is an established document — operators and their buyers
+// read it, and the multi-pallet export now shares its columns. Pinning the
+// arrays against their literals means "Layout 1's report must not change"
+// fails the build rather than shipping quietly. Same for Layout 2.
+describe('report columns', () => {
+  it('pins the Layout 1 columns', () => {
+    expect(VARIANT_HEADERS).toEqual([
+      'Pallet number',
+      'Manufacturer',
+      'Model',
+      'Size',
+      'Variant',
+      'Stand',
+      'Quantity',
+      'Grade',
+      'Unit cost (£)',
+      'Line total (£)',
+    ]);
+    expect(VARIANT_WIDTHS).toEqual([16, 16, 22, 10, 14, 8, 10, 12, 14, 16]);
+  });
+
+  it('pins the Layout 2 columns', () => {
+    expect(SPEC_HEADERS).toEqual([
+      'Pallet number',
+      'Manufacturer',
+      'Model',
+      'Chassis',
+      'CPU',
+      'Gen',
+      'RAM',
+      'Storage',
+      'Quantity',
+    ]);
+    expect(SPEC_WIDTHS).toEqual([16, 16, 22, 12, 20, 10, 10, 16, 12]);
+  });
+
+  it('leads every row with the pallet number, in both layouts', () => {
+    const line: any = { manufacturer: 'Dell', model: 'P2419H', size: '24', variantType: 'frameless', stand: true, quantity: 45, grade: 'a', unitCost: 12.5, variant: 'Dell', product: null };
+    expect(variantRow('PALLET-000001', line)[0]).toBe('PALLET-000001');
+    expect(specRow('PALLET-000001', line)[0]).toBe('PALLET-000001');
+  });
+
+  it('keeps quantity a count rather than expanding it into rows', () => {
+    const line: any = { quantity: 45, unitCost: 2, variant: 'x', product: null };
+    expect(variantRow('P', line)[VARIANT_HEADERS.indexOf('Quantity')]).toBe(45);
+    expect(specRow('P', line)[SPEC_HEADERS.indexOf('Quantity')]).toBe(45);
+  });
+
+  it('leaves cost cells blank rather than zero when there is no unit cost', () => {
+    const priced: any = { quantity: 4, unitCost: 2.5, variant: 'x', product: null };
+    const unpriced: any = { quantity: 4, unitCost: null, variant: 'x', product: null };
+    expect(palletLineTotal(priced)).toBe(10);
+    expect(palletLineTotal(unpriced)).toBeNull();
+    expect(variantRow('P', unpriced)[VARIANT_HEADERS.indexOf('Line total (£)')]).toBe('');
   });
 });
