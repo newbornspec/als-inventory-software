@@ -76,40 +76,40 @@ export function RepairsSection({
   return (
     <section>
       <h2 className="text-sm font-medium text-neutral-500">Repairs &amp; refurbishment</h2>
-      <div role="region" aria-label="Repair log" tabIndex={0} className="mt-3 overflow-x-auto rounded-lg border border-neutral-200">
-        <table className="w-full text-left text-sm">
+      <div role="region" aria-label="Repair log" tabIndex={0} className="mt-3 overflow-x-auto rounded-lg border border-[var(--grid-line)]">
+        <table data-dense-grid className="w-full border-collapse text-left text-sm">
           <caption className="sr-only">Repair jobs logged against this device</caption>
           <thead className="bg-neutral-50 text-neutral-500">
             <tr>
-              <th scope="col" className="px-3 py-2">Work / fault</th>
-              <th scope="col" className="px-3 py-2">Parts</th>
-              <th scope="col" className="w-24 px-3 py-2">Cost (£)</th>
-              <th scope="col" className="w-36 px-3 py-2">Status</th>
-              <th scope="col" className="px-3 py-2">By / when</th>
-              {canManage && <th scope="col" className="w-14 px-3 py-2" />}
+              <th scope="col" className="border-l border-[var(--grid-line)] px-3 py-2 first:border-l-0">Work / fault</th>
+              <th scope="col" className="border-l border-[var(--grid-line)] px-3 py-2 first:border-l-0">Parts</th>
+              <th scope="col" className="w-24 border-l border-[var(--grid-line)] px-3 py-2 first:border-l-0">Cost (£)</th>
+              <th scope="col" className="w-36 border-l border-[var(--grid-line)] px-3 py-2 first:border-l-0">Status</th>
+              <th scope="col" className="border-l border-[var(--grid-line)] px-3 py-2 first:border-l-0">By / when</th>
+              {canManage && <th scope="col" className="w-14 border-l border-[var(--grid-line)] px-3 py-2 first:border-l-0" />}
             </tr>
           </thead>
           <tbody>
             {repairs.map((r) => (
-              <tr key={r.id} className="border-t border-neutral-200 align-top">
-                <td className="px-3 py-2">
+              <tr key={r.id} className="border-t border-[var(--grid-line)] align-top">
+                <td className="border-l border-[var(--grid-line)] p-0 transition-colors first:border-l-0 hover:bg-neutral-100 focus-within:bg-blue-50">
                   <input
                     aria-label="Work or fault"
                     defaultValue={r.description}
                     onBlur={(e) => e.target.value.trim() && e.target.value !== r.description && save(r, { description: e.target.value })}
-                    className="w-full rounded border border-[var(--field-border)] bg-white px-2 py-1"
+                    className="block w-full bg-transparent px-3 py-2"
                   />
                 </td>
-                <td className="px-3 py-2">
+                <td className="border-l border-[var(--grid-line)] p-0 transition-colors first:border-l-0 hover:bg-neutral-100 focus-within:bg-blue-50">
                   <input
                     aria-label="Parts used"
                     defaultValue={r.partsUsed ?? ''}
                     placeholder="—"
                     onBlur={(e) => e.target.value !== (r.partsUsed ?? '') && save(r, { partsUsed: e.target.value })}
-                    className="w-full rounded border border-[var(--field-border)] bg-white px-2 py-1"
+                    className="block w-full bg-transparent px-3 py-2"
                   />
                 </td>
-                <td className="px-3 py-2">
+                <td className="border-l border-[var(--grid-line)] p-0 transition-colors first:border-l-0 hover:bg-neutral-100 focus-within:bg-blue-50">
                   <input
                     type="number"
                     min={0}
@@ -121,15 +121,15 @@ export function RepairsSection({
                       const v = e.target.value ? parseFloat(e.target.value) : null;
                       if (v !== r.cost) save(r, { cost: v });
                     }}
-                    className="w-20 rounded border border-[var(--field-border)] bg-white px-2 py-1"
+                    className="block w-full bg-transparent px-3 py-2 text-right tabular-nums"
                   />
                 </td>
-                <td className="px-3 py-2">
+                <td className="border-l border-[var(--grid-line)] p-0 transition-colors first:border-l-0 hover:bg-neutral-100 focus-within:bg-blue-50">
                   <select
                     aria-label="Repair status"
                     defaultValue={r.status}
                     onChange={(e) => save(r, { status: e.target.value as RepairStatus })}
-                    className="w-full rounded border border-[var(--field-border)] bg-white px-2 py-1"
+                    className="block w-full bg-transparent px-3 py-2"
                   >
                     {REPAIR_STATUSES.map((s) => (
                       <option key={s} value={s} className="bg-white">
@@ -138,13 +138,13 @@ export function RepairsSection({
                     ))}
                   </select>
                 </td>
-                <td className="px-3 py-2 text-xs text-neutral-500">
+                <td className="border-l border-[var(--grid-line)] px-3 py-2 text-xs text-neutral-600">
                   {r.performedBy?.name ?? '—'}
                   <br />
                   {new Date(r.createdAt).toLocaleDateString()}
                 </td>
                 {canManage && (
-                  <td className="px-3 py-2">
+                  <td className="border-l border-[var(--grid-line)] px-3 py-2">
                     <button
                       onClick={() => run(() => deleteRepair(assetId, r.id))}
                       aria-label={`Remove repair: ${r.description}`}
@@ -165,26 +165,26 @@ export function RepairsSection({
             )}
           </tbody>
           <tfoot>
-            <tr className="border-t border-neutral-200 bg-neutral-50">
-              <td className="px-3 py-2">
+            <tr className="border-t-2 border-[var(--grid-line)] bg-neutral-50">
+              <td className="border-l border-[var(--grid-line)] p-0 transition-colors first:border-l-0 hover:bg-neutral-100 focus-within:bg-blue-50">
                 <input
                   aria-label="New repair: work or fault"
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
                   placeholder="e.g. Replaced faulty charging port"
-                  className="w-full rounded border border-[var(--field-border)] bg-white px-2 py-1"
+                  className="block w-full bg-transparent px-3 py-2"
                 />
               </td>
-              <td className="px-3 py-2">
+              <td className="border-l border-[var(--grid-line)] p-0 transition-colors first:border-l-0 hover:bg-neutral-100 focus-within:bg-blue-50">
                 <input
                   aria-label="New repair: parts used"
                   value={parts}
                   onChange={(e) => setParts(e.target.value)}
                   placeholder="parts (optional)"
-                  className="w-full rounded border border-[var(--field-border)] bg-white px-2 py-1"
+                  className="block w-full bg-transparent px-3 py-2"
                 />
               </td>
-              <td className="px-3 py-2">
+              <td className="border-l border-[var(--grid-line)] p-0 transition-colors first:border-l-0 hover:bg-neutral-100 focus-within:bg-blue-50">
                 <input
                   type="number"
                   min={0}
@@ -193,15 +193,15 @@ export function RepairsSection({
                   value={cost}
                   onChange={(e) => setCost(e.target.value)}
                   placeholder="optional"
-                  className="w-20 rounded border border-[var(--field-border)] bg-white px-2 py-1"
+                  className="block w-full bg-transparent px-3 py-2 text-right tabular-nums"
                 />
               </td>
-              <td className="px-3 py-2">
+              <td className="border-l border-[var(--grid-line)] p-0 transition-colors first:border-l-0 hover:bg-neutral-100 focus-within:bg-blue-50">
                 <select
                   aria-label="New repair: status"
                   value={status}
                   onChange={(e) => setStatus(e.target.value as RepairStatus)}
-                  className="w-full rounded border border-[var(--field-border)] bg-white px-2 py-1"
+                  className="block w-full bg-transparent px-3 py-2"
                 >
                   {REPAIR_STATUSES.map((s) => (
                     <option key={s} value={s} className="bg-white">
@@ -210,8 +210,8 @@ export function RepairsSection({
                   ))}
                 </select>
               </td>
-              <td className="px-3 py-2" />
-              <td className="px-3 py-2">
+              <td className="border-l border-[var(--grid-line)] px-3 py-2" />
+              <td className="border-l border-[var(--grid-line)] px-3 py-2">
                 <button
                   onClick={add}
                   disabled={busy}
