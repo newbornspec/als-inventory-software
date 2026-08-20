@@ -27,6 +27,29 @@ export class PalletLine {
   @JoinColumn({ name: 'pallet_id' })
   pallet: Pallet;
 
+  // --- merge provenance ------------------------------------------------------
+  // Where this item came FROM; pallet_id above is where it IS. A merge moves
+  // the row rather than copying it, so this is the only record of its origin.
+  //
+  // ONE HOP, not the whole chain: if A came from X+Y and then A+B merge into C,
+  // C's rows point at A and B — the immediate pre-merge parent. The full
+  // ancestry is walked through pallet_merges, which is what that table is for.
+  //
+  // NOTE THE CASCADE DIFFERENCE, which is not an oversight: pallet_id above is
+  // ON DELETE CASCADE, this is ON DELETE SET NULL. Deleting a merged-away
+  // original must never delete the surviving pallet's stock.
+  @Column({ name: 'source_pallet_id', type: 'uuid', nullable: true })
+  sourcePalletId: string | null;
+
+  @ManyToOne(() => Pallet, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'source_pallet_id' })
+  sourcePallet: Pallet | null;
+
+  // Snapshot — readable even once the source pallet is deleted and the FK above
+  // has gone null. Same idiom as pallet_sold_lines.pallet_number.
+  @Column({ name: 'source_pallet_number', type: 'varchar', nullable: true })
+  sourcePalletNumber: string | null;
+
   // A composed display label ("Dell · P2419H · 24\" · Frameless · Stand").
   // NOT NULL and load-bearing — the report, the sold snapshot and sold-return
   // matching all read it — so the server composes it from the fields below

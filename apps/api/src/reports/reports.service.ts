@@ -162,6 +162,9 @@ export interface PalletAnalytics {
     totalPallets: number;
     activePallets: number;
     shippedPallets: number;
+    // Merged away into another pallet: holds no stock, but is not shipped
+    // either. Counted separately so it stops inflating "active".
+    mergedPallets: number;
     unitsOnHand: number;
     unitsSold: number;
     revenue: number;
@@ -552,7 +555,12 @@ export class ReportsService {
       soldRowsInRange.reduce((s, r) => s + (r.unitCost != null ? r.unitCost * r.quantity : 0), 0);
     const profit = revenue - costOfSold;
 
-    const activePallets = activePalletsList.filter((p) => p.status !== PalletStatus.SHIPPED);
+    // "Active" means holding stock. Merged shells are neither active nor
+    // shipped: their lines moved to the pallet that replaced them, so counting
+    // them here would inflate the pallet count with empty records.
+    const activePallets = activePalletsList.filter(
+      (p) => p.status !== PalletStatus.SHIPPED && p.status !== PalletStatus.MERGED,
+    );
     const palletUnits = pLines.reduce((s, l) => s + l.quantity, 0);
     const warehouseValue =
       active
@@ -797,7 +805,7 @@ export class ReportsService {
       soldByPallet.set(s.palletId, arr);
     }
 
-    let unitsOnHand = 0, unitsSoldTotal = 0, revenueTotal = 0, activePallets = 0, shippedPallets = 0;
+    let unitsOnHand = 0, unitsSoldTotal = 0, revenueTotal = 0, activePallets = 0, shippedPallets = 0, mergedPallets = 0;
 
     const rows = pallets.map((p) => {
       const pLines = linesByPallet.get(p.id) ?? [];
@@ -811,6 +819,7 @@ export class ReportsService {
       unitsSoldTotal += unitsSold;
       revenueTotal += revenue;
       if (p.status === PalletStatus.SHIPPED) shippedPallets += 1;
+      else if (p.status === PalletStatus.MERGED) mergedPallets += 1;
       else activePallets += 1;
 
       return {
@@ -836,6 +845,7 @@ export class ReportsService {
         totalPallets: pallets.length,
         activePallets,
         shippedPallets,
+        mergedPallets,
         unitsOnHand,
         unitsSold: unitsSoldTotal,
         revenue: round2(revenueTotal),

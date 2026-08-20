@@ -21,8 +21,11 @@ export default async function SoldPage() {
   ]);
 
   const batchDests = batches.map((b) => ({ id: b.id, label: b.batchNumber }));
+  // Returned stock must never land on a merged pallet: it would sit on a
+  // record that holds no stock and that /inventory deliberately hides. The API
+  // refuses it too — this just stops offering a destination that will 409.
   const palletDests = pallets
-    .filter((p) => p.status !== 'shipped')
+    .filter((p) => p.status !== 'shipped' && p.status !== 'merged')
     .map((p) => ({ id: p.id, label: p.palletNumber }));
 
   const totalUnits =

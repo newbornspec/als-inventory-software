@@ -13,6 +13,12 @@ export enum PalletStatus {
   OPEN = 'open', // being built up / counted
   READY = 'ready', // ready for sale or dispatch
   SHIPPED = 'shipped',
+  // TERMINAL, and reachable ONLY through mergePallets — never offered in the
+  // status dropdown and explicitly rejected by PATCH, in both directions. A
+  // merged pallet has had its lines moved to the pallet that replaced it; it is
+  // kept as a historical record, not as stock. Anything that adds or sells
+  // lines must refuse it, or the merge invariant breaks from the side.
+  MERGED = 'merged',
 }
 
 // Which "New Pallet" layout created this pallet. It doesn't change the pallet's

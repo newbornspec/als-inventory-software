@@ -46,6 +46,8 @@ export function PalletLines({
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
+  // Provenance is only worth a column when something actually has it.
+  const showSource = lines.some((l) => l.sourcePalletNumber);
   const [error, setError] = useState<string | null>(null);
 
   // The new-row form.
@@ -166,7 +168,7 @@ export function PalletLines({
   const field = 'block w-full bg-transparent px-3 py-2';
   // Read-only cells have no control to carry the padding, so they carry it.
   const readOnly = 'block px-3 py-2';
-  const cols = canManage ? 9 : 8;
+  const cols = (canManage ? 9 : 8) + (showSource ? 1 : 0);
 
   return (
     <div role="region" aria-label="Pallet contents" tabIndex={0} className="mt-3 overflow-x-auto rounded-lg border border-[var(--grid-line)]">
@@ -182,6 +184,12 @@ export function PalletLines({
           <caption className="sr-only">Pallet contents, one row per product variant</caption>
         <thead className="bg-neutral-50 text-neutral-500">
           <tr>
+            {/* Only on a pallet that was built by merging. A column that is
+                blank on every ordinary pallet would cost grid width forever to
+                serve a case that almost never applies. */}
+            {showSource && (
+              <th scope="col" className="w-[8.5rem] border-l border-[var(--grid-line)] px-3 py-2 first:border-l-0">From</th>
+            )}
             <th scope="col" className="w-[8.5rem] border-l border-[var(--grid-line)] px-3 py-2 first:border-l-0">Manufacturer</th>
             <th scope="col" className="w-[11rem] border-l border-[var(--grid-line)] px-3 py-2 first:border-l-0">Model</th>
             <th scope="col" className="w-[6rem] border-l border-[var(--grid-line)] px-3 py-2 first:border-l-0">Size</th>
@@ -209,6 +217,11 @@ export function PalletLines({
                 : PALLET_MANUFACTURERS;
             return (
               <tr key={l.id} className="border-t border-[var(--grid-line)]">
+                {showSource && (
+                  <td className="border-l border-[var(--grid-line)] px-3 py-2 text-neutral-600 first:border-l-0">
+                    {l.sourcePalletNumber ?? ''}
+                  </td>
+                )}
                 <td className="border-l border-[var(--grid-line)] p-0 transition-colors first:border-l-0 hover:bg-neutral-100 focus-within:bg-blue-50">
                   {canManage ? (
                     <select
@@ -432,6 +445,12 @@ export function PalletLines({
         {canManage && (
           <tfoot>
             <tr className="border-t border-neutral-200 bg-neutral-50">
+              {/* A new row has no source pallet — it was added here, not
+                  merged in. The cell is empty, but it has to exist or every
+                  column below the header shifts by one. */}
+              {showSource && (
+                <td className="border-l border-[var(--grid-line)] px-3 py-2 first:border-l-0" />
+              )}
               <td className="border-l border-[var(--grid-line)] p-0 transition-colors first:border-l-0 hover:bg-neutral-100 focus-within:bg-blue-50">
                 <select
                   aria-label="New row: manufacturer"
@@ -601,7 +620,7 @@ export function PalletLines({
             </tr>
             {lines.length > 0 && (
               <tr className="border-t-2 border-[var(--grid-line)] bg-white font-medium text-neutral-900">
-                <td className="px-3 py-2" colSpan={5}>
+                <td className="px-3 py-2" colSpan={showSource ? 6 : 5}>
                   Total
                 </td>
                 <td className="border-l border-[var(--grid-line)] px-3 py-2">{totalUnits}</td>

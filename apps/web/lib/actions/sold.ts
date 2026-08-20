@@ -163,10 +163,10 @@ export async function bulkReturnSoldAssets(
 export async function bulkReturnSoldPalletLines(
   soldIds: string[],
   palletId?: string,
-): Promise<{ returned?: number; skipped?: number; error?: string }> {
-  let res: { returned: number; skipped: number };
+): Promise<{ returned?: number; skipped?: number; reasons?: string[]; error?: string }> {
+  let res: { returned: number; skipped: number; reasons?: string[] };
   try {
-    res = await apiFetch<{ returned: number; skipped: number }>('/pallets/sold/return-bulk', {
+    res = await apiFetch<{ returned: number; skipped: number; reasons?: string[] }>('/pallets/sold/return-bulk', {
       method: 'POST',
       body: JSON.stringify({ soldIds, ...(palletId ? { palletId } : {}) }),
     });

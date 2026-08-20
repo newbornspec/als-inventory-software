@@ -13,6 +13,7 @@ import { PalletSupplier } from './pallet-supplier';
 import { PalletBuyer } from './pallet-buyer';
 import { SpecEditor } from './spec-editor';
 import { SellPalletButton } from './sell-pallet-button';
+import { ContributedLines, MergeHistory } from './merge-history';
 
 // 404 (deleted pallet) -> Next's not-found page instead of a server-side crash.
 async function loadPallet(id: string): Promise<Pallet> {
@@ -34,9 +35,17 @@ export default async function PalletDetailPage({ params }: { params: Promise<{ i
     // no suggestions rather than the page 500ing.
     apiFetch<LookupValue[]>('/lookups').catch(() => [] as LookupValue[]),
   ]);
+  // A merged pallet is a record, not stock: its lines have moved to the pallet
+  // that replaced it. Folding this into canManage/canDelete freezes every
+  // mutating affordance on the page at once — status, sell, delete, the spec
+  // editor, the line editors — rather than gating eight of them separately and
+  // missing the ninth. The API refuses these anyway; this stops offering
+  // buttons that would 409.
+  const isMerged = pallet.status === 'merged';
   const canManage =
-    user?.role === 'admin' || user?.role === 'manager' || user?.role === 'technician';
-  const canDelete = user?.role === 'admin';
+    (user?.role === 'admin' || user?.role === 'manager' || user?.role === 'technician') &&
+    !isMerged;
+  const canDelete = user?.role === 'admin' && !isMerged;
   // Both downloads carry purchase costs and their endpoints are ADMIN+MANAGER.
   // The Export button was previously shown to technicians too, so they got a
   // 403 download page instead of a file.
@@ -109,6 +118,15 @@ export default async function PalletDetailPage({ params }: { params: Promise<{ i
             </div>
           </div>
 
+          <MergeHistory pallet={pallet} />
+
+          {isMerged && (
+            <ContributedLines
+              lines={pallet.contributedLines ?? []}
+              destination={pallet.mergedInto?.palletNumber ?? null}
+            />
+          )}
+
           {canManage ? (
             <SpecEditor
               palletId={pallet.id}
@@ -122,7 +140,7 @@ export default async function PalletDetailPage({ params }: { params: Promise<{ i
               locations={locations}
               lookups={lookups}
             />
-          ) : (
+          ) : isMerged ? null : (
             <p className="mt-6 text-sm text-neutral-500">
               You have read-only access — ask a manager to edit this pallet.
             </p>
@@ -232,6 +250,8 @@ export default async function PalletDetailPage({ params }: { params: Promise<{ i
           </div>
         </div>
 
+        <MergeHistory pallet={pallet} />
+
         <div className="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-4">
           <div className="rounded-lg border border-neutral-200 bg-white p-4">
             <div className="text-2xl font-semibold">{pallet.totalQuantity}</div>
@@ -268,6 +288,13 @@ export default async function PalletDetailPage({ params }: { params: Promise<{ i
             lookups={lookups}
           />
         </section>
+
+        {isMerged && (
+          <ContributedLines
+            lines={pallet.contributedLines ?? []}
+            destination={pallet.mergedInto?.palletNumber ?? null}
+          />
+        )}
       </main>
   </>
   );

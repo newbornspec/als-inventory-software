@@ -23,6 +23,7 @@ import { UpdatePalletDto } from './dto/update-pallet.dto';
 import { CreatePalletLineDto } from './dto/create-pallet-line.dto';
 import { UpdatePalletLineDto } from './dto/update-pallet-line.dto';
 import { ExportPalletsDto } from './dto/export-pallets.dto';
+import { MergePalletsDto } from './dto/merge-pallets.dto';
 
 @Controller('pallets')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -61,6 +62,23 @@ export class PalletsController {
       type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       disposition: `attachment; filename="${filename}"`,
     });
+  }
+
+  // Both declared before the ':id' routes, like 'sold' and 'next-number'.
+  //
+  // Not technician: merging retires pallets and creates a replacement, which is
+  // far closer to deleting a pallet (admin only) than to editing a line. A
+  // technician may correct what is on a pallet but may not retire one.
+  @Roles(UserRole.ADMIN, UserRole.MANAGER)
+  @Post('merge/preview')
+  mergePreview(@Body() dto: MergePalletsDto) {
+    return this.pallets.previewMerge(dto.palletIds);
+  }
+
+  @Roles(UserRole.ADMIN, UserRole.MANAGER)
+  @Post('merge')
+  merge(@Body() dto: MergePalletsDto, @Req() req: { user?: { userId?: string } }) {
+    return this.pallets.mergePallets(dto, req.user?.userId ?? null);
   }
 
   @Get(':id')

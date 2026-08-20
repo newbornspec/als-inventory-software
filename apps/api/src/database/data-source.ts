@@ -12,6 +12,7 @@ import { Product } from '../products/product.entity';
 import { Pallet } from '../pallets/pallet.entity';
 import { PalletLine } from '../pallets/pallet-line.entity';
 import { PalletSoldLine } from '../pallets/pallet-sold-line.entity';
+import { PalletMerge } from '../pallets/pallet-merge.entity';
 import { StockLine } from '../stock/stock-line.entity';
 import { StockMovement } from '../stock/stock-movement.entity';
 import { Customer } from '../customers/customer.entity';
@@ -30,7 +31,7 @@ export default new DataSource({
   username: process.env.DB_USERNAME ?? 'als_inventory',
   password: process.env.DB_PASSWORD ?? 'als_inventory_dev',
   database: process.env.DB_NAME ?? 'als_inventory',
-  entities: [User, Location, Asset, AssetHistory, AssetAudit, Batch, Lot, ExpectedLineItem, Product, Pallet, PalletLine, PalletSoldLine, StockLine, StockMovement, Customer, SalesOrder, OrderLine, AssetPhoto, ActivityLog],
+  entities: [User, Location, Asset, AssetHistory, AssetAudit, Batch, Lot, ExpectedLineItem, Product, Pallet, PalletLine, PalletSoldLine, PalletMerge, StockLine, StockMovement, Customer, SalesOrder, OrderLine, AssetPhoto, ActivityLog],
   migrations: ['src/database/migrations/*.ts'],
   synchronize: false,
 });

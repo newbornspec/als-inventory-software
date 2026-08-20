@@ -5,25 +5,48 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { FindOptionsWhere, In, IsNull, Repository } from 'typeorm';
+import { EntityManager, FindOptionsWhere, In, IsNull, Repository } from 'typeorm';
 import * as ExcelJS from 'exceljs';
 import PDFDocument from 'pdfkit';
 import { COMPANY } from '../common/company';
 import { Pallet, PalletStatus, PalletEntryLayout } from './pallet.entity';
 import { PalletLine } from './pallet-line.entity';
 import { PalletSoldLine } from './pallet-sold-line.entity';
+import { PalletMerge } from './pallet-merge.entity';
 import { Product, ProductTrackingType } from '../products/product.entity';
 import { CreatePalletDto } from './dto/create-pallet.dto';
 import { UpdatePalletDto } from './dto/update-pallet.dto';
 import { CreatePalletLineDto } from './dto/create-pallet-line.dto';
 import { UpdatePalletLineDto } from './dto/update-pallet-line.dto';
 import { CreatePalletSpecDto, SpecRowDto } from './dto/create-pallet-spec.dto';
+import { MergePalletsDto } from './dto/merge-pallets.dto';
 import { LookupsService } from '../lookups/lookups.service';
+import { ActivityService } from '../activity/activity.service';
 import { sanitizeUser } from '../users/sanitize-user';
 
 export interface PalletWithTotals extends Pallet {
   totalQuantity: number;
   lineCount: number;
+}
+
+export interface MergedFromSummary {
+  id: string | null; // null once the original is deleted; the number survives
+  palletNumber: string;
+  units: number;
+  lines: number;
+  mergedAt: Date;
+}
+
+export interface PalletDetail extends PalletWithTotals {
+  lines: PalletLine[];
+  // Which pallets were merged INTO this one.
+  mergedFrom: MergedFromSummary[];
+  // Where this pallet's stock went, if it was itself merged away.
+  mergedInto: { id: string; palletNumber: string; mergedAt: Date } | null;
+  // What this pallet contributed, as it now sits on its successor. Only
+  // populated for a merged pallet — this is the "historical record" its own
+  // page still shows once its stock has moved.
+  contributedLines: PalletLine[];
 }
 
 // A ceiling on the multi-pallet export, so a runaway request can't ask the
@@ -41,8 +64,10 @@ export class PalletsService {
     @InjectRepository(Pallet) private pallets: Repository<Pallet>,
     @InjectRepository(PalletLine) private lines: Repository<PalletLine>,
     @InjectRepository(PalletSoldLine) private soldLines: Repository<PalletSoldLine>,
+    @InjectRepository(PalletMerge) private merges: Repository<PalletMerge>,
     @InjectRepository(Product) private products: Repository<Product>,
     private lookupsService: LookupsService,
+    private activity: ActivityService,
   ) {}
 
   async findAll(): Promise<PalletWithTotals[]> {
@@ -53,7 +78,7 @@ export class PalletsService {
     return this.withTotals(pallets);
   }
 
-  async findOne(id: string): Promise<PalletWithTotals & { lines: PalletLine[] }> {
+  async findOne(id: string): Promise<PalletDetail> {
     const pallet = await this.pallets.findOne({ where: { id }, relations: ['location'] });
     if (!pallet) throw new NotFoundException(`Pallet ${id} not found`);
     const [withTotals] = await this.withTotals([pallet]);
@@ -64,7 +89,46 @@ export class PalletsService {
       relations: { product: true },
       order: { createdAt: 'ASC' },
     });
-    return { ...withTotals, lines };
+
+    // Both sides of the merge story, from pallet_merges rather than from the
+    // lines — read it off the lines and "Created from: PALLET-a" vanishes the
+    // moment the last line originating from PALLET-a is sold. Two indexed
+    // point-lookups, and both return nothing for the ordinary unmerged pallet.
+    const [from, into] = await Promise.all([
+      this.merges.find({ where: { resultPalletId: id }, order: { mergedAt: 'ASC' } }),
+      this.merges.findOne({ where: { sourcePalletId: id }, relations: ['resultPallet'] }),
+    ]);
+
+    // What this pallet contributed, now living on the pallet that replaced it.
+    // Derived, so there is no second copy to drift out of step.
+    const contributedLines =
+      pallet.status === PalletStatus.MERGED
+        ? await this.lines.find({
+            where: { sourcePalletId: id },
+            relations: { product: true },
+            order: { createdAt: 'ASC' },
+          })
+        : [];
+
+    return {
+      ...withTotals,
+      lines,
+      mergedFrom: from.map((m) => ({
+        id: m.sourcePalletId,
+        palletNumber: m.sourcePalletNumber,
+        units: m.unitsContributed,
+        lines: m.linesContributed,
+        mergedAt: m.mergedAt,
+      })),
+      mergedInto: into?.resultPallet
+        ? {
+            id: into.resultPallet.id,
+            palletNumber: into.resultPallet.palletNumber,
+            mergedAt: into.mergedAt,
+          }
+        : null,
+      contributedLines,
+    };
   }
 
   async create(dto: CreatePalletDto): Promise<Pallet> {
@@ -273,18 +337,24 @@ export class PalletsService {
     soldIds: string[],
     palletId: string | undefined,
     userId: string,
-  ): Promise<{ returned: number; skipped: number }> {
+  ): Promise<{ returned: number; skipped: number; reasons: string[] }> {
     let returned = 0;
     let skipped = 0;
+    // Why, not just how many. "3 skipped" is unactionable, and merging made the
+    // most likely reason a precise one worth passing on: the original pallet
+    // was merged, and the message names the pallet to return to instead.
+    const reasons = new Set<string>();
     for (const id of soldIds) {
       try {
         await this.returnSoldLine(id, palletId, userId);
         returned += 1;
-      } catch {
+      } catch (err) {
         skipped += 1;
+        const message = (err as { message?: string })?.message;
+        if (message) reasons.add(message);
       }
     }
-    return { returned, skipped };
+    return { returned, skipped, reasons: [...reasons] };
   }
 
   private async createLinesFromSpec(palletId: string, rows: SpecRowDto[]): Promise<void> {
@@ -360,6 +430,17 @@ export class PalletsService {
   async update(id: string, dto: UpdatePalletDto): Promise<PalletWithTotals> {
     const before = await this.pallets.findOne({ where: { id } });
     if (!before) throw new NotFoundException(`Pallet ${id} not found`);
+    // Frozen once merged — including its status, so it can't be quietly
+    // reopened to hide the merge.
+    await this.assertNotMerged(before);
+    // And no manual route INTO merged. UpdatePalletDto is a PartialType of
+    // CreatePalletDto, whose @IsEnum(PalletStatus) started accepting 'merged'
+    // the moment the TS enum gained it — merged is reachable only by merging.
+    if (dto.status === PalletStatus.MERGED) {
+      throw new BadRequestException(
+        'A pallet becomes merged by merging it, not by setting its status.',
+      );
+    }
 
     // Stamp the ship time on the transition into 'shipped'; clear it if the
     // pallet is brought back to open/ready.
@@ -824,11 +905,15 @@ export class PalletsService {
         ['Pallets included', pallets.length],
       ]);
 
+      // A real date cell, not a formatted string: the operator's first move on
+      // this sheet is to sort by Created, and text sorts 01/02 before 02/01.
+      ws.getColumn(headers.indexOf('Created') + 1).numFmt = 'dd/mm/yyyy';
+
       let row = firstDataRow;
       for (const p of pallets) {
         ws.getRow(row).values = [
           p.palletNumber,
-          p.createdAt ? new Date(p.createdAt).toLocaleDateString('en-GB') : '',
+          londonDate(p.createdAt) ?? '',
           isSpec(p) ? 'Layout 2' : 'Layout 1',
           p.supplier ?? '',
           p.buyer ?? '',
@@ -918,6 +1003,212 @@ export class PalletsService {
 
     const stamp = new Date().toISOString().slice(0, 10);
     return { buffer: Buffer.from(await wb.xlsx.writeBuffer()), filename: `pallets-${stamp}.xlsx` };
+  }
+
+  // --- merge ----------------------------------------------------------------
+
+  // The counts behind a merge, so the confirmation dialog can state real
+  // numbers instead of guessing, and the button can be disabled WITH A REASON
+  // before anyone clicks. Same validator as the merge, but blockers are
+  // returned rather than thrown — the workspace needs to explain, not fail.
+  // Note it does NOT suggest a pallet number: nextval is non-transactional, so
+  // every preview would burn one. The dialog prefills from the existing
+  // /pallets/next-number endpoint, exactly as the New Pallet form does.
+  async previewMerge(palletIds: string[]): Promise<{
+    sources: MergeCandidate[];
+    blockers: string[];
+  }> {
+    const ids = [...new Set(palletIds)].filter((id) => UUID_RE.test(id));
+    if (ids.length < 2) {
+      return { sources: [], blockers: ['Select at least two pallets to merge.'] };
+    }
+
+    const found = await this.pallets.find({ where: { id: In(ids) } });
+    const sources = await this.toMergeCandidates(found);
+    const blockers = mergeBlockers(sources);
+    const missing = ids.length - found.length;
+    if (missing > 0) {
+      blockers.unshift(`${missing} of the selected pallets no longer exist.`);
+    }
+
+    return { sources, blockers };
+  }
+
+  // Merge two or more pallets onto a NEW pallet.
+  //
+  // The lines MOVE; they are never copied. A pallet_lines row is a claim on
+  // physical stock, and every consumer in the system sums that table with no
+  // status filter and no join back to pallets — so a copied line would be
+  // sellable, invoiceable and countable twice, forever. Moving keeps
+  // SUM(quantity) globally identical, which is why no report, valuation or
+  // roll-up needed touching for this feature.
+  //
+  // The originals are kept as records, not as stock: status MERGED, zero lines,
+  // and every mutating path refuses them.
+  async mergePallets(
+    dto: MergePalletsDto,
+    userId: string | null,
+  ): Promise<PalletWithTotals & { lines: PalletLine[] }> {
+    const ids = [...new Set(dto.palletIds)];
+    if (ids.length < 2) {
+      throw new BadRequestException('Select at least two pallets to merge.');
+    }
+
+    // Taken OUTSIDE the transaction: sequences are non-transactional by design,
+    // so a rolled-back merge simply burns a number, exactly as a failed create
+    // does today. Reserving it inside would not make it recyclable.
+    const palletNumber = (dto.palletNumber ?? '').trim() || (await this.nextPalletNumber());
+
+    const newPalletId = await this.pallets.manager.transaction(async (m) => {
+      // Lock the sources in a deterministic order. Without this, two people
+      // merging overlapping selections at the same moment could split one
+      // pallet's lines across two destinations — and with the ids unordered,
+      // opposite-order merges deadlock instead of queueing.
+      const locked = await m
+        .getRepository(Pallet)
+        .createQueryBuilder('p')
+        .setLock('pessimistic_write')
+        .where('p.id IN (:...ids)', { ids })
+        .orderBy('p.id', 'ASC')
+        .getMany();
+
+      if (locked.length !== ids.length) {
+        throw new NotFoundException('One or more of the selected pallets no longer exist.');
+      }
+
+      // Re-validated INSIDE the lock: the preview the operator saw may be
+      // seconds stale, and everything it checked is something another session
+      // could have changed in between.
+      const sources = await this.toMergeCandidates(locked, m);
+      const blockers = mergeBlockers(sources);
+      if (blockers.length) {
+        throw new ConflictException(blockers.join(' '));
+      }
+
+      const byId = new Map(locked.map((p) => [p.id, p]));
+      const ordered = ids.map((id) => byId.get(id)!);
+      const agreed = <T>(pick: (p: Pallet) => T): T | null => {
+        const values = new Set(ordered.map(pick));
+        return values.size === 1 ? ordered.map(pick)[0] : null;
+      };
+
+      const pallets = m.getRepository(Pallet);
+      const created = await this.saveUnique(
+        () =>
+          pallets.save(
+            pallets.create({
+              palletNumber,
+              description:
+                (dto.description ?? '').trim() ||
+                `Merged from ${ordered.map((p) => p.palletNumber).join(', ')}`,
+              // Inherited only where the sources agree — a merged pallet with
+              // two different suppliers has no single supplier, and guessing
+              // one would be a lie that then prints on the report.
+              supplier: agreed((p) => p.supplier),
+              // Deliberately not inherited: a freshly merged pallet has not
+              // been sold to anyone.
+              buyer: null,
+              locationId: dto.locationId ?? agreed((p) => p.locationId),
+              status: PalletStatus.OPEN,
+              entryLayout: ordered[0].entryLayout,
+            }),
+          ),
+        palletNumber,
+      );
+
+      const lines = m.getRepository(PalletLine);
+      const mergeRows = m.getRepository(PalletMerge);
+      for (const source of ordered) {
+        const summary = sources.find((s) => s.id === source.id)!;
+        // OVERWRITE source_pallet_id — never COALESCE it with the existing
+        // value. It means ONE HOP: the immediate pre-merge parent. If A was
+        // itself merged from X and Y, then A+B into C, C's rows must name A,
+        // not X — otherwise A's own page shows nothing and C claims a parent it
+        // never merged with. The full chain lives in pallet_merges.
+        await lines.update(
+          { palletId: source.id },
+          {
+            palletId: created.id,
+            sourcePalletId: source.id,
+            sourcePalletNumber: source.palletNumber,
+          },
+        );
+
+        await mergeRows.save(
+          mergeRows.create({
+            resultPalletId: created.id,
+            sourcePalletId: source.id,
+            sourcePalletNumber: source.palletNumber,
+            unitsContributed: summary.totalQuantity,
+            linesContributed: summary.lineCount,
+            mergedById: userId,
+          }),
+        );
+      }
+
+      // shippedAt deliberately untouched — merging is not shipping.
+      await pallets.update({ id: In(ids) }, { status: PalletStatus.MERGED });
+
+      return created.id;
+    });
+
+    const merged = await this.findOne(newPalletId);
+
+    // AFTER the commit, never inside it. ActivityService.record swallows its
+    // own failures, so a call inside the transaction could hide a real error —
+    // and a log written before a rollback would record a merge that never
+    // happened.
+    const sourceRows = await this.merges.find({ where: { resultPalletId: newPalletId } });
+    const summary = sourceRows
+      .map((s) => `${s.sourcePalletNumber} (${s.linesContributed} lines, ${s.unitsContributed} units)`)
+      .join(' and ');
+    await this.activity.record({
+      userId,
+      action: 'pallet.merged',
+      entityType: 'pallet',
+      entityId: newPalletId,
+      summary: `Merged ${summary} into ${merged.palletNumber} (${merged.lineCount} lines, ${merged.totalQuantity} units)`,
+    });
+    // One row per source too: someone opening a pallet that has gone quiet must
+    // be able to see why, and activity is queried by entityId.
+    for (const s of sourceRows) {
+      await this.activity.record({
+        userId,
+        action: 'pallet.merged_into',
+        entityType: 'pallet',
+        entityId: s.sourcePalletId,
+        summary: `${s.sourcePalletNumber} merged into ${merged.palletNumber} — ${s.unitsContributed} units moved`,
+      });
+    }
+
+    return merged;
+  }
+
+  // Line counts for a set of pallets, optionally inside a transaction.
+  private async toMergeCandidates(
+    pallets: Pallet[],
+    manager?: EntityManager,
+  ): Promise<MergeCandidate[]> {
+    if (pallets.length === 0) return [];
+    const repo = manager ? manager.getRepository(PalletLine) : this.lines;
+    const rows = await repo
+      .createQueryBuilder('line')
+      .select('line.palletId', 'palletId')
+      .addSelect('COALESCE(SUM(line.quantity), 0)', 'total')
+      .addSelect('COUNT(*)', 'lines')
+      .where('line.palletId IN (:...ids)', { ids: pallets.map((p) => p.id) })
+      .groupBy('line.palletId')
+      .getRawMany<{ palletId: string; total: string; lines: string }>();
+    const map = new Map(rows.map((r) => [r.palletId, r]));
+
+    return pallets.map((p) => ({
+      id: p.id,
+      palletNumber: p.palletNumber,
+      status: p.status,
+      entryLayout: p.entryLayout,
+      totalQuantity: parseInt(map.get(p.id)?.total ?? '0', 10),
+      lineCount: parseInt(map.get(p.id)?.lines ?? '0', 10),
+    }));
   }
 
   async remove(id: string): Promise<void> {
@@ -1017,17 +1308,113 @@ export class PalletsService {
     return `PALLET-${n}`;
   }
 
+  // Every caller of this mutates the pallet it returns — adding or selling
+  // lines, replacing a spec grid, returning stock onto it, deleting it. So the
+  // merged check belongs here rather than repeated at six call sites: a merged
+  // pallet has had its stock moved away and must be frozen, or the invariant
+  // that one physical unit is one line row gets broken from the side.
   private async assertPallet(id: string): Promise<Pallet> {
     const pallet = await this.pallets.findOne({ where: { id } });
     if (!pallet) throw new NotFoundException(`Pallet ${id} not found`);
+    await this.assertNotMerged(pallet);
     return pallet;
   }
+
+  // Names where the stock actually went, because "this pallet was merged" is
+  // only half an answer — the operator needs to know where to go instead. The
+  // lookup only runs on the error path.
+  private async assertNotMerged(pallet: Pallet): Promise<void> {
+    if (pallet.status !== PalletStatus.MERGED) return;
+    const merge = await this.merges.findOne({
+      where: { sourcePalletId: pallet.id },
+      relations: ['resultPallet'],
+    });
+    const into = merge?.resultPallet?.palletNumber;
+    throw new ConflictException(
+      into
+        ? `${pallet.palletNumber} was merged into ${into} — make the change there instead.`
+        : `${pallet.palletNumber} was merged into another pallet and can no longer be changed.`,
+    );
+  }
+}
+
+// Excel reads a Date cell as UTC, so what goes in is the London CALENDAR date
+// the timestamp falls on — otherwise a pallet booked in at 00:30 BST exports as
+// the previous day and disagrees with the Pallets page that listed it. Time of
+// day is dropped deliberately: the column is a date, and a date sorts.
+function londonDate(value: Date | string | null | undefined): Date | null {
+  if (!value) return null;
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return null;
+  const [day, month, year] = d
+    .toLocaleDateString('en-GB', { timeZone: 'Europe/London' })
+    .split('/')
+    .map(Number);
+  return new Date(Date.UTC(year, month - 1, day));
 }
 
 // Empty/whitespace -> null, so blank spec cells are stored (and matched) as NULL.
 function nz(v: string | null | undefined): string | null {
   const s = (v ?? '').trim();
   return s === '' ? null : s;
+}
+
+// --- merge validation -----------------------------------------------------
+
+export interface MergeCandidate {
+  id: string;
+  palletNumber: string;
+  status: string;
+  entryLayout: string | null;
+  totalQuantity: number;
+  lineCount: number;
+}
+
+export function layoutName(entryLayout: string | null | undefined): string {
+  return entryLayout === PalletEntryLayout.SPEC ? 'Layout 2' : 'Layout 1';
+}
+
+// Everything that makes a merge impossible, phrased as sentences an operator
+// can act on. Pure and exported so the workspace can answer "why is Merge
+// disabled?" without opening a transaction, and so it is testable without a
+// database — the merge itself re-runs it under a row lock, which is the check
+// that actually counts.
+export function mergeBlockers(sources: MergeCandidate[]): string[] {
+  const blockers: string[] = [];
+
+  if (sources.length < 2) {
+    return ['Select at least two pallets to merge.'];
+  }
+  if (new Set(sources.map((s) => s.id)).size !== sources.length) {
+    blockers.push('The same pallet was selected more than once.');
+  }
+
+  for (const s of sources) {
+    if (s.status === PalletStatus.SHIPPED) {
+      blockers.push(`${s.palletNumber} has shipped — those goods have left the warehouse.`);
+    } else if (s.status === PalletStatus.MERGED) {
+      blockers.push(`${s.palletNumber} was already merged into another pallet.`);
+    } else if (s.lineCount === 0 || s.totalQuantity <= 0) {
+      blockers.push(`${s.palletNumber} is empty — there is nothing to move off it.`);
+    }
+  }
+
+  // Refusing a cross-layout merge is not fussiness. The two layouts store their
+  // data in different places — Layout 1 on the line's own columns, Layout 2 on
+  // the linked catalogue product — so a mixed pallet exports unreadable rows
+  // whichever layout it claims. Worse, marking it Layout 2 arms a data-loss
+  // trap: the spec editor saves by deleting every line and recreating from the
+  // grid, so the operator's first routine edit would destroy every unit cost,
+  // grade and scrap of merge provenance on the Layout 1 rows.
+  const layouts = new Set(sources.map((s) => s.entryLayout ?? PalletEntryLayout.VARIANT));
+  if (layouts.size > 1) {
+    const named = sources.map((s) => `${s.palletNumber} is ${layoutName(s.entryLayout)}`);
+    blockers.push(
+      `${named.join(', ')}. Pallets built with different layouts export different reports and cannot be merged.`,
+    );
+  }
+
+  return blockers;
 }
 
 // --- report columns -------------------------------------------------------

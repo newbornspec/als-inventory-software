@@ -5,7 +5,9 @@ import { revalidatePath } from 'next/cache';
 import { apiFetch, ApiError } from '@/lib/api-server';
 import type { ActionState } from './assets';
 
-export type PalletStatus = 'open' | 'ready' | 'shipped';
+// 'merged' is terminal and set only by merging — it is deliberately absent
+// from the status dropdown, and the API rejects any attempt to set it directly.
+export type PalletStatus = 'open' | 'ready' | 'shipped' | 'merged';
 
 export interface PalletLine {
   id: string;
@@ -25,6 +27,11 @@ export interface PalletLine {
   unitCost: number | null;
   productId: string | null;
   createdAt: string;
+  // Where this item came from, if it arrived by a merge. pallet_id is where it
+  // IS; this is where it CAME FROM. The number is a snapshot, so it survives
+  // deletion of the original.
+  sourcePalletId?: string | null;
+  sourcePalletNumber?: string | null;
   // Loaded on the pallet detail endpoint so the Layout 2 grid can rebuild rows.
   product?: {
     manufacturer: string | null;
@@ -56,6 +63,36 @@ export interface Pallet {
   lineCount: number;
   location?: { id: string; name: string } | null;
   lines?: PalletLine[];
+
+  // --- merge history (detail endpoint only) ---------------------------------
+  // Read from the merge EVENT, not from the lines: derive it from the lines and
+  // a source disappears the moment its last contributed line is sold.
+  mergedFrom?: {
+    id: string | null; // null once the original is deleted; the number remains
+    palletNumber: string;
+    units: number;
+    lines: number;
+    mergedAt: string;
+  }[];
+  // Set on a pallet that was itself merged away — where its stock went.
+  mergedInto?: { id: string; palletNumber: string; mergedAt: string } | null;
+  // What a merged pallet contributed, as it now sits on its successor. This is
+  // the historical record the original still shows once its stock has moved.
+  contributedLines?: PalletLine[];
+}
+
+export interface MergeCandidate {
+  id: string;
+  palletNumber: string;
+  status: string;
+  entryLayout: string | null;
+  totalQuantity: number;
+  lineCount: number;
+}
+
+export interface MergePreview {
+  sources: MergeCandidate[];
+  blockers: string[];
 }
 
 export async function createPallet(_prev: ActionState, formData: FormData): Promise<ActionState> {
@@ -277,6 +314,55 @@ export async function deletePalletLine(palletId: string, lineId: string): Promis
   }
   revalidatePath(`/pallets/${palletId}`);
   revalidatePath('/pallets');
+}
+
+// What merging this selection would do, and why it can't if it can't. Called
+// when the dialog opens so the confirmation states real numbers and the button
+// is disabled with a reason rather than failing on submit.
+export async function previewMerge(palletIds: string[]): Promise<MergePreview> {
+  try {
+    return await apiFetch<MergePreview>('/pallets/merge/preview', {
+      method: 'POST',
+      body: JSON.stringify({ palletIds }),
+    });
+  } catch (err) {
+    return {
+      sources: [],
+      blockers: [err instanceof ApiError ? err.message : 'Could not check these pallets.'],
+    };
+  }
+}
+
+// Merge the selected pallets onto a new one. Returns the new pallet's number on
+// success so the caller can say where the stock went; the merge itself is
+// atomic server-side.
+export async function mergePallets(
+  palletIds: string[],
+  opts: { palletNumber?: string; description?: string; locationId?: string } = {},
+): Promise<{ ok: true; pallet: Pallet } | { ok: false; error: string }> {
+  try {
+    // Blank fields are omitted rather than sent as '': the DTO validates
+    // palletNumber's shape when present, and an empty string would fail it
+    // instead of falling back to the sequence.
+    const body: Record<string, unknown> = { palletIds };
+    for (const [k, v] of Object.entries(opts)) {
+      const trimmed = typeof v === 'string' ? v.trim() : v;
+      if (trimmed) body[k] = trimmed;
+    }
+    const pallet = await apiFetch<Pallet>('/pallets/merge', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+    revalidatePath('/pallets');
+    revalidatePath('/inventory');
+    for (const id of palletIds) revalidatePath(`/pallets/${id}`);
+    return { ok: true, pallet };
+  } catch (err) {
+    return {
+      ok: false,
+      error: err instanceof ApiError ? err.message : 'The merge could not be completed.',
+    };
+  }
 }
 
 function str(value: FormDataEntryValue | null): string | undefined {

@@ -19,8 +19,13 @@ export default async function InventoryPage() {
     apiFetch<StockLine[]>('/stock').catch(() => [] as StockLine[]),
   ]);
 
-  const heldPallets = pallets.filter((p) => p.status !== 'shipped');
-  const shippedCount = pallets.length - heldPallets.length;
+  // Merged pallets hold no stock — their lines moved to the pallet that
+  // replaced them — so they are excluded alongside shipped ones. Counting them
+  // as held would list ghost rows with zero units in the Pallet stock table.
+  const heldPallets = pallets.filter(
+    (p) => p.status !== 'shipped' && p.status !== 'merged',
+  );
+  const shippedCount = pallets.filter((p) => p.status === 'shipped').length;
 
   const serializedUnits =
     batches.reduce((s, b) => s + (b.actualUnitCount ?? 0), 0) + unassigned.length;

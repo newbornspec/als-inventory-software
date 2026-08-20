@@ -1,5 +1,7 @@
 import {
   RAM_NONE,
+  type MergeCandidate,
+  mergeBlockers,
   SPEC_HEADERS,
   SPEC_WIDTHS,
   VARIANT_HEADERS,
@@ -165,5 +167,107 @@ describe('report columns', () => {
     expect(palletLineTotal(priced)).toBe(10);
     expect(palletLineTotal(unpriced)).toBeNull();
     expect(variantRow('P', unpriced)[VARIANT_HEADERS.indexOf('Line total (£)')]).toBe('');
+  });
+});
+
+// The merge validator is pure so it can be tested without a database — and so
+// the workspace can grey out the Merge button WITH a reason rather than letting
+// someone discover the problem via a 409.
+describe('mergeBlockers', () => {
+  const p = (over: Partial<MergeCandidate>): MergeCandidate => ({
+    id: over.id ?? 'a',
+    palletNumber: over.palletNumber ?? 'PALLET-000001',
+    status: over.status ?? 'open',
+    entryLayout: over.entryLayout ?? 'variant',
+    totalQuantity: over.totalQuantity ?? 10,
+    lineCount: over.lineCount ?? 2,
+  });
+
+  it('allows the ordinary case', () => {
+    expect(
+      mergeBlockers([
+        p({ id: 'a', palletNumber: 'PALLET-000001' }),
+        p({ id: 'b', palletNumber: 'PALLET-000002' }),
+      ]),
+    ).toEqual([]);
+  });
+
+  it('allows more than two', () => {
+    expect(
+      mergeBlockers([
+        p({ id: 'a', palletNumber: 'PALLET-000001' }),
+        p({ id: 'b', palletNumber: 'PALLET-000002' }),
+        p({ id: 'c', palletNumber: 'PALLET-000003' }),
+      ]),
+    ).toEqual([]);
+  });
+
+  it('needs at least two', () => {
+    expect(mergeBlockers([p({})])).toHaveLength(1);
+    expect(mergeBlockers([])).toHaveLength(1);
+  });
+
+  it('refuses the same pallet twice', () => {
+    const blockers = mergeBlockers([p({ id: 'a' }), p({ id: 'a' })]);
+    expect(blockers.join(' ')).toMatch(/more than once/);
+  });
+
+  it('refuses shipped goods', () => {
+    const blockers = mergeBlockers([
+      p({ id: 'a', palletNumber: 'PALLET-000001', status: 'shipped' }),
+      p({ id: 'b', palletNumber: 'PALLET-000002' }),
+    ]);
+    expect(blockers.join(' ')).toMatch(/PALLET-000001 has shipped/);
+  });
+
+  it('refuses a pallet that was already merged, and says so', () => {
+    const blockers = mergeBlockers([
+      p({ id: 'a', palletNumber: 'PALLET-000001', status: 'merged' }),
+      p({ id: 'b', palletNumber: 'PALLET-000002' }),
+    ]);
+    expect(blockers.join(' ')).toMatch(/PALLET-000001 was already merged/);
+  });
+
+  it('refuses an empty pallet — merging one burns a number for nothing', () => {
+    expect(
+      mergeBlockers([
+        p({ id: 'a', palletNumber: 'PALLET-000001', totalQuantity: 0, lineCount: 0 }),
+        p({ id: 'b', palletNumber: 'PALLET-000002' }),
+      ]).join(' '),
+    ).toMatch(/PALLET-000001 is empty/);
+    // Lines that exist but sum to zero are just as empty.
+    expect(
+      mergeBlockers([
+        p({ id: 'a', palletNumber: 'PALLET-000001', totalQuantity: 0, lineCount: 3 }),
+        p({ id: 'b', palletNumber: 'PALLET-000002' }),
+      ]).join(' '),
+    ).toMatch(/PALLET-000001 is empty/);
+  });
+
+  it('refuses a cross-layout merge, naming which is which', () => {
+    const blockers = mergeBlockers([
+      p({ id: 'a', palletNumber: 'PALLET-000001', entryLayout: 'variant' }),
+      p({ id: 'b', palletNumber: 'PALLET-000002', entryLayout: 'spec' }),
+    ]);
+    expect(blockers.join(' ')).toMatch(/PALLET-000001 is Layout 1/);
+    expect(blockers.join(' ')).toMatch(/PALLET-000002 is Layout 2/);
+    expect(blockers.join(' ')).toMatch(/cannot be merged/);
+  });
+
+  it('treats a null entryLayout as Layout 1 rather than a third layout', () => {
+    expect(
+      mergeBlockers([
+        p({ id: 'a', palletNumber: 'PALLET-000001', entryLayout: null }),
+        p({ id: 'b', palletNumber: 'PALLET-000002', entryLayout: 'variant' }),
+      ]),
+    ).toEqual([]);
+  });
+
+  it('reports every problem at once, not just the first', () => {
+    const blockers = mergeBlockers([
+      p({ id: 'a', palletNumber: 'PALLET-000001', status: 'shipped' }),
+      p({ id: 'b', palletNumber: 'PALLET-000002', totalQuantity: 0, lineCount: 0 }),
+    ]);
+    expect(blockers.length).toBeGreaterThanOrEqual(2);
   });
 });

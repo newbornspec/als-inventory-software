@@ -227,7 +227,13 @@ export function SoldManager({
       setError(res.error);
       return;
     }
-    setNotice(`Returned ${res.returned} quantit${res.returned === 1 ? 'y' : 'ies'}${res.skipped ? ` (${res.skipped} skipped)` : ''}.`);
+    // The reasons matter more than the count: the usual cause of a skip now is
+    // that the original pallet was merged, and the message names where to
+    // return to instead.
+    const why = res.reasons?.length ? ` ${res.reasons.join(' ')}` : '';
+    setNotice(
+      `Returned ${res.returned} quantit${res.returned === 1 ? 'y' : 'ies'}${res.skipped ? ` (${res.skipped} skipped)` : ''}.${why}`,
+    );
     setSelP(new Set());
     router.refresh();
   }
