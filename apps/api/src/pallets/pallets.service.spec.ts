@@ -192,19 +192,19 @@ describe('mergeBlockers', () => {
     ).toEqual([]);
   });
 
-  it('allows more than two', () => {
+  it('refuses more than two, in the words the spec specified', () => {
     expect(
       mergeBlockers([
         p({ id: 'a', palletNumber: 'PALLET-000001' }),
         p({ id: 'b', palletNumber: 'PALLET-000002' }),
         p({ id: 'c', palletNumber: 'PALLET-000003' }),
       ]),
-    ).toEqual([]);
+    ).toEqual(['Please select exactly 2 pallets to merge.']);
   });
 
-  it('needs at least two', () => {
-    expect(mergeBlockers([p({})])).toHaveLength(1);
-    expect(mergeBlockers([])).toHaveLength(1);
+  it('refuses fewer than two, in the words the spec specified', () => {
+    expect(mergeBlockers([p({})])).toEqual(['Merge requires exactly 2 pallets.']);
+    expect(mergeBlockers([])).toEqual(['Merge requires exactly 2 pallets.']);
   });
 
   it('refuses the same pallet twice', () => {

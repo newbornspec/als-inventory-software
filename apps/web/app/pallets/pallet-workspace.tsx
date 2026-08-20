@@ -6,6 +6,7 @@ import { ArrowDown, ArrowUp, ChevronDown, ChevronRight } from 'lucide-react';
 import type { Pallet } from '@/lib/actions/pallets';
 import { formatLabel } from '@/lib/asset-options';
 import { MergeDialog } from './merge-dialog';
+import { RowActions } from './row-actions';
 import {
   applyFilters,
   MAX_EXPORT_PALLETS,
@@ -137,6 +138,13 @@ export function PalletWorkspace({
   // Select-all over a big table is one click, and the server refuses past the
   // cap. Saying so here beats navigating the operator to an error page.
   const tooManyToExport = selectedList.length > MAX_EXPORT_PALLETS;
+
+  // "Merge with…" from a row menu selects that pallet and leaves the operator
+  // one click from the pair the merge needs, rather than opening a dialog that
+  // immediately complains it has only one pallet.
+  function startMerge(id: string) {
+    setSelected((prev) => (prev.has(id) ? prev : new Set([...prev, id])));
+  }
 
   function toggleSort(key: SortKey) {
     if (key === sortKey) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
@@ -398,11 +406,18 @@ export function PalletWorkspace({
                 Export to Excel
               </button>
             </form>
-            {selectedList.length >= 2 && (
+            {selectedList.length === 2 && (
               <MergeDialog
                 selected={selectedList}
                 onDone={() => setSelected(new Set())}
               />
+            )}
+            {selectedList.length !== 2 && (
+              <span className="self-center text-sm text-neutral-700">
+                {selectedList.length < 2
+                  ? 'Merge requires exactly 2 pallets.'
+                  : 'Please select exactly 2 pallets to merge.'}
+              </span>
             )}
             <button
               onClick={() => setSelected(new Set())}
@@ -490,6 +505,9 @@ export function PalletWorkspace({
                   which supplier a pallet came from. */}
               <th scope="col" className={`${TH} hidden lg:table-cell`}>Supplier</th>
               <th scope="col" className={`${TH} hidden lg:table-cell`}>Location</th>
+              <th scope="col" className={`${TH} w-10`}>
+                <span className="sr-only">Actions</span>
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -570,6 +588,9 @@ export function PalletWorkspace({
                     <td className={`${TD} hidden text-neutral-700 lg:table-cell`}>
                       {p.location?.name ?? '—'}
                     </td>
+                    <td className={TD}>
+                      <RowActions pallet={p} canManage={canManage} onMerge={startMerge} />
+                    </td>
                   </tr>
 
                   {/* The columns hidden at this width, rather than squeezing
@@ -578,7 +599,7 @@ export function PalletWorkspace({
                       visible count changes at every breakpoint. */}
                   {isOpen && (
                     <tr className="lg:hidden">
-                      <td colSpan={canManage ? 11 : 10} className="bg-neutral-50 px-3 py-2">
+                      <td colSpan={canManage ? 12 : 11} className="bg-neutral-50 px-3 py-2">
                         <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
                           <dt className="text-neutral-600">Description</dt>
                           <dd>{p.description ?? '—'}</dd>
@@ -601,7 +622,7 @@ export function PalletWorkspace({
             {visible.length === 0 && (
               <tr>
                 <td
-                  colSpan={canManage ? 11 : 10}
+                  colSpan={canManage ? 12 : 11}
                   className="px-4 py-10 text-center text-sm text-neutral-600"
                 >
                   {pallets.length === 0

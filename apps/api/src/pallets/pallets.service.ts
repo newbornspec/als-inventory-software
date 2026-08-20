@@ -1020,7 +1020,10 @@ export class PalletsService {
   }> {
     const ids = [...new Set(palletIds)].filter((id) => UUID_RE.test(id));
     if (ids.length < 2) {
-      return { sources: [], blockers: ['Select at least two pallets to merge.'] };
+      return { sources: [], blockers: ['Merge requires exactly 2 pallets.'] };
+    }
+    if (ids.length > 2) {
+      return { sources: [], blockers: ['Please select exactly 2 pallets to merge.'] };
     }
 
     const found = await this.pallets.find({ where: { id: In(ids) } });
@@ -1050,8 +1053,10 @@ export class PalletsService {
     userId: string | null,
   ): Promise<PalletWithTotals & { lines: PalletLine[] }> {
     const ids = [...new Set(dto.palletIds)];
-    if (ids.length < 2) {
-      throw new BadRequestException('Select at least two pallets to merge.');
+    if (ids.length !== 2) {
+      throw new BadRequestException(
+        ids.length < 2 ? 'Merge requires exactly 2 pallets.' : 'Please select exactly 2 pallets to merge.',
+      );
     }
 
     // Taken OUTSIDE the transaction: sequences are non-transactional by design,
@@ -1382,8 +1387,14 @@ export function layoutName(entryLayout: string | null | undefined): string {
 export function mergeBlockers(sources: MergeCandidate[]): string[] {
   const blockers: string[] = [];
 
+  // Exactly two, per spec — not "two or more". A merge has no undo, and the
+  // confirmation names both pallets and the combined total; keeping it to a
+  // pair is what makes that sentence checkable before someone commits to it.
   if (sources.length < 2) {
-    return ['Select at least two pallets to merge.'];
+    return ['Merge requires exactly 2 pallets.'];
+  }
+  if (sources.length > 2) {
+    return ['Please select exactly 2 pallets to merge.'];
   }
   if (new Set(sources.map((s) => s.id)).size !== sources.length) {
     blockers.push('The same pallet was selected more than once.');

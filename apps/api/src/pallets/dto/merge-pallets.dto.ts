@@ -1,4 +1,5 @@
 import {
+  ArrayMaxSize,
   ArrayMinSize,
   ArrayUnique,
   IsArray,
@@ -11,11 +12,12 @@ import {
 } from 'class-validator';
 
 export class MergePalletsDto {
-  // Two or more. The workspace selects pallets with checkboxes, so merging
-  // three in one go is a natural thing to ask for and refusing it would be an
-  // arbitrary dead end.
+  // Exactly two. A merge cannot be undone, and the confirmation dialog states
+  // both pallet numbers and the combined unit total — a sentence the operator
+  // can actually check. A variable-N merge has no equivalent.
   @IsArray()
   @ArrayMinSize(2)
+  @ArrayMaxSize(2)
   @ArrayUnique()
   @IsUUID(undefined, { each: true })
   palletIds!: string[];
