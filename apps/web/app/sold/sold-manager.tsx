@@ -463,9 +463,6 @@ export function SoldManager({
                         {lOpen && (
                           <div role="region" aria-label="Sold devices by lot" tabIndex={0} className="overflow-x-auto">
                             <table className="w-full text-left text-xs">
-                      <caption className="sr-only">
-                        Sold pallet lines with quantity, sale price and who sold them
-                      </caption>
                               <caption className="sr-only">
                                 Sold devices with tag, specification, sale price and who sold them
                               </caption>
@@ -580,6 +577,9 @@ export function SoldManager({
                 {open && (
                   <div role="region" aria-label="Sold pallet lines" tabIndex={0} className="overflow-x-auto">
                     <table className="w-full text-left text-xs">
+                      <caption className="sr-only">
+                        Sold pallet lines with quantity, sale price and who sold them
+                      </caption>
                       <thead className="text-neutral-500">
                         <tr>
                           <th scope="col" className="w-10 px-3 py-1.5" />
