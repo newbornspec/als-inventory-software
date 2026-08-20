@@ -34,7 +34,7 @@ function AssetRows({ assets }: { assets: Asset[] }) {
             </td>
             <td className="px-4 py-2 text-neutral-500">{a.category}</td>
             <td className="px-4 py-2">
-              <span className="rounded-full border border-[var(--field-border)] px-2 py-0.5 text-xs">
+              <span className="rounded-full border border-neutral-200 px-2 py-0.5 text-xs">
                 {formatLabel(a.stockStatus)}
               </span>
             </td>

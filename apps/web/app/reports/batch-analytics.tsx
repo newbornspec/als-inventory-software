@@ -51,7 +51,7 @@ export function BatchAnalyticsTable({ rows }: { rows: BatchAnalytics[] }) {
 
   if (rows.length === 0) {
     return (
-      <p className="mt-3 rounded-lg border border-[var(--field-border)] px-4 py-6 text-center text-sm text-neutral-500">
+      <p className="mt-3 rounded-lg border border-neutral-200 px-4 py-6 text-center text-sm text-neutral-500">
         No purchase lots yet.
       </p>
     );
@@ -119,7 +119,7 @@ function FragmentRow({
           {b.owner ?? '—'}
         </td>
         <td className="px-3 py-2">
-          <span className="rounded-full border border-[var(--field-border)] px-2 py-0.5 text-xs text-neutral-700">
+          <span className="rounded-full border border-neutral-200 px-2 py-0.5 text-xs text-neutral-700">
             {formatLabel(b.status)}
           </span>
         </td>

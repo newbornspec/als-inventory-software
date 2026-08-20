@@ -219,7 +219,7 @@ export function InvoiceForm({
           ) : (
             // Nothing is assumed when not registered: no rate is applied and the
             // invoice says so rather than silently showing a zero VAT line.
-            <p className="rounded-md border border-[var(--field-border)] bg-neutral-50 px-3 py-2 text-sm text-neutral-600">
+            <p className="rounded-md border border-neutral-200 bg-neutral-50 px-3 py-2 text-sm text-neutral-600">
               Registration number and rate are not applicable. No VAT will be added, and the
               invoice will state that.
             </p>

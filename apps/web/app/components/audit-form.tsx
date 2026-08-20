@@ -126,7 +126,7 @@ export function AuditForm({ assetId, onSaved }: { assetId: string; onSaved?: () 
         <legend className="text-xs text-neutral-600">Functional tests</legend>
         <div className="mt-1 grid grid-cols-2 gap-2 sm:grid-cols-3">
           {TEST_FIELDS.map((field) => (
-            <div key={field} className="flex items-center justify-between rounded-md border border-[var(--field-border)] px-2 py-1">
+            <div key={field} className="flex items-center justify-between rounded-md border border-neutral-200 px-2 py-1">
               <label htmlFor={`${uid}-test-${field}`} className="text-xs capitalize text-neutral-700">
                 {field}
               </label>

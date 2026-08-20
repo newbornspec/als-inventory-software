@@ -189,7 +189,7 @@ export default async function AssetsPage({
                     </td>
                     <td className="px-4 py-3 text-neutral-500">{asset.category}</td>
                     <td className="px-4 py-3">
-                      <span className="rounded-full border border-[var(--field-border)] px-2 py-0.5 text-xs">
+                      <span className="rounded-full border border-neutral-200 px-2 py-0.5 text-xs">
                         {formatLabel(asset.stockStatus)}
                       </span>
                     </td>

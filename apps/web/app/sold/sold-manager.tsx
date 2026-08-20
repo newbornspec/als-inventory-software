@@ -510,7 +510,7 @@ export function SoldManager({
             );
           })}
           {assetGroups.length === 0 && (
-            <p className="rounded-lg border border-[var(--field-border)] px-4 py-6 text-center text-sm text-neutral-500">
+            <p className="rounded-lg border border-neutral-200 px-4 py-6 text-center text-sm text-neutral-500">
               {hasFilters ? 'No sold devices match the filters.' : 'No sold devices yet.'}
             </p>
           )}
@@ -615,7 +615,7 @@ export function SoldManager({
             );
           })}
           {palletGroups.length === 0 && (
-            <p className="rounded-lg border border-[var(--field-border)] px-4 py-6 text-center text-sm text-neutral-500">
+            <p className="rounded-lg border border-neutral-200 px-4 py-6 text-center text-sm text-neutral-500">
               {hasFilters ? 'No sold pallet goods match the filters.' : 'No sold pallet goods yet.'}
             </p>
           )}

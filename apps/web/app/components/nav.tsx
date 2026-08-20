@@ -101,7 +101,7 @@ export function Nav() {
   }
 
   return (
-    <header className="sticky top-0 z-30 border-b border-[var(--field-border)] bg-white/95 px-4 py-3 backdrop-blur-sm sm:px-8 sm:py-4">
+    <header className="sticky top-0 z-30 border-b border-neutral-200 bg-white/95 px-4 py-3 backdrop-blur-sm sm:px-8 sm:py-4">
       <div className="flex items-center gap-4 lg:gap-6">
         <Link href="/dashboard" className="flex shrink-0 items-center gap-3">
           <div className="flex size-10 items-center justify-center rounded-xl bg-[#1a6ef5] text-white shadow-sm shadow-blue-500/15">

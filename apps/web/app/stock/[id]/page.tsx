@@ -81,7 +81,7 @@ export default async function StockDetailPage({ params }: { params: Promise<{ id
               {movements.map((m) => (
                 <li
                   key={m.id}
-                  className="flex items-center justify-between rounded-md border border-[var(--field-border)] px-3 py-2 text-sm"
+                  className="flex items-center justify-between rounded-md border border-neutral-200 px-3 py-2 text-sm"
                 >
                   <div>
                     <span
