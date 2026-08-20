@@ -61,7 +61,7 @@ export default async function SubLotDetailPage({
         <Breadcrumbs
           items={[
             { label: 'Dashboard', href: '/dashboard' },
-            { label: 'Lots', href: '/batches' },
+            { label: 'Audit', href: '/batches' },
             { label: batch.batchNumber, href: `/batches/${id}` },
             { label: lot.lotNumber },
           ]}

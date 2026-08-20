@@ -7,7 +7,7 @@ import {
   Activity,
   BarChart3,
   Box,
-  Boxes,
+  ClipboardCheck,
   Droplet,
   Grid3x3,
   LayoutDashboard,
@@ -29,7 +29,11 @@ import { logout } from '@/lib/auth';
 const BASE_LINKS: { href: string; label: string; icon: LucideIcon }[] = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { href: '/inventory', label: 'Inventory', icon: Package },
-  { href: '/batches', label: 'Lots', icon: Boxes },
+  // Labelled "Audit" while the route stays /batches. The label was already
+  // decoupled from the route ("Lots" over /batches), so this changes nothing
+  // structural — no bookmark breaks and no link rewrites — and the section is
+  // being developed into the audit workspace next.
+  { href: '/batches', label: 'Audit', icon: ClipboardCheck },
   { href: '/scan', label: 'Scan', icon: Scan },
   { href: '/assets', label: 'Assets', icon: Zap },
   { href: '/pallets', label: 'Pallets', icon: Grid3x3 },

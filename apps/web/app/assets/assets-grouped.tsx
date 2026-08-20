@@ -81,7 +81,7 @@ export function AssetsGrouped({ batches, unassigned }: { batches: Batch[]; unass
   if (groups.length === 0 && unassigned.length === 0) {
     return (
       <p className="mt-6 text-sm text-neutral-500">
-        No devices yet. Receive a lot on the <Link href="/batches" className="underline">Lots</Link>{' '}
+        No devices yet. Receive a lot on the <Link href="/batches" className="underline">Audit</Link>{' '}
         page.
       </p>
     );
