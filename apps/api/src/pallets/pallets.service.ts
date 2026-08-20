@@ -908,71 +908,11 @@ export class PalletsService {
       return { ws, firstDataRow: headerRowIndex + 1 };
     };
 
-    // Summary — the per-pallet facts, once each.
-    {
-      const headers = [
-        'Pallet number',
-        'Created',
-        'Layout',
-        'Supplier',
-        'Buyer',
-        'Description',
-        'Location',
-        'Status',
-        'Lines',
-        'Total items',
-      ];
-      const widths = [16, 14, 10, 20, 20, 32, 18, 12, 8, 12];
-      const totalLines = pallets.reduce((n, p) => n + p.lineCount, 0);
-      const sheetNames = [
-        ...(layout1.length ? [itemSheet(false)] : []),
-        ...(layout2.length ? [itemSheet(true)] : []),
-      ];
-      const { ws, firstDataRow } = startSheet('Summary', 'Pallet Export', headers, widths, [
-        ['Date generated', generated],
-        ['Pallets included', pallets.length],
-        // Said outright, because a reader who does not notice the second tab
-        // sees only totals here and reasonably concludes the stock is missing.
-        [
-          'Item detail',
-          `${totalLines} item lines on the ${sheetNames.map((n) => `"${n}"`).join(' and ')} sheet${sheetNames.length > 1 ? 's' : ''}`,
-        ],
-      ]);
-
-      const createdCol = headers.indexOf('Created') + 1;
-      let row = firstDataRow;
-      for (const p of pallets) {
-        ws.getRow(row).values = [
-          p.palletNumber,
-          londonDate(p.createdAt) ?? '',
-          isSpec(p) ? 'Layout 2' : 'Layout 1',
-          p.supplier ?? '',
-          p.buyer ?? '',
-          p.description ?? '',
-          p.location?.name ?? '',
-          p.status,
-          p.lineCount,
-          p.totalQuantity,
-        ];
-        // Format the CELL, not the column. Formatting the whole column also
-        // hit the meta block above, which writes its values into column B —
-        // so "Pallets included: 2" rendered as 02/01/1900.
-        ws.getRow(row).getCell(createdCol).numFmt = 'dd/mm/yyyy';
-        row += 1;
-      }
-
-      const totalRow = ws.getRow(row + 1);
-      totalRow.getCell(1).value = 'Total';
-      totalRow.getCell(headers.indexOf('Lines') + 1).value = pallets.reduce(
-        (n, p) => n + p.lineCount,
-        0,
-      );
-      totalRow.getCell(headers.length).value = pallets.reduce(
-        (n, p) => n + p.totalQuantity,
-        0,
-      );
-      totalRow.font = { bold: true };
-    }
+    // ITEM SHEETS ARE CREATED FIRST, and the workbook opens on the first one.
+    // The stock is what someone opens this file for; a Summary-first workbook
+    // depends on the reader finding a second tab, and a reader whose Excel has
+    // the tab bar hidden — or who is looking at a preview pane — never will.
+    // Twice a full item sheet was reported as missing data because of it.
 
     if (layout1.length > 0) {
       const rows1 = layout1.flatMap((p) => byPallet.get(p.id) ?? []);
@@ -1047,6 +987,77 @@ export class PalletsService {
       totalRow.getCell(headers.length).value = qtyTotal;
       totalRow.font = { bold: true };
     }
+
+
+    // Summary — the per-pallet facts, once each.
+    {
+      const headers = [
+        'Pallet number',
+        'Created',
+        'Layout',
+        'Supplier',
+        'Buyer',
+        'Description',
+        'Location',
+        'Status',
+        'Lines',
+        'Total items',
+      ];
+      const widths = [16, 14, 10, 20, 20, 32, 18, 12, 8, 12];
+      const totalLines = pallets.reduce((n, p) => n + p.lineCount, 0);
+      const sheetNames = [
+        ...(layout1.length ? [itemSheet(false)] : []),
+        ...(layout2.length ? [itemSheet(true)] : []),
+      ];
+      const { ws, firstDataRow } = startSheet('Summary', 'Pallet Export', headers, widths, [
+        ['Date generated', generated],
+        ['Pallets included', pallets.length],
+        // Said outright, because a reader who does not notice the second tab
+        // sees only totals here and reasonably concludes the stock is missing.
+        [
+          'Item detail',
+          `${totalLines} item lines on the ${sheetNames.map((n) => `"${n}"`).join(' and ')} sheet${sheetNames.length > 1 ? 's' : ''}`,
+        ],
+      ]);
+
+      const createdCol = headers.indexOf('Created') + 1;
+      let row = firstDataRow;
+      for (const p of pallets) {
+        ws.getRow(row).values = [
+          p.palletNumber,
+          londonDate(p.createdAt) ?? '',
+          isSpec(p) ? 'Layout 2' : 'Layout 1',
+          p.supplier ?? '',
+          p.buyer ?? '',
+          p.description ?? '',
+          p.location?.name ?? '',
+          p.status,
+          p.lineCount,
+          p.totalQuantity,
+        ];
+        // Format the CELL, not the column. Formatting the whole column also
+        // hit the meta block above, which writes its values into column B —
+        // so "Pallets included: 2" rendered as 02/01/1900.
+        ws.getRow(row).getCell(createdCol).numFmt = 'dd/mm/yyyy';
+        row += 1;
+      }
+
+      const totalRow = ws.getRow(row + 1);
+      totalRow.getCell(1).value = 'Total';
+      totalRow.getCell(headers.indexOf('Lines') + 1).value = pallets.reduce(
+        (n, p) => n + p.lineCount,
+        0,
+      );
+      totalRow.getCell(headers.length).value = pallets.reduce(
+        (n, p) => n + p.totalQuantity,
+        0,
+      );
+      totalRow.font = { bold: true };
+    }
+
+    // Say which sheet the file opens on rather than leaving it to the reader's
+    // Excel to decide.
+    wb.views = [{ activeTab: 0, x: 0, y: 0, width: 20000, height: 20000, firstSheet: 0, visibility: 'visible' }];
 
     const stamp = new Date().toISOString().slice(0, 10);
     return { buffer: Buffer.from(await wb.xlsx.writeBuffer()), filename: `pallets-${stamp}.xlsx` };

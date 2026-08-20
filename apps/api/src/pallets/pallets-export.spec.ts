@@ -80,7 +80,9 @@ describe('multi-pallet export', () => {
     const { buffer } = await svc.generateMultiReport(['aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb']);
     const wb = await load(buffer);
 
-    expect(wb.worksheets.map((w) => w.name)).toEqual(['Summary', 'Items']);
+    // Items FIRST: the workbook opens on the stock, not on the totals.
+    expect(wb.worksheets.map((w) => w.name)).toEqual(['Items', 'Summary']);
+    expect(wb.views?.[0]?.activeTab).toBe(0);
 
     const items = rowsOf(wb.getWorksheet('Items')!);
     const dataRows = items.filter((r) => String(r[0] ?? '').startsWith('PALLET-'));
@@ -144,9 +146,9 @@ describe('multi-pallet export', () => {
     const svc = svcFor(mixed, mixedLines);
     const wb = await load((await svc.generateMultiReport(['aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'])).buffer);
     expect(wb.worksheets.map((w) => w.name)).toEqual([
-      'Summary',
       'Items (Layout 1)',
       'Items (Layout 2)',
+      'Summary',
     ]);
   });
 });
