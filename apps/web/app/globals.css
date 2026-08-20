@@ -42,6 +42,30 @@
 
   /* What the boundary becomes under the pointer — see the hover rule below. */
   --field-border-hover: #6f6f6f;
+
+  /* Gridline for the dense editing grids (the two pallet layouts). Those cells
+     used to draw a rounded box PER CONTROL: eight boxes a row, 32 border edges
+     a row, 640 across a 20-row pallet. That is what made them feel heavy, and
+     no colour is calm at 640 edges — which is why lightening --field-border
+     only ever treated the symptom.
+     A spreadsheet draws ONE shared line between cells instead. With
+     border-collapse that is about 29 lines for the same 20-row grid rather than
+     640 edges, so the line can afford to be the compliant #949494 (3.03:1) and
+     still read far calmer than the faint boxes it replaces. Fewer lines, each
+     one honest. */
+  --grid-line: #949494;
+}
+
+/* Dense grids: the focus ring draws INSIDE the cell.
+   The global rule offsets the ring 2px outward, which is right for a standalone
+   field with room around it and wrong in a grid, where it would sit on top of
+   the gridline and the neighbouring cell. Inset, it reads as a selected
+   spreadsheet cell. */
+[data-dense-grid] :where(input, select, textarea):focus-visible {
+  outline-offset: -2px;
+  /* The global rule also rounds the element at focus, which on a square
+     full-width cell pops rounded corners the moment you tab into it. */
+  border-radius: 0;
 }
 
 /* Hover firms the boundary up, which buys back some of what the lighter resting

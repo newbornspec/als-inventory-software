@@ -159,29 +159,38 @@ export function PalletLines({
 
   const totalUnits = lines.reduce((sum, l) => sum + l.quantity, 0);
 
-  const field = 'w-full rounded border border-[var(--field-border)] bg-white px-2 py-1.5';
+  // No border, no radius, no fill: the table draws the grid now (see
+  // --grid-line in globals.css). Hover tints the cell so the one you are
+  // about to edit is unmistakable, which is what the per-control box was
+  // really doing for us.
+  const field = 'block w-full bg-transparent px-3 py-2';
+  // Read-only cells have no control to carry the padding, so they carry it.
+  const readOnly = 'block px-3 py-2';
   const cols = canManage ? 9 : 8;
 
   return (
-    <div role="region" aria-label="Pallet contents" tabIndex={0} className="mt-3 overflow-x-auto rounded-lg border border-neutral-200">
+    <div role="region" aria-label="Pallet contents" tabIndex={0} className="mt-3 overflow-x-auto rounded-lg border border-[var(--grid-line)]">
       {/* min-w matters: w-* on a th is only a hint, and inside overflow-x-auto a
           w-full table compresses to its container instead of holding its
           columns — which squeezed "Frameless" to "Fram" and "Grade B" to "Gra".
           A floor plus the existing horizontal scroll keeps every control
           readable at any width. */}
-      <table className="w-full min-w-[64rem] table-fixed text-left text-sm">
+      <table
+        data-dense-grid
+        className="w-full min-w-[64rem] table-fixed border-collapse text-left text-sm"
+      >
           <caption className="sr-only">Pallet contents, one row per product variant</caption>
         <thead className="bg-neutral-50 text-neutral-500">
           <tr>
-            <th scope="col" className="w-[8.5rem] px-3 py-2">Manufacturer</th>
-            <th scope="col" className="w-[11rem] px-3 py-2">Model</th>
-            <th scope="col" className="w-[6rem] px-3 py-2">Size</th>
-            <th scope="col" className="w-[7.5rem] px-3 py-2">Variant</th>
-            <th scope="col" className="w-[5.5rem] px-3 py-2">Stand</th>
-            <th scope="col" className="w-[6rem] px-3 py-2">Quantity</th>
-            <th scope="col" className="w-[7.5rem] px-3 py-2">Grade</th>
-            <th scope="col" className="w-[7.5rem] px-3 py-2">Unit cost (£)</th>
-            {canManage && <th scope="col" className="w-[6.5rem] px-3 py-2" />}
+            <th scope="col" className="w-[8.5rem] border-l border-[var(--grid-line)] px-3 py-2 first:border-l-0">Manufacturer</th>
+            <th scope="col" className="w-[11rem] border-l border-[var(--grid-line)] px-3 py-2 first:border-l-0">Model</th>
+            <th scope="col" className="w-[6rem] border-l border-[var(--grid-line)] px-3 py-2 first:border-l-0">Size</th>
+            <th scope="col" className="w-[7.5rem] border-l border-[var(--grid-line)] px-3 py-2 first:border-l-0">Variant</th>
+            <th scope="col" className="w-[5.5rem] border-l border-[var(--grid-line)] px-3 py-2 first:border-l-0">Stand</th>
+            <th scope="col" className="w-[6rem] border-l border-[var(--grid-line)] px-3 py-2 first:border-l-0">Quantity</th>
+            <th scope="col" className="w-[7.5rem] border-l border-[var(--grid-line)] px-3 py-2 first:border-l-0">Grade</th>
+            <th scope="col" className="w-[7.5rem] border-l border-[var(--grid-line)] px-3 py-2 first:border-l-0">Unit cost (£)</th>
+            {canManage && <th scope="col" className="w-[6.5rem] border-l border-[var(--grid-line)] px-3 py-2 first:border-l-0" />}
           </tr>
         </thead>
         <tbody>
@@ -199,8 +208,8 @@ export function PalletLines({
                 ? [...PALLET_MANUFACTURERS, l.manufacturer]
                 : PALLET_MANUFACTURERS;
             return (
-              <tr key={l.id} className="border-t border-neutral-200">
-                <td className="px-3 py-2">
+              <tr key={l.id} className="border-t border-[var(--grid-line)]">
+                <td className="border-l border-[var(--grid-line)] p-0 transition-colors first:border-l-0 hover:bg-neutral-100 focus-within:bg-blue-50">
                   {canManage ? (
                     <select
                       defaultValue={l.manufacturer ?? ''}
@@ -216,10 +225,10 @@ export function PalletLines({
                       ))}
                     </select>
                   ) : (
-                    <span className="text-neutral-900">{l.manufacturer ?? '—'}</span>
+                    <span className={`${readOnly} text-neutral-900`}>{l.manufacturer ?? '—'}</span>
                   )}
                 </td>
-                <td className="px-3 py-2">
+                <td className="border-l border-[var(--grid-line)] p-0 transition-colors first:border-l-0 hover:bg-neutral-100 focus-within:bg-blue-50">
                   {canManage ? (
                     <input
                       defaultValue={l.model ?? ''}
@@ -229,10 +238,10 @@ export function PalletLines({
                       className={field}
                     />
                   ) : (
-                    <span className="text-neutral-700">{l.model ?? '—'}</span>
+                    <span className={`${readOnly} text-neutral-700`}>{l.model ?? '—'}</span>
                   )}
                 </td>
-                <td className="px-3 py-2">
+                <td className="border-l border-[var(--grid-line)] p-0 transition-colors first:border-l-0 hover:bg-neutral-100 focus-within:bg-blue-50">
                   {canManage ? (
                     <>
                       <select
@@ -255,7 +264,7 @@ export function PalletLines({
                         ))}
                       </select>
                       {customSize[l.id] && (
-                        <div className="mt-1">
+                        <div className="px-3 pb-2">
                           <div className="flex items-center gap-1">
                             <input
                               type="number"
@@ -272,7 +281,7 @@ export function PalletLines({
                                   save(l, { size }),
                                 )
                               }
-                              className="w-20 rounded border border-[var(--field-border)] bg-white px-2 py-1.5"
+                              className="w-20 border-b border-[var(--grid-line)] bg-transparent px-2 py-1 hover:bg-neutral-100"
                             />
                             <span className="text-xs text-neutral-500">inches</span>
                           </div>
@@ -283,10 +292,10 @@ export function PalletLines({
                       )}
                     </>
                   ) : (
-                    <span className="text-neutral-700">{l.size ?? '—'}</span>
+                    <span className={`${readOnly} text-neutral-700`}>{l.size ?? '—'}</span>
                   )}
                 </td>
-                <td className="px-3 py-2">
+                <td className="border-l border-[var(--grid-line)] p-0 transition-colors first:border-l-0 hover:bg-neutral-100 focus-within:bg-blue-50">
                   {canManage ? (
                     <select
                       defaultValue={l.variantType ?? ''}
@@ -302,12 +311,12 @@ export function PalletLines({
                       ))}
                     </select>
                   ) : (
-                    <span className="text-neutral-700">
+                    <span className={`${readOnly} text-neutral-700`}>
                       {l.variantType ? formatLabel(l.variantType) : '—'}
                     </span>
                   )}
                 </td>
-                <td className="px-3 py-2">
+                <td className="border-l border-[var(--grid-line)] p-0 transition-colors first:border-l-0 hover:bg-neutral-100 focus-within:bg-blue-50">
                   {canManage ? (
                     <select
                       aria-label={`Stand included for ${l.variant}`}
@@ -328,12 +337,12 @@ export function PalletLines({
                       </option>
                     </select>
                   ) : (
-                    <span className="text-neutral-700">
+                    <span className={`${readOnly} text-neutral-700`}>
                       {l.stand == null ? '—' : l.stand ? 'Yes' : 'No'}
                     </span>
                   )}
                 </td>
-                <td className="px-3 py-2">
+                <td className="border-l border-[var(--grid-line)] p-0 transition-colors first:border-l-0 hover:bg-neutral-100 focus-within:bg-blue-50">
                   {canManage ? (
                     <input
                       type="number"
@@ -347,7 +356,7 @@ export function PalletLines({
                     l.quantity
                   )}
                 </td>
-                <td className="px-3 py-2">
+                <td className="border-l border-[var(--grid-line)] p-0 transition-colors first:border-l-0 hover:bg-neutral-100 focus-within:bg-blue-50">
                   {canManage ? (
                     <select
                       defaultValue={l.grade ?? ''}
@@ -363,10 +372,10 @@ export function PalletLines({
                       ))}
                     </select>
                   ) : (
-                    <span className="text-neutral-500">{l.grade ? formatLabel(l.grade) : '—'}</span>
+                    <span className={`${readOnly} text-neutral-600`}>{l.grade ? formatLabel(l.grade) : '—'}</span>
                   )}
                 </td>
-                <td className="px-3 py-2">
+                <td className="border-l border-[var(--grid-line)] p-0 transition-colors first:border-l-0 hover:bg-neutral-100 focus-within:bg-blue-50">
                   {canManage ? (
                     <input
                       type="number"
@@ -387,8 +396,8 @@ export function PalletLines({
                   )}
                 </td>
                 {canManage && (
-                  <td className="px-3 py-2">
-                    <div className="flex items-center gap-2">
+                  <td className="border-l border-[var(--grid-line)] p-0 transition-colors first:border-l-0 hover:bg-neutral-100 focus-within:bg-blue-50">
+                    <div className="flex items-center gap-2 px-3 py-2">
                       {l.quantity > 0 && (
                         <button
                           onClick={() => void sell(l)}
@@ -423,7 +432,7 @@ export function PalletLines({
         {canManage && (
           <tfoot>
             <tr className="border-t border-neutral-200 bg-neutral-50">
-              <td className="px-3 py-2">
+              <td className="border-l border-[var(--grid-line)] p-0 transition-colors first:border-l-0 hover:bg-neutral-100 focus-within:bg-blue-50">
                 <select
                   aria-label="New row: manufacturer"
                   value={add.manufacturer ?? ''}
@@ -438,7 +447,7 @@ export function PalletLines({
                   ))}
                 </select>
               </td>
-              <td className="px-3 py-2">
+              <td className="border-l border-[var(--grid-line)] p-0 transition-colors first:border-l-0 hover:bg-neutral-100 focus-within:bg-blue-50">
                 <input
                   aria-label="New row: model"
                   value={add.model ?? ''}
@@ -447,7 +456,7 @@ export function PalletLines({
                   className={field}
                 />
               </td>
-              <td className="px-3 py-2">
+              <td className="border-l border-[var(--grid-line)] p-0 transition-colors first:border-l-0 hover:bg-neutral-100 focus-within:bg-blue-50">
                 <select
                   aria-label="New row: size"
                   value={customSize[ADD_ROW] ? CUSTOM_SIZE : (add.size ?? '')}
@@ -469,7 +478,7 @@ export function PalletLines({
                   ))}
                 </select>
                 {customSize[ADD_ROW] && (
-                  <div className="mt-1">
+                  <div className="px-3 pb-2">
                     <div className="flex items-center gap-1">
                       <input
                         type="number"
@@ -486,7 +495,7 @@ export function PalletLines({
                             setAdd((a) => ({ ...a, size })),
                           )
                         }
-                        className="w-20 rounded border border-[var(--field-border)] bg-white px-2 py-1.5"
+                        className="w-20 border-b border-[var(--grid-line)] bg-transparent px-2 py-1 hover:bg-neutral-100"
                       />
                       <span className="text-xs text-neutral-500">inches</span>
                     </div>
@@ -496,7 +505,7 @@ export function PalletLines({
                   </div>
                 )}
               </td>
-              <td className="px-3 py-2">
+              <td className="border-l border-[var(--grid-line)] p-0 transition-colors first:border-l-0 hover:bg-neutral-100 focus-within:bg-blue-50">
                 <select
                   aria-label="New row: variant"
                   value={add.variantType ?? ''}
@@ -511,7 +520,7 @@ export function PalletLines({
                   ))}
                 </select>
               </td>
-              <td className="px-3 py-2">
+              <td className="border-l border-[var(--grid-line)] p-0 transition-colors first:border-l-0 hover:bg-neutral-100 focus-within:bg-blue-50">
                 <select
                   aria-label="New row: stand included"
                   value={add.stand == null ? '' : add.stand ? 'yes' : 'no'}
@@ -532,7 +541,7 @@ export function PalletLines({
                   </option>
                 </select>
               </td>
-              <td className="px-3 py-2">
+              <td className="border-l border-[var(--grid-line)] p-0 transition-colors first:border-l-0 hover:bg-neutral-100 focus-within:bg-blue-50">
                 <input
                   type="number"
                   min={0}
@@ -548,7 +557,7 @@ export function PalletLines({
                   className={field}
                 />
               </td>
-              <td className="px-3 py-2">
+              <td className="border-l border-[var(--grid-line)] p-0 transition-colors first:border-l-0 hover:bg-neutral-100 focus-within:bg-blue-50">
                 <select
                   aria-label="New row: grade"
                   value={add.grade ?? ''}
@@ -563,7 +572,7 @@ export function PalletLines({
                   ))}
                 </select>
               </td>
-              <td className="px-3 py-2">
+              <td className="border-l border-[var(--grid-line)] p-0 transition-colors first:border-l-0 hover:bg-neutral-100 focus-within:bg-blue-50">
                 <input
                   type="number"
                   min={0}
@@ -580,7 +589,7 @@ export function PalletLines({
                   className={field}
                 />
               </td>
-              <td className="px-3 py-2">
+              <td className="border-l border-[var(--grid-line)] px-3 py-2 first:border-l-0">
                 <button
                   onClick={addRow}
                   disabled={busy}
@@ -591,14 +600,14 @@ export function PalletLines({
               </td>
             </tr>
             {lines.length > 0 && (
-              <tr className="border-t border-neutral-200 bg-white font-medium text-neutral-900">
+              <tr className="border-t-2 border-[var(--grid-line)] bg-white font-medium text-neutral-900">
                 <td className="px-3 py-2" colSpan={5}>
                   Total
                 </td>
-                <td className="px-3 py-2">{totalUnits}</td>
-                <td className="px-3 py-2" />
-                <td className="px-3 py-2" />
-                <td className="px-3 py-2" />
+                <td className="border-l border-[var(--grid-line)] px-3 py-2">{totalUnits}</td>
+                <td className="border-l border-[var(--grid-line)] px-3 py-2" />
+                <td className="border-l border-[var(--grid-line)] px-3 py-2" />
+                <td className="border-l border-[var(--grid-line)] px-3 py-2" />
               </tr>
             )}
           </tfoot>

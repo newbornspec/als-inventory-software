@@ -40,8 +40,10 @@ const COLUMNS: {
 
 const inputCls =
   'w-full rounded-md border border-[var(--field-border)] bg-white px-3 py-2 text-sm focus:border-[var(--field-border)]';
-const cellCls =
-  'w-full rounded border border-[var(--field-border)] bg-white px-2 py-1.5 text-sm focus:border-[var(--field-border)]';
+// Grid cells draw no box of their own — the table draws the grid (see
+// --grid-line in globals.css). inputCls above is the meta form, which is a
+// normal standalone field and keeps its border.
+const cellCls = 'block w-full bg-transparent px-2 py-1.5 text-sm';
 
 export interface SpecEditorMeta {
   description: string;
@@ -305,8 +307,8 @@ export function SpecEditor({
         </span>
       </div>
 
-      <div role="region" aria-label="Specification grid" tabIndex={0} className="mt-2 overflow-x-auto rounded-lg border border-neutral-200">
-        <table className="w-full text-left text-sm">
+      <div role="region" aria-label="Specification grid" tabIndex={0} className="mt-2 overflow-x-auto rounded-lg border border-[var(--grid-line)]">
+        <table data-dense-grid className="w-full border-collapse text-left text-sm">
           <caption className="sr-only">Pallet specification grid</caption>
           <thead className="bg-neutral-50 text-neutral-500">
             <tr>
@@ -321,7 +323,7 @@ export function SpecEditor({
                         : 'descending'
                       : 'none'
                   }
-                  className={`${c.width} px-3 py-2`}
+                  className={`${c.width} border-l border-[var(--grid-line)] px-3 py-2 first:border-l-0`}
                 >
                   <button
                     onClick={() => sortBy(c.key)}
@@ -333,7 +335,7 @@ export function SpecEditor({
                   </button>
                 </th>
               ))}
-              <th scope="col" className="w-28 px-3 py-2">
+              <th scope="col" className="w-28 border-l border-[var(--grid-line)] px-3 py-2">
                 <span className="sr-only">Row actions</span>
               </th>
             </tr>
@@ -342,9 +344,12 @@ export function SpecEditor({
             {visible.map((r, ri) => {
               const manId = manIdByValue.get(r.manufacturer.trim().toLowerCase());
               return (
-                <tr key={r.id} className="border-t border-neutral-200">
+                <tr key={r.id} className="border-t border-[var(--grid-line)]">
                   {COLUMNS.map((c, ci) => (
-                    <td key={c.key} className="px-2 py-1">
+                    <td
+                      key={c.key}
+                      className="border-l border-[var(--grid-line)] p-0 transition-colors first:border-l-0 hover:bg-neutral-100 focus-within:bg-blue-50"
+                    >
                       {c.options ? (
                         <select
                           aria-label={`${c.label}, row ${ri + 1}`}
@@ -376,7 +381,7 @@ export function SpecEditor({
                       )}
                     </td>
                   ))}
-                  <td className="px-2 py-1">
+                  <td className="border-l border-[var(--grid-line)] px-2 py-1">
                     <div className="flex items-center gap-2">
                       {r.lineId && parseInt(r.quantity || '0', 10) > 0 && (
                         <button
