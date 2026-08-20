@@ -6,6 +6,7 @@ import { Asset } from '../assets/asset.entity';
 import { CreateRepairDto } from './dto/create-repair.dto';
 import { UpdateRepairDto } from './dto/update-repair.dto';
 import { sanitizeUser } from '../users/sanitize-user';
+import { isScopedManager, managerBatchCondition, type RequestUser } from '../common/ownership';
 
 @Injectable()
 export class RepairsService {
@@ -21,6 +22,35 @@ export class RepairsService {
       order: { createdAt: 'DESC' },
     });
     // performedBy is a User — never leak the password hash.
+    return rows.map((r) => ({
+      ...r,
+      performedBy: r.performedBy ? (sanitizeUser(r.performedBy) as RepairLog['performedBy']) : null,
+    }));
+  }
+
+  // Every unfinished repair job in the warehouse, newest first. Repairs were
+  // only ever reachable one asset at a time, so "4 pending repairs" on the
+  // dashboard had nowhere to send you — you had to already know which devices
+  // they were. Scoped the same way as every other list: a manager sees jobs on
+  // devices in lots they own or in the unowned pool.
+  async findOpen(user?: RequestUser): Promise<RepairLog[]> {
+    const qb = this.repairs
+      .createQueryBuilder('repair')
+      .leftJoinAndSelect('repair.performedBy', 'performedBy')
+      .innerJoinAndSelect('repair.asset', 'asset')
+      .leftJoinAndSelect('asset.location', 'location')
+      .where('repair.status IN (:...open)', {
+        open: [RepairStatus.PENDING, RepairStatus.IN_PROGRESS],
+      })
+      .orderBy('repair.createdAt', 'DESC');
+
+    if (isScopedManager(user)) {
+      qb.innerJoin('asset.batch', 'ownerBatch').andWhere(managerBatchCondition('ownerBatch'), {
+        ownerUid: user!.userId,
+      });
+    }
+
+    const rows = await qb.getMany();
     return rows.map((r) => ({
       ...r,
       performedBy: r.performedBy ? (sanitizeUser(r.performedBy) as RepairLog['performedBy']) : null,

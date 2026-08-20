@@ -36,6 +36,21 @@ export class QueryAssetsDto {
   @IsString()
   noBatch?: string;
 
+  // 'true' → only assets with no location set. Same string-flag reason as
+  // noBatch: locationId must be a UUID, so "is null" needs its own parameter.
+  // The dashboard's "No location set" row links here.
+  @IsOptional()
+  @IsString()
+  noLocation?: string;
+
+  // 'true' → only assets that have never been audited (audit_status IS NULL).
+  // This is what the app means by "awaiting audit": the stock status of the
+  // same name is a hand-picked dropdown value that production code never sets,
+  // so counting it would report ~0 however much work is outstanding.
+  @IsOptional()
+  @IsString()
+  noAudit?: string;
+
   @IsOptional()
   @IsUUID()
   lotId?: string;

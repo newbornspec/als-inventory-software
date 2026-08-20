@@ -44,6 +44,7 @@ import { SalesModule } from './sales/sales.module';
 import { RepairsModule } from './repairs/repairs.module';
 import { PhotosModule } from './photos/photos.module';
 import { DevicesModule } from './devices/devices.module';
+import { DashboardModule } from './dashboard/dashboard.module';
 
 @Module({
   imports: [
@@ -70,6 +71,7 @@ import { DevicesModule } from './devices/devices.module';
     AssetsModule,
     LocationsModule,
     ReportsModule,
+    DashboardModule,
     UsersModule,
     BatchesModule,
     ProductsModule,

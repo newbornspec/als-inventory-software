@@ -80,6 +80,14 @@ export class Batch {
   @Column({ name: 'purchase_date', type: 'date', nullable: true })
   purchaseDate: string | null;
 
+  // When the goods are DUE to land. Distinct from purchaseDate (when we bought
+  // them) and receivedDate (when they actually arrived) — the dashboard's
+  // "expected today / this week / overdue" counts are meaningless without it.
+  // Null means no delivery date was promised: such a lot is awaiting receipt
+  // but can never be overdue.
+  @Column({ name: 'expected_arrival_date', type: 'date', nullable: true })
+  expectedArrivalDate: string | null;
+
   @Column({ name: 'expected_unit_count', type: 'int', nullable: true })
   expectedUnitCount: number | null;
 

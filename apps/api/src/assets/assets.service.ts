@@ -94,6 +94,12 @@ export class AssetsService {
     if (query.noBatch === 'true') {
       qb.andWhere('asset.batchId IS NULL');
     }
+    if (query.noLocation === 'true') {
+      qb.andWhere('asset.locationId IS NULL');
+    }
+    if (query.noAudit === 'true') {
+      qb.andWhere('asset.auditStatus IS NULL');
+    }
     if (query.lotId) {
       qb.andWhere('asset.lotId = :lotId', { lotId: query.lotId });
     }

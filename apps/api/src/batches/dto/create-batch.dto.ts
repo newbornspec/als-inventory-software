@@ -19,6 +19,8 @@ export class CreateBatchDto {
   @IsOptional() @IsString() purchaseOrder?: string;
   @IsOptional() @IsString() deliveryNote?: string;
   @IsOptional() @IsDateString() purchaseDate?: string;
+  // When delivery is due. Drives the dashboard's incoming/overdue counts.
+  @IsOptional() @IsDateString() expectedArrivalDate?: string;
 
   @IsOptional()
   @IsInt()
