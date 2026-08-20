@@ -398,8 +398,8 @@ export class BatchesService {
 
     // One transaction — a half-deleted lot is the orphan case above, arrived at by
     // accident. Order is deliberate:
-    //   assets first  — asset_audits, asset_history, asset_photos and repair_logs
-    //                   are ON DELETE CASCADE off assets, so this is the step that
+    //   assets first  — asset_audits, asset_history and asset_photos are
+    //                   ON DELETE CASCADE off assets, so this is the step that
     //                   removes each device's audit trail and wipe evidence
     //   sub-lots next  — SET NULL would strand them, so remove them here
     //   the batch last — cascades expected_line_items, the supplier manifest

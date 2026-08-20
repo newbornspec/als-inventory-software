@@ -6,7 +6,6 @@ import { AssetHistory } from '../assets/asset-history.entity';
 import { Batch } from '../batches/batch.entity';
 import { Lot } from '../batches/lot.entity';
 import { OrderLine } from '../sales/order-line.entity';
-import { RepairLog, RepairStatus } from '../repairs/repair-log.entity';
 import { StockLine } from '../stock/stock-line.entity';
 import { StockMovement, StockMovementReason } from '../stock/stock-movement.entity';
 import { Pallet, PalletStatus } from '../pallets/pallet.entity';
@@ -50,10 +49,9 @@ export interface AssetCosting {
   unitsInLot: number;
   evenSplit: number | null;
   allocatedCost: number | null; // override ?? even split
-  repairsCost: number; // total of this unit's COMPLETED repair jobs
   salePrice: number | null; // from the order line, if on one
   sold: boolean;
-  profit: number | null; // salePrice - allocatedCost - repairsCost, when sold and known
+  profit: number | null; // salePrice - allocatedCost, when sold and known
   orderId: string | null;
   orderNumber: string | null;
 }
@@ -303,12 +301,11 @@ export interface DashboardSummary {
   sold: number;
   sellThroughPct: number | null;
   revenue: number; // realized (shipped units)
-  realizedProfit: number; // revenue − cost of sold − repairs on sold
+  realizedProfit: number; // revenue − cost of sold
   stockAtCost: number; // allocated cost of unsold, in-stock devices
   byStatus: { key: string; count: number }[];
   byGrade: { key: string; count: number }[];
   ageing: { key: string; count: number }[]; // in-stock devices by age
-  repairs: { pending: number; inProgress: number; completed: number; spend: number };
   lots: { total: number; reconciled: number };
   consumables: { total: number; lowStock: number; outOfStock: number };
 }
@@ -321,7 +318,6 @@ export class ReportsService {
     @InjectRepository(Batch) private batches: Repository<Batch>,
     @InjectRepository(Lot) private lots: Repository<Lot>,
     @InjectRepository(OrderLine) private lines: Repository<OrderLine>,
-    @InjectRepository(RepairLog) private repairLogs: Repository<RepairLog>,
     @InjectRepository(StockLine) private stockLines: Repository<StockLine>,
     @InjectRepository(StockMovement) private stockMovements: Repository<StockMovement>,
     @InjectRepository(Pallet) private pallets: Repository<Pallet>,
@@ -420,18 +416,12 @@ export class ReportsService {
     }
     const allocatedCost = asset.purchaseCost ?? evenSplit;
 
-    // Completed repair jobs are a real cost of getting this unit to sale.
-    const repairRows = await this.repairLogs.find({
-      where: { assetId, status: RepairStatus.COMPLETED },
-    });
-    const repairsCost = round2(repairRows.reduce((s, r) => s + (r.cost ?? 0), 0));
-
     const line = await this.lines.findOne({ where: { assetId }, relations: ['order'] });
     const salePrice = line ? (line.unitPrice ?? 0) * line.quantity : null;
     const sold = asset.stockStatus === AssetStockStatus.SHIPPED;
     const profit =
       sold && salePrice != null && allocatedCost != null
-        ? round2(salePrice - allocatedCost - repairsCost)
+        ? round2(salePrice - allocatedCost)
         : null;
 
     return {
@@ -441,7 +431,6 @@ export class ReportsService {
       unitsInLot,
       evenSplit,
       allocatedCost,
-      repairsCost,
       salePrice,
       sold,
       profit,
@@ -1521,25 +1510,22 @@ export class ReportsService {
 
   async getDashboard(user?: RequestUser): Promise<DashboardSummary> {
     // eslint-disable-next-line prefer-const
-    let [assets, batches, lines, repairs, stock] = await Promise.all([
+    let [assets, batches, lines, stock] = await Promise.all([
       this.assets
         .createQueryBuilder('a')
         .select(['a.id', 'a.batchId', 'a.purchaseCost', 'a.stockStatus', 'a.conditionGrade', 'a.createdAt'])
         .getMany(),
       this.batches.find(),
       this.lines.find(),
-      this.repairLogs.find(),
       this.stockLines.find({ select: { id: true, quantity: true } }),
     ]);
 
-    // Managers: restrict device/lot/repair metrics to their own lots. Sales
-    // (lines) and consumables (stock) stay global — they're shared modules.
+    // Managers: restrict device/lot metrics to their own lots. Sales (lines)
+    // and consumables (stock) stay global — they're shared modules.
     const owned = await this.ownedBatchIds(user);
     if (owned) {
       batches = batches.filter((b) => owned.has(b.id));
       assets = assets.filter((a) => a.batchId != null && owned.has(a.batchId));
-      const assetIds = new Set(assets.map((a) => a.id));
-      repairs = repairs.filter((r) => assetIds.has(r.assetId));
     }
 
     const unitsPerBatch = new Map<string, number>();
@@ -1552,21 +1538,6 @@ export class ReportsService {
     for (const l of lines) {
       if (!l.assetId) continue;
       saleByAsset.set(l.assetId, (saleByAsset.get(l.assetId) ?? 0) + (l.unitPrice ?? 0) * l.quantity);
-    }
-
-    const repairCostByAsset = new Map<string, number>();
-    let rPending = 0;
-    let rInProgress = 0;
-    let rCompleted = 0;
-    let rSpend = 0;
-    for (const r of repairs) {
-      if (r.status === 'pending') rPending += 1;
-      else if (r.status === 'in_progress') rInProgress += 1;
-      else if (r.status === 'completed') {
-        rCompleted += 1;
-        rSpend += r.cost ?? 0;
-        repairCostByAsset.set(r.assetId, (repairCostByAsset.get(r.assetId) ?? 0) + (r.cost ?? 0));
-      }
     }
 
     const allocated = (a: Asset): number => {
@@ -1592,7 +1563,6 @@ export class ReportsService {
     let stockAtCost = 0;
     let revenue = 0;
     let costOfSold = 0;
-    let repairsOfSold = 0;
     const now = Date.now();
 
     for (const a of assets) {
@@ -1604,7 +1574,6 @@ export class ReportsService {
         sold += 1;
         revenue += saleByAsset.get(a.id) ?? 0;
         costOfSold += allocated(a);
-        repairsOfSold += repairCostByAsset.get(a.id) ?? 0;
       } else if (a.stockStatus === AssetStockStatus.DISPOSED) {
         disposed += 1;
       } else {
@@ -1627,7 +1596,7 @@ export class ReportsService {
       sold,
       sellThroughPct: denom > 0 ? round2((sold / denom) * 100) : null,
       revenue: round2(revenue),
-      realizedProfit: round2(revenue - costOfSold - repairsOfSold),
+      realizedProfit: round2(revenue - costOfSold),
       stockAtCost: round2(stockAtCost),
       byStatus: Object.entries(byStatus)
         .map(([key, count]) => ({ key, count }))
@@ -1636,7 +1605,6 @@ export class ReportsService {
         .map(([key, count]) => ({ key, count }))
         .sort((a, b) => b.count - a.count),
       ageing: Object.entries(ageing).map(([key, count]) => ({ key, count })),
-      repairs: { pending: rPending, inProgress: rInProgress, completed: rCompleted, spend: round2(rSpend) },
       lots: {
         total: batches.length,
         reconciled: batches.filter((b) => b.status === 'reconciled').length,

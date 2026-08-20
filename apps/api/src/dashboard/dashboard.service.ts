@@ -105,7 +105,6 @@ export class DashboardService {
     const [
       byStatus,
       consumables,
-      repairs,
       discrepancies,
       noLocation,
       neverAudited,
@@ -120,7 +119,6 @@ export class DashboardService {
     ] = await Promise.all([
       this.statusCounts(s),
       this.consumableSummary(),
-      this.openRepairs(s),
       this.discrepancyCount(bs),
       this.noLocationCount(s),
       this.neverAuditedCount(s),
@@ -175,13 +173,6 @@ export class DashboardService {
         detail: `Consumable lines below ${LOW_STOCK_THRESHOLD} on hand`,
       },
       {
-        key: 'pending_repairs',
-        label: 'Open repairs',
-        count: repairs,
-        severity: 'warning',
-        detail: 'Repair jobs logged but not finished',
-      },
-      {
         key: 'quarantined',
         label: 'Quarantined',
         count: quarantined,
@@ -217,7 +208,6 @@ export class DashboardService {
         consumableUnits: consumables.units,
         lowStockLines: consumables.lowStockLines,
         outOfStockLines: consumables.outOfStockLines,
-        pendingRepairs: repairs,
         pendingActions: attention.reduce((n, r) => n + r.count, 0),
       },
       finance,
@@ -271,18 +261,6 @@ export class DashboardService {
       lowStockLines: Number(row.low),
       outOfStockLines: Number(row.out),
     };
-  }
-
-  private async openRepairs(s: { clause: string; params: unknown[] }) {
-    const [row] = await this.q<CountRow>(
-      sql`
-        SELECT COUNT(*) AS count
-        FROM repair_logs r
-        JOIN assets a ON a.id = r.asset_id
-        WHERE r.status IN ('pending', 'in_progress') ${s.clause}`,
-      s.params,
-    );
-    return Number(row.count);
   }
 
   // A discrepancy is arithmetic, not a status someone remembered to set: the
@@ -358,16 +336,6 @@ export class DashboardService {
       params,
     );
 
-    const repairs = await this.q<{ id: string | null; count: string }>(
-      sql`
-        SELECT a.location_id AS id, COUNT(*) AS count
-        FROM repair_logs r
-        JOIN assets a ON a.id = r.asset_id
-        WHERE r.status IN ('pending', 'in_progress') ${s.clause}
-        GROUP BY a.location_id`,
-      s.params,
-    );
-
     const stock = await this.q<{ id: string | null; lines: string; low: string }>(
       sql`
         SELECT location_id AS id,
@@ -395,7 +363,6 @@ export class DashboardService {
           value: canSeeMoney ? 0 : null,
           consumableLines: 0,
           lowStockLines: 0,
-          openRepairs: 0,
         };
         rows.set(k, row);
       }
@@ -410,7 +377,6 @@ export class DashboardService {
       row.devices = Number(d.devices);
       if (canSeeMoney) row.value = Number(d.value);
     }
-    for (const r of repairs) ensure(r.id, null).openRepairs = Number(r.count);
     for (const st of stock) {
       const row = ensure(st.id, null);
       row.consumableLines = Number(st.lines);
@@ -633,23 +599,13 @@ export class DashboardService {
       [...s.params, GONE as unknown as string[]],
     );
 
-    // Repair spend on units that have since sold is a real cost of that sale.
-    const [rep] = await this.q<{ spend: string }>(
-      sql`
-        SELECT COALESCE(SUM(r.cost), 0) AS spend
-        FROM repair_logs r
-        JOIN assets a ON a.id = r.asset_id
-        WHERE a.stock_status IN ('sold', 'shipped') ${s.clause}`,
-      s.params,
-    );
-
     const revenue = Number(row.revenue);
     const sold = Number(row.sold);
     const total = Number(row.total);
     return {
       stockValue: round2(Number(row.stock_value)),
       revenue: round2(revenue),
-      realizedProfit: round2(revenue - Number(row.cost_of_sold) - Number(rep.spend)),
+      realizedProfit: round2(revenue - Number(row.cost_of_sold)),
       sellThroughPct: total > 0 ? Math.round((sold / total) * 100) : null,
     };
   }

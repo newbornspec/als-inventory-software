@@ -18,7 +18,6 @@ export interface AttentionRow {
   key:
     | 'out_of_stock'
     | 'low_stock'
-    | 'pending_repairs'
     | 'discrepancies'
     | 'no_location'
     | 'never_audited'
@@ -43,7 +42,6 @@ export interface LocationRow {
   value: number | null;
   consumableLines: number;
   lowStockLines: number;
-  openRepairs: number;
 }
 
 export interface AgeingBucket {
@@ -91,7 +89,6 @@ export interface OperationsDashboard {
     consumableUnits: number;
     lowStockLines: number;
     outOfStockLines: number;
-    pendingRepairs: number;
     // The sum of every ATTENTION REQUIRED count — a queue length, not a score.
     pendingActions: number;
   };

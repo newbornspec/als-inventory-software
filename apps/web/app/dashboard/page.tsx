@@ -121,11 +121,10 @@ export default async function DashboardPage() {
             />
             <Tile label="Sold" value={metrics.sold} sub="Units gone" href={canManage ? '/sold' : undefined} />
             <Tile
-              label="Open repairs"
-              value={metrics.pendingRepairs}
-              sub="Jobs not finished"
-              href="/repairs"
-              emphasis={metrics.pendingRepairs > 0 ? 'alert' : undefined}
+              label="Consumable units"
+              value={metrics.consumableUnits}
+              sub={`${metrics.consumableLines} lines`}
+              href="/stock"
             />
             <Tile
               label="Pending actions"
@@ -240,7 +239,7 @@ export default async function DashboardPage() {
             <TableScroll label="Inventory by location">
               <table className="w-full min-w-[40rem] border-collapse">
                 <caption className="sr-only">
-                  Devices, value, consumables and open repairs at each location
+                  Devices, value and consumables at each location
                 </caption>
                 <thead className="bg-neutral-50">
                   <tr>
@@ -248,7 +247,6 @@ export default async function DashboardPage() {
                     <th scope="col" className={TH}>Devices</th>
                     {canManage && <th scope="col" className={TH}>Value</th>}
                     <th scope="col" className={TH}>Low stock</th>
-                    <th scope="col" className={TH}>Repairs</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -276,13 +274,12 @@ export default async function DashboardPage() {
                             <span className="text-neutral-600">0</span>
                           )}
                         </td>
-                        <td className={`${TD} tabular-nums`}>{l.openRepairs}</td>
                       </tr>
                     );
                   })}
                   {data.locations.length === 0 && (
                     <tr>
-                      <td colSpan={canManage ? 5 : 4} className={`${TD} text-neutral-600`}>
+                      <td colSpan={canManage ? 4 : 3} className={`${TD} text-neutral-600`}>
                         No locations set up yet.
                       </td>
                     </tr>

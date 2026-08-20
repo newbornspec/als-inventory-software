@@ -21,7 +21,6 @@ import { StockMovement } from './stock/stock-movement.entity';
 import { Customer } from './customers/customer.entity';
 import { SalesOrder } from './sales/sales-order.entity';
 import { OrderLine } from './sales/order-line.entity';
-import { RepairLog } from './repairs/repair-log.entity';
 import { AssetPhoto } from './photos/asset-photo.entity';
 import { ActivityLog } from './activity/activity-log.entity';
 import { LookupValue } from './lookups/lookup-value.entity';
@@ -41,7 +40,6 @@ import { Invoice } from './invoices/invoice.entity';
 import { StockModule } from './stock/stock.module';
 import { CustomersModule } from './customers/customers.module';
 import { SalesModule } from './sales/sales.module';
-import { RepairsModule } from './repairs/repairs.module';
 import { PhotosModule } from './photos/photos.module';
 import { DevicesModule } from './devices/devices.module';
 import { DashboardModule } from './dashboard/dashboard.module';
@@ -58,7 +56,7 @@ import { DashboardModule } from './dashboard/dashboard.module';
         username: config.get('database.username'),
         password: config.get('database.password'),
         database: config.get('database.name'),
-        entities: [User, Location, Asset, AssetHistory, AssetAudit, Batch, Lot, ExpectedLineItem, Product, Pallet, PalletLine, PalletSoldLine, StockLine, StockMovement, Customer, SalesOrder, OrderLine, RepairLog, AssetPhoto, ActivityLog, LookupValue, Invoice],
+        entities: [User, Location, Asset, AssetHistory, AssetAudit, Batch, Lot, ExpectedLineItem, Product, Pallet, PalletLine, PalletSoldLine, StockLine, StockMovement, Customer, SalesOrder, OrderLine, AssetPhoto, ActivityLog, LookupValue, Invoice],
         // Migrations only — never let the app auto-mutate the schema.
         synchronize: false,
       }),
@@ -80,7 +78,6 @@ import { DashboardModule } from './dashboard/dashboard.module';
     StockModule,
     CustomersModule,
     SalesModule,
-    RepairsModule,
     PhotosModule,
     DevicesModule,
   ],

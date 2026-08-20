@@ -7,7 +7,6 @@ export interface AttentionRow {
   key:
     | 'out_of_stock'
     | 'low_stock'
-    | 'pending_repairs'
     | 'discrepancies'
     | 'no_location'
     | 'never_audited'
@@ -26,7 +25,6 @@ export interface LocationRow {
   value: number | null;
   consumableLines: number;
   lowStockLines: number;
-  openRepairs: number;
 }
 
 export interface AgeingBucket {
@@ -68,7 +66,6 @@ export interface OperationsDashboard {
     consumableUnits: number;
     lowStockLines: number;
     outOfStockLines: number;
-    pendingRepairs: number;
     pendingActions: number;
   };
   finance: {
@@ -101,7 +98,6 @@ export interface OperationsDashboard {
 export const ATTENTION_LINKS: Record<AttentionRow['key'], { href: string; action: string }> = {
   out_of_stock: { href: '/stock?status=out_of_stock', action: 'View' },
   low_stock: { href: '/stock?status=low_stock', action: 'View' },
-  pending_repairs: { href: '/repairs', action: 'View' },
   discrepancies: { href: '/batches?filter=discrepancy', action: 'Review' },
   no_location: { href: '/assets?noLocation=true', action: 'View' },
   never_audited: { href: '/assets?noAudit=true', action: 'View' },
