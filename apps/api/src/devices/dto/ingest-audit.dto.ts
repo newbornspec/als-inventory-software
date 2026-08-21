@@ -1,7 +1,7 @@
 import { IsBoolean, IsEnum, IsInt, IsObject, IsOptional, IsString, IsUUID, Min } from 'class-validator';
 import type { HardwareProfile } from '../hardware-profile.type';
 import { DataWipeStatus } from '../../assets/asset-audit.entity';
-import { AssetConditionGrade } from '../../assets/asset.entity';
+import { AssetAuditStatus, AssetConditionGrade } from '../../assets/asset.entity';
 
 // Auto-read specs from the capture tool. No asset tag / no verification — the
 // device is created (or re-audited) in the target lot using its serial.
@@ -36,6 +36,12 @@ export class IngestAuditDto {
   // wipe lands on the audit record (and feeds the erasure certificate).
   @IsOptional() @IsEnum(DataWipeStatus) dataWipeStatus?: DataWipeStatus;
   @IsOptional() @IsString() dataWipeMethod?: string;
+
+  // The operator's overall functional call for this audit. Optional for the same
+  // reason as the grade below — no capture tool in the field sends one today — so
+  // ingest() derives a floor from what the capture itself proves when it's absent.
+  // @IsEnum matters here for the same reason it does below.
+  @IsOptional() @IsEnum(AssetAuditStatus) auditStatus?: AssetAuditStatus;
 
   // The operator's physical condition grade, chosen on the capture tool's audit
   // panel. Optional forever: USB sticks are updated by hand, so older ones send

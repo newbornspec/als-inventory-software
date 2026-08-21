@@ -3,15 +3,68 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { User } from '../users/user.entity';
 import { Batch } from '../batches/batch.entity';
-import { Asset, AssetStockStatus } from '../assets/asset.entity';
+import { Asset, AssetAuditStatus, AssetStockStatus } from '../assets/asset.entity';
 import { nextUnitId } from '../assets/unit-id';
-import { AssetAudit } from '../assets/asset-audit.entity';
+import { AssetAudit, DataWipeStatus } from '../assets/asset-audit.entity';
 import { AssetHistory, AssetEventType } from '../assets/asset-history.entity';
 import { IngestAuditDto } from './dto/ingest-audit.dto';
 import { HardwareProfile } from './hardware-profile.type';
 import { normaliseHardwareProfile } from './normalise-profile';
 import { screenSizeFor, standardiseRamGb } from '../common/spec-normalise';
 import { ActivityService } from '../activity/activity.service';
+
+// What a capture proves on its own, for the normal case where the tool sends no
+// explicit call. Deliberately the floor rather than a guess: nothing here claims a
+// unit passed testing, only what the capture demonstrably establishes.
+export function deriveAuditStatus(dto: IngestAuditDto): AssetAuditStatus | null {
+  // Hand-entered devices are typed off a label, not tested. The web form still
+  // builds a `profile` out of what was typed, so without this check that profile
+  // would read below as evidence the machine booted.
+  if (dto.manual) return null;
+  if (dto.dataWipeStatus === DataWipeStatus.WIPED) return AssetAuditStatus.DATA_WIPED;
+  if (dto.dataWipeStatus === DataWipeStatus.FAILED) return AssetAuditStatus.DATA_WIPE_FAILED;
+  // The capture tool boots on the machine itself, so a profile coming back from it
+  // is proof the unit powers on and POSTs.
+  if (dto.profile) return AssetAuditStatus.POWER_ON;
+  return null;
+}
+
+// The only three outcomes deriveAuditStatus can produce. A wipe result outranks the
+// bare power-on floor; the two wipe results are peers, because which one is true is a
+// question of which happened most recently, not which is stronger.
+const DERIVED_RANK: Partial<Record<AssetAuditStatus, number>> = {
+  [AssetAuditStatus.POWER_ON]: 1,
+  [AssetAuditStatus.DATA_WIPE_FAILED]: 2,
+  [AssetAuditStatus.DATA_WIPED]: 2,
+};
+
+// May a value this path DERIVED replace what the asset already carries?
+//
+// The rule this replaces was "only ever fill a blank", which quietly lost real
+// outcomes: a unit sitting at 'power_on' (from an earlier capture, or from the
+// backfill migration) could be securely erased and the asset would still read
+// 'power_on' forever, contradicting the precedence deriveAuditStatus and the backfill
+// both assert. Ranking fixes that without reopening the downgrade hole:
+//
+//   - anything not in DERIVED_RANK is a human's call ('ready_for_sale',
+//     'passed_testing', …) and is never overwritten by a machine's inference;
+//   - a plain re-capture can never erase a wipe result (rank 1 cannot replace rank 2);
+//   - a wipe result replaces the power-on floor, and either wipe result replaces the
+//     other, so a re-wipe that finally succeeds is recorded — the >= is deliberate,
+//     a strict > would strand a unit on 'data_wipe_failed' permanently;
+//   - an unchanged value is not rewritten: assets is in the powersync publication, so
+//     a no-op UPDATE still costs a WAL record and a sync to every offline client.
+export function derivedMayReplace(
+  next: AssetAuditStatus,
+  current: AssetAuditStatus | null,
+): boolean {
+  if (current == null) return true;
+  if (next === current) return false;
+  const currentRank = DERIVED_RANK[current];
+  const nextRank = DERIVED_RANK[next];
+  if (currentRank == null || nextRank == null) return false;
+  return nextRank >= currentRank;
+}
 
 @Injectable()
 export class DevicesService {
@@ -76,10 +129,11 @@ export class DevicesService {
   //
   // The comprehensive `profile` is stored as-is (JSONB) on the asset and snapshotted
   // on the audit row. Auto-derived hardware identity plus the operator's chosen
-  // grade are written to the asset; the remaining warehouse fields (cost, location,
-  // status, notes) are never overwritten. The grade is written ONLY when the capture
-  // tool actually sends one, so an older USB stick can never blank a grade set in
-  // the web app.
+  // grade and audit outcome are written to the asset; the remaining warehouse fields
+  // (cost, location, stock status, notes) are never overwritten. The grade is written
+  // ONLY when the capture tool actually sends one, so an older USB stick can never
+  // blank a grade set in the web app. The audit outcome is guarded more precisely, by
+  // rank rather than by "fill blanks only" — see deriveAuditStatus and derivedMayReplace.
   async ingest(userId: string, dto: IngestAuditDto) {
     const user = await this.users.findOne({ where: { id: userId } });
     const lotId = dto.lotId ?? user?.activeAuditLotId ?? null;
@@ -113,6 +167,12 @@ export class DevicesService {
     const name = [manufacturer, model].filter(Boolean).join(' ').trim() || 'Audited device';
     const category = deviceType || 'Uncategorised';
 
+    // The operator's explicit call if the tool sent one, else the floor the capture
+    // itself establishes. Both land on the audit row unconditionally; what may reach
+    // the asset is decided by derivedMayReplace.
+    const explicitStatus = dto.auditStatus ?? null;
+    const auditStatus = explicitStatus ?? deriveAuditStatus(dto);
+
     // Serial is the device identity; re-running just files another audit.
     let asset = await this.assets
       .createQueryBuilder('a')
@@ -120,9 +180,16 @@ export class DevicesService {
       .getOne();
     let created = false;
     if (asset) {
+      // An explicit call always wins. A derived one has to outrank what is already
+      // there, so a routine re-capture can never downgrade a technician's
+      // 'ready_for_sale' to 'power_on' — but a wipe result still lands on a unit
+      // previously known only to power on. See derivedMayReplace.
+      const statusPatch =
+        explicitStatus ??
+        (auditStatus && derivedMayReplace(auditStatus, asset.auditStatus) ? auditStatus : null);
       // Refresh auto-captured hardware identity + profile, and the grade when the
       // operator supplied one; leave the lot as set (moving it only if a different
-      // lot was chosen) and never touch cost, location, status or notes.
+      // lot was chosen) and never touch cost, location, stock status or notes.
       await this.assets.update(asset.id, {
         name,
         category,
@@ -137,6 +204,7 @@ export class DevicesService {
         // does (assets.service.ts createAudit). Guarded so a stick that sends no
         // grade leaves whatever the warehouse set.
         ...(dto.cosmeticGrade ? { conditionGrade: dto.cosmeticGrade } : {}),
+        ...(statusPatch ? { auditStatus: statusPatch } : {}),
         ...(asset.batchId !== lotId ? { batchId: lotId } : {}),
         // Only touch the sub-lot when one was supplied (the USB tool never sends it).
         ...(dto.subLotId !== undefined ? { lotId: dto.subLotId } : {}),
@@ -155,6 +223,9 @@ export class DevicesService {
           expressServiceCode: expressCode,
           hardwareProfile: normalisedProfile,
           ...(dto.cosmeticGrade ? { conditionGrade: dto.cosmeticGrade } : {}),
+          // No existing value to protect on a brand-new asset, so the derived
+          // floor applies unguarded.
+          ...(auditStatus ? { auditStatus } : {}),
           batchId: lotId,
           lotId: dto.subLotId ?? null, // optional sub-lot (spec bucket)
           stockStatus: AssetStockStatus.AUDITED,
@@ -169,6 +240,11 @@ export class DevicesService {
     await this.audits.save(
       this.audits.create({
         assetId: asset.id,
+        // Unconditional, like cosmeticGrade below: this is the append-only trail,
+        // so it records what this event established — including a derived floor
+        // the asset itself may have declined to take, and null when the capture
+        // proves nothing at all.
+        auditStatus,
         hardwareProfile: normalisedProfile,
         manufacturer,
         model,
