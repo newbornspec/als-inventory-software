@@ -7,6 +7,7 @@ const PROTECTED_PREFIXES = [
   '/scan',
   '/assets',
   '/batches',
+  '/audit',
   '/reports',
   '/users',
   '/pallets',

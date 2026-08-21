@@ -35,7 +35,10 @@ const BASE_LINKS: { href: string; label: string; icon: LucideIcon }[] = [
   // route stays /batches, since the label was never tied to it.
   { href: '/batches', label: 'Goods In', icon: Boxes },
   // Auditing is its own section, not a renamed intake: it reads asset_audits,
-  // which stand alone from the lot a device arrived in.
+  // one row per audit EVENT, and a device is re-audited over its life
+  // (received, pre-resale, post-repair). Those rows hang off the ASSET — asset_id
+  // is NOT NULL — so an audit is reached through the device, not through the lot
+  // it happened to arrive in.
   { href: '/audit', label: 'Audit', icon: ClipboardCheck },
   { href: '/scan', label: 'Scan', icon: Scan },
   { href: '/assets', label: 'Assets', icon: Zap },
