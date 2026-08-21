@@ -81,7 +81,7 @@ export default async function AssetDetailPage({
   const crumbs: Crumb[] = lot
     ? [
         { label: 'Dashboard', href: '/dashboard' },
-        { label: 'Audit', href: '/batches' },
+        { label: 'Goods In', href: '/batches' },
         { label: lot.batchNumber, href: `/batches/${lot.id}` },
         { label: asset.name },
       ]

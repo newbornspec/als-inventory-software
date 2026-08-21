@@ -87,13 +87,13 @@ export default async function LotsPage({
             Dashboard
           </Link>
           <ChevronRight className="size-4" aria-hidden="true" />
-          <span className="font-medium text-neutral-950">Audit</span>
+          <span className="font-medium text-neutral-950">Goods In</span>
         </div>
 
         <div className="mt-8 flex flex-wrap items-start justify-between gap-4 sm:gap-6">
           <div className="min-w-0 max-w-3xl">
             <h1 className="text-3xl leading-9 font-semibold tracking-tight text-neutral-950 sm:text-4xl sm:leading-10">
-              {copy ? copy.title : 'Audit'}
+              {copy ? copy.title : 'Goods In'}
             </h1>
             <p className="mt-3 max-w-2xl text-sm leading-6 text-neutral-600">
               {copy

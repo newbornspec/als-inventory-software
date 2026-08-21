@@ -68,7 +68,7 @@ export default async function BatchDetailPage({ params }: { params: Promise<{ id
         <Breadcrumbs
           items={[
             { label: 'Dashboard', href: '/dashboard' },
-            { label: 'Audit', href: '/batches' },
+            { label: 'Goods In', href: '/batches' },
             { label: batch.batchNumber },
           ]}
         />

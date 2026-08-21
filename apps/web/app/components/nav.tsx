@@ -7,6 +7,7 @@ import {
   Activity,
   BarChart3,
   Box,
+  Boxes,
   ClipboardCheck,
   Droplet,
   Grid3x3,
@@ -29,11 +30,13 @@ import { logout } from '@/lib/auth';
 const BASE_LINKS: { href: string; label: string; icon: LucideIcon }[] = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { href: '/inventory', label: 'Inventory', icon: Package },
-  // Labelled "Audit" while the route stays /batches. The label was already
-  // decoupled from the route ("Lots" over /batches), so this changes nothing
-  // structural — no bookmark breaks and no link rewrites — and the section is
-  // being developed into the audit workspace next.
-  { href: '/batches', label: 'Audit', icon: ClipboardCheck },
+  // Intake: booking in purchased goods and reconciling them against the
+  // supplier manifest. Called "Lots" until the word was needed elsewhere — the
+  // route stays /batches, since the label was never tied to it.
+  { href: '/batches', label: 'Goods In', icon: Boxes },
+  // Auditing is its own section, not a renamed intake: it reads asset_audits,
+  // which stand alone from the lot a device arrived in.
+  { href: '/audit', label: 'Audit', icon: ClipboardCheck },
   { href: '/scan', label: 'Scan', icon: Scan },
   { href: '/assets', label: 'Assets', icon: Zap },
   { href: '/pallets', label: 'Pallets', icon: Grid3x3 },
