@@ -1,7 +1,13 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { User } from '../users/user.entity';
+import { User, UserRole } from '../users/user.entity';
+import { PermissionsService } from '../auth/permissions.service';
 import { Batch } from '../batches/batch.entity';
 import { Asset, AssetAuditStatus, AssetStockStatus } from '../assets/asset.entity';
 import { nextUnitId } from '../assets/unit-id';
@@ -75,6 +81,7 @@ export class DevicesService {
     @InjectRepository(AssetAudit) private audits: Repository<AssetAudit>,
     @InjectRepository(AssetHistory) private history: Repository<AssetHistory>,
     private activity: ActivityService,
+    private permissions: PermissionsService,
   ) {}
 
   async setActiveLot(userId: string, batchId: string) {
@@ -135,15 +142,38 @@ export class DevicesService {
   // blank a grade set in the web app. The audit outcome is guarded more precisely, by
   // rank rather than by "fill blanks only" — see deriveAuditStatus and derivedMayReplace.
   async ingest(userId: string, dto: IngestAuditDto) {
+    // The station is a SHARED tool; the WORKFLOW decides the destination
+    // (client correction, 2026-08-22). An 'amazon' audit is standalone — no
+    // lot required, no lot touched, the record lives in the Audit workspace.
+    // A 'goods_in' audit (and every legacy payload that names no kind) files
+    // into a lot exactly as before. The route guard admits anyone holding
+    // EITHER audit permission, so the kind named here is re-checked against
+    // the caller's actual grants — a Goods In-only account cannot file Amazon
+    // audits by editing the payload.
+    const isAmazon = dto.auditKind === 'amazon';
+    if (dto.auditKind) {
+      const needed = isAmazon ? 'perform_amazon_audit' : 'perform_goods_in_audit';
+      const authz = await this.permissions.getAuthz(userId);
+      const allowed =
+        authz && (authz.role === UserRole.ADMIN || authz.permissions.includes(needed));
+      if (!allowed) {
+        throw new ForbiddenException(
+          `Your account is not permitted to record ${isAmazon ? 'Amazon' : 'Goods In'} audits.`,
+        );
+      }
+    }
+
     const user = await this.users.findOne({ where: { id: userId } });
-    const lotId = dto.lotId ?? user?.activeAuditLotId ?? null;
-    if (!lotId) {
+    // Amazon: any lotId in the payload is IGNORED, not honoured — once the
+    // operator chose the workflow, nothing silently re-routes the audit.
+    const lotId = isAmazon ? null : (dto.lotId ?? user?.activeAuditLotId ?? null);
+    if (!isAmazon && !lotId) {
       throw new BadRequestException(
         'No audit lot selected — pick the lot you are working on in Als Inventory first.',
       );
     }
-    const batch = await this.batches.findOne({ where: { id: lotId } });
-    if (!batch) throw new NotFoundException(`Lot ${lotId} not found`);
+    const batch = lotId ? await this.batches.findOne({ where: { id: lotId } }) : null;
+    if (lotId && !batch) throw new NotFoundException(`Lot ${lotId} not found`);
 
     // Prefer the rich profile; fall back to the legacy flat fields.
     const profile: HardwareProfile | null = dto.profile ?? null;
@@ -205,9 +235,11 @@ export class DevicesService {
         // grade leaves whatever the warehouse set.
         ...(dto.cosmeticGrade ? { conditionGrade: dto.cosmeticGrade } : {}),
         ...(statusPatch ? { auditStatus: statusPatch } : {}),
-        ...(asset.batchId !== lotId ? { batchId: lotId } : {}),
+        // An Amazon audit never moves a device between lots — or out of one.
+        // Only the Goods In workflow files devices into batches.
+        ...(!isAmazon && asset.batchId !== lotId ? { batchId: lotId } : {}),
         // Only touch the sub-lot when one was supplied (the USB tool never sends it).
-        ...(dto.subLotId !== undefined ? { lotId: dto.subLotId } : {}),
+        ...(!isAmazon && dto.subLotId !== undefined ? { lotId: dto.subLotId } : {}),
       });
     } else {
       asset = await this.assets.save(
@@ -226,8 +258,10 @@ export class DevicesService {
           // No existing value to protect on a brand-new asset, so the derived
           // floor applies unguarded.
           ...(auditStatus ? { auditStatus } : {}),
+          // Amazon-created devices carry NO lot: batch_id NULL is the spec's
+          // own marker that the audit belongs to the workspace, not receiving.
           batchId: lotId,
-          lotId: dto.subLotId ?? null, // optional sub-lot (spec bucket)
+          lotId: isAmazon ? null : (dto.subLotId ?? null), // optional sub-lot (spec bucket)
           stockStatus: AssetStockStatus.AUDITED,
         }),
       );
@@ -281,9 +315,11 @@ export class DevicesService {
         assetId: asset.id,
         eventType: AssetEventType.AUDITED,
         userId,
-        notes: dto.manual
-          ? `Manually added to ${batch.batchNumber}`
-          : `Hardware audit captured into ${batch.batchNumber}`,
+        notes: isAmazon
+          ? 'Amazon audit captured'
+          : dto.manual
+            ? `Manually added to ${batch!.batchNumber}`
+            : `Hardware audit captured into ${batch!.batchNumber}`,
       }),
     );
 
@@ -292,9 +328,11 @@ export class DevicesService {
       action: dto.manual ? 'asset.created' : 'audit.captured',
       entityType: 'asset',
       entityId: asset.id,
-      summary: dto.manual
-        ? `Added ${name} to ${batch.batchNumber}`
-        : `${created ? 'Audited new device' : 'Re-audited'} ${name} into ${batch.batchNumber}`,
+      summary: isAmazon
+        ? `${created ? 'Audited new device' : 'Re-audited'} ${name} (Amazon audit)`
+        : dto.manual
+          ? `Added ${name} to ${batch!.batchNumber}`
+          : `${created ? 'Audited new device' : 'Re-audited'} ${name} into ${batch!.batchNumber}`,
     });
 
     return {
@@ -303,7 +341,7 @@ export class DevicesService {
       tag,
       name,
       deviceType,
-      lot: batch.batchNumber,
+      lot: batch?.batchNumber ?? null,
     };
   }
 }
