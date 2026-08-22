@@ -1,5 +1,6 @@
 import { notFound, redirect } from 'next/navigation';
-import { apiFetch, getSessionUser, ApiError } from '@/lib/api-server';
+import { apiFetch, getSessionAccess, ApiError } from '@/lib/api-server';
+import { hasPermission, landingFor } from '@/lib/permissions';
 import { Nav } from '@/app/components/nav';
 import { BackLink } from '@/app/components/back-link';
 import type { AppUser } from '@/lib/actions/users';
@@ -9,8 +10,9 @@ import { EditAccessForm } from './edit-access-form';
 // Reached from the Users list; the inline role dropdown there stays for quick
 // promotions, this page is where deliberate per-user tailoring happens.
 export default async function UserAccessPage({ params }: { params: Promise<{ id: string }> }) {
-  const session = await getSessionUser();
-  if (session?.role !== 'admin') redirect('/dashboard');
+  // Same rule as the API's users controller: the 'users' permission.
+  const session = await getSessionAccess();
+  if (!session || !hasPermission(session, 'users')) redirect(landingFor(session));
 
   const { id } = await params;
   const users = await apiFetch<AppUser[]>('/users').catch((err) => {

@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
-import { getSessionUser } from '@/lib/api-server';
+import { getSessionAccess } from '@/lib/api-server';
+import { hasPermission, landingFor } from '@/lib/permissions';
 import { Nav } from '@/app/components/nav';
 import { BackLink } from '@/app/components/back-link';
 import { SellForm } from './sell-form';
@@ -12,10 +13,11 @@ import { SellForm } from './sell-form';
 // No new API: this resolves a device then calls the same POST /assets/:id/sell
 // that the device page has always used.
 export default async function SellPage() {
-  const user = await getSessionUser();
-  // Same gate as the Sold archive: selling is a money action.
-  if (user?.role !== 'admin' && user?.role !== 'manager') {
-    redirect('/dashboard');
+  const user = await getSessionAccess();
+  // Same gate as the Sold archive: selling is a money action, so this keys on
+  // the 'sold' module — the same audience the old admin/manager check had.
+  if (!hasPermission(user, 'sold')) {
+    redirect(landingFor(user));
   }
 
   return (

@@ -65,3 +65,69 @@ export const DEFAULT_PERMISSIONS: Record<string, string[]> = {
   manager: MANAGER_DEFAULTS,
   technician: TECHNICIAN_DEFAULTS,
 };
+
+// ---------------------------------------------------------------------------
+// Routing: which module permission opens which area, and where a user lands.
+// UI-gating only — the API enforces access on every call regardless.
+// ---------------------------------------------------------------------------
+
+export interface SessionAccess {
+  userId: string;
+  role: string;
+  permissions: string[];
+}
+
+// Landing priority order. amazon_audit -> /audit is deliberately ABSENT until
+// the Amazon Audit workspace page ships — landing a single-module audit user
+// on a 404 would be worse than the dashboard fallback.
+export const MODULE_ROUTES: { permission: string; href: string }[] = [
+  { permission: 'dashboard', href: '/dashboard' },
+  { permission: 'goods_in', href: '/batches' },
+  { permission: 'inventory', href: '/inventory' },
+  { permission: 'scan', href: '/scan' },
+  { permission: 'assets', href: '/assets' },
+  { permission: 'pallets', href: '/pallets' },
+  { permission: 'consumables', href: '/stock' },
+  { permission: 'sold', href: '/sold' },
+  { permission: 'reports', href: '/reports' },
+  { permission: 'activity', href: '/activity' },
+  { permission: 'users', href: '/users' },
+];
+
+// Route prefix -> the permission that opens it, for validating a ?from= deep
+// link before honouring it. Prefixes not listed are never honoured.
+const PATH_PERMISSIONS: [string, string][] = [
+  ...MODULE_ROUTES.map(({ href, permission }) => [href, permission] as [string, string]),
+  ['/lookups', 'manage_lookups'],
+  ['/sell', 'sold'], // same audience as the Sold archive (the page says so)
+  ['/transfer', 'manage_consumables'], // same audience as adjusting stock
+];
+
+export function hasPermission(access: SessionAccess | null, permission: string): boolean {
+  if (!access) return false;
+  // Admin bypass mirrors the API guard: role is the master switch, so a
+  // damaged grant list can never hide the screens that repair grant lists.
+  return access.role === 'admin' || access.permissions.includes(permission);
+}
+
+// May this user open this path? Only says yes for paths it can vouch for.
+export function mayVisit(path: string, access: SessionAccess | null): boolean {
+  const hit = PATH_PERMISSIONS.find(([prefix]) => path.startsWith(prefix));
+  return hit ? hasPermission(access, hit[1]) : false;
+}
+
+// Where a signed-in user lands: the spec's rule is that a user with exactly
+// one module goes straight to it. With several, dashboard wins when held,
+// else the first module they hold in priority order. With none, a plain
+// explainer page rather than a redirect loop.
+export function landingFor(access: SessionAccess | null): string {
+  if (!access) return '/dashboard';
+  if (access.role === 'admin') return '/dashboard';
+  const held = MODULE_ROUTES.filter(({ permission }) =>
+    access.permissions.includes(permission),
+  );
+  if (held.length === 0) return '/no-access';
+  if (held.length === 1) return held[0].href;
+  const dashboard = held.find((m) => m.permission === 'dashboard');
+  return (dashboard ?? held[0]).href;
+}

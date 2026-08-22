@@ -1,15 +1,16 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
-import { getSessionUser } from '@/lib/api-server';
-import { apiFetch } from '@/lib/api-server';
+import { apiFetch, getSessionAccess } from '@/lib/api-server';
+import { hasPermission, landingFor } from '@/lib/permissions';
 import { deleteUser, updateUserRole, type AppUser } from '@/lib/actions/users';
 import { Nav } from '@/app/components/nav';
 
 const ROLES = ['admin', 'manager', 'technician'];
 
 export default async function UsersPage() {
-  const session = await getSessionUser();
-  if (session?.role !== 'admin') redirect('/dashboard');
+  // Same rule as the API's users controller: the 'users' permission.
+  const session = await getSessionAccess();
+  if (!session || !hasPermission(session, 'users')) redirect(landingFor(session));
 
   const users = await apiFetch<AppUser[]>('/users');
 

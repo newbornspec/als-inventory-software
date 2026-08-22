@@ -24,45 +24,50 @@ import {
 } from 'lucide-react';
 import { logout } from '@/lib/auth';
 
-// Ordered along the warehouse workflow: receive a lot → scan devices into it →
-// find any single device in the global Assets register.
-const BASE_LINKS: { href: string; label: string; icon: LucideIcon }[] = [
-  { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
-  { href: '/inventory', label: 'Inventory', icon: Package },
+// One list, ordered along the warehouse workflow; each link names the
+// permission that opens it, and the nav shows exactly what the signed-in user
+// holds. Hiding here is UX only — PermissionsGuard enforces the same rule on
+// every API call, so a typed URL gets a 403, not data.
+//
+// The Audit link (an /audit entry keyed on 'amazon_audit') returns here when
+// the Amazon Audit workspace ships — the route has no page yet, so linking it
+// now sends every click to a 404. Middleware already protects /audit.
+const LINKS: { href: string; label: string; icon: LucideIcon; permission: string }[] = [
+  { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard, permission: 'dashboard' },
+  { href: '/inventory', label: 'Inventory', icon: Package, permission: 'inventory' },
   // Intake: booking in purchased goods and reconciling them against the
   // supplier manifest. Called "Lots" until the word was needed elsewhere — the
   // route stays /batches, since the label was never tied to it.
-  { href: '/batches', label: 'Goods In', icon: Boxes },
-  // The Audit section (an /audit link) returns here when the Amazon Audit
-  // workspace ships — the route has no page yet, so linking it now sends every
-  // click to a 404. Middleware already protects /audit for when it lands.
-  { href: '/scan', label: 'Scan', icon: Scan },
-  { href: '/assets', label: 'Assets', icon: Zap },
-  { href: '/pallets', label: 'Pallets', icon: Grid3x3 },
-  { href: '/stock', label: 'Consumables', icon: Droplet },
-];
-
-const MANAGER_LINKS: { href: string; label: string; icon: LucideIcon }[] = [
-  { href: '/sold', label: 'Sold', icon: ShoppingCart },
-  { href: '/reports', label: 'Reports', icon: BarChart3 },
-  { href: '/activity', label: 'Activity', icon: Activity },
-];
-const ADMIN_LINKS: { href: string; label: string; icon: LucideIcon }[] = [
-  { href: '/users', label: 'Users', icon: Users },
-  { href: '/lookups', label: 'Lookups', icon: Search },
+  { href: '/batches', label: 'Goods In', icon: Boxes, permission: 'goods_in' },
+  { href: '/scan', label: 'Scan', icon: Scan, permission: 'scan' },
+  { href: '/assets', label: 'Assets', icon: Zap, permission: 'assets' },
+  { href: '/pallets', label: 'Pallets', icon: Grid3x3, permission: 'pallets' },
+  { href: '/stock', label: 'Consumables', icon: Droplet, permission: 'consumables' },
+  { href: '/sold', label: 'Sold', icon: ShoppingCart, permission: 'sold' },
+  { href: '/reports', label: 'Reports', icon: BarChart3, permission: 'reports' },
+  { href: '/activity', label: 'Activity', icon: Activity, permission: 'activity' },
+  { href: '/users', label: 'Users', icon: Users, permission: 'users' },
+  // Keyed on the ACTION rather than a module: the Lookups page is the editing
+  // surface, and reading lookups needs no permission at all.
+  { href: '/lookups', label: 'Lookups', icon: Search, permission: 'manage_lookups' },
 ];
 
 export function Nav() {
   const pathname = usePathname();
-  const [role, setRole] = useState<'admin' | 'manager' | 'technician' | null>(null);
+  const [access, setAccess] = useState<{ role: string; permissions: string[] } | null>(null);
   const [open, setOpen] = useState(false);
   const toggleRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
+    // DB-fresh role + permissions (see /api/me). Until it resolves, the link
+    // row is empty rather than a guess — links pop in once, same as the old
+    // role-gated extras did.
     fetch('/api/me')
       .then((res) => (res.ok ? res.json() : null))
-      .then((user) => setRole(user?.role ?? null))
-      .catch(() => setRole(null));
+      .then((user) =>
+        setAccess(user ? { role: user.role, permissions: user.permissions ?? [] } : null),
+      )
+      .catch(() => setAccess(null));
   }, []);
 
   // Route change closes the small-screen menu, or it would stay open on top of
@@ -85,13 +90,15 @@ export function Nav() {
     return () => document.removeEventListener('keydown', onKey);
   }, [open]);
 
-  // Role gating is deliberate: technicians never see Sold/Reports/Activity, and
-  // only admins see Users/Lookups.
-  const links = [
-    ...BASE_LINKS,
-    ...(role === 'admin' || role === 'manager' ? MANAGER_LINKS : []),
-    ...(role === 'admin' ? ADMIN_LINKS : []),
-  ];
+  // Exactly what this user holds — an admin sees everything (same master
+  // bypass as the API guard), everyone else sees their granted modules.
+  const links =
+    access === null
+      ? []
+      : LINKS.filter(
+          ({ permission }) =>
+            access.role === 'admin' || access.permissions.includes(permission),
+        );
 
   async function handleLogout() {
     await logout();
