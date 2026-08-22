@@ -58,6 +58,10 @@ export function PalletAssets({
           <tr>
             <th scope="col" className="px-4 py-2">Device</th>
             <th scope="col" className="px-4 py-2">Unit ID</th>
+            <th scope="col" className="px-4 py-2">Serial</th>
+            <th scope="col" className="px-4 py-2">CPU</th>
+            <th scope="col" className="px-4 py-2">RAM</th>
+            <th scope="col" className="px-4 py-2">Storage</th>
             <th scope="col" className="px-4 py-2">Grade</th>
             <th scope="col" className="px-4 py-2">Audit status</th>
             <th scope="col" className="px-4 py-2">Moved</th>
@@ -72,8 +76,17 @@ export function PalletAssets({
                 <Link href={`/assets/${a.id}`} className="font-medium text-[#1a6ef5] hover:underline">
                   {a.name}
                 </Link>
+                {a.deviceType && (
+                  <span className="block text-xs text-neutral-500">{a.deviceType}</span>
+                )}
               </td>
               <td className="px-4 py-2 font-mono text-xs text-neutral-600">{a.unitId ?? a.tag}</td>
+              <td className="px-4 py-2 font-mono text-xs text-neutral-600">{a.serialNumber ?? '—'}</td>
+              <td className="px-4 py-2 text-neutral-700">{a.cpu ?? '—'}</td>
+              <td className="px-4 py-2 whitespace-nowrap text-neutral-700">
+                {a.ramGb != null ? `${a.ramGb}GB` : '—'}
+              </td>
+              <td className="px-4 py-2 text-neutral-700">{a.storage ?? '—'}</td>
               <td className="px-4 py-2 text-neutral-600">
                 {a.conditionGrade ? formatLabel(a.conditionGrade) : '—'}
               </td>
