@@ -91,10 +91,26 @@ export class PalletsController {
   // Goods In allocation: move selected devices onto an asset pallet, or take
   // them back off. Declared before the ':id' routes so 'assets' can never be
   // captured as a pallet id. Gated on the spec's Move Items to Pallet action.
+  // Batch-level: create a new auto-numbered pallet and move every eligible
+  // device from the lot onto it. Same permission as the per-item move — it is
+  // the same action with a bigger selection.
   @RequirePermissions('move_to_pallet')
+  @Post('transfer-batch')
+  transferBatch(@Body() body: { batchId: string }, @Req() req: any) {
+    return this.pallets.transferBatch(body?.batchId ?? '', req.user);
+  }
+
+  // Admin-grade, per the client's correction: once devices are on a pallet,
+  // the pallet owns them — normal users cannot move them back to Goods In.
+  // (Tightened from move_to_pallet, which briefly gated this.) The optional
+  // reason lands on the device's history line.
+  @RequirePermissions('return_from_pallet')
   @Post('assets/remove')
-  removeAssets(@Body() body: { assetIds: string[] }, @Req() req: any) {
-    return this.pallets.removeAssets(body?.assetIds ?? [], req.user);
+  removeAssets(
+    @Body() body: { assetIds: string[]; reason?: string },
+    @Req() req: any,
+  ) {
+    return this.pallets.removeAssets(body?.assetIds ?? [], req.user, body?.reason);
   }
 
   @RequirePermissions('move_to_pallet')

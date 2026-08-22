@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -1431,6 +1432,62 @@ export class PalletsService {
 
   // --- asset allocation (Goods In -> Move to Pallet) ---
 
+  // Batch-level transfer (client spec: Goods In -> Transfer Entire Batch):
+  // create a NEW auto-numbered asset pallet and move every ELIGIBLE serialized
+  // device from the lot onto it in one action. Eligible = not sold, not
+  // already on a pallet — the same rules the per-item move applies, applied
+  // to the whole pool at once so nobody ticks 22 boxes. Items MOVE, never
+  // copy: the batch link survives as origin, the pallet becomes the current
+  // location, and the lot's live counts drop to zero — total stock unchanged.
+  async transferBatch(
+    batchId: string,
+    user: RequestUser,
+  ): Promise<{
+    palletId: string;
+    palletNumber: string;
+    moved: number;
+    skipped: { id: string; reason: string }[];
+  }> {
+    const batch = await this.batches.findOne({ where: { id: batchId } });
+    if (!batch) throw new NotFoundException(`Lot ${batchId} not found`);
+    if (isScopedManager(user) && !(await managerCanAccessBatch(this.batches, batchId, user))) {
+      throw new ForbiddenException('You do not have access to this lot.');
+    }
+
+    const eligible = await this.assets.find({
+      where: { batchId, palletId: IsNull() },
+      select: { id: true, stockStatus: true },
+    });
+    const ids = eligible
+      .filter((a) => a.stockStatus !== ('sold' as Asset['stockStatus']))
+      .map((a) => a.id);
+    if (ids.length === 0) {
+      throw new ConflictException(
+        `${batch.batchNumber} has no devices eligible for transfer — they are all sold or already on pallets.`,
+      );
+    }
+
+    // The pallet is created FIRST, then filled through the exact same per-item
+    // path the manual selection uses — one set of rules, not two.
+    const pallet = await this.create({ entryLayout: PalletEntryLayout.ASSET });
+    const result = await this.addAssets(pallet.id, ids, user);
+
+    await this.activity.record({
+      userId: user.userId,
+      action: 'pallet.batch_transferred',
+      entityType: 'pallet',
+      entityId: pallet.id,
+      summary: `Transferred ${result.moved} device${result.moved === 1 ? '' : 's'} from ${batch.batchNumber} to ${pallet.palletNumber}`,
+    });
+
+    return {
+      palletId: pallet.id,
+      palletNumber: pallet.palletNumber,
+      moved: result.moved,
+      skipped: result.skipped,
+    };
+  }
+
   // Move devices onto an asset pallet. Loops per item and reports skips like
   // bulkReturnFromSold: a warehouse selection is heterogeneous, and one sold
   // unit must not abort the other eleven.
@@ -1529,7 +1586,9 @@ export class PalletsService {
   async removeAssets(
     assetIds: string[],
     user: RequestUser,
+    reason?: string,
   ): Promise<{ removed: number; skipped: { id: string; reason: string }[] }> {
+    const why = (reason ?? '').trim().slice(0, 300);
     const wanted = [...new Set(assetIds)].filter((id) => UUID_RE.test(id));
     if (wanted.length === 0) {
       throw new BadRequestException('Select at least one device to remove.');
@@ -1577,7 +1636,9 @@ export class PalletsService {
           assetId: id,
           eventType: AssetEventType.ALLOCATED,
           userId: user.userId,
-          notes: `Removed from ${palletNumber} — back in its lot's pool`,
+          notes:
+            `Removed from ${palletNumber} — back in its lot's pool` +
+            (why ? ` — reason: ${why}` : ''),
         }),
       );
       removed += 1;

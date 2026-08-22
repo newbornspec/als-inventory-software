@@ -30,6 +30,7 @@ export const ACTION_PERMISSIONS: { slug: string; label: string; hint: string }[]
   { slug: 'review_audits', label: 'Review Audits', hint: 'Sign off recorded audits (workflow to come)' },
   { slug: 'sell_items', label: 'Sell Items', hint: 'Mark assets, lots or pallet lines as Sold' },
   { slug: 'return_sold', label: 'Return Sold Stock', hint: 'Bring sold stock back into inventory' },
+  { slug: 'return_from_pallet', label: 'Return from Pallet', hint: 'Move devices off a pallet back into Goods In (admin-grade)' },
   { slug: 'delete_asset', label: 'Delete Asset', hint: 'Remove a device and its history' },
   { slug: 'delete_pallet', label: 'Delete Pallet', hint: 'Remove a pallet' },
   { slug: 'merge_pallets', label: 'Merge Pallets', hint: 'Combine pallets into one' },

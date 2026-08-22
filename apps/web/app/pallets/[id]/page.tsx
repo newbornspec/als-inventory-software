@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { apiFetch, ApiError, getSessionUser } from '@/lib/api-server';
+import { apiFetch, ApiError, getSessionAccess, getSessionUser } from '@/lib/api-server';
+import { hasPermission } from '@/lib/permissions';
 import { deletePallet, type Pallet } from '@/lib/actions/pallets';
 import type { LookupValue } from '@/lib/actions/lookups';
 import { getLocations } from '@/lib/data';
@@ -58,6 +59,10 @@ export default async function PalletDetailPage({ params }: { params: Promise<{ i
   // page just doesn't offer them.
   if (pallet.entryLayout === 'asset') {
     const devices = pallet.assets ?? [];
+    // Returning devices to Goods In is admin-grade (client's correction) —
+    // gated on the same permission the API's remove endpoint enforces.
+    const access = await getSessionAccess();
+    const canReturn = hasPermission(access, 'return_from_pallet') && !isMerged;
     return (
       <>
         <Nav />
@@ -98,7 +103,7 @@ export default async function PalletDetailPage({ params }: { params: Promise<{ i
             </div>
           </div>
 
-          <PalletAssets palletId={pallet.id} assets={devices} canMove={canManage} />
+          <PalletAssets palletId={pallet.id} assets={devices} canReturn={canReturn} />
         </main>
       </>
     );

@@ -49,6 +49,10 @@ export const ACTION_PERMISSIONS = [
   'review_audits', // no consumer yet — the audit sign-off workflow, when specced
   'sell_items', // marking assets/batches/pallet lines Sold
   'return_sold', // admin-grade: bringing sold stock back into inventory
+  // Admin-grade per the client's §11: once devices are transferred to a
+  // pallet, normal users cannot move them back — the pallet is their current
+  // owner. Deliberately in NO default set below; admins pass via role bypass.
+  'return_from_pallet',
   'delete_asset',
   'delete_pallet',
   'merge_pallets',

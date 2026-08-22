@@ -10,6 +10,7 @@ import { setAuditLot } from '@/lib/actions/devices';
 import { formatLabel } from '@/lib/asset-options';
 import { DeleteBatchButton } from './delete-batch-button';
 import { MoveToPallet } from './move-to-pallet';
+import { TransferBatch } from './transfer-batch';
 
 type LotAssets = { loading: boolean; error: string | null; assets: Asset[] };
 
@@ -193,6 +194,13 @@ export function LotsAccordion({
                 >
                   Set audit target
                 </button>
+              )}
+              {canMove && scanned > 0 && (
+                <TransferBatch
+                  batchId={lot.id}
+                  batchNumber={lot.batchNumber}
+                  eligibleCount={scanned}
+                />
               )}
               {canExport && (
                 <a
