@@ -8,19 +8,22 @@ import { formatLabel } from '@/lib/asset-options';
 
 type LotAssets = { loading: boolean; error: string | null; assets: Asset[] };
 
-// Shared device table — same columns/actions as the flat Assets list, so a
-// device keeps all its information whether browsed under a lot or searched flat.
-function AssetRows({ assets }: { assets: Asset[] }) {
+// Shared device table — same identity columns as the flat Assets list, minus
+// Lot: here the group header IS the lot (and the "No lot" group has none).
+function AssetRows({ assets, caption }: { assets: Asset[]; caption: string }) {
   return (
     <table className="w-full text-left text-sm">
-          <caption className="sr-only">Devices in this lot</caption>
+          <caption className="sr-only">{caption}</caption>
       <thead className="bg-neutral-50 text-neutral-500">
         <tr>
           <th scope="col" className="px-4 py-2">Name</th>
+          <th scope="col" className="px-4 py-2">Unit ID</th>
+          <th scope="col" className="px-4 py-2">Serial / Tag</th>
           <th scope="col" className="px-4 py-2">Category</th>
           <th scope="col" className="px-4 py-2">Stock Status</th>
           <th scope="col" className="px-4 py-2">Grade</th>
           <th scope="col" className="px-4 py-2">Audit Status</th>
+          <th scope="col" className="px-4 py-2">Pallet</th>
           <th scope="col" className="px-4 py-2">Location</th>
         </tr>
       </thead>
@@ -32,6 +35,8 @@ function AssetRows({ assets }: { assets: Asset[] }) {
                 {a.name}
               </Link>
             </td>
+            <td className="px-4 py-2 font-mono text-xs text-neutral-700">{a.unitId ?? '—'}</td>
+            <td className="px-4 py-2 font-mono text-xs text-neutral-600">{a.serialNumber ?? a.tag}</td>
             <td className="px-4 py-2 text-neutral-500">{a.category}</td>
             <td className="px-4 py-2">
               <span className="rounded-full border border-neutral-200 px-2 py-0.5 text-xs">
@@ -43,6 +48,18 @@ function AssetRows({ assets }: { assets: Asset[] }) {
             </td>
             <td className="px-4 py-2 text-neutral-500">
               {a.auditStatus ? formatLabel(a.auditStatus) : '—'}
+            </td>
+            <td className="px-4 py-2">
+              {a.pallet ? (
+                <Link
+                  href={`/pallets/${a.pallet.id}`}
+                  className="text-neutral-700 underline hover:text-neutral-950"
+                >
+                  {a.pallet.palletNumber}
+                </Link>
+              ) : (
+                <span className="text-neutral-500">—</span>
+              )}
             </td>
             <td className="px-4 py-2 text-neutral-500">{a.location?.name ?? '—'}</td>
           </tr>
@@ -135,7 +152,7 @@ export function AssetsGrouped({ batches, unassigned }: { batches: Batch[]; unass
                 ) : data.assets.length === 0 ? (
                   <p className="px-4 py-3 text-xs text-neutral-500">No devices.</p>
                 ) : (
-                  <AssetRows assets={data.assets} />
+                  <AssetRows assets={data.assets} caption={`Devices in ${b.batchNumber}`} />
                 )}
               </div>
             )}
@@ -175,7 +192,7 @@ function UnassignedGroup({ assets }: { assets: Asset[] }) {
           tabIndex={0}
           className="overflow-x-auto border-t border-neutral-200"
         >
-          <AssetRows assets={assets} />
+          <AssetRows assets={assets} caption="Devices not assigned to a lot" />
         </div>
       )}
     </div>

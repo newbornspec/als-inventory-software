@@ -92,13 +92,13 @@ export default async function AssetsPage({
           {params.noLocation === 'true' && <input type="hidden" name="noLocation" value="true" />}
           {params.noAudit === 'true' && <input type="hidden" name="noAudit" value="true" />}
           <label htmlFor="assets-search" className="sr-only">
-            Search by tag, serial or name
+            Search by tag, serial, unit ID, name, make, model, lot, pallet or location
           </label>
           <input
             id="assets-search"
             name="search"
             defaultValue={params.search}
-            placeholder="Search by tag, serial or name…"
+            placeholder="Search by tag, serial, unit ID, name, make, model, lot, pallet or location…"
             className="field-underline w-full min-w-0 flex-1 sm:w-auto sm:min-w-[18rem] px-3 py-2 text-sm"
           />
           <label htmlFor="assets-stock-status" className="sr-only">
@@ -172,10 +172,14 @@ export default async function AssetsPage({
               <thead className="bg-neutral-50 text-neutral-500">
                 <tr>
                   <th scope="col" className="px-4 py-3">Name</th>
+                  <th scope="col" className="px-4 py-3">Unit ID</th>
+                  <th scope="col" className="px-4 py-3">Serial / Tag</th>
                   <th scope="col" className="px-4 py-3">Category</th>
                   <th scope="col" className="px-4 py-3">Stock Status</th>
                   <th scope="col" className="px-4 py-3">Grade</th>
                   <th scope="col" className="px-4 py-3">Audit Status</th>
+                  <th scope="col" className="px-4 py-3">Lot</th>
+                  <th scope="col" className="px-4 py-3">Pallet</th>
                   <th scope="col" className="px-4 py-3">Location</th>
                 </tr>
               </thead>
@@ -186,6 +190,12 @@ export default async function AssetsPage({
                       <Link href={`/assets/${asset.id}`} className="text-neutral-950 underline">
                         {asset.name}
                       </Link>
+                    </td>
+                    <td className="px-4 py-3 font-mono text-xs text-neutral-700">
+                      {asset.unitId ?? '—'}
+                    </td>
+                    <td className="px-4 py-3 font-mono text-xs text-neutral-600">
+                      {asset.serialNumber ?? asset.tag}
                     </td>
                     <td className="px-4 py-3 text-neutral-500">{asset.category}</td>
                     <td className="px-4 py-3">
@@ -199,12 +209,36 @@ export default async function AssetsPage({
                     <td className="px-4 py-3 text-neutral-500">
                       {asset.auditStatus ? formatLabel(asset.auditStatus) : '—'}
                     </td>
+                    <td className="px-4 py-3">
+                      {asset.batch ? (
+                        <Link
+                          href={`/batches/${asset.batch.id}`}
+                          className="text-neutral-700 underline hover:text-neutral-950"
+                        >
+                          {asset.batch.batchNumber}
+                        </Link>
+                      ) : (
+                        <span className="text-neutral-500">—</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3">
+                      {asset.pallet ? (
+                        <Link
+                          href={`/pallets/${asset.pallet.id}`}
+                          className="text-neutral-700 underline hover:text-neutral-950"
+                        >
+                          {asset.pallet.palletNumber}
+                        </Link>
+                      ) : (
+                        <span className="text-neutral-500">—</span>
+                      )}
+                    </td>
                     <td className="px-4 py-3 text-neutral-500">{asset.location?.name ?? '—'}</td>
                   </tr>
                 ))}
                 {flat.length === 0 && (
                   <tr>
-                    <td colSpan={6} className="px-4 py-8 text-center text-neutral-500">
+                    <td colSpan={10} className="px-4 py-8 text-center text-neutral-500">
                       No assets match this search.
                     </td>
                   </tr>

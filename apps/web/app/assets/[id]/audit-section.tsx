@@ -1,9 +1,8 @@
 'use client';
 
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { AuditForm } from '@/app/components/audit-form';
-import { formatLabel } from '@/lib/asset-options';
 
 export interface AssetAuditRecord {
   id: string;
@@ -11,6 +10,9 @@ export interface AssetAuditRecord {
   cosmeticGrade: string | null;
   finalDisposition: string | null;
   dataWipeStatus: string | null;
+  // 'amazon' | 'goods_in' | null (Unclassified). The detail page uses it to
+  // tell an Amazon-workspace device from one hand-created outside Goods In.
+  auditKind?: string | null;
   notes: string | null;
   createdAt: string;
 }
@@ -21,6 +23,13 @@ export function AuditSection({ assetId, audits }: { assetId: string; audits: Ass
   const addRef = useRef<HTMLButtonElement>(null);
   const [saved, setSaved] = useState(false);
   const hasWipe = audits.some((a) => a.dataWipeStatus === 'wiped');
+
+  // Focus the reopened "+ Record audit" button AFTER React has re-mounted it —
+  // calling focus() inside onSaved ran before the re-render, when the ref was
+  // still null, and keyboard focus fell back to <body>.
+  useEffect(() => {
+    if (saved && !showForm) addRef.current?.focus();
+  }, [saved, showForm]);
 
   return (
     <section>
@@ -56,10 +65,9 @@ export function AuditSection({ assetId, audits }: { assetId: string; audits: Ass
             assetId={assetId}
             onSaved={() => {
               setShowForm(false);
-              // Say it happened, and put focus somewhere real — the button that
-              // opened the form — rather than losing it with the unmounted DOM.
+              // Say it happened; the effect above restores focus to the
+              // "+ Record audit" button once it has re-mounted.
               setSaved(true);
-              addRef.current?.focus();
               // Re-fetches the server-rendered audit list. Only reflects the
               // new record once it's actually synced — offline, that's
               // expected: the audit itself already saved locally via
@@ -74,27 +82,18 @@ export function AuditSection({ assetId, audits }: { assetId: string; audits: Ass
         {saved ? 'Audit saved.' : ''}
       </p>
 
-      <ul className="mt-4 space-y-3">
-        {audits.map((a) => (
-          <li key={a.id} className="border-l-2 border-neutral-200 pl-3 text-sm">
-            <div className="text-neutral-900">
-              {a.auditStatus ? formatLabel(a.auditStatus) : 'Audit recorded'}
-              {a.cosmeticGrade && ` · ${formatLabel(a.cosmeticGrade)}`}
-            </div>
-            {a.finalDisposition && (
-              <div className="text-neutral-500">Disposition: {formatLabel(a.finalDisposition)}</div>
-            )}
-            {a.dataWipeStatus && (
-              <div className="text-neutral-500">Data wipe: {formatLabel(a.dataWipeStatus)}</div>
-            )}
-            {a.notes && <div className="text-neutral-500">{a.notes}</div>}
-            <div className="text-xs text-neutral-500">{new Date(a.createdAt).toLocaleString()}</div>
-          </li>
-        ))}
-        {audits.length === 0 && !showForm && (
-          <li className="text-sm text-neutral-500">No audits recorded yet.</li>
-        )}
-      </ul>
+      {/* The events themselves render once, in the Lifecycle section below —
+          this section is the recording surface, not a second list. A just-saved
+          audit gets its own line: offline, the server list only reflects it
+          after PowerSync uploads, and "No audits recorded yet" right after
+          saving one would read as a failure. */}
+      <p className="mt-4 text-sm text-neutral-500">
+        {saved
+          ? 'Audit saved — it appears in the Lifecycle section below once synced.'
+          : audits.length === 0
+            ? 'No audits recorded yet.'
+            : `${audits.length} audit${audits.length === 1 ? '' : 's'} recorded — see the Lifecycle section below.`}
+      </p>
     </section>
   );
 }

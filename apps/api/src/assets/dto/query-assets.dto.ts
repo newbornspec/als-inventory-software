@@ -60,4 +60,10 @@ export class QueryAssetsDto {
   @IsOptional()
   @IsIn(['true', 'false'])
   onPallet?: string;
+
+  // Only devices allocated to this specific pallet. Additive (the register
+  // redesign introduced it); onPallet remains the boolean form.
+  @IsOptional()
+  @IsUUID()
+  palletId?: string;
 }
