@@ -8,6 +8,7 @@ import {
   BarChart3,
   Box,
   Boxes,
+  ClipboardCheck,
   Droplet,
   Grid3x3,
   LayoutDashboard,
@@ -28,10 +29,6 @@ import { logout } from '@/lib/auth';
 // permission that opens it, and the nav shows exactly what the signed-in user
 // holds. Hiding here is UX only — PermissionsGuard enforces the same rule on
 // every API call, so a typed URL gets a 403, not data.
-//
-// The Audit link (an /audit entry keyed on 'amazon_audit') returns here when
-// the Amazon Audit workspace ships — the route has no page yet, so linking it
-// now sends every click to a 404. Middleware already protects /audit.
 const LINKS: { href: string; label: string; icon: LucideIcon; permission: string }[] = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard, permission: 'dashboard' },
   { href: '/inventory', label: 'Inventory', icon: Package, permission: 'inventory' },
@@ -39,6 +36,9 @@ const LINKS: { href: string; label: string; icon: LucideIcon; permission: string
   // supplier manifest. Called "Lots" until the word was needed elsewhere — the
   // route stays /batches, since the label was never tied to it.
   { href: '/batches', label: 'Goods In', icon: Boxes, permission: 'goods_in' },
+  // The audit workspace: day-grouped audit events across all devices.
+  // Deliberately its own section, not a renamed intake.
+  { href: '/audit', label: 'Audit', icon: ClipboardCheck, permission: 'amazon_audit' },
   { href: '/scan', label: 'Scan', icon: Scan, permission: 'scan' },
   { href: '/assets', label: 'Assets', icon: Zap, permission: 'assets' },
   { href: '/pallets', label: 'Pallets', icon: Grid3x3, permission: 'pallets' },

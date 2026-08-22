@@ -77,12 +77,12 @@ export interface SessionAccess {
   permissions: string[];
 }
 
-// Landing priority order. amazon_audit -> /audit is deliberately ABSENT until
-// the Amazon Audit workspace page ships — landing a single-module audit user
-// on a 404 would be worse than the dashboard fallback.
+// Landing priority order: a single-module user lands on their module; a
+// multi-module user without the dashboard lands on the first entry they hold.
 export const MODULE_ROUTES: { permission: string; href: string }[] = [
   { permission: 'dashboard', href: '/dashboard' },
   { permission: 'goods_in', href: '/batches' },
+  { permission: 'amazon_audit', href: '/audit' },
   { permission: 'inventory', href: '/inventory' },
   { permission: 'scan', href: '/scan' },
   { permission: 'assets', href: '/assets' },

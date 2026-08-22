@@ -1,0 +1,86 @@
+import { groupDayEvents, type DayEventRow } from './audits.service';
+
+// The merge the Audit workspace's honesty depends on: the kiosk files SEVERAL
+// asset_audits rows for one machine in one session (the capture posts one,
+// then each wiped drive posts another), so a naive per-row feed would show a
+// day's work double and render a securely-erased laptop twice — once with the
+// audit tick and once with the wipe tick, neither row showing both.
+
+function row(over: Partial<DayEventRow>): DayEventRow {
+  return {
+    id: over.id ?? 'e1',
+    asset_id: over.asset_id ?? 'a1',
+    created_at: over.created_at ?? '2026-08-22T09:00:00.000Z',
+    audit_status: null,
+    cosmetic_grade: null,
+    data_wipe_status: null,
+    data_wipe_method: null,
+    notes: null,
+    asset_name: 'Latitude 7490',
+    asset_tag: 'SN123',
+    unit_id: 'U-000001',
+    serial_number: 'SN123',
+    device_type: 'Laptop',
+    auditor_name: null,
+    ...over,
+  };
+}
+
+describe('groupDayEvents', () => {
+  it('collapses a capture + wipe session into ONE device with both facts', () => {
+    const devices = groupDayEvents([
+      row({ id: 'e1', created_at: '2026-08-22T09:00:00Z', audit_status: 'power_on', cosmetic_grade: 'grade_b' }),
+      row({ id: 'e2', created_at: '2026-08-22T09:40:00Z', audit_status: 'data_wiped', data_wipe_status: 'wiped', data_wipe_method: 'NIST 800-88' }),
+    ]);
+    expect(devices).toHaveLength(1);
+    const d = devices[0];
+    expect(d.events).toHaveLength(2);
+    // Later non-null wins; earlier facts survive where the later row is null.
+    expect(d.auditStatus).toBe('data_wiped');
+    expect(d.cosmeticGrade).toBe('grade_b');
+    expect(d.dataWipeStatus).toBe('wiped');
+    expect(d.dataWipeMethod).toBe('NIST 800-88');
+  });
+
+  it('a later null never erases an earlier fact (plain re-capture after a wipe)', () => {
+    const d = groupDayEvents([
+      row({ id: 'e1', created_at: '2026-08-22T09:00:00Z', data_wipe_status: 'wiped' }),
+      row({ id: 'e2', created_at: '2026-08-22T10:00:00Z', audit_status: 'power_on' }),
+    ])[0];
+    expect(d.dataWipeStatus).toBe('wiped');
+    expect(d.auditStatus).toBe('power_on');
+  });
+
+  it('counts devices, not events — the dual-disk double-wipe case', () => {
+    const devices = groupDayEvents([
+      row({ id: 'e1', asset_id: 'a1', created_at: '2026-08-22T09:00:00Z' }),
+      row({ id: 'e2', asset_id: 'a1', created_at: '2026-08-22T09:30:00Z', data_wipe_status: 'wiped' }),
+      row({ id: 'e3', asset_id: 'a1', created_at: '2026-08-22T09:31:00Z', data_wipe_status: 'wiped' }),
+      row({ id: 'e4', asset_id: 'a2', created_at: '2026-08-22T11:00:00Z', asset_name: 'EliteBook' }),
+    ]);
+    expect(devices).toHaveLength(2);
+    expect(devices.find((d) => d.assetId === 'a1')!.events).toHaveLength(3);
+  });
+
+  it("orders devices by latest activity and each device's events newest-first", () => {
+    const devices = groupDayEvents([
+      row({ id: 'e1', asset_id: 'a1', created_at: '2026-08-22T09:00:00Z' }),
+      row({ id: 'e2', asset_id: 'a2', created_at: '2026-08-22T10:00:00Z' }),
+      row({ id: 'e3', asset_id: 'a1', created_at: '2026-08-22T11:00:00Z' }),
+    ]);
+    expect(devices.map((d) => d.assetId)).toEqual(['a1', 'a2']);
+    expect(devices[0].events.map((e) => e.id)).toEqual(['e3', 'e1']);
+    expect(devices[0].firstAt).toBe('2026-08-22T09:00:00Z');
+    expect(devices[0].lastAt).toBe('2026-08-22T11:00:00Z');
+  });
+
+  it('collects distinct auditors and tolerates the NULL-author history', () => {
+    const d = groupDayEvents([
+      row({ id: 'e1', created_at: '2026-08-22T09:00:00Z', auditor_name: 'Ada Admin' }),
+      row({ id: 'e2', created_at: '2026-08-22T09:30:00Z', auditor_name: null }),
+      row({ id: 'e3', created_at: '2026-08-22T10:00:00Z', auditor_name: 'Ada Admin' }),
+    ])[0];
+    expect(d.auditors).toEqual(['Ada Admin']);
+    expect(d.events.find((e) => e.id === 'e2')!.auditor).toBeNull();
+  });
+});
