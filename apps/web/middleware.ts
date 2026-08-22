@@ -99,6 +99,10 @@ export async function middleware(request: NextRequest) {
   return response;
 }
 
+// KEEP THIS LIST IN STEP WITH PROTECTED_PREFIXES. Next.js only runs middleware
+// for paths the matcher names — a prefix listed above but missing here is dead
+// code, and the route ships UNPROTECTED: no login redirect, just a server crash
+// when the page fetches without a token. /audit was exactly that gap.
 export const config = {
   matcher: [
     '/dashboard/:path*',
@@ -106,6 +110,7 @@ export const config = {
     '/scan/:path*',
     '/assets/:path*',
     '/batches/:path*',
+    '/audit/:path*',
     '/reports/:path*',
     '/users/:path*',
     '/pallets/:path*',
