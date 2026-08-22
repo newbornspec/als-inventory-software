@@ -52,7 +52,12 @@ function svcFor(pallets: any[], lines: any[]) {
   return new PalletsService(
     repo(pallets, 'id') as any,
     repo(lines, 'palletId') as any,
-    {} as any, {} as any, {} as any, {} as any,
+    {} as any, {} as any, {} as any,
+    // assets / assetHistory / batches — the line-pallet export paths under
+    // test never touch them (withTotals skips its asset query when no pallet
+    // is asset-layout), so inert stubs are correct here.
+    {} as any, {} as any, {} as any,
+    {} as any,
     { record: async () => {} } as any,
   );
 }

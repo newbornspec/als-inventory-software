@@ -44,6 +44,19 @@ export interface PalletLine {
   } | null;
 }
 
+// A device row on an asset pallet's detail page — the API projects it (never
+// the raw entity), so this mirrors PalletAssetRow on the server.
+export interface PalletAssetRow {
+  id: string;
+  unitId: string | null;
+  tag: string;
+  name: string;
+  conditionGrade: string | null;
+  auditStatus: string | null;
+  movedToPalletAt: string | null;
+  movedToPalletByName: string | null;
+}
+
 export interface Pallet {
   id: string;
   palletNumber: string;
@@ -54,7 +67,10 @@ export interface Pallet {
   status: PalletStatus;
   notes: string | null;
   shippedAt: string | null;
-  entryLayout?: string; // 'variant' | 'spec' — which New Pallet layout made it
+  entryLayout?: string; // 'variant' | 'spec' | 'asset' — what this pallet holds
+  // Present on the detail endpoint for entryLayout='asset' pallets: the
+  // serialized devices allocated to it. [] / absent everywhere else.
+  assets?: PalletAssetRow[];
   // Stamped by the database when the pallet is created. The API has always sent
   // it and ordered by it; this type simply never declared it, so the Pallets
   // page could not show a Created column.
@@ -368,4 +384,74 @@ export async function mergePallets(
 function str(value: FormDataEntryValue | null): string | undefined {
   const s = String(value ?? '').trim();
   return s === '' ? undefined : s;
+}
+
+// --- Goods In allocation (Move to Pallet) ---
+
+export interface MoveResult {
+  error: string | null;
+  moved: number;
+  palletNumber?: string;
+  skipped?: { id: string; reason: string }[];
+}
+
+// Move selected devices onto an asset pallet — creating the destination first
+// when asked (the API numbers it from the sequence). Two calls, not a
+// transaction: if the move half fails the new pallet exists but is empty,
+// which is visible and harmless rather than half-allocated.
+export async function moveAssetsToPallet(
+  target: { palletId?: string; createNew?: boolean },
+  assetIds: string[],
+): Promise<MoveResult> {
+  try {
+    let palletId = target.palletId;
+    if (!palletId) {
+      const created = await apiFetch<Pallet>('/pallets', {
+        method: 'POST',
+        body: JSON.stringify({ entryLayout: 'asset' }),
+      });
+      palletId = created.id;
+    }
+    const result = await apiFetch<{ moved: number; skipped: { id: string; reason: string }[] }>(
+      `/pallets/${palletId}/assets`,
+      { method: 'POST', body: JSON.stringify({ assetIds }) },
+    );
+    const pallet = await apiFetch<Pallet>(`/pallets/${palletId}`);
+    revalidatePath('/batches');
+    revalidatePath('/pallets');
+    revalidatePath(`/pallets/${palletId}`);
+    return {
+      error: null,
+      moved: result.moved,
+      skipped: result.skipped,
+      palletNumber: pallet.palletNumber,
+    };
+  } catch (err) {
+    return {
+      error: err instanceof ApiError ? err.message : 'Could not move the devices.',
+      moved: 0,
+    };
+  }
+}
+
+// The reverse: back into each device's lot pool. Same permission as the move.
+export async function removeAssetsFromPallet(
+  assetIds: string[],
+  palletId: string,
+): Promise<{ error: string | null; removed: number }> {
+  try {
+    const result = await apiFetch<{ removed: number }>('/pallets/assets/remove', {
+      method: 'POST',
+      body: JSON.stringify({ assetIds }),
+    });
+    revalidatePath('/batches');
+    revalidatePath('/pallets');
+    revalidatePath(`/pallets/${palletId}`);
+    return { error: null, removed: result.removed };
+  } catch (err) {
+    return {
+      error: err instanceof ApiError ? err.message : 'Could not remove the devices.',
+      removed: 0,
+    };
+  }
 }

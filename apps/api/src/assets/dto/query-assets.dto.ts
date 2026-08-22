@@ -1,4 +1,4 @@
-import { IsEnum, IsOptional, IsString, IsUUID } from 'class-validator';
+import { IsEnum, IsOptional, IsString, IsUUID, IsIn } from 'class-validator';
 import { AssetAuditStatus, AssetConditionGrade, AssetStockStatus } from '../asset.entity';
 
 export class QueryAssetsDto {
@@ -54,4 +54,10 @@ export class QueryAssetsDto {
   @IsOptional()
   @IsUUID()
   lotId?: string;
+
+  // 'false' = the Goods In pool view (not yet allocated to a pallet);
+  // 'true' = only palletised devices. Absent = both, the full register.
+  @IsOptional()
+  @IsIn(['true', 'false'])
+  onPallet?: string;
 }

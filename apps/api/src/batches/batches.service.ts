@@ -1,6 +1,6 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { In, Repository, IsNull, Not } from 'typeorm';
 import * as ExcelJS from 'exceljs';
 import { Batch, BatchStatus } from './batch.entity';
 import { Lot } from './lot.entity';
@@ -396,6 +396,19 @@ export class BatchesService {
     const assetCount = parseInt(totals?.total ?? '0', 10);
     const soldCount = parseInt(totals?.sold ?? '0', 10);
 
+    // Deleting this lot deletes its assets -- and a device sitting on a pallet
+    // is live stock the pallet still claims. Refuse until they are moved off;
+    // silently destroying palletised devices is the exact hazard the
+    // sold-inclusive count above exists to prevent for sold ones.
+    const palletised = await this.assets.count({
+      where: { batchId: id, palletId: Not(IsNull()) },
+    });
+    if (palletised > 0) {
+      throw new ConflictException(
+        `${palletised} device${palletised === 1 ? ' is' : 's are'} on pallets -- remove them from their pallets before deleting this lot.`,
+      );
+    }
+
     // One transaction — a half-deleted lot is the orphan case above, arrived at by
     // accident. Order is deliberate:
     //   assets first  — asset_audits, asset_history and asset_photos are
@@ -442,7 +455,12 @@ export class BatchesService {
     // the same pass can also return `everything` — the sold-INCLUSIVE count.
     // Destructive actions must be measured against that one: a fully-sold lot has
     // an actualUnitCount of 0 while still holding an entire consignment.
-    const LIVE = `asset.stock_status != 'sold'`;
+    // 'Live in the Goods In pool' now excludes two states: sold (left the
+    // warehouse) and palletised (left staging -- allocated onto an asset
+    // pallet, per the Goods In -> Move to Pallet workflow). The sold-INCLUSIVE
+    // `everything` below deliberately ignores both: it guards deletion, and a
+    // fully-palletised lot still holds real devices.
+    const LIVE = `asset.stock_status != 'sold' AND asset.pallet_id IS NULL`;
     const rows = await this.assets
       .createQueryBuilder('asset')
       .select('asset.batchId', 'batchId')

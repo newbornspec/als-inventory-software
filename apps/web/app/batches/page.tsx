@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { ChevronRight, Plus, Target } from 'lucide-react';
-import { apiFetch, getSessionUser } from '@/lib/api-server';
+import { apiFetch, getSessionAccess } from '@/lib/api-server';
+import { hasPermission } from '@/lib/permissions';
 import type { Batch } from '@/lib/actions/batches';
 import type { AuditTarget } from '@/lib/actions/devices';
 import { Nav } from '@/app/components/nav';
@@ -67,14 +68,15 @@ export default async function LotsPage({
       : null;
   const [allLots, user, auditTarget] = await Promise.all([
     apiFetch<Batch[]>('/batches'),
-    getSessionUser(),
+    getSessionAccess(),
     apiFetch<AuditTarget | null>('/devices/audit-target').catch(() => null),
   ]);
-  const canCreate =
-    user?.role === 'admin' || user?.role === 'manager' || user?.role === 'technician';
-  // Deleting a lot removes its devices and their audit trail with it, so it stays
-  // admin-only — narrower than canCreate.
-  const canDelete = user?.role === 'admin';
+  // Derived from the same permissions the API enforces, so the buttons on this
+  // page can never promise what a request would 403. Populations are identical
+  // to the old role checks (create_batch: all roles; delete_batch: admin).
+  const canCreate = hasPermission(user, 'create_batch');
+  const canDelete = hasPermission(user, 'delete_batch');
+  const canMove = hasPermission(user, 'move_to_pallet');
   const lots = applyFilter(allLots, filter);
   const copy = filter ? FILTER_COPY[filter] : null;
 
@@ -151,6 +153,7 @@ export default async function LotsPage({
         <LotsAccordion
           lots={lots}
           canExport={canCreate}
+          canMove={canMove}
           canDelete={canDelete}
           activeAuditLotId={auditTarget?.batchId ?? null}
         />

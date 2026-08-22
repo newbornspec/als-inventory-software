@@ -169,6 +169,19 @@ export default async function AssetDetailPage({
                 <div className="flex justify-between max-w-sm">
                   <dt className="text-neutral-500">Location</dt>
                   <dd>{asset.location?.name ?? 'Unassigned'}</dd>
+                  <dt className="text-neutral-500">Pallet</dt>
+                  <dd>
+                    {asset.pallet ? (
+                      <Link
+                        href={`/pallets/${asset.pallet.id}`}
+                        className="text-[#1a6ef5] hover:underline"
+                      >
+                        {asset.pallet.palletNumber}
+                      </Link>
+                    ) : (
+                      '—'
+                    )}
+                  </dd>
                 </div>
               </dl>
             )}

@@ -27,6 +27,11 @@ export enum PalletStatus {
 export enum PalletEntryLayout {
   VARIANT = 'variant',
   SPEC = 'spec',
+  // Holds serialized DEVICES (assets.pallet_id points here) instead of
+  // quantity lines. One or the other, never both: an asset pallet has no
+  // pallet_lines rows, so every consumer that sums that table keeps meaning
+  // what it always meant, and its devices stay counted as serialized assets.
+  ASSET = 'asset',
 }
 
 // A physical pallet holding counted quantities by variant — the monitor case

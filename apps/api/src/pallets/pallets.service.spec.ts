@@ -13,6 +13,9 @@ import {
   safeFilePart,
   specRow,
   variantRow,
+  ASSET_HEADERS,
+  ASSET_WIDTHS,
+  assetReportRow,
 } from './pallets.service';
 
 // composeLineVariant fills pallet_lines.variant, which is NOT NULL and is read
@@ -149,6 +152,36 @@ describe('report columns', () => {
     expect(SPEC_WIDTHS).toEqual([16, 16, 22, 12, 20, 10, 10, 16, 12]);
   });
 
+  it('pins the asset-pallet columns', () => {
+    // One row per DEVICE -- serial identity is this layout's entire point, so
+    // its columns are the device's. Same freeze contract as the other two:
+    // changing the document is a decision, not a drive-by.
+    expect(ASSET_HEADERS).toEqual([
+      'Pallet number',
+      'Unit ID',
+      'Serial / Tag',
+      'Device',
+      'Grade',
+      'Audit status',
+      'Moved to pallet',
+      'Moved by',
+    ]);
+    expect(ASSET_WIDTHS).toEqual([16, 12, 22, 34, 12, 16, 20, 18]);
+  });
+
+  it('asset rows lead with the pallet number and blank rather than zero-fill', () => {
+    const a = {
+      unitId: 'U-000042', tag: 'SN42', name: 'Latitude 7490',
+      conditionGrade: 'grade_b', auditStatus: 'data_wiped',
+      movedToPalletAt: null, movedToPalletByName: null,
+    };
+    const row = assetReportRow('PALLET-000009', a);
+    expect(row[0]).toBe('PALLET-000009');
+    expect(row).toHaveLength(ASSET_HEADERS.length);
+    expect(row[ASSET_HEADERS.indexOf('Moved to pallet')]).toBe('');
+    expect(row[ASSET_HEADERS.indexOf('Moved by')]).toBe('');
+  });
+
   it('leads every row with the pallet number, in both layouts', () => {
     const line: any = { manufacturer: 'Dell', model: 'P2419H', size: '24', variantType: 'frameless', stand: true, quantity: 45, grade: 'a', unitCost: 12.5, variant: 'Dell', product: null };
     expect(variantRow('PALLET-000001', line)[0]).toBe('PALLET-000001');
@@ -269,5 +302,19 @@ describe('mergeBlockers', () => {
       p({ id: 'b', palletNumber: 'PALLET-000002', totalQuantity: 0, lineCount: 0 }),
     ]);
     expect(blockers.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('refuses to merge a pallet that holds serialized devices', () => {
+    // v1 boundary: merging asset pallets needs a second move path for asset
+    // rows plus asset-aware provenance. Until that exists, the blocker is what
+    // keeps the lines-are-MOVED-not-copied invariant safe from the side.
+    const blockers = mergeBlockers([
+      p({ id: 'a', palletNumber: 'PALLET-000001', entryLayout: 'asset', totalQuantity: 5, lineCount: 0 }),
+      p({ id: 'b', palletNumber: 'PALLET-000002', entryLayout: 'asset', totalQuantity: 3, lineCount: 0 }),
+    ]);
+    expect(blockers.some((b) => b.includes('serialized devices'))).toBe(true);
+    // ...and the 'empty' rule must NOT also fire: an asset pallet with devices
+    // is not empty, its lineCount just is 0.
+    expect(blockers.some((b) => b.includes('empty'))).toBe(false);
   });
 });

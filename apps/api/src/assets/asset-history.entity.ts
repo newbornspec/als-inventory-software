@@ -16,6 +16,10 @@ export enum AssetEventType {
   STATUS_CHANGED = 'status_changed', // stock_status changes
   CONDITION_CHANGED = 'condition_changed',
   AUDITED = 'audited',
+  // Moved onto / removed from an asset pallet — the note names the pallet and
+  // the direction. TRANSFERRED is NOT reused for this: it already means a
+  // location change, and conflating the two makes history unreadable.
+  ALLOCATED = 'allocated',
   RETIRED = 'retired',
 }
 

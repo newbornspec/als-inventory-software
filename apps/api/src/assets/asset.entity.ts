@@ -12,6 +12,7 @@ import { User } from '../users/user.entity';
 import { Batch } from '../batches/batch.entity';
 import { Lot } from '../batches/lot.entity';
 import { Product } from '../products/product.entity';
+import { Pallet } from '../pallets/pallet.entity';
 import { numericTransformer } from '../common/numeric.transformer';
 import { HardwareProfile } from '../devices/hardware-profile.type';
 
@@ -150,6 +151,29 @@ export class Asset {
     transformer: numericTransformer,
   })
   salePrice: number | null;
+
+  // Set when the device is moved onto an asset pallet (Goods In allocation);
+  // cleared when it is removed again or sold. Mirrors the sold stamp's shape.
+  // The device STAYS in the register and keeps its batch/lot links — pallet_id
+  // is the single allocation marker, and 'on a pallet' is what removes it from
+  // the Goods In pool and its lot's live counts. stock_status is deliberately
+  // untouched by allocation, so no dashboard KPI shifts meaning.
+  @Column({ name: 'pallet_id', type: 'uuid', nullable: true })
+  palletId: string | null;
+
+  @ManyToOne(() => Pallet, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'pallet_id' })
+  pallet: Pallet | null;
+
+  @Column({ name: 'moved_to_pallet_at', type: 'timestamp', nullable: true })
+  movedToPalletAt: Date | null;
+
+  @Column({ name: 'moved_to_pallet_by_id', type: 'uuid', nullable: true })
+  movedToPalletById: string | null;
+
+  @ManyToOne(() => User, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'moved_to_pallet_by_id' })
+  movedToPalletBy: User | null;
 
   @Column({ name: 'image_url', type: 'varchar', nullable: true })
   imageUrl: string | null;
