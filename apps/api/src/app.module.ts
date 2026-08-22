@@ -15,6 +15,7 @@ import { ActivityModule } from './activity/activity.module';
 import { LookupsModule } from './lookups/lookups.module';
 import { PowerSyncModule } from './powersync/powersync.module';
 import { AssetsModule } from './assets/assets.module';
+import { AuditsModule } from './audits/audits.module';
 import { LocationsModule } from './locations/locations.module';
 import { ReportsModule } from './reports/reports.module';
 import { UsersModule } from './users/users.module';
@@ -53,6 +54,7 @@ import { DashboardModule } from './dashboard/dashboard.module';
     LookupsModule,
     PowerSyncModule,
     AssetsModule,
+    AuditsModule,
     LocationsModule,
     ReportsModule,
     DashboardModule,
