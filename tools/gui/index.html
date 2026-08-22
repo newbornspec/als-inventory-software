@@ -196,6 +196,9 @@
 .linklike{background:none;border:none;color:var(--mut,#9aa4b2);font:inherit;
   font-size:13px;cursor:pointer;padding:0 8px;text-decoration:underline dotted;}
 .linklike:hover{color:var(--fg,#e8edf2);}
+.wfbtn{padding:10px 16px;border-radius:10px;border:1px solid var(--line,#d8dee7);
+  background:transparent;color:var(--mut,#556);font:inherit;font-size:14px;cursor:pointer;}
+.wfbtn.on{border-color:#1a6ef5;color:#1a6ef5;font-weight:600;background:rgba(26,110,245,.06);}
 </style>
 </head>
 
@@ -252,8 +255,19 @@
       <!-- ======================= LEFT COLUMN ======================= -->
       <div class="col">
 
-        <!-- select batch -->
-        <div class="card">
+        <!-- workflow: the station is a shared tool, the workflow decides the
+             destination. Hidden when the account may only do one thing. -->
+        <div class="card hidden" id="wfCard">
+          <div class="lbl" style="margin-bottom:12px">Workflow</div>
+          <div style="display:flex;gap:10px;flex-wrap:wrap">
+            <button id="wfAmazon" class="wfbtn" onclick="setWorkflow('amazon')">Amazon / General audit</button>
+            <button id="wfGoodsIn" class="wfbtn" onclick="setWorkflow('goods_in')">Goods In audit</button>
+          </div>
+          <div class="k" id="wfHint" style="margin-top:10px">Choose where this session's audits are filed.</div>
+        </div>
+
+        <!-- select batch (Goods In workflow only) -->
+        <div class="card" id="batchCard">
           <div class="lbl" style="margin-bottom:12px">Select batch</div>
           <div class="brow">
             <div class="sel">
@@ -553,6 +567,7 @@ async function bootstrap(){
   else $('errBanner').classList.add('hidden');
 
   fillBatches(); fillDrives(); fillImages(); fillHardware(); renderImageSource();
+  renderWorkflow();
 
   auditGate();
   // NOTE: the old line here was  $('wStart').disabled=!$('wDrive').value;
@@ -562,7 +577,11 @@ async function bootstrap(){
   // leaving hardware detection dead on dual-drive machines. estimate() (called from
   // fillDrives) already sets wStart correctly for both branches, so it is just gone.
   $('aReady').textContent=b.device
-    ? 'Detected '+b.device.name+'. The audit is saved to the selected batch.'
+    ? 'Detected '+b.device.name+'. '+(wf()==='amazon'
+        ? 'The audit is saved to the Audit workspace.'
+        : wf()==='goods_in'
+          ? 'The audit is saved to the selected batch.'
+          : 'Choose a workflow above to start.')
     : (b.capturing?'Detecting hardware…':'Collect hardware and system information for the current unit.');
   if(b.capturing) setTimeout(bootstrap,1500);
 }
@@ -572,7 +591,8 @@ async function bootstrap(){
 // and after a run finishes - four places that must never disagree.
 function auditGate(){
   const g=$('gradeSel');
-  $('aStart').disabled=!(BOOT.device&&$('batchSel').value&&g&&g.value);
+  const needBatch=wf()==='goods_in';
+  $('aStart').disabled=!(BOOT.device&&wf()&&g&&g.value&&(!needBatch||$('batchSel').value));
 }
 
 function fillBatches(){
@@ -785,6 +805,7 @@ function fillHardware(){
 let PRIOR=null;
 async function checkPrior(){
   const el=$('aPrior'); if(!el)return;
+  if(wf()!=='goods_in') return;
   const lot=$('batchSel').value;
   PRIOR=null;
   if(!lot||!BOOT.device){el.classList.add('hidden');el.__k=null;return;}
@@ -831,6 +852,41 @@ async function startAudit(){
   doAudit();
 }
 
+function wf(){ return BOOT.workflow||''; }
+
+function renderWorkflow(){
+  const wfs=BOOT.workflows||[];
+  const both=wfs.length>1;
+  $('wfCard').classList.toggle('hidden',!both);
+  if(both){
+    $('wfAmazon').classList.toggle('on',wf()==='amazon');
+    $('wfGoodsIn').classList.toggle('on',wf()==='goods_in');
+    $('wfHint').textContent=wf()
+      ? (wf()==='amazon'
+          ? 'Standalone audit \u2014 saved to the Audit workspace, no batch involved.'
+          : 'Receiving audit \u2014 saved into the selected batch below.')
+      : 'Choose where this session\u2019s audits are filed before starting.';
+  }
+  // The batch card belongs to the Goods In workflow alone. For amazon (or an
+  // unchosen dual account) it disappears rather than sitting there implying
+  // every audit needs a batch \u2014 that implication is what this fixes.
+  $('batchCard').classList.toggle('hidden',wf()!=='goods_in');
+  if(wfs.length===0){
+    $('errBanner').classList.remove('hidden');
+    $('errMsg').textContent='This account has no audit permission \u2014 ask an admin to grant Perform Amazon Audit or Perform Goods In Audit.';
+  }
+}
+
+async function setWorkflow(w){
+  try{
+    const r=await jpost('/api/workflow',{workflow:w});
+    if(!r.ok){toast(r.data.message||'Could not switch workflow.',false);return;}
+    BOOT.workflow=w;
+    renderWorkflow(); auditGate();
+    if(w==='goods_in') checkPrior();
+  }catch(e){ toast('Could not switch workflow.',false); }
+}
+
 async function setOperator(){
   // prompt() over a custom modal on purpose: the overlay helpers here are
   // confirm-shaped, and a rewritten container would lose focus mid-typing
@@ -848,7 +904,7 @@ async function doAudit(){
   $('aStart').disabled=true; $('aRun').classList.remove('hidden');
   let res;
   const grade=$('gradeSel').value;
-  const body={lotId:$('batchSel').value};
+  const body=wf()==='goods_in'?{lotId:$('batchSel').value}:{};
   // Omitted entirely when unset. Sending '' would fail the API's @IsEnum (@IsOptional
   // skips undefined/null, not an empty string) and a 400 is queued and retried every
   // 45s forever, so one blank would wedge the upload queue permanently.
@@ -948,7 +1004,8 @@ function confirmWipe(){
     '. This cannot be undone.'+warn, false, async()=>{
     closeOv();
     let res;
-    try{ res=await jpost('/api/wipe/start',{devices:devs,lotId:$('batchSel').value,
+    try{ res=await jpost('/api/wipe/start',{devices:devs,
+      lotId:(wf()==='goods_in'?$('batchSel').value:undefined),
                                            method:$('wMethod').value}); }
     catch(e){ toast('Could not start the wipe.',false); return; }
     if(!res.ok){toast(res.data.message||'Could not start wipe',false);return;}
@@ -1032,7 +1089,7 @@ function confirmInstall(){
     closeOv();
     let res;
     try{ res=await jpost('/api/os/install',{imageId:img,device:dev,
-      imageName:imgName,lotId:$('batchSel').value||undefined}); }
+      imageName:imgName,lotId:(wf()==='goods_in'?$('batchSel').value:undefined)}); }
     catch(e){ toast('Could not start the install.',false); return; }
     if(!res.ok){toast(res.data.message||'Could not start install',false);return;}
     $('iActions').classList.add('hidden'); $('iRun').classList.remove('hidden');

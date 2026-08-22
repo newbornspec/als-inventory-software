@@ -1015,9 +1015,11 @@ wipe_internal_drives
 
 BODY="{\"lotId\":\"$CHOSEN_ID\""
 [ -n "$CHOSEN_SUB_ID" ] && BODY="$BODY,\"subLotId\":\"$CHOSEN_SUB_ID\""
-# Phase-5 provenance: this script IS the Amazon audit workflow, and
+# Workflow provenance: this text-mode flow always audits INTO a chosen lot,
+# which makes it the Goods In workflow by definition (the client's correction:
+# lot-attached = goods_in, standalone = amazon; the GUI station offers both).
 # AUDIT_OPERATOR (optional, set in audit.conf) names the human at the bench.
-BODY="$BODY,\"auditKind\":\"amazon\""
+BODY="$BODY,\"auditKind\":\"goods_in\""
 [ -n "${AUDIT_OPERATOR:-}" ] && BODY="$BODY,\"operatorName\":\"$(esc "$AUDIT_OPERATOR")\""
 [ -n "$WIPE_STATUS" ] && BODY="$BODY,\"dataWipeStatus\":\"$WIPE_STATUS\",\"dataWipeMethod\":\"$(esc "$WIPE_METHOD")\""
 BODY="$BODY,\"profile\":$PROFILE}"

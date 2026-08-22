@@ -68,6 +68,17 @@ STATE = {
     # Deliberately per-boot: a fresh shift starts blank rather than inheriting
     # yesterday's name.
     "operator": "",
+    # Which WORKFLOW this session is filing audits into: 'amazon' (standalone,
+    # no lot -- lands in the Audit workspace) or 'goods_in' (into the selected
+    # batch). The station is a shared tool; the workflow decides the
+    # destination. Auto-selected when the account may only do one; an admin
+    # (or dual-permission account) chooses in the GUI before starting work.
+    "workflow": "",
+    # The signed-in account's role/permissions, straight from the login
+    # response. None (not []) means the server predates permissions -- treat
+    # as legacy and behave exactly like the old lot-coupled station.
+    "role": "",
+    "permissions": None,
 }
 # One background job per kind (only one wipe/install runs at a time).
 JOBS = {"wipe": None, "install": None}
@@ -346,6 +357,33 @@ def queue_count():
 UPLOAD_LOCK = threading.Lock()
 
 
+def allowed_workflows():
+    """Which workflows this account may file. Admin: both. Otherwise the two
+    perform_* permissions decide. A legacy server that sends no permissions
+    gets ['goods_in'] -- the station behaves exactly as it did before the
+    workflow split, which is also what that server expects."""
+    if STATE.get("role") == "admin":
+        return ["amazon", "goods_in"]
+    perms = STATE.get("permissions")
+    if perms is None:
+        return ["goods_in"]
+    out = []
+    if "perform_amazon_audit" in perms:
+        out.append("amazon")
+    if "perform_goods_in_audit" in perms:
+        out.append("goods_in")
+    return out
+
+
+def current_workflow():
+    wfs = allowed_workflows()
+    if STATE.get("workflow") in wfs:
+        return STATE["workflow"]
+    if len(wfs) == 1:
+        return wfs[0]
+    return ""   # dual-permission account that has not chosen yet
+
+
 def stamp_provenance(payload):
     """Phase-5 provenance on every record this station files: the station IS
     the Amazon audit workflow (auditKind), and the operator field names the
@@ -353,7 +391,15 @@ def stamp_provenance(payload):
     unknown properties is NOT a concern here -- the API's DTOs ignore extras
     only after validation, so these two are validated, optional fields there.
     """
-    payload["auditKind"] = "amazon"
+    wf = current_workflow()
+    if wf in ("amazon", "goods_in"):
+        payload["auditKind"] = wf
+    if wf == "amazon":
+        # Standalone audit: no lot, ever. The server ignores a stray lotId on
+        # an amazon payload too -- stripping here keeps the record honest at
+        # the source.
+        payload.pop("lotId", None)
+        payload.pop("subLotId", None)
     op = (STATE.get("operator") or "").strip()
     if op:
         payload["operatorName"] = op[:120]
@@ -437,7 +483,16 @@ def login():
         raise RuntimeError("Sign-in failed — check AUDIT_EMAIL / AUDIT_PASSWORD.")
     STATE["token"] = tok
     # Show the operator's real name in the header rather than the login address.
-    STATE["userName"] = ((out or {}).get("user") or {}).get("name") or ""
+    u = (out or {}).get("user") or {}
+    STATE["userName"] = u.get("name") or ""
+    STATE["role"] = u.get("role") or ""
+    perms = u.get("permissions")
+    STATE["permissions"] = perms if isinstance(perms, list) else None
+    # One permitted workflow -> it is simply selected; the GUI shows no
+    # chooser (spec: specialised users are not offered the other option).
+    wfs = allowed_workflows()
+    if len(wfs) == 1:
+        STATE["workflow"] = wfs[0]
     return tok
 
 
@@ -1580,6 +1635,8 @@ class Handler(BaseHTTPRequestHandler):
                 "currentUser": (STATE.get("userName")
                                 or STATE["conf"].get("AUDIT_EMAIL", "") or "Operator"),
                 "operator": STATE.get("operator", ""),
+                "workflow": current_workflow(),
+                "workflows": allowed_workflows(),
                 "adminPinSet": bool(STATE["conf"].get("AUDIT_ADMIN_PIN", "")),
                 "launch": launch_info(),
                 "waiting": queue_count(),   # records held offline, retrying
@@ -1684,6 +1741,14 @@ class Handler(BaseHTTPRequestHandler):
             del OPTICAL_CACHE[:]
             threading.Thread(target=refresh, daemon=True).start()
             return self._send(200, {"started": True})
+
+        if u.path == "/api/workflow":
+            wf = (body.get("workflow") or "").strip()
+            if wf not in allowed_workflows():
+                return self._send(403, {"message": "This account cannot record %s audits."
+                                                   % ("Amazon" if wf == "amazon" else "Goods In")})
+            STATE["workflow"] = wf
+            return self._send(200, {"ok": True, "workflow": wf})
 
         if u.path == "/api/operator":
             # Session-scoped, not PIN-gated: it is a name label on the records
