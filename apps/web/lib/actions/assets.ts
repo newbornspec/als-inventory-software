@@ -23,6 +23,11 @@ export interface Asset {
   lotId: string | null;
   updatedAt: string;
   location?: { id: string; name: string } | null;
+  // Set while the device is allocated to an asset pallet. It STAYS in the
+  // register (labels keep scanning to a hit); this is how pages show where it
+  // physically sits.
+  palletId?: string | null;
+  pallet?: { id: string; palletNumber: string } | null;
   // Auto-captured hardware audit (Phase 4). hardwareProfile is only present on
   // the detail fetch (select:false on the server); it's an open-ended document.
   serialNumber?: string | null;

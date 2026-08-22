@@ -27,6 +27,14 @@ import { MergePalletsDto } from './dto/merge-pallets.dto';
 import { LookupsService } from '../lookups/lookups.service';
 import { ActivityService } from '../activity/activity.service';
 import { sanitizeUser } from '../users/sanitize-user';
+import { Asset } from '../assets/asset.entity';
+import { AssetEventType, AssetHistory } from '../assets/asset-history.entity';
+import { Batch } from '../batches/batch.entity';
+import {
+  isScopedManager,
+  managerCanAccessBatch,
+  type RequestUser,
+} from '../common/ownership';
 
 export interface PalletWithTotals extends Pallet {
   totalQuantity: number;
@@ -41,8 +49,25 @@ export interface MergedFromSummary {
   mergedAt: Date;
 }
 
+// A device row on an asset pallet's detail page — a projection, never the
+// raw entity (movedToPalletBy is a User relation and must not leak a hash).
+export interface PalletAssetRow {
+  id: string;
+  unitId: string | null;
+  tag: string;
+  name: string;
+  conditionGrade: string | null;
+  auditStatus: string | null;
+  movedToPalletAt: Date | null;
+  movedToPalletByName: string | null;
+}
+
 export interface PalletDetail extends PalletWithTotals {
   lines: PalletLine[];
+  // Populated for entryLayout='asset' pallets; [] otherwise. An asset pallet
+  // has no lines and a line pallet has no assets — one or the other, never
+  // both (the modelling decision behind the whole Goods In allocation).
+  assets: PalletAssetRow[];
   // Which pallets were merged INTO this one.
   mergedFrom: MergedFromSummary[];
   // Where this pallet's stock went, if it was itself merged away.
@@ -72,6 +97,9 @@ export class PalletsService {
     private soldLines: Repository<PalletSoldLine>,
     @InjectRepository(PalletMerge) private merges: Repository<PalletMerge>,
     @InjectRepository(Product) private products: Repository<Product>,
+    @InjectRepository(Asset) private assets: Repository<Asset>,
+    @InjectRepository(AssetHistory) private assetHistory: Repository<AssetHistory>,
+    @InjectRepository(Batch) private batches: Repository<Batch>,
     private lookupsService: LookupsService,
     private activity: ActivityService,
   ) {}
@@ -125,8 +153,33 @@ export class PalletsService {
           })
         : [];
 
+    // The device rows an asset pallet holds. [] for line pallets — the query
+    // is skipped entirely rather than run empty.
+    const assetRows: PalletAssetRow[] =
+      pallet.entryLayout === PalletEntryLayout.ASSET
+        ? (
+            await this.assets.find({
+              where: { palletId: id },
+              relations: { movedToPalletBy: true },
+              order: { movedToPalletAt: 'ASC' },
+            })
+          ).map((a) => ({
+            id: a.id,
+            unitId: a.unitId,
+            tag: a.tag,
+            name: a.name,
+            conditionGrade: a.conditionGrade,
+            auditStatus: a.auditStatus,
+            movedToPalletAt: a.movedToPalletAt,
+            movedToPalletByName: a.movedToPalletBy
+              ? sanitizeUser(a.movedToPalletBy).name
+              : null,
+          }))
+        : [];
+
     return {
       ...withTotals,
+      assets: assetRows,
       lines,
       mergedFrom: from.map((m) => ({
         id: m.sourcePalletId,
@@ -190,7 +243,15 @@ export class PalletsService {
     id: string,
     dto: CreatePalletSpecDto,
   ): Promise<PalletWithTotals & { lines: PalletLine[] }> {
-    await this.assertPallet(id);
+    const specTarget = await this.assertPallet(id);
+    // The spec editor saves by deleting every line and recreating from the
+    // grid. An asset pallet has no grid — letting this run would silently
+    // relabel it Layout 2 while its devices still point at it.
+    if (specTarget.entryLayout === PalletEntryLayout.ASSET) {
+      throw new ConflictException(
+        `${specTarget.palletNumber} holds serialized devices — it has no spec grid to edit.`,
+      );
+    }
     const { rows, ...meta } = dto;
     const patch: Record<string, unknown> = {};
     for (const key of [
@@ -260,6 +321,18 @@ export class PalletsService {
     saleTotal?: number,
   ): Promise<{ soldLines: number; soldUnits: number }> {
     const pallet = await this.assertPallet(palletId);
+    // Selling an asset pallet AS a pallet is deliberately unsupported: a lump
+    // price would have to be invented across serialized units the client never
+    // specified pricing rules for, and wrong money silently poisons the profit
+    // reports. The devices themselves sell individually exactly as before.
+    const deviceCount = await this.assets.count({ where: { palletId } });
+    if (deviceCount > 0 || pallet.entryLayout === PalletEntryLayout.ASSET) {
+      throw new ConflictException(
+        `${pallet.palletNumber} holds ${deviceCount} serialized device${
+          deviceCount === 1 ? '' : 's'
+        }. Selling an asset pallet as one unit isn't supported yet — sell the devices individually, or remove them from the pallet first.`,
+      );
+    }
     const lines = await this.lines.find({ where: { palletId } });
     const withQty = lines.filter((l) => l.quantity > 0);
     if (withQty.length === 0)
@@ -537,6 +610,9 @@ export class PalletsService {
     if (pallet.entryLayout === PalletEntryLayout.SPEC) {
       return this.generateSpecReport(pallet);
     }
+    if (pallet.entryLayout === PalletEntryLayout.ASSET) {
+      return this.generateAssetReport(pallet);
+    }
 
     const wb = new ExcelJS.Workbook();
     wb.creator = 'ALS Trade Wholesales';
@@ -621,6 +697,77 @@ export class PalletsService {
   // general system rather than a document hanging off a single pallet. The
   // landscape renderer is recoverable from git history at 56c23d9 if the new
   // system wants the same layout.
+
+  // Asset-pallet export: one row per DEVICE — serial identity is the point,
+  // so the columns are the device's, not a line's. Header/width arrays are
+  // pinned by test like the other two layouts.
+  private async generateAssetReport(
+    pallet: PalletDetail,
+  ): Promise<{ buffer: Buffer; filename: string }> {
+    const wb = new ExcelJS.Workbook();
+    wb.creator = 'ALS Trade Wholesales';
+    const ws = wb.addWorksheet('Pallet Report');
+
+    const headers = ASSET_HEADERS;
+    const widths = ASSET_WIDTHS;
+    ws.columns = widths.map((width) => ({ width }));
+    const lastCol = ws.getColumn(headers.length).letter;
+
+    const title = (row: number, text: string, size: number) => {
+      ws.mergeCells(`A${row}:${lastCol}${row}`);
+      const cell = ws.getCell(`A${row}`);
+      cell.value = text;
+      cell.font = { size, bold: true };
+    };
+    title(1, 'ALS Trade Wholesales', 16);
+    title(2, 'Pallet Report — serialized devices', 12);
+
+    const meta: [string, string | number][] = [
+      ['Date generated', new Date().toLocaleString('en-GB')],
+      ['Pallet number', pallet.palletNumber],
+      ['Description', pallet.description ?? '—'],
+      ['Location', pallet.location?.name ?? '—'],
+      ['Status', pallet.status],
+      ['Total devices', pallet.totalQuantity],
+    ];
+    let r = 4;
+    for (const [label, value] of meta) {
+      ws.getCell(`A${r}`).value = label;
+      ws.getCell(`A${r}`).font = { bold: true };
+      ws.getCell(`B${r}`).value = value;
+      r += 1;
+    }
+
+    const headerRowIndex = r + 1;
+    const headerRow = ws.getRow(headerRowIndex);
+    headerRow.values = headers;
+    headerRow.font = { bold: true };
+    headerRow.eachCell((cell) => {
+      cell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FFEFEFEF' },
+      };
+      cell.border = { bottom: { style: 'thin' } };
+    });
+
+    let dataRow = headerRowIndex + 1;
+    for (const a of pallet.assets) {
+      ws.getRow(dataRow).values = assetReportRow(pallet.palletNumber, a);
+      dataRow += 1;
+    }
+
+    const totalRow = ws.getRow(dataRow + 1);
+    totalRow.getCell(1).value = 'Total';
+    totalRow.getCell(headers.length).value = pallet.totalQuantity;
+    totalRow.font = { bold: true };
+
+    const buffer = Buffer.from(await wb.xlsx.writeBuffer());
+    return {
+      buffer,
+      filename: `${safeFilePart(pallet.palletNumber, pallet.id)}-report.xlsx`,
+    };
+  }
 
   private async generateSpecReport(
     pallet: PalletWithTotals & { lines: PalletLine[] },
@@ -744,6 +891,22 @@ export class PalletsService {
     if (found.length === 0) {
       throw new NotFoundException(
         'None of the selected pallets could be found.',
+      );
+    }
+
+    // Asset pallets are refused rather than silently rendered empty — their
+    // rows are devices, not lines, and this workbook's sections are line-
+    // shaped. Their own single-pallet export handles them.
+    const assetPallets = found.filter(
+      (p) => p.entryLayout === PalletEntryLayout.ASSET,
+    );
+    if (assetPallets.length > 0) {
+      throw new BadRequestException(
+        `${assetPallets.map((p) => p.palletNumber).join(', ')} hold${
+          assetPallets.length === 1 ? 's' : ''
+        } serialized devices — export ${
+          assetPallets.length === 1 ? 'it' : 'them'
+        } individually from the pallet page.`,
       );
     }
 
@@ -1251,8 +1414,185 @@ export class PalletsService {
   }
 
   async remove(id: string): Promise<void> {
-    await this.assertPallet(id);
+    const doomed = await this.assertPallet(id);
+    // Never let a pallet delete take devices with it. The FK is SET NULL as a
+    // backstop, but silently dumping units back into their lot pools is a
+    // stock movement nobody asked for — refuse until they are moved off.
+    const deviceCount = await this.assets.count({ where: { palletId: id } });
+    if (deviceCount > 0) {
+      throw new ConflictException(
+        `${doomed.palletNumber} still holds ${deviceCount} device${
+          deviceCount === 1 ? '' : 's'
+        } — remove them from the pallet first.`,
+      );
+    }
     await this.pallets.delete(id); // cascades pallet_lines
+  }
+
+  // --- asset allocation (Goods In -> Move to Pallet) ---
+
+  // Move devices onto an asset pallet. Loops per item and reports skips like
+  // bulkReturnFromSold: a warehouse selection is heterogeneous, and one sold
+  // unit must not abort the other eleven.
+  async addAssets(
+    palletId: string,
+    assetIds: string[],
+    user: RequestUser,
+  ): Promise<{ moved: number; skipped: { id: string; reason: string }[] }> {
+    const pallet = await this.assertPallet(palletId);
+    if (pallet.entryLayout !== PalletEntryLayout.ASSET) {
+      throw new ConflictException(
+        `${pallet.palletNumber} is a quantity pallet — devices can only be moved onto an asset pallet.`,
+      );
+    }
+    if (pallet.status === PalletStatus.SHIPPED) {
+      throw new ConflictException(
+        `${pallet.palletNumber} has shipped — those goods have left the warehouse.`,
+      );
+    }
+
+    const wanted = [...new Set(assetIds)].filter((id) => UUID_RE.test(id));
+    if (wanted.length === 0) {
+      throw new BadRequestException('Select at least one device to move.');
+    }
+    const found = await this.assets.find({ where: { id: In(wanted) } });
+    const byId = new Map(found.map((a) => [a.id, a]));
+
+    // Scoped managers may only move devices out of lots they own (or pool
+    // lots) — same ownership axis as every other list, checked per lot once.
+    const ownable = new Map<string, boolean>();
+    const mayTouch = async (a: Asset): Promise<boolean> => {
+      if (!isScopedManager(user)) return true;
+      if (a.batchId == null) return false;
+      if (!ownable.has(a.batchId)) {
+        ownable.set(a.batchId, await managerCanAccessBatch(this.batches, a.batchId, user));
+      }
+      return ownable.get(a.batchId)!;
+    };
+
+    let moved = 0;
+    const skipped: { id: string; reason: string }[] = [];
+    for (const id of wanted) {
+      const a = byId.get(id);
+      if (!a) {
+        skipped.push({ id, reason: 'not found' });
+        continue;
+      }
+      if (a.stockStatus === ('sold' as Asset['stockStatus'])) {
+        skipped.push({ id, reason: `${a.tag} is sold` });
+        continue;
+      }
+      if (a.palletId === palletId) {
+        skipped.push({ id, reason: `${a.tag} is already on this pallet` });
+        continue;
+      }
+      if (a.palletId != null) {
+        skipped.push({ id, reason: `${a.tag} is already on another pallet — remove it first` });
+        continue;
+      }
+      if (!(await mayTouch(a))) {
+        skipped.push({ id, reason: `${a.tag} is in a lot you don't own` });
+        continue;
+      }
+      await this.assets.update(id, {
+        palletId,
+        movedToPalletAt: new Date(),
+        movedToPalletById: user.userId,
+      });
+      await this.assetHistory.save(
+        this.assetHistory.create({
+          assetId: id,
+          eventType: AssetEventType.ALLOCATED,
+          userId: user.userId,
+          notes: `Moved to ${pallet.palletNumber}`,
+        }),
+      );
+      moved += 1;
+    }
+
+    if (moved > 0) {
+      await this.activity.record({
+        userId: user.userId,
+        action: 'pallet.assets_added',
+        entityType: 'pallet',
+        entityId: palletId,
+        summary: `Moved ${moved} device${moved === 1 ? '' : 's'} to ${pallet.palletNumber}`,
+      });
+    }
+    return { moved, skipped };
+  }
+
+  // The reverse: back into the lot pool. Same permission as the move — a
+  // mis-scan is routine warehouse reality, not a money action — and the full
+  // trail is logged either way. Allocation is the pallet_id trio and nothing
+  // else, so removal is exactly clearing it.
+  async removeAssets(
+    assetIds: string[],
+    user: RequestUser,
+  ): Promise<{ removed: number; skipped: { id: string; reason: string }[] }> {
+    const wanted = [...new Set(assetIds)].filter((id) => UUID_RE.test(id));
+    if (wanted.length === 0) {
+      throw new BadRequestException('Select at least one device to remove.');
+    }
+    const found = await this.assets.find({
+      where: { id: In(wanted) },
+      relations: { pallet: true },
+    });
+    const byId = new Map(found.map((a) => [a.id, a]));
+
+    const ownable = new Map<string, boolean>();
+    let removed = 0;
+    const skipped: { id: string; reason: string }[] = [];
+    for (const id of wanted) {
+      const a = byId.get(id);
+      if (!a) {
+        skipped.push({ id, reason: 'not found' });
+        continue;
+      }
+      if (a.palletId == null) {
+        skipped.push({ id, reason: `${a.tag} is not on a pallet` });
+        continue;
+      }
+      if (isScopedManager(user)) {
+        const key = a.batchId ?? '';
+        if (!ownable.has(key)) {
+          ownable.set(
+            key,
+            a.batchId != null && (await managerCanAccessBatch(this.batches, a.batchId, user)),
+          );
+        }
+        if (!ownable.get(key)) {
+          skipped.push({ id, reason: `${a.tag} is in a lot you don't own` });
+          continue;
+        }
+      }
+      const palletNumber = a.pallet?.palletNumber ?? 'its pallet';
+      await this.assets.update(id, {
+        palletId: null,
+        movedToPalletAt: null,
+        movedToPalletById: null,
+      });
+      await this.assetHistory.save(
+        this.assetHistory.create({
+          assetId: id,
+          eventType: AssetEventType.ALLOCATED,
+          userId: user.userId,
+          notes: `Removed from ${palletNumber} — back in its lot's pool`,
+        }),
+      );
+      removed += 1;
+    }
+
+    if (removed > 0) {
+      await this.activity.record({
+        userId: user.userId,
+        action: 'pallet.assets_removed',
+        entityType: 'asset',
+        entityId: wanted[0],
+        summary: `Removed ${removed} device${removed === 1 ? '' : 's'} from pallets`,
+      });
+    }
+    return { removed, skipped };
   }
 
   // --- lines ---
@@ -1261,7 +1601,14 @@ export class PalletsService {
     palletId: string,
     dto: CreatePalletLineDto,
   ): Promise<PalletLine> {
-    await this.assertPallet(palletId);
+    const lineTarget = await this.assertPallet(palletId);
+    // One or the other, never both: a quantity line on an asset pallet would
+    // double-count its stock the moment anything summed pallet_lines.
+    if (lineTarget.entryLayout === PalletEntryLayout.ASSET) {
+      throw new ConflictException(
+        `${lineTarget.palletNumber} holds serialized devices — it cannot take quantity lines.`,
+      );
+    }
     await this.persistLineLookups(dto);
     // `variant` is NOT NULL and is what the report, the sold snapshot and
     // sold-return matching read, so it is always composed — never left to the
@@ -1313,9 +1660,31 @@ export class PalletsService {
       .groupBy('line.palletId')
       .getRawMany<{ palletId: string; total: string; lines: string }>();
     const map = new Map(rows.map((r) => [r.palletId, r]));
+
+    // Asset pallets have no lines — their total is a COUNT of the devices
+    // pointing at them. Same shape out, so every list/export/merge consumer
+    // sees a real number instead of a silent zero.
+    const assetPalletIds = pallets
+      .filter((p) => p.entryLayout === PalletEntryLayout.ASSET)
+      .map((p) => p.id);
+    const assetCounts = new Map<string, number>();
+    if (assetPalletIds.length > 0) {
+      const counts = await this.assets
+        .createQueryBuilder('asset')
+        .select('asset.palletId', 'palletId')
+        .addSelect('COUNT(*)', 'total')
+        .where('asset.palletId IN (:...ids)', { ids: assetPalletIds })
+        .groupBy('asset.palletId')
+        .getRawMany<{ palletId: string; total: string }>();
+      for (const c of counts) assetCounts.set(c.palletId, parseInt(c.total, 10));
+    }
+
     return pallets.map((p) => ({
       ...p,
-      totalQuantity: parseInt(map.get(p.id)?.total ?? '0', 10),
+      totalQuantity:
+        p.entryLayout === PalletEntryLayout.ASSET
+          ? (assetCounts.get(p.id) ?? 0)
+          : parseInt(map.get(p.id)?.total ?? '0', 10),
       lineCount: parseInt(map.get(p.id)?.lines ?? '0', 10),
     }));
   }
@@ -1460,6 +1829,15 @@ export function mergeBlockers(sources: MergeCandidate[]): string[] {
   }
 
   for (const s of sources) {
+    if (s.entryLayout === PalletEntryLayout.ASSET) {
+      // v1 boundary, stated rather than fudged: merging device-holding pallets
+      // means a second move path for asset rows plus asset-aware provenance,
+      // which nothing needs yet. The blocker keeps the merge invariant safe.
+      blockers.push(
+        `${s.palletNumber} holds serialized devices — merging asset pallets isn't supported yet.`,
+      );
+      continue;
+    }
     if (s.status === PalletStatus.SHIPPED) {
       blockers.push(
         `${s.palletNumber} has shipped — those goods have left the warehouse.`,
@@ -1522,6 +1900,45 @@ export const VARIANT_HEADERS: string[] = [
   'Line total (£)',
 ];
 export const VARIANT_WIDTHS: number[] = [16, 16, 22, 10, 14, 8, 10, 12, 14, 16];
+
+// Asset-pallet export columns. Pinned by pallets-export.spec so a change
+// fails the build rather than shipping quietly — same contract as the other
+// two layouts.
+export const ASSET_HEADERS: string[] = [
+  'Pallet number',
+  'Unit ID',
+  'Serial / Tag',
+  'Device',
+  'Grade',
+  'Audit status',
+  'Moved to pallet',
+  'Moved by',
+];
+export const ASSET_WIDTHS: number[] = [16, 12, 22, 34, 12, 16, 20, 18];
+
+export function assetReportRow(
+  palletNumber: string,
+  a: {
+    unitId: string | null;
+    tag: string;
+    name: string;
+    conditionGrade: string | null;
+    auditStatus: string | null;
+    movedToPalletAt: Date | null;
+    movedToPalletByName: string | null;
+  },
+): (string | number)[] {
+  return [
+    palletNumber,
+    a.unitId ?? '',
+    a.tag,
+    a.name,
+    a.conditionGrade ?? '',
+    a.auditStatus ?? '',
+    a.movedToPalletAt ? new Date(a.movedToPalletAt).toLocaleString('en-GB') : '',
+    a.movedToPalletByName ?? '',
+  ];
+}
 
 export const SPEC_HEADERS: string[] = [
   'Pallet number',

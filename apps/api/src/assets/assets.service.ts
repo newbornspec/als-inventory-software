@@ -100,6 +100,14 @@ export class AssetsService {
     if (query.noAudit === 'true') {
       qb.andWhere('asset.auditStatus IS NULL');
     }
+    // Palletised devices STAY in the register (labels must keep scanning to a
+    // hit) -- this filter is how the Goods In pool excludes them instead.
+    if (query.onPallet === 'true') {
+      qb.andWhere('asset.palletId IS NOT NULL');
+    }
+    if (query.onPallet === 'false') {
+      qb.andWhere('asset.palletId IS NULL');
+    }
     if (query.lotId) {
       qb.andWhere('asset.lotId = :lotId', { lotId: query.lotId });
     }
@@ -113,6 +121,7 @@ export class AssetsService {
     const qb = this.assets
       .createQueryBuilder('asset')
       .leftJoinAndSelect('asset.location', 'location')
+      .leftJoinAndSelect('asset.pallet', 'pallet')
       .leftJoinAndSelect('asset.owner', 'owner')
       .addSelect('asset.hardwareProfile')
       .where('asset.id = :id', { id });
@@ -302,6 +311,12 @@ export class AssetsService {
       soldAt: new Date(),
       soldById: user.userId,
       salePrice: salePrice != null && salePrice >= 0 ? salePrice : null,
+      // A sold device has physically left the building, so it leaves its
+      // pallet too -- otherwise the pallet's device count claims stock that
+      // is gone. The sell event in history records who and when.
+      palletId: null,
+      movedToPalletAt: null,
+      movedToPalletById: null,
     });
     await this.logEvent(
       id,

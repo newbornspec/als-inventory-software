@@ -14,6 +14,7 @@ import { PalletBuyer } from './pallet-buyer';
 import { SpecEditor } from './spec-editor';
 import { SellPalletButton } from './sell-pallet-button';
 import { ContributedLines, MergeHistory } from './merge-history';
+import { PalletAssets } from './pallet-assets';
 
 // 404 (deleted pallet) -> Next's not-found page instead of a server-side crash.
 async function loadPallet(id: string): Promise<Pallet> {
@@ -50,6 +51,58 @@ export default async function PalletDetailPage({ params }: { params: Promise<{ i
   // The Export button was previously shown to technicians too, so they got a
   // 403 download page instead of a file.
   const canSeeCosts = user?.role === 'admin' || user?.role === 'manager';
+
+  // An asset pallet holds serialized DEVICES, not quantity lines — its page is
+  // the device table plus removal, and none of the line machinery (spec grid,
+  // line editors, sell-as-pallet) applies. The API refuses those anyway; this
+  // page just doesn't offer them.
+  if (pallet.entryLayout === 'asset') {
+    const devices = pallet.assets ?? [];
+    return (
+      <>
+        <Nav />
+        <main id="main-content" tabIndex={-1} className="min-h-screen bg-white text-neutral-950 px-4 py-6 sm:p-8">
+          <Link href="/pallets" className="text-sm text-neutral-700 hover:text-neutral-950">
+            <span aria-hidden="true">← </span>Back to Pallets
+          </Link>
+
+          <div className="mt-3 flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h1 className="text-2xl font-semibold">{pallet.palletNumber}</h1>
+              <p className="mt-1 text-sm text-neutral-500">
+                Serialized device pallet · {pallet.totalQuantity}{' '}
+                device{pallet.totalQuantity === 1 ? '' : 's'} · {formatLabel(pallet.status)}
+              </p>
+              <p className="mt-1 max-w-2xl text-xs text-neutral-500">
+                Devices here stay in the Assets register and are sold individually from their
+                own pages. Selling or merging this pallet as one unit isn&rsquo;t supported yet.
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <a
+                href={`/api/pallets/${pallet.id}/report`}
+                className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm font-medium text-neutral-800 hover:bg-neutral-50"
+              >
+                Export to Excel
+              </a>
+              {canDelete && devices.length === 0 && (
+                <form action={deletePallet.bind(null, pallet.id)}>
+                  <button
+                    type="submit"
+                    className="rounded-md border border-red-200 px-3 py-1.5 text-sm font-medium text-red-700 hover:bg-red-50"
+                  >
+                    Delete pallet
+                  </button>
+                </form>
+              )}
+            </div>
+          </div>
+
+          <PalletAssets palletId={pallet.id} assets={devices} canMove={canManage} />
+        </main>
+      </>
+    );
+  }
 
   // A Layout 2 pallet always opens back into its Excel-style grid editor —
   // spec pallets are edited as a grid for their whole life, not just at

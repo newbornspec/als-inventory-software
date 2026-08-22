@@ -1,5 +1,6 @@
 import {
   IsEnum,
+  IsIn,
   IsOptional,
   IsString,
   IsUUID,
@@ -30,4 +31,9 @@ export class CreatePalletDto {
   @IsOptional() @IsUUID() locationId?: string;
   @IsOptional() @IsEnum(PalletStatus) status?: PalletStatus;
   @IsOptional() @IsString() notes?: string;
+
+  // 'asset' creates a device-holding pallet (the Move to Pallet destination).
+  // 'spec' is NOT accepted here — Layout 2 pallets come in through POST
+  // /pallets/spec, which also writes their grid.
+  @IsOptional() @IsIn(['variant', 'asset']) entryLayout?: string;
 }

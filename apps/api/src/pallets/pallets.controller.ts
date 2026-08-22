@@ -88,6 +88,25 @@ export class PalletsController {
     return this.pallets.mergePallets(dto, req.user?.userId ?? null);
   }
 
+  // Goods In allocation: move selected devices onto an asset pallet, or take
+  // them back off. Declared before the ':id' routes so 'assets' can never be
+  // captured as a pallet id. Gated on the spec's Move Items to Pallet action.
+  @RequirePermissions('move_to_pallet')
+  @Post('assets/remove')
+  removeAssets(@Body() body: { assetIds: string[] }, @Req() req: any) {
+    return this.pallets.removeAssets(body?.assetIds ?? [], req.user);
+  }
+
+  @RequirePermissions('move_to_pallet')
+  @Post(':id/assets')
+  addAssets(
+    @Param('id') id: string,
+    @Body() body: { assetIds: string[] },
+    @Req() req: any,
+  ) {
+    return this.pallets.addAssets(id, body?.assetIds ?? [], req.user);
+  }
+
   @RequirePermissions('pallets')
   @Get(':id')
   findOne(@Param('id') id: string) {

@@ -9,6 +9,7 @@ import type { Asset } from '@/lib/actions/assets';
 import { setAuditLot } from '@/lib/actions/devices';
 import { formatLabel } from '@/lib/asset-options';
 import { DeleteBatchButton } from './delete-batch-button';
+import { MoveToPallet } from './move-to-pallet';
 
 type LotAssets = { loading: boolean; error: string | null; assets: Asset[] };
 
@@ -16,39 +17,66 @@ export function LotsAccordion({
   lots,
   canExport,
   canDelete,
+  canMove,
   activeAuditLotId,
 }: {
   lots: Batch[];
   canExport: boolean;
   canDelete: boolean;
+  canMove?: boolean;
   activeAuditLotId: string | null;
 }) {
   const router = useRouter();
   const [open, setOpen] = useState<Record<string, boolean>>({});
   const [cache, setCache] = useState<Record<string, LotAssets>>({});
+  // Ticked devices per lot, for Move to Pallet. Keyed by lot so selections in
+  // two expanded lots never bleed into one another.
+  const [selected, setSelected] = useState<Record<string, string[]>>({});
 
   async function makeAuditTarget(id: string) {
     await setAuditLot(id);
     router.refresh();
   }
 
+  async function loadLot(id: string) {
+    setCache((c) => ({ ...c, [id]: { loading: true, error: null, assets: [] } }));
+    try {
+      // onPallet=false: this table is the lot's POOL — devices already moved
+      // to a pallet have left it (they're still in the Assets register).
+      const res = await fetch(`/api/assets?batchId=${id}&onPallet=false`);
+      if (!res.ok) throw new Error('failed');
+      const assets: Asset[] = await res.json();
+      setCache((c) => ({ ...c, [id]: { loading: false, error: null, assets } }));
+    } catch {
+      setCache((c) => ({
+        ...c,
+        [id]: { loading: false, error: 'Could not load assets.', assets: [] },
+      }));
+    }
+  }
+
   async function toggle(id: string) {
     const willOpen = !open[id];
     setOpen((o) => ({ ...o, [id]: willOpen }));
-    if (willOpen && !cache[id]) {
-      setCache((c) => ({ ...c, [id]: { loading: true, error: null, assets: [] } }));
-      try {
-        const res = await fetch(`/api/assets?batchId=${id}`);
-        if (!res.ok) throw new Error('failed');
-        const assets: Asset[] = await res.json();
-        setCache((c) => ({ ...c, [id]: { loading: false, error: null, assets } }));
-      } catch {
-        setCache((c) => ({
-          ...c,
-          [id]: { loading: false, error: 'Could not load assets.', assets: [] },
-        }));
-      }
-    }
+    if (willOpen && !cache[id]) await loadLot(id);
+  }
+
+  function toggleSelected(lotId: string, assetId: string) {
+    setSelected((sel) => {
+      const cur = sel[lotId] ?? [];
+      return {
+        ...sel,
+        [lotId]: cur.includes(assetId) ? cur.filter((x) => x !== assetId) : [...cur, assetId],
+      };
+    });
+  }
+
+  function toggleAll(lotId: string, assets: Asset[]) {
+    setSelected((sel) => {
+      const cur = sel[lotId] ?? [];
+      const all = assets.map((a) => a.id);
+      return { ...sel, [lotId]: cur.length === all.length ? [] : all };
+    });
   }
 
   if (lots.length === 0) {
@@ -205,6 +233,15 @@ export function LotsAccordion({
             </div>
 
             <div id={`lot-panel-${lot.id}`} hidden={!isOpen}>
+            {isOpen && canMove && (selected[lot.id]?.length ?? 0) > 0 && (
+              <MoveToPallet
+                selectedIds={selected[lot.id] ?? []}
+                onMoved={() => {
+                  setSelected((sel) => ({ ...sel, [lot.id]: [] }));
+                  void loadLot(lot.id);
+                }}
+              />
+            )}
             {isOpen && (
               <div role="region" aria-label="Lot devices" tabIndex={0} className="mt-4 overflow-x-auto rounded-xl border border-neutral-200">
                 {!data || data.loading ? (
@@ -220,6 +257,19 @@ export function LotsAccordion({
           <caption className="sr-only">Devices scanned into this lot</caption>
                     <thead className="bg-neutral-50 text-neutral-500">
                       <tr>
+                        {canMove && (
+                          <th scope="col" className="w-8 px-3 py-2">
+                            <input
+                              type="checkbox"
+                              aria-label={`Select all devices in ${lot.batchNumber}`}
+                              checked={
+                                data.assets.length > 0 &&
+                                (selected[lot.id]?.length ?? 0) === data.assets.length
+                              }
+                              onChange={() => toggleAll(lot.id, data.assets)}
+                            />
+                          </th>
+                        )}
                         <th scope="col" className="px-4 py-2 font-medium">Name</th>
                         <th scope="col" className="px-4 py-2 font-medium">Category</th>
                         <th scope="col" className="px-4 py-2 font-medium">Status</th>
@@ -229,6 +279,16 @@ export function LotsAccordion({
                     <tbody>
                       {data.assets.map((a) => (
                         <tr key={a.id} className="border-t border-neutral-200">
+                          {canMove && (
+                            <td className="w-8 px-3 py-2">
+                              <input
+                                type="checkbox"
+                                aria-label={`Select ${a.name}`}
+                                checked={(selected[lot.id] ?? []).includes(a.id)}
+                                onChange={() => toggleSelected(lot.id, a.id)}
+                              />
+                            </td>
+                          )}
                           <td className="px-4 py-2">
                             <Link
                               href={`/assets/${a.id}`}
