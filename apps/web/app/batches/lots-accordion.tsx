@@ -94,6 +94,9 @@ export function LotsAccordion({
         const pct =
           expected && expected > 0 ? Math.min(100, Math.round((scanned / expected) * 100)) : null;
         const pending = Math.max(0, scanned - lot.audited); // scanned but not yet audited
+        // The pool still movable to a pallet. Falls back to the full count
+        // when the API predates the split (deploy skew), matching old behaviour.
+        const unallocated = lot.unallocatedCount ?? scanned;
         const isOpen = !!open[lot.id];
         const data = cache[lot.id];
         const isTarget = lot.id === activeAuditLotId;
@@ -162,6 +165,7 @@ export function LotsAccordion({
               <Chip label="Total" value={scanned} />
               <Chip label="Audited" value={lot.audited} tone={lot.audited > 0 ? 'emerald' : undefined} />
               <Chip label="Pending" value={pending} tone={pending > 0 ? 'amber' : undefined} />
+              <Chip label="Unallocated" value={unallocated} />
               {missing != null && (
                 <Chip label="Missing" value={missing} tone={missing > 0 ? 'amber' : undefined} />
               )}
@@ -195,11 +199,11 @@ export function LotsAccordion({
                   Set audit target
                 </button>
               )}
-              {canMove && scanned > 0 && (
+              {canMove && unallocated > 0 && (
                 <TransferBatch
                   batchId={lot.id}
                   batchNumber={lot.batchNumber}
-                  eligibleCount={scanned}
+                  eligibleCount={unallocated}
                 />
               )}
               {canExport && (

@@ -1,6 +1,8 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { apiFetch, ApiError, getSessionUser } from '@/lib/api-server';
+import { apiFetch, ApiError, getSessionAccess, getSessionUser } from '@/lib/api-server';
+import { hasPermission } from '@/lib/permissions';
+import { TransferBatch } from '../transfer-batch';
 import type { Batch, Lot, ReconciliationResult } from '@/lib/actions/batches';
 import type { Asset } from '@/lib/actions/assets';
 import { Nav } from '@/app/components/nav';
@@ -45,6 +47,10 @@ export default async function BatchDetailPage({ params }: { params: Promise<{ id
   // Technicians can create + input like managers; only delete/reassign are gated.
   const canManage =
     user?.role === 'admin' || user?.role === 'manager' || user?.role === 'technician';
+  const access = await getSessionAccess();
+  const canMove = hasPermission(access, 'move_to_pallet');
+  // The pool still movable to a pallet; register rows keep palletised devices.
+  const unallocated = batch.unallocatedCount ?? assets.filter((a) => !a.palletId).length;
   const canDelete = user?.role === 'admin';
   const isAdmin = user?.role === 'admin';
   const otherBatches = allBatches
@@ -316,6 +322,15 @@ export default async function BatchDetailPage({ params }: { params: Promise<{ id
           <h2 className="text-sm font-medium text-neutral-500">
             Assets in this lot ({assets.length})
           </h2>
+          {canMove && unallocated > 0 && (
+            <div className="mt-3">
+              <TransferBatch
+                batchId={batch.id}
+                batchNumber={batch.batchNumber}
+                eligibleCount={unallocated}
+              />
+            </div>
+          )}
           <LotAssets
             assets={assets}
             subLots={lots}
@@ -323,6 +338,7 @@ export default async function BatchDetailPage({ params }: { params: Promise<{ id
             otherBatches={otherBatches}
             canManage={canManage}
             canDelete={canDelete}
+            canMove={canMove}
           />
           {canManage && <AddAssetForm batchId={batch.id} subLots={lots} />}
         </section>

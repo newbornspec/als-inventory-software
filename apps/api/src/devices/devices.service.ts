@@ -115,7 +115,7 @@ export class DevicesService {
         .select('asset.batchId', 'batchId')
         .addSelect('COUNT(*)', 'total')
         .where('asset.batchId IN (:...ids)', { ids: batches.map((b) => b.id) })
-        .andWhere(`asset.stock_status != 'sold' AND asset.pallet_id IS NULL`)
+        .andWhere(`asset.stock_status != 'sold'`)
         .groupBy('asset.batchId')
         .getRawMany<{ batchId: string; total: string }>();
       for (const r of rows) counts.set(r.batchId, parseInt(r.total, 10));

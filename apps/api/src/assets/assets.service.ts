@@ -58,6 +58,9 @@ export class AssetsService {
       });
     }
 
+    // Palletised devices stay in lists (the register keeps them) — join the
+    // pallet so rows can show and link the allocation.
+    qb.leftJoinAndSelect('asset.pallet', 'pallet');
     // Sold assets are out of active inventory: excluded from every list/search
     // unless the caller explicitly filters by a status (e.g. the Sold archive
     // asking for stockStatus=sold).

@@ -27,6 +27,11 @@ export interface BatchWithCount extends Omit<Batch, 'receivedBy' | 'owner' | 'cr
   // supplier manifest or planned sub-lots.
   subLotCount: number;
   expectedLineCount: number;
+  // The Goods In POOL: received, not sold, not yet on a pallet. This is what
+  // Transfer to Pallet can move and what the Unallocated chip shows draining
+  // to zero -- distinct from actualUnitCount, which keeps counting palletised
+  // devices because the lot remains their origin.
+  unallocatedCount: number;
   // Live per-lot roll-ups so the Lots view can show operational progress
   // (audit/grading throughput) without loading every asset.
   readyForSale: number;
@@ -455,12 +460,16 @@ export class BatchesService {
     // the same pass can also return `everything` — the sold-INCLUSIVE count.
     // Destructive actions must be measured against that one: a fully-sold lot has
     // an actualUnitCount of 0 while still holding an entire consignment.
-    // 'Live in the Goods In pool' now excludes two states: sold (left the
-    // warehouse) and palletised (left staging -- allocated onto an asset
-    // pallet, per the Goods In -> Move to Pallet workflow). The sold-INCLUSIVE
-    // `everything` below deliberately ignores both: it guards deletion, and a
-    // fully-palletised lot still holds real devices.
-    const LIVE = `asset.stock_status != 'sold' AND asset.pallet_id IS NULL`;
+    // Two distinct notions, per the client's own mockup (Total 22 stays while
+    // Unallocated drains to 0 as devices move to pallets):
+    //   LIVE  = received and still owned (not sold). Palletised devices ARE
+    //           counted -- the lot is their origin, and folding them out here
+    //           made a fully-transferred lot read "Missing 22" against its
+    //           manifest, as if the goods had vanished.
+    //   POOL  = LIVE and not yet allocated to a pallet -- what Transfer to
+    //           Pallet can still move, and what drains to zero.
+    const LIVE = `asset.stock_status != 'sold'`;
+    const POOL = `${LIVE} AND asset.pallet_id IS NULL`;
     const rows = await this.assets
       .createQueryBuilder('asset')
       .select('asset.batchId', 'batchId')
@@ -478,6 +487,7 @@ export class BatchesService {
       // a quarantined row cannot also be sold.
       .addSelect(`COUNT(*) FILTER (WHERE asset.stock_status = 'quarantined')`, 'quarantine')
       .addSelect(`COUNT(*) FILTER (WHERE asset.audit_status IS NOT NULL AND ${LIVE})`, 'audited')
+      .addSelect(`COUNT(*) FILTER (WHERE ${POOL})`, 'unallocated')
       .where('asset.batchId IN (:...ids)', { ids: batches.map((b) => b.id) })
       .groupBy('asset.batchId')
       .getRawMany<{
@@ -488,6 +498,7 @@ export class BatchesService {
         scrap: string;
         quarantine: string;
         audited: string;
+        unallocated: string;
       }>();
     // Sub-lots and imported manifest lines are user-authored data that a batch
     // delete cascades away, so their REAL counts have to travel with the batch —
@@ -530,6 +541,7 @@ export class BatchesService {
         scrap: r ? parseInt(r.scrap, 10) : 0,
         quarantine: r ? parseInt(r.quarantine, 10) : 0,
         audited: r ? parseInt(r.audited, 10) : 0,
+        unallocatedCount: r ? parseInt(r.unallocated, 10) : 0,
       };
     });
   }
