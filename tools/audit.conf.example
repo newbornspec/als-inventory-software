@@ -7,7 +7,25 @@
 # Keep this file next to hardware-audit.sh on the USB.
 
 AUDIT_URL="https://als-inventory-software-production.up.railway.app"
-AUDIT_EMAIL="admin@als.com"
+
+# --- account ----------------------------------------------------------------
+# Use a DEDICATED STATION ACCOUNT, never a person's login and never an admin.
+# This password sits in plaintext on a USB stick in a warehouse: if the stick
+# walks, an admin credential walks with it. A station account limits the blast
+# radius to exactly what the station does.
+#
+# Create it once in ALS Inventory (Users -> New User):
+#   Role:        technician
+#   Permissions: UNTICK everything, then tick exactly these three -
+#                  * Goods In
+#                  * Perform Amazon Audit
+#                  * Perform Goods In Audit
+# That covers every call the station makes (lot picker, prior-audit lookup,
+# sub-lot picker, and filing audits in both workflows) and NOTHING else - no
+# reports, no selling, no deleting, no user management. Granting only ONE of
+# the two audit permissions makes a single-workflow station: the chooser
+# disappears and every audit files to that workflow.
+AUDIT_EMAIL="station@your-domain"
 AUDIT_PASSWORD=""
 
 # Wi-Fi to connect to automatically at the start of each run.
