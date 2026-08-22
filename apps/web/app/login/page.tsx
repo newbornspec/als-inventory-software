@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { login } from '@/lib/auth';
+import { landingFor, mayVisit, type SessionAccess } from '@/lib/permissions';
 
 export default function LoginPage() {
   const [email, setEmail] = useState('');
@@ -15,10 +16,21 @@ export default function LoginPage() {
     setSubmitting(true);
     try {
       await login(email, password);
+      // Where to land: honour the ?from= deep link middleware set — but only
+      // when this user may actually open it (an unpermitted from would just
+      // bounce them) — else their permission-derived landing page: a
+      // single-module user goes straight into their module, per the spec.
+      // window.location.search is read here at submit time rather than via
+      // useSearchParams, which would force a Suspense boundary on this page.
+      const access: SessionAccess | null = await fetch('/api/me')
+        .then((res) => (res.ok ? res.json() : null))
+        .catch(() => null);
+      const from = new URLSearchParams(window.location.search).get('from');
+      const destination = from && mayVisit(from, access) ? from : landingFor(access);
       // Full-page navigation (not router.push) so the browser reloads the app
       // from scratch — this guarantees the freshly deployed bundle is loaded,
       // avoiding stale server-action references after a deploy.
-      window.location.href = '/dashboard';
+      window.location.href = destination;
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Something went wrong');
       setSubmitting(false);

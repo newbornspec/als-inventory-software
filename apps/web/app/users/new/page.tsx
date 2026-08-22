@@ -1,12 +1,14 @@
 import { redirect } from 'next/navigation';
-import { getSessionUser } from '@/lib/api-server';
+import { getSessionAccess } from '@/lib/api-server';
+import { hasPermission, landingFor } from '@/lib/permissions';
 import { Nav } from '@/app/components/nav';
 import { BackLink } from '@/app/components/back-link';
 import { NewUserForm } from './new-user-form';
 
 export default async function NewUserPage() {
-  const session = await getSessionUser();
-  if (session?.role !== 'admin') redirect('/dashboard');
+  // Same rule as the API's users controller: the 'users' permission.
+  const access = await getSessionAccess();
+  if (!access || !hasPermission(access, 'users')) redirect(landingFor(access));
 
   return (
     <>

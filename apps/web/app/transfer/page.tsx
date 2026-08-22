@@ -1,4 +1,5 @@
-import { apiFetch, getSessionUser } from '@/lib/api-server';
+import { apiFetch, getSessionAccess } from '@/lib/api-server';
+import { hasPermission, landingFor } from '@/lib/permissions';
 import { redirect } from 'next/navigation';
 import { getLocations } from '@/lib/data';
 import type { StockLine } from '@/lib/actions/stock';
@@ -12,10 +13,12 @@ import { DeviceTransfer, StockTransfer } from './transfer-forms';
 // as a unit from its own page, so a third panel here would just be a worse way
 // to do the same thing.
 export default async function TransferPage() {
-  const user = await getSessionUser();
-  // Same gate as adjusting stock — a transfer changes what two locations hold.
-  if (user?.role !== 'admin' && user?.role !== 'manager') {
-    redirect('/dashboard');
+  const user = await getSessionAccess();
+  // Same gate as adjusting stock — a transfer changes what two locations
+  // hold, so it keys on 'manage_consumables', the permission that gates those
+  // writes on the API. Same audience the old admin/manager check had.
+  if (!hasPermission(user, 'manage_consumables')) {
+    redirect(landingFor(user));
   }
 
   const [locations, stock] = await Promise.all([

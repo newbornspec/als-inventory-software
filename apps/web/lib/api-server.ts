@@ -45,10 +45,26 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
   return (text ? JSON.parse(text) : undefined) as T;
 }
 
+// DB-fresh identity INCLUDING permissions, via POST /auth/me — what the nav,
+// the landing decision and permission-gated pages read. One API round trip
+// per call; null when there is no session or the API is unreachable. Still
+// UI-gating only: PermissionsGuard enforces access on every API call anyway.
+export async function getSessionAccess(): Promise<
+  (SessionUser & { name: string; permissions: string[] }) | null
+> {
+  try {
+    return await apiFetch('/auth/me', { method: 'POST' });
+  } catch {
+    return null;
+  }
+}
+
 // Decodes (does NOT verify) the JWT payload for UI-gating purposes only —
 // e.g. hiding an "Edit" button for technicians. This is never a security
-// boundary: NestJS's RolesGuard is what actually enforces access on every
-// write endpoint, regardless of what this function returns.
+// boundary: the API's PermissionsGuard is what actually enforces access on
+// every endpoint, regardless of what this function returns. Note the payload
+// carries NO permissions and its role can be up to 12h stale — use
+// getSessionAccess() where either matters.
 export async function getSessionUser(): Promise<SessionUser | null> {
   const store = await cookies();
   const token = store.get('token')?.value;
