@@ -245,6 +245,11 @@ export class DevicesService {
         // the asset itself may have declined to take, and null when the capture
         // proves nothing at all.
         auditStatus,
+        // Phase-5 provenance, straight onto the trail. NULL from old sticks.
+        auditKind: dto.auditKind ?? null,
+        operatorName: dto.operatorName ?? null,
+        restoreImageStatus: dto.restoreImageStatus ?? null,
+        restoreImageName: dto.restoreImageName ?? null,
         hardwareProfile: normalisedProfile,
         manufacturer,
         model,

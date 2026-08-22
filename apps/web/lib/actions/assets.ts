@@ -127,6 +127,7 @@ export async function addManualAsset(
         lotId: batchId,
         subLotId: s('subLotId'), // optional sub-lot chosen in the form
         manual: true,
+        auditKind: 'goods_in', // hand-entering a device is receiving work
         notes: s('notes'),
         profile,
       }),

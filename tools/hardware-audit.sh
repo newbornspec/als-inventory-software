@@ -1015,6 +1015,10 @@ wipe_internal_drives
 
 BODY="{\"lotId\":\"$CHOSEN_ID\""
 [ -n "$CHOSEN_SUB_ID" ] && BODY="$BODY,\"subLotId\":\"$CHOSEN_SUB_ID\""
+# Phase-5 provenance: this script IS the Amazon audit workflow, and
+# AUDIT_OPERATOR (optional, set in audit.conf) names the human at the bench.
+BODY="$BODY,\"auditKind\":\"amazon\""
+[ -n "${AUDIT_OPERATOR:-}" ] && BODY="$BODY,\"operatorName\":\"$(esc "$AUDIT_OPERATOR")\""
 [ -n "$WIPE_STATUS" ] && BODY="$BODY,\"dataWipeStatus\":\"$WIPE_STATUS\",\"dataWipeMethod\":\"$(esc "$WIPE_METHOD")\""
 BODY="$BODY,\"profile\":$PROFILE}"
 

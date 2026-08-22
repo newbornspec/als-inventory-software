@@ -17,6 +17,18 @@ import { isScopedManager, type RequestUser } from '../common/ownership';
 // backwards and shift every late-evening audit into the wrong day.
 const LONDON_DAY = `((aa."created_at" AT TIME ZONE 'UTC') AT TIME ZONE 'Europe/London')::date`;
 
+// Feed filter: a stored kind, or 'unclassified' for rows that predate the
+// audit_kind column (or came from a stick that does). Anything else is a 400.
+export const AUDIT_KIND_FILTERS = ['amazon', 'goods_in', 'unclassified'] as const;
+export type AuditKindFilter = (typeof AUDIT_KIND_FILTERS)[number];
+
+function kindClause(kind: AuditKindFilter | undefined, params: unknown[]): string {
+  if (!kind) return '';
+  if (kind === 'unclassified') return `AND aa."audit_kind" IS NULL`;
+  params.push(kind);
+  return `AND aa."audit_kind" = $${params.length}`;
+}
+
 export interface AuditDaySummary {
   day: string; // YYYY-MM-DD
   devices: number;
@@ -32,6 +44,10 @@ export interface DayEventRow {
   data_wipe_status: string | null;
   data_wipe_method: string | null;
   notes: string | null;
+  audit_kind: string | null;
+  operator_name: string | null;
+  restore_image_status: string | null;
+  restore_image_name: string | null;
   asset_name: string;
   asset_tag: string;
   unit_id: string | null;
@@ -56,6 +72,11 @@ export interface AuditDayDevice {
   cosmeticGrade: string | null;
   dataWipeStatus: string | null;
   dataWipeMethod: string | null;
+  auditKind: string | null;
+  restoreImageStatus: string | null;
+  restoreImageName: string | null;
+  // Who touched the device that day: the station's operator_name where the
+  // event carries one (the human), else the account that uploaded it.
   auditors: string[];
   events: {
     id: string;
@@ -64,6 +85,9 @@ export interface AuditDayDevice {
     cosmeticGrade: string | null;
     dataWipeStatus: string | null;
     dataWipeMethod: string | null;
+    restoreImageStatus: string | null;
+    restoreImageName: string | null;
+    auditKind: string | null;
     notes: string | null;
     auditor: string | null;
   }[];
@@ -90,6 +114,9 @@ export function groupDayEvents(rows: DayEventRow[]): AuditDayDevice[] {
         cosmeticGrade: null,
         dataWipeStatus: null,
         dataWipeMethod: null,
+        auditKind: null,
+        restoreImageStatus: null,
+        restoreImageName: null,
         auditors: [],
         events: [],
       };
@@ -100,7 +127,13 @@ export function groupDayEvents(rows: DayEventRow[]): AuditDayDevice[] {
     if (r.cosmetic_grade != null) d.cosmeticGrade = r.cosmetic_grade;
     if (r.data_wipe_status != null) d.dataWipeStatus = r.data_wipe_status;
     if (r.data_wipe_method != null) d.dataWipeMethod = r.data_wipe_method;
-    if (r.auditor_name && !d.auditors.includes(r.auditor_name)) d.auditors.push(r.auditor_name);
+    if (r.audit_kind != null) d.auditKind = r.audit_kind;
+    if (r.restore_image_status != null) d.restoreImageStatus = r.restore_image_status;
+    if (r.restore_image_name != null) d.restoreImageName = r.restore_image_name;
+    // The station's operator field names the human; the joined account name is
+    // the shared kiosk login and only stands in when no operator was recorded.
+    const who = r.operator_name || r.auditor_name;
+    if (who && !d.auditors.includes(who)) d.auditors.push(who);
     d.events.push({
       id: r.id,
       at: r.created_at,
@@ -108,8 +141,11 @@ export function groupDayEvents(rows: DayEventRow[]): AuditDayDevice[] {
       cosmeticGrade: r.cosmetic_grade,
       dataWipeStatus: r.data_wipe_status,
       dataWipeMethod: r.data_wipe_method,
+      restoreImageStatus: r.restore_image_status,
+      restoreImageName: r.restore_image_name,
+      auditKind: r.audit_kind,
       notes: r.notes,
-      auditor: r.auditor_name,
+      auditor: who ?? null,
     });
   }
   // Devices newest-activity-first; each device's events newest-first for
@@ -136,9 +172,14 @@ export class AuditsService {
     };
   }
 
-  async days(user?: RequestUser, limit = 30): Promise<AuditDaySummary[]> {
+  async days(
+    user?: RequestUser,
+    limit = 30,
+    kind?: AuditKindFilter,
+  ): Promise<AuditDaySummary[]> {
     const params: unknown[] = [];
     const { join, where } = this.scope(user, params);
+    const kindWhere = kindClause(kind, params);
     params.push(Math.min(Math.max(limit, 1), 120));
     const rows: { day: string; devices: number; events: number }[] =
       await this.audits.manager.query(
@@ -148,7 +189,7 @@ export class AuditsService {
          FROM "asset_audits" aa
          JOIN "assets" a ON a."id" = aa."asset_id"
          ${join}
-         WHERE TRUE ${where}
+         WHERE TRUE ${where} ${kindWhere}
          GROUP BY 1
          ORDER BY 1 DESC
          LIMIT $${params.length}`,
@@ -157,16 +198,22 @@ export class AuditsService {
     return rows;
   }
 
-  async day(day: string, user?: RequestUser): Promise<AuditDayDevice[]> {
+  async day(
+    day: string,
+    user?: RequestUser,
+    kind?: AuditKindFilter,
+  ): Promise<AuditDayDevice[]> {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) {
       throw new BadRequestException('day must be YYYY-MM-DD');
     }
     const params: unknown[] = [day];
     const { join, where } = this.scope(user, params);
+    const kindWhere = kindClause(kind, params);
     const rows: DayEventRow[] = await this.audits.manager.query(
       `SELECT aa."id", aa."asset_id", aa."created_at", aa."audit_status",
               aa."cosmetic_grade", aa."data_wipe_status", aa."data_wipe_method",
-              aa."notes",
+              aa."notes", aa."audit_kind", aa."operator_name",
+              aa."restore_image_status", aa."restore_image_name",
               a."name" AS asset_name, a."tag" AS asset_tag, a."unit_id",
               a."serial_number", a."device_type",
               u."name" AS auditor_name
@@ -174,7 +221,7 @@ export class AuditsService {
        JOIN "assets" a ON a."id" = aa."asset_id"
        LEFT JOIN "users" u ON u."id" = aa."audited_by_id"
        ${join}
-       WHERE ${LONDON_DAY} = $1::date ${where}
+       WHERE ${LONDON_DAY} = $1::date ${where} ${kindWhere}
        ORDER BY aa."created_at" ASC`,
       params,
     );

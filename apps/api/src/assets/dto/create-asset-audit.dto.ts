@@ -1,4 +1,4 @@
-import { IsBoolean, IsEnum, IsInt, IsObject, IsOptional, IsString } from 'class-validator';
+import { IsBoolean, IsEnum, IsIn, IsInt, IsObject, IsOptional, IsString } from 'class-validator';
 import { AssetAuditStatus, AssetConditionGrade } from '../asset.entity';
 import { DataWipeStatus, FinalDisposition } from '../asset-audit.entity';
 import type { FunctionalTestResults } from '../asset-audit.entity';
@@ -43,4 +43,9 @@ export class CreateAssetAuditDto {
   finalDisposition?: FinalDisposition;
 
   @IsOptional() @IsString() notes?: string;
+
+  // Which workflow filed this event. The web audit form sends 'goods_in' (it
+  // is the receiving surface); absent -> NULL -> shown as Unclassified.
+  // Flows onto the audit row via createAudit's {...dto} spread.
+  @IsOptional() @IsIn(['amazon', 'goods_in']) auditKind?: string;
 }

@@ -39,8 +39,9 @@ export function AuditForm({ assetId, onSaved }: { assetId: string; onSaved?: () 
     await db.execute(
       `INSERT INTO asset_audits (
          id, asset_id, audit_status, cosmetic_grade, functional_tests,
-         data_wipe_status, data_wipe_method, final_disposition, notes, created_at
-       ) VALUES (uuid(), ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         data_wipe_status, data_wipe_method, final_disposition, notes,
+         audit_kind, created_at
+       ) VALUES (uuid(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         assetId,
         auditStatus || null,
@@ -50,6 +51,8 @@ export function AuditForm({ assetId, onSaved }: { assetId: string; onSaved?: () 
         dataWipeMethod || null,
         finalDisposition || null,
         notes || null,
+        // This form is the receiving surface — a Goods In audit, never Amazon.
+        'goods_in',
         now,
       ],
     );

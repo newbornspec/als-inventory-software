@@ -192,6 +192,10 @@
     .iconbtn{width:46px;height:46px}
     .log{font-size:15px;height:250px}
   }
+/* The header's operator control: reads as a label, works as a button. */
+.linklike{background:none;border:none;color:var(--mut,#9aa4b2);font:inherit;
+  font-size:13px;cursor:pointer;padding:0 8px;text-decoration:underline dotted;}
+.linklike:hover{color:var(--fg,#e8edf2);}
 </style>
 </head>
 
@@ -212,6 +216,7 @@
       <span class="chip"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
         stroke-width="2" stroke-linecap="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg>
         <span id="hUser">—</span></span>
+      <button id="hOperator" class="linklike" title="Who is at this station? Recorded on every audit, wipe and restore this session." onclick="setOperator()">Operator: —</button>
       <span class="chip"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
         stroke-width="2" stroke-linecap="round"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M8 3v4M16 3v4M3 11h18"/></svg>
         <span id="hDate">—</span></span>
@@ -528,6 +533,7 @@ async function bootstrap(){
   $('hConn').textContent=bad?'Not connected':'Connected';
   $('hConn').style.color=bad?'var(--red)':'var(--green)';
   $('hUser').textContent=b.currentUser||'Operator';
+  $('hOperator').textContent='Operator: '+(b.operator||'— tap to set');
   // Records held on this machine because the network was down.
   const q=b.waiting||0;
   $('hQueue').classList.toggle('hidden',!q);
@@ -825,6 +831,18 @@ async function startAudit(){
   doAudit();
 }
 
+async function setOperator(){
+  // prompt() over a custom modal on purpose: the overlay helpers here are
+  // confirm-shaped, and a rewritten container would lose focus mid-typing
+  // (see the dropdown caveats above). The kiosk browser renders prompt fine.
+  const cur=($('hOperator').textContent||'').replace(/^Operator: /,'').replace(/^—.*/,'');
+  const n=prompt('Who is at this station? Recorded on every audit, wipe and restore.',cur);
+  if(n===null) return;
+  try{ const r=await jpost('/api/operator',{name:n});
+       if(r.ok) $('hOperator').textContent='Operator: '+(r.data.operator||'— tap to set'); }
+  catch(e){ toast('Could not save the operator name.',false); }
+}
+
 async function doAudit(){
   if(!BOOT.device){toast('Hardware not detected yet.',false);return;}
   $('aStart').disabled=true; $('aRun').classList.remove('hidden');
@@ -1013,7 +1031,8 @@ function confirmInstall(){
     ' and writes the OS image to it. This cannot be undone.', false, async()=>{
     closeOv();
     let res;
-    try{ res=await jpost('/api/os/install',{imageId:img,device:dev}); }
+    try{ res=await jpost('/api/os/install',{imageId:img,device:dev,
+      imageName:imgName,lotId:$('batchSel').value||undefined}); }
     catch(e){ toast('Could not start the install.',false); return; }
     if(!res.ok){toast(res.data.message||'Could not start install',false);return;}
     $('iActions').classList.add('hidden'); $('iRun').classList.remove('hidden');
