@@ -27,6 +27,9 @@ export interface Batch {
   // Real row counts, unrelated to the hand-typed expectedUnitCount below.
   subLotCount: number;
   expectedLineCount: number;
+  // Optional: web and API deploy independently; absent means the API predates
+  // the pool split and callers fall back to actualUnitCount.
+  unallocatedCount?: number;
   readyForSale: number;
   scrap: number;
   quarantine: number;

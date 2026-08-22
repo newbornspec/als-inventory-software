@@ -8,6 +8,7 @@ import type { Lot } from '@/lib/actions/batches';
 import { assignSubLot, moveAssetToBatch, deleteAssetFromLot } from '@/lib/actions/batches';
 import { sellAsset } from '@/lib/actions/sold';
 import { formatLabel } from '@/lib/asset-options';
+import { MoveToPallet } from '../move-to-pallet';
 
 // Level 2 of the hierarchy: the devices that belong to THIS purchase lot only.
 // A clean, searchable table — drill into a row for the full hardware audit.
@@ -18,6 +19,7 @@ export function LotAssets({
   otherBatches,
   canManage,
   canDelete,
+  canMove,
 }: {
   assets: Asset[];
   subLots: Lot[];
@@ -25,10 +27,14 @@ export function LotAssets({
   otherBatches: { id: string; batchNumber: string; source: string | null }[];
   canManage: boolean;
   canDelete: boolean;
+  canMove?: boolean;
 }) {
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const [q, setQ] = useState('');
+  // Ticked pool devices for Move to Pallet. Palletised rows are not tickable
+  // -- they have already left the pool and show where they sit instead.
+  const [selected, setSelected] = useState<string[]>([]);
   const router = useRouter();
 
   const filtered = useMemo(() => {
@@ -109,7 +115,17 @@ export function LotAssets({
   const actionCols =
     (canManage ? 2 : 0) + (canDelete ? 1 : 0) + (canManage && subLots.length > 0 ? 1 : 0);
   // 10 data columns + Unit ID + the always-present Print column.
-  const totalCols = 12 + actionCols;
+  const totalCols = 12 + actionCols + (canMove ? 1 : 0);
+
+  const poolFiltered = filtered.filter((a) => !a.palletId);
+  const allPoolSelected =
+    poolFiltered.length > 0 && poolFiltered.every((a) => selected.includes(a.id));
+  function toggleAllPool() {
+    setSelected(allPoolSelected ? [] : poolFiltered.map((a) => a.id));
+  }
+  function toggleOne(id: string) {
+    setSelected((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]));
+  }
 
   return (
     <div className="mt-3">
@@ -126,6 +142,16 @@ export function LotAssets({
         </span>
       </div>
 
+      {canMove && selected.length > 0 && (
+        <MoveToPallet
+          selectedIds={selected}
+          onMoved={() => {
+            setSelected([]);
+            router.refresh();
+          }}
+        />
+      )}
+
       <div
         role="region"
         aria-label="Devices in this lot"
@@ -140,6 +166,17 @@ export function LotAssets({
           <caption className="sr-only">Devices in this sub-lot</caption>
           <thead className="bg-neutral-50 text-neutral-500">
             <tr>
+              {canMove && (
+                <th scope="col" className="w-8 px-3 py-2">
+                  <input
+                    type="checkbox"
+                    aria-label="Select all unallocated devices"
+                    checked={allPoolSelected}
+                    onChange={toggleAllPool}
+                    disabled={poolFiltered.length === 0}
+                  />
+                </th>
+              )}
               <th scope="col" className="px-3 py-2">Unit ID</th>
               <th scope="col" className="px-3 py-2">Name</th>
               <th scope="col" className="px-3 py-2">Manufacturer</th>
@@ -161,11 +198,33 @@ export function LotAssets({
           <tbody>
             {filtered.map((a) => (
               <tr key={a.id} className="border-t border-neutral-200 hover:bg-neutral-50">
+                {canMove && (
+                  <td className="w-8 px-3 py-2">
+                    {a.palletId ? (
+                      <span aria-hidden="true" className="text-neutral-300">—</span>
+                    ) : (
+                      <input
+                        type="checkbox"
+                        aria-label={`Select ${a.name}`}
+                        checked={selected.includes(a.id)}
+                        onChange={() => toggleOne(a.id)}
+                      />
+                    )}
+                  </td>
+                )}
                 <td className="px-3 py-2 font-mono text-neutral-950">{a.unitId || '—'}</td>
                 <td className="px-3 py-2">
                   <Link href={`/assets/${a.id}`} className="text-neutral-950 underline">
                     {a.name}
                   </Link>
+                  {a.pallet && (
+                    <Link
+                      href={`/pallets/${a.pallet.id}`}
+                      className="ml-2 rounded border border-blue-200 bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-blue-700 hover:bg-blue-100"
+                    >
+                      {a.pallet.palletNumber}
+                    </Link>
+                  )}
                 </td>
                 <td className="px-3 py-2 text-neutral-700">{a.manufacturer || '—'}</td>
                 <td className="px-3 py-2 text-neutral-700">{a.model || '—'}</td>
@@ -202,6 +261,12 @@ export function LotAssets({
 
                 {canManage && otherBatches.length > 0 && (
                   <td className="px-3 py-2">
+                    {a.palletId ? (
+                      // Relocating a lot out from under a pallet allocation is
+                      // how provenance gets scrambled -- take it off the pallet
+                      // first (admin action), then move it.
+                      <span className="text-xs text-neutral-400">On pallet</span>
+                    ) : (
                     <select
                       value=""
                       onChange={(e) => onMove(a.id, e.target.value)}
@@ -217,6 +282,7 @@ export function LotAssets({
                         </option>
                       ))}
                     </select>
+                    )}
                   </td>
                 )}
 
