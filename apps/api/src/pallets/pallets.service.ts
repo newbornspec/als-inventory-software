@@ -57,10 +57,33 @@ export interface PalletAssetRow {
   unitId: string | null;
   tag: string;
   name: string;
+  // The device's captured configuration — what the buyer of a serialized
+  // pallet is actually buying. Sourced from the asset's hardware_profile
+  // (the capture tool's normalised snapshot); null where a device was
+  // hand-entered without one.
+  manufacturer: string | null;
+  model: string | null;
+  deviceType: string | null;
+  serialNumber: string | null;
+  cpu: string | null;
+  ramGb: number | null;
+  storage: string | null;
+  screenSize: string | null;
+  batteryHealth: string | null;
   conditionGrade: string | null;
   auditStatus: string | null;
   movedToPalletAt: Date | null;
   movedToPalletByName: string | null;
+}
+
+// "256GB NVMe + 1TB HDD" from the profile's drive list — same composition the
+// audit summary rows use, extended across every drive rather than the first.
+function composeStorage(profile: Asset['hardwareProfile']): string | null {
+  const drives = profile?.storage ?? [];
+  const parts = drives
+    .map((d) => [d.capacity, d.type].filter(Boolean).join(' '))
+    .filter((s) => s.length > 0);
+  return parts.length ? parts.join(' + ') : null;
 }
 
 export interface PalletDetail extends PalletWithTotals {
@@ -159,23 +182,40 @@ export class PalletsService {
     const assetRows: PalletAssetRow[] =
       pallet.entryLayout === PalletEntryLayout.ASSET
         ? (
-            await this.assets.find({
-              where: { palletId: id },
-              relations: { movedToPalletBy: true },
-              order: { movedToPalletAt: 'ASC' },
-            })
-          ).map((a) => ({
-            id: a.id,
-            unitId: a.unitId,
-            tag: a.tag,
-            name: a.name,
-            conditionGrade: a.conditionGrade,
-            auditStatus: a.auditStatus,
-            movedToPalletAt: a.movedToPalletAt,
-            movedToPalletByName: a.movedToPalletBy
-              ? sanitizeUser(a.movedToPalletBy).name
-              : null,
-          }))
+            await this.assets
+              .createQueryBuilder('asset')
+              .leftJoinAndSelect('asset.movedToPalletBy', 'movedToPalletBy')
+              // hardware_profile is select:false (kept out of list views) —
+              // added back here because the pallet page and its export ARE
+              // the spec sheet for these devices.
+              .addSelect('asset.hardwareProfile')
+              .where('asset.palletId = :id', { id })
+              .orderBy('asset.movedToPalletAt', 'ASC')
+              .getMany()
+          ).map((a) => {
+            const hp = a.hardwareProfile;
+            return {
+              id: a.id,
+              unitId: a.unitId,
+              tag: a.tag,
+              name: a.name,
+              manufacturer: a.manufacturer ?? hp?.identification?.manufacturer ?? null,
+              model: a.model ?? hp?.identification?.model ?? null,
+              deviceType: a.deviceType ?? a.category ?? null,
+              serialNumber: a.serialNumber,
+              cpu: hp?.cpu?.model ?? null,
+              ramGb: hp?.memory?.totalGb ?? null,
+              storage: composeStorage(hp),
+              screenSize: hp?.display?.size ?? null,
+              batteryHealth: hp?.battery?.health ?? null,
+              conditionGrade: a.conditionGrade,
+              auditStatus: a.auditStatus,
+              movedToPalletAt: a.movedToPalletAt,
+              movedToPalletByName: a.movedToPalletBy
+                ? sanitizeUser(a.movedToPalletBy).name
+                : null,
+            };
+          })
         : [];
 
     return {
@@ -1969,20 +2009,34 @@ export const ASSET_HEADERS: string[] = [
   'Pallet number',
   'Unit ID',
   'Serial / Tag',
-  'Device',
+  'Manufacturer',
+  'Model',
+  'Type',
+  'CPU',
+  'RAM',
+  'Storage',
+  'Screen',
+  'Battery',
   'Grade',
   'Audit status',
   'Moved to pallet',
   'Moved by',
 ];
-export const ASSET_WIDTHS: number[] = [16, 12, 22, 34, 12, 16, 20, 18];
+export const ASSET_WIDTHS: number[] = [16, 12, 20, 16, 22, 12, 26, 9, 20, 9, 10, 12, 16, 20, 18];
 
 export function assetReportRow(
   palletNumber: string,
   a: {
     unitId: string | null;
     tag: string;
-    name: string;
+    manufacturer: string | null;
+    model: string | null;
+    deviceType: string | null;
+    cpu: string | null;
+    ramGb: number | null;
+    storage: string | null;
+    screenSize: string | null;
+    batteryHealth: string | null;
     conditionGrade: string | null;
     auditStatus: string | null;
     movedToPalletAt: Date | null;
@@ -1993,7 +2047,15 @@ export function assetReportRow(
     palletNumber,
     a.unitId ?? '',
     a.tag,
-    a.name,
+    a.manufacturer ?? '',
+    a.model ?? '',
+    a.deviceType ?? '',
+    a.cpu ?? '',
+    // No space before GB, matching SPEC_RAM's convention everywhere else.
+    a.ramGb != null ? `${a.ramGb}GB` : '',
+    a.storage ?? '',
+    a.screenSize ?? '',
+    a.batteryHealth ?? '',
     a.conditionGrade ?? '',
     a.auditStatus ?? '',
     a.movedToPalletAt ? new Date(a.movedToPalletAt).toLocaleString('en-GB') : '',

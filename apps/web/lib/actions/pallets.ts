@@ -51,6 +51,17 @@ export interface PalletAssetRow {
   unitId: string | null;
   tag: string;
   name: string;
+  // Per-device configuration from the capture tool's hardware profile —
+  // null where a device was hand-entered without a capture.
+  manufacturer: string | null;
+  model: string | null;
+  deviceType: string | null;
+  serialNumber: string | null;
+  cpu: string | null;
+  ramGb: number | null;
+  storage: string | null;
+  screenSize: string | null;
+  batteryHealth: string | null;
   conditionGrade: string | null;
   auditStatus: string | null;
   movedToPalletAt: string | null;
