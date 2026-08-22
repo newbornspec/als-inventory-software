@@ -187,43 +187,7 @@ export class PalletsService {
     // is skipped entirely rather than run empty.
     const assetRows: PalletAssetRow[] =
       pallet.entryLayout === PalletEntryLayout.ASSET
-        ? (
-            await this.assets
-              .createQueryBuilder('asset')
-              .leftJoinAndSelect('asset.movedToPalletBy', 'movedToPalletBy')
-              // hardware_profile is select:false (kept out of list views) —
-              // added back here because the pallet page and its export ARE
-              // the spec sheet for these devices.
-              .addSelect('asset.hardwareProfile')
-              .where('asset.palletId = :id', { id })
-              .orderBy('asset.movedToPalletAt', 'ASC')
-              .getMany()
-          ).map((a) => {
-            const hp = a.hardwareProfile;
-            return {
-              id: a.id,
-              unitId: a.unitId,
-              tag: a.tag,
-              name: a.name,
-              manufacturer: a.manufacturer ?? hp?.identification?.manufacturer ?? null,
-              model: a.model ?? hp?.identification?.model ?? null,
-              deviceType: a.deviceType ?? a.category ?? null,
-              serialNumber: a.serialNumber,
-              cpu: hp?.cpu?.model ?? null,
-              ramGb: hp?.memory?.totalGb ?? null,
-              storage: composeStorage(hp),
-              screenSize: hp?.display?.size ?? null,
-              batteryHealth: hp?.battery?.health ?? null,
-              conditionGrade: a.conditionGrade,
-              auditStatus: a.auditStatus,
-              movedToPalletAt: a.movedToPalletAt,
-              movedToPalletByName: a.movedToPalletBy
-                ? sanitizeUser(a.movedToPalletBy).name
-                : null,
-              soldAt: a.soldAt,
-              salePrice: a.salePrice,
-            };
-          })
+        ? ((await this.assetRowsByPallet([id])).get(id) ?? [])
         : [];
 
     return {
@@ -945,22 +909,6 @@ export class PalletsService {
       );
     }
 
-    // Asset pallets are refused rather than silently rendered empty — their
-    // rows are devices, not lines, and this workbook's sections are line-
-    // shaped. Their own single-pallet export handles them.
-    const assetPallets = found.filter(
-      (p) => p.entryLayout === PalletEntryLayout.ASSET,
-    );
-    if (assetPallets.length > 0) {
-      throw new BadRequestException(
-        `${assetPallets.map((p) => p.palletNumber).join(', ')} hold${
-          assetPallets.length === 1 ? 's' : ''
-        } serialized devices — export ${
-          assetPallets.length === 1 ? 'it' : 'them'
-        } individually from the pallet page.`,
-      );
-    }
-
     // Pallet number ascending rather than selection order: a spreadsheet is
     // read top to bottom and the numbers are sequential, so this is the order
     // in which someone can find a pallet by eye.
@@ -987,8 +935,17 @@ export class PalletsService {
     const generated = new Date().toLocaleString('en-GB');
     const isSpec = (p: PalletWithTotals) =>
       p.entryLayout === PalletEntryLayout.SPEC;
-    const layout1 = pallets.filter((p) => !isSpec(p));
+    const isAsset = (p: PalletWithTotals) =>
+      p.entryLayout === PalletEntryLayout.ASSET;
+    const layout1 = pallets.filter((p) => !isSpec(p) && !isAsset(p));
     const layout2 = pallets.filter(isSpec);
+    // Serialized pallets get their own sheet: their rows are DEVICES with the
+    // full per-unit configuration, not quantity lines — transferring whole
+    // Goods In batches made them the common case, so the bulk export must
+    // carry them rather than refuse the selection.
+    const assetPallets2 = pallets.filter(isAsset);
+    const deviceRows = await this.assetRowsByPallet(assetPallets2.map((p) => p.id));
+    const deviceTotal = [...deviceRows.values()].reduce((n, r) => n + r.length, 0);
 
     // The sheet holding the actual stock is called "Items". It used to be named
     // after the entry layout that built the pallet — an internal idea from the
@@ -1001,9 +958,14 @@ export class PalletsService {
     // catalogue product and has no cost column at all. So a mixed selection
     // gets one named sheet each, and the far more common single-layout
     // selection gets a sheet called simply "Items".
-    const mixed = layout1.length > 0 && layout2.length > 0;
+    const kindsPresent =
+      (layout1.length > 0 ? 1 : 0) +
+      (layout2.length > 0 ? 1 : 0) +
+      (assetPallets2.length > 0 ? 1 : 0);
+    const mixed = kindsPresent > 1;
     const itemSheet = (spec: boolean) =>
       mixed ? `Items (${spec ? 'Layout 2' : 'Layout 1'})` : 'Items';
+    const deviceSheetName = mixed ? 'Items (Serialized)' : 'Items';
 
     // A merged pallet's lines remember which pallet they came from, and an
     // export of one has to show it or the traceability is only in the database.
@@ -1147,6 +1109,33 @@ export class PalletsService {
       totalRow.font = { bold: true };
     }
 
+    if (assetPallets2.length > 0) {
+      const { ws, firstDataRow } = startSheet(
+        deviceSheetName,
+        'Pallet Export — serialized devices',
+        ASSET_HEADERS,
+        ASSET_WIDTHS,
+        [
+          ['Date generated', generated],
+          ['Pallets included', assetPallets2.length],
+          ['Devices', deviceTotal],
+        ],
+      );
+
+      let row = firstDataRow;
+      for (const pallet of assetPallets2) {
+        for (const device of deviceRows.get(pallet.id) ?? []) {
+          ws.getRow(row).values = assetReportRow(pallet.palletNumber, device);
+          row += 1;
+        }
+      }
+
+      const totalRow = ws.getRow(row + 1);
+      totalRow.getCell(1).value = 'Total';
+      totalRow.getCell(ASSET_HEADERS.length).value = deviceTotal;
+      totalRow.font = { bold: true };
+    }
+
     // Summary — the per-pallet facts, once each.
     {
       const headers = [
@@ -1166,6 +1155,7 @@ export class PalletsService {
       const sheetNames = [
         ...(layout1.length ? [itemSheet(false)] : []),
         ...(layout2.length ? [itemSheet(true)] : []),
+        ...(assetPallets2.length ? [deviceSheetName] : []),
       ];
       const { ws, firstDataRow } = startSheet(
         'Summary',
@@ -1179,7 +1169,9 @@ export class PalletsService {
           // sees only totals here and reasonably concludes the stock is missing.
           [
             'Item detail',
-            `${totalLines} item lines on the ${sheetNames.map((n) => `"${n}"`).join(' and ')} sheet${sheetNames.length > 1 ? 's' : ''}`,
+            `${totalLines} item line${totalLines === 1 ? '' : 's'}${
+              deviceTotal > 0 ? ` and ${deviceTotal} device${deviceTotal === 1 ? '' : 's'}` : ''
+            } on the ${sheetNames.map((n) => `"${n}"`).join(' and ')} sheet${sheetNames.length > 1 ? 's' : ''}`,
           ],
         ],
       );
@@ -1190,7 +1182,7 @@ export class PalletsService {
         ws.getRow(row).values = [
           p.palletNumber,
           londonDate(p.createdAt) ?? '',
-          isSpec(p) ? 'Layout 2' : 'Layout 1',
+          layoutName(p.entryLayout),
           p.supplier ?? '',
           p.buyer ?? '',
           p.description ?? '',
@@ -1828,6 +1820,54 @@ export class PalletsService {
 
   // Totals are always summed live from the lines, never stored, so they can't
   // drift from the counts.
+  // The device rows for one or many asset pallets, projected for the page and
+  // both exports from ONE code path. hardware_profile is select:false (kept
+  // out of list views) — added back here because these surfaces ARE the spec
+  // sheet for the devices.
+  private async assetRowsByPallet(
+    palletIds: string[],
+  ): Promise<Map<string, PalletAssetRow[]>> {
+    const out = new Map<string, PalletAssetRow[]>();
+    if (palletIds.length === 0) return out;
+    const devices = await this.assets
+      .createQueryBuilder('asset')
+      .leftJoinAndSelect('asset.movedToPalletBy', 'movedToPalletBy')
+      .addSelect('asset.hardwareProfile')
+      .where('asset.palletId IN (:...ids)', { ids: palletIds })
+      .orderBy('asset.movedToPalletAt', 'ASC')
+      .getMany();
+    for (const a of devices) {
+      const hp = a.hardwareProfile;
+      const row: PalletAssetRow = {
+        id: a.id,
+        unitId: a.unitId,
+        tag: a.tag,
+        name: a.name,
+        manufacturer: a.manufacturer ?? hp?.identification?.manufacturer ?? null,
+        model: a.model ?? hp?.identification?.model ?? null,
+        deviceType: a.deviceType ?? a.category ?? null,
+        serialNumber: a.serialNumber,
+        cpu: hp?.cpu?.model ?? null,
+        ramGb: hp?.memory?.totalGb ?? null,
+        storage: composeStorage(hp),
+        screenSize: hp?.display?.size ?? null,
+        batteryHealth: hp?.battery?.health ?? null,
+        conditionGrade: a.conditionGrade,
+        auditStatus: a.auditStatus,
+        movedToPalletAt: a.movedToPalletAt,
+        movedToPalletByName: a.movedToPalletBy
+          ? sanitizeUser(a.movedToPalletBy).name
+          : null,
+        soldAt: a.soldAt,
+        salePrice: a.salePrice,
+      };
+      const bucket = out.get(a.palletId!);
+      if (bucket) bucket.push(row);
+      else out.set(a.palletId!, [row]);
+    }
+    return out;
+  }
+
   private async withTotals(pallets: Pallet[]): Promise<PalletWithTotals[]> {
     if (pallets.length === 0) return [];
     const rows = await this.lines
@@ -1983,6 +2023,7 @@ export interface MergeCandidate {
 }
 
 export function layoutName(entryLayout: string | null | undefined): string {
+  if (entryLayout === PalletEntryLayout.ASSET) return 'Serialized';
   return entryLayout === PalletEntryLayout.SPEC ? 'Layout 2' : 'Layout 1';
 }
 
