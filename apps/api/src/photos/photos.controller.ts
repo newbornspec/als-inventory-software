@@ -11,22 +11,23 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { Roles } from '../auth/guards/roles.decorator';
-import { RolesGuard } from '../auth/guards/roles.guard';
-import { UserRole } from '../users/user.entity';
+import { PermissionsGuard } from '../auth/guards/permissions.guard';
+import { RequirePermissions } from '../auth/guards/permissions.decorator';
 import { PhotosService } from './photos.service';
 import { CreatePhotoDto } from './dto/create-photo.dto';
 
 @Controller('assets/:assetId/photos')
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, PermissionsGuard)
 export class PhotosController {
   constructor(private photos: PhotosService) {}
 
+  @RequirePermissions('assets', 'goods_in')
   @Get()
   list(@Param('assetId') assetId: string) {
     return this.photos.listForAsset(assetId);
   }
 
+  @RequirePermissions('assets', 'goods_in')
   @Get(':id')
   @Header('Cache-Control', 'private, max-age=31536000, immutable')
   async data(
@@ -37,6 +38,7 @@ export class PhotosController {
     return new StreamableFile(data, { type: contentType });
   }
 
+  @RequirePermissions('assets', 'goods_in')
   @Post()
   create(
     @Param('assetId') assetId: string,
@@ -46,7 +48,7 @@ export class PhotosController {
     return this.photos.create(assetId, dto, req.user.userId);
   }
 
-  @Roles(UserRole.ADMIN, UserRole.MANAGER)
+  @RequirePermissions('manage_photos')
   @Delete(':id')
   remove(@Param('assetId') assetId: string, @Param('id') id: string) {
     return this.photos.remove(assetId, id);

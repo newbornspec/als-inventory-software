@@ -18,7 +18,13 @@ export default async function UsersPage() {
       <Nav />
       <main id="main-content" tabIndex={-1} className="min-h-screen bg-white text-neutral-950 px-4 py-6 sm:p-8">
         <div className="flex items-center justify-between">
-          <h1 className="text-2xl font-semibold">Users</h1>
+          <div>
+            <h1 className="text-2xl font-semibold">Users</h1>
+            <p className="mt-1 text-sm text-neutral-500">
+              Changing a role here resets that user&rsquo;s access to the role&rsquo;s standard
+              set — open Access to tailor what an individual can see and do.
+            </p>
+          </div>
           <Link
             href="/users/new"
             className="rounded-md bg-[#1a6ef5] hover:bg-blue-600 px-4 py-2 text-sm font-medium text-white"
@@ -70,17 +76,26 @@ export default async function UsersPage() {
                     </form>
                   </td>
                   <td className="px-4 py-3 text-right">
-                    {user.id !== session.userId && (
-                      <form action={deleteUser.bind(null, user.id)}>
-                        <button
-                          type="submit"
-                          aria-label={`Delete the account for ${user.name}`}
-                          className="text-xs text-red-700 hover:underline"
-                        >
-                          Delete
-                        </button>
-                      </form>
-                    )}
+                    <div className="flex items-center justify-end gap-4">
+                      <Link
+                        href={`/users/${user.id}`}
+                        aria-label={`Edit access for ${user.name}`}
+                        className="text-xs text-neutral-800 underline hover:text-neutral-950"
+                      >
+                        Access
+                      </Link>
+                      {user.id !== session.userId && (
+                        <form action={deleteUser.bind(null, user.id)}>
+                          <button
+                            type="submit"
+                            aria-label={`Delete the account for ${user.name}`}
+                            className="text-xs text-red-700 hover:underline"
+                          >
+                            Delete
+                          </button>
+                        </form>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ))}

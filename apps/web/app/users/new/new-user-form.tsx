@@ -1,7 +1,8 @@
 'use client';
 
-import { useActionState } from 'react';
+import { useActionState, useState } from 'react';
 import { createUser, type ActionState } from '@/lib/actions/users';
+import { PermissionsPicker } from '../permissions-picker';
 
 const ROLES = ['admin', 'manager', 'technician'];
 
@@ -9,46 +10,54 @@ export function NewUserForm() {
   const [state, formAction, pending] = useActionState<ActionState, FormData>(createUser, {
     error: null,
   });
+  // Role is controlled state (not just a form field) so the permissions grid
+  // can reset to the chosen role's baseline as it changes.
+  const [role, setRole] = useState('technician');
 
   return (
-    <form action={formAction} className="mt-6 max-w-sm space-y-3">
-      <div className="space-y-1">
-        <label htmlFor="users-new-new-user-form-name" className="text-sm text-neutral-700">Name</label>
-        <input id="users-new-new-user-form-name" name="name"
-          required
-          className="field-underline w-full px-3 py-2 text-sm"
-        />
+    <form action={formAction} className="mt-6 max-w-2xl space-y-3">
+      <div className="max-w-sm space-y-3">
+        <div className="space-y-1">
+          <label htmlFor="users-new-new-user-form-name" className="text-sm text-neutral-700">Name</label>
+          <input id="users-new-new-user-form-name" name="name"
+            required
+            className="field-underline w-full px-3 py-2 text-sm"
+          />
+        </div>
+        <div className="space-y-1">
+          <label htmlFor="users-new-new-user-form-email" className="text-sm text-neutral-700">Email</label>
+          <input id="users-new-new-user-form-email" name="email"
+            type="email"
+            required
+            className="field-underline w-full px-3 py-2 text-sm"
+          />
+        </div>
+        <div className="space-y-1">
+          <label htmlFor="users-new-new-user-form-password" className="text-sm text-neutral-700">Temporary password</label>
+          <input id="users-new-new-user-form-password" name="password"
+            type="password"
+            required
+            minLength={8}
+            className="field-underline w-full px-3 py-2 text-sm"
+          />
+        </div>
+        <div className="space-y-1">
+          <label htmlFor="users-new-new-user-form-role" className="text-sm text-neutral-700">Role</label>
+          <select id="users-new-new-user-form-role" name="role"
+            value={role}
+            onChange={(e) => setRole(e.target.value)}
+            className="field-underline w-full px-3 py-2 text-sm"
+          >
+            {ROLES.map((r) => (
+              <option key={r} value={r}>
+                {r}
+              </option>
+            ))}
+          </select>
+        </div>
       </div>
-      <div className="space-y-1">
-        <label htmlFor="users-new-new-user-form-email" className="text-sm text-neutral-700">Email</label>
-        <input id="users-new-new-user-form-email" name="email"
-          type="email"
-          required
-          className="field-underline w-full px-3 py-2 text-sm"
-        />
-      </div>
-      <div className="space-y-1">
-        <label htmlFor="users-new-new-user-form-password" className="text-sm text-neutral-700">Temporary password</label>
-        <input id="users-new-new-user-form-password" name="password"
-          type="password"
-          required
-          minLength={8}
-          className="field-underline w-full px-3 py-2 text-sm"
-        />
-      </div>
-      <div className="space-y-1">
-        <label htmlFor="users-new-new-user-form-role" className="text-sm text-neutral-700">Role</label>
-        <select id="users-new-new-user-form-role" name="role"
-          defaultValue="technician"
-          className="field-underline w-full px-3 py-2 text-sm"
-        >
-          {ROLES.map((r) => (
-            <option key={r} value={r}>
-              {r}
-            </option>
-          ))}
-        </select>
-      </div>
+
+      <PermissionsPicker role={role} />
 
       {state.error && <p role="alert" className="text-sm text-red-700">{state.error}</p>}
 

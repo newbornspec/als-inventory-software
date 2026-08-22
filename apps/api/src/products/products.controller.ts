@@ -10,44 +10,45 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { Roles } from '../auth/guards/roles.decorator';
-import { RolesGuard } from '../auth/guards/roles.guard';
-import { UserRole } from '../users/user.entity';
+import { PermissionsGuard } from '../auth/guards/permissions.guard';
+import { RequirePermissions } from '../auth/guards/permissions.decorator';
 import { ProductsService } from './products.service';
 import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { QueryProductsDto } from './dto/query-products.dto';
 
 @Controller('products')
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, PermissionsGuard)
 export class ProductsController {
   constructor(private products: ProductsService) {}
 
-  // Any role can read the catalogue — technicians pick a product's spec when
-  // building a sub-lot on the scan page, same reasoning as asset/batch reads.
+  // Readable with any of goods_in/assets/pallets — technicians pick a product's
+  // spec when building a sub-lot on the scan page, same reasoning as asset/batch reads.
+  @RequirePermissions('goods_in', 'assets', 'pallets')
   @Get()
   findAll(@Query() query: QueryProductsDto) {
     return this.products.findAll(query);
   }
 
+  @RequirePermissions('goods_in', 'assets', 'pallets')
   @Get(':id')
   findOne(@Param('id') id: string) {
     return this.products.findOne(id);
   }
 
-  @Roles(UserRole.ADMIN, UserRole.MANAGER)
+  @RequirePermissions('manage_products')
   @Post()
   create(@Body() dto: CreateProductDto) {
     return this.products.create(dto);
   }
 
-  @Roles(UserRole.ADMIN, UserRole.MANAGER)
+  @RequirePermissions('manage_products')
   @Patch(':id')
   update(@Param('id') id: string, @Body() dto: UpdateProductDto) {
     return this.products.update(id, dto);
   }
 
-  @Roles(UserRole.ADMIN)
+  @RequirePermissions('delete_product')
   @Delete(':id')
   remove(@Param('id') id: string) {
     return this.products.remove(id);

@@ -13,9 +13,8 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { Roles } from '../auth/guards/roles.decorator';
-import { RolesGuard } from '../auth/guards/roles.guard';
-import { UserRole } from '../users/user.entity';
+import { PermissionsGuard } from '../auth/guards/permissions.guard';
+import { RequirePermissions } from '../auth/guards/permissions.decorator';
 import { PalletsService } from './pallets.service';
 import { CreatePalletDto } from './dto/create-pallet.dto';
 import { CreatePalletSpecDto } from './dto/create-pallet-spec.dto';
@@ -26,10 +25,11 @@ import { ExportPalletsDto } from './dto/export-pallets.dto';
 import { MergePalletsDto } from './dto/merge-pallets.dto';
 
 @Controller('pallets')
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, PermissionsGuard)
 export class PalletsController {
   constructor(private pallets: PalletsService) {}
 
+  @RequirePermissions('pallets')
   @Get()
   findAll() {
     return this.pallets.findAll();
@@ -37,23 +37,25 @@ export class PalletsController {
 
   // Declared before ':id' so 'sold' isn't captured as a pallet id. The Sold
   // archive for pallet goods (unreturned sold quantities).
+  @RequirePermissions('pallets', 'sold')
   @Get('sold')
   findSoldLines() {
     return this.pallets.findSoldLines();
   }
 
   // Declared before ':id' for the same reason as 'sold' above. The suggested
-  // number for a new pallet — the operator can overwrite it. No @Roles: anyone
-  // who can reach the New Pallet form needs it, and it exposes nothing.
+  // number for a new pallet — the operator can overwrite it. Needs the pallets
+  // module permission like the rest of the page.
+  @RequirePermissions('pallets')
   @Get('next-number')
   async nextNumber(): Promise<{ palletNumber: string }> {
     return { palletNumber: await this.pallets.nextPalletNumber() };
   }
 
   // Declared before ':id' like the two above. A POST because the selection
-  // travels in the body, not the URL — see ExportPalletsDto. Same admin/manager
-  // gate as the per-pallet report below: this carries the same purchase costs.
-  @Roles(UserRole.ADMIN, UserRole.MANAGER)
+  // travels in the body, not the URL — see ExportPalletsDto. Same export
+  // permission as the per-pallet report below: this carries the same purchase costs.
+  @RequirePermissions('export')
   @Post('export.xlsx')
   @Header('Cache-Control', 'no-store')
   async exportMany(@Body() dto: ExportPalletsDto): Promise<StreamableFile> {
@@ -68,16 +70,16 @@ export class PalletsController {
 
   // Both declared before the ':id' routes, like 'sold' and 'next-number'.
   //
-  // Not technician: merging retires pallets and creates a replacement, which is
-  // far closer to deleting a pallet (admin only) than to editing a line. A
-  // technician may correct what is on a pallet but may not retire one.
-  @Roles(UserRole.ADMIN, UserRole.MANAGER)
+  // Its own merge_pallets permission: merging retires pallets and creates a
+  // replacement, which is far closer to deleting a pallet than to editing a
+  // line. Correcting what is on a pallet does not grant retiring one.
+  @RequirePermissions('merge_pallets')
   @Post('merge/preview')
   mergePreview(@Body() dto: MergePalletsDto) {
     return this.pallets.previewMerge(dto.palletIds);
   }
 
-  @Roles(UserRole.ADMIN, UserRole.MANAGER)
+  @RequirePermissions('merge_pallets')
   @Post('merge')
   merge(
     @Body() dto: MergePalletsDto,
@@ -86,12 +88,13 @@ export class PalletsController {
     return this.pallets.mergePallets(dto, req.user?.userId ?? null);
   }
 
+  @RequirePermissions('pallets')
   @Get(':id')
   findOne(@Param('id') id: string) {
     return this.pallets.findOne(id);
   }
 
-  @Roles(UserRole.ADMIN, UserRole.MANAGER)
+  @RequirePermissions('export')
   @Get(':id/report.xlsx')
   async report(@Param('id') id: string): Promise<StreamableFile> {
     const { buffer, filename } = await this.pallets.generateReport(id);
@@ -101,7 +104,7 @@ export class PalletsController {
     });
   }
 
-  @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.TECHNICIAN)
+  @RequirePermissions('pallets')
   @Post()
   create(@Body() dto: CreatePalletDto) {
     return this.pallets.create(dto);
@@ -109,26 +112,26 @@ export class PalletsController {
 
   // Layout 2 (spec table): create a pallet — empty body creates an empty grid
   // pallet (number generated immediately), rows fill it at creation if given.
-  @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.TECHNICIAN)
+  @RequirePermissions('pallets')
   @Post('spec')
   createFromSpec(@Body() dto: CreatePalletSpecDto) {
     return this.pallets.createFromSpec(dto);
   }
 
   // Layout 2 editor: one save replaces the pallet's metadata + all spec rows.
-  @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.TECHNICIAN)
+  @RequirePermissions('pallets')
   @Put(':id/spec')
   replaceSpec(@Param('id') id: string, @Body() dto: CreatePalletSpecDto) {
     return this.pallets.replaceSpec(id, dto);
   }
 
-  @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.TECHNICIAN)
+  @RequirePermissions('pallets')
   @Patch(':id')
   update(@Param('id') id: string, @Body() dto: UpdatePalletDto) {
     return this.pallets.update(id, dto);
   }
 
-  @Roles(UserRole.ADMIN)
+  @RequirePermissions('delete_pallet')
   @Delete(':id')
   remove(@Param('id') id: string) {
     return this.pallets.remove(id);
@@ -136,8 +139,8 @@ export class PalletsController {
 
   // --- Sold workflow ---
 
-  // Selling is normal warehouse work — any role may do it.
-  @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.TECHNICIAN)
+  // Selling is normal warehouse work — gated by the sell_items permission.
+  @RequirePermissions('sell_items')
   @Post(':id/sell')
   sellPallet(
     @Param('id') id: string,
@@ -147,7 +150,7 @@ export class PalletsController {
     return this.pallets.sellPallet(id, req.user.userId, body?.saleTotal);
   }
 
-  @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.TECHNICIAN)
+  @RequirePermissions('sell_items')
   @Post(':id/lines/:lineId/sell')
   sellLine(
     @Param('id') id: string,
@@ -164,9 +167,9 @@ export class PalletsController {
     );
   }
 
-  // Bulk return from the Sold page — admin only. No palletId -> each row
+  // Bulk return from the Sold page — needs return_sold. No palletId -> each row
   // returns to its own original pallet.
-  @Roles(UserRole.ADMIN)
+  @RequirePermissions('return_sold')
   @Post('sold/return-bulk')
   bulkReturnSoldLines(
     @Body() body: { soldIds: string[]; palletId?: string },
@@ -179,8 +182,8 @@ export class PalletsController {
     );
   }
 
-  // Returning sold goods to inventory is admin-only.
-  @Roles(UserRole.ADMIN)
+  // Returning sold goods to inventory needs the return_sold permission.
+  @RequirePermissions('return_sold')
   @Post('sold/:soldId/return')
   returnSoldLine(
     @Param('soldId') soldId: string,
@@ -192,13 +195,13 @@ export class PalletsController {
 
   // --- lines ---
 
-  @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.TECHNICIAN)
+  @RequirePermissions('pallets')
   @Post(':id/lines')
   addLine(@Param('id') id: string, @Body() dto: CreatePalletLineDto) {
     return this.pallets.addLine(id, dto);
   }
 
-  @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.TECHNICIAN)
+  @RequirePermissions('pallets')
   @Patch(':id/lines/:lineId')
   updateLine(
     @Param('id') id: string,
@@ -209,8 +212,9 @@ export class PalletsController {
   }
 
   // Removing a mistyped line is content-correction (input), not deleting the
-  // whole pallet — technicians may do it. Whole-pallet delete stays admin-only.
-  @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.TECHNICIAN)
+  // whole pallet — it stays under the pallets permission. Whole-pallet delete
+  // needs delete_pallet.
+  @RequirePermissions('pallets')
   @Delete(':id/lines/:lineId')
   removeLine(@Param('id') id: string, @Param('lineId') lineId: string) {
     return this.pallets.removeLine(id, lineId);

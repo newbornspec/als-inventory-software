@@ -7,18 +7,17 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { Roles } from '../auth/guards/roles.decorator';
-import { RolesGuard } from '../auth/guards/roles.guard';
-import { UserRole } from '../users/user.entity';
+import { PermissionsGuard } from '../auth/guards/permissions.guard';
+import { RequirePermissions } from '../auth/guards/permissions.decorator';
 import { InvoicesService } from './invoices.service';
 import { renderInvoice } from './invoice-pdf';
 import { safeFilePart } from '../pallets/pallets.service';
 
-// Invoicing is a money document: admin and manager only, matching the pallet
-// report and costing sheet rather than the wider line-editing roles.
+// Invoicing is a money document: requires the 'sold' permission, matching the
+// sales flow rather than the wider line-editing permissions.
 @Controller()
-@UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(UserRole.ADMIN, UserRole.MANAGER)
+@UseGuards(JwtAuthGuard, PermissionsGuard)
+@RequirePermissions('sold')
 export class InvoicesController {
   constructor(private invoices: InvoicesService) {}
 

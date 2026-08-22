@@ -13,9 +13,8 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { Roles } from '../auth/guards/roles.decorator';
-import { RolesGuard } from '../auth/guards/roles.guard';
-import { UserRole } from '../users/user.entity';
+import { PermissionsGuard } from '../auth/guards/permissions.guard';
+import { RequirePermissions } from '../auth/guards/permissions.decorator';
 import { AssetsService } from './assets.service';
 import { BarcodeService, BarcodeType } from './barcode.service';
 import { CertificatesService } from './certificates.service';
@@ -25,7 +24,7 @@ import { QueryAssetsDto } from './dto/query-assets.dto';
 import { CreateAssetAuditDto } from './dto/create-asset-audit.dto';
 
 @Controller('assets')
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, PermissionsGuard)
 export class AssetsController {
   constructor(
     private assets: AssetsService,
@@ -33,8 +32,9 @@ export class AssetsController {
     private certificates: CertificatesService,
   ) {}
 
-  // Any authenticated role can view/search — technicians need this to look
-  // up assets in the field, not just admins/managers.
+  // Viewable with assets, goods_in, or scan permission — technicians need this
+  // to look up assets in the field, not just admins/managers.
+  @RequirePermissions('assets', 'goods_in', 'scan')
   @Get()
   findAll(@Query() query: QueryAssetsDto, @Req() req: any) {
     return this.assets.findAll(query, req.user);
@@ -42,37 +42,42 @@ export class AssetsController {
 
   // Declared before ':id' so 'sold' isn't captured as an asset id. The Sold
   // archive of serialized devices.
+  @RequirePermissions('sold')
   @Get('sold')
   findSold() {
     return this.assets.findSold();
   }
 
-  // Bulk return from the Sold page — admin only, like single returns.
+  // Bulk return from the Sold page — requires return_sold, like single returns.
   // No batchId -> each asset returns to its own original lot.
-  @Roles(UserRole.ADMIN)
+  @RequirePermissions('return_sold')
   @Post('sold/return-bulk')
   bulkReturn(@Body() body: { assetIds: string[]; batchId?: string }, @Req() req: any) {
     return this.assets.bulkReturnFromSold(body?.assetIds ?? [], body?.batchId, req.user);
   }
 
+  @RequirePermissions('assets', 'goods_in', 'scan')
   @Get(':id')
   findOne(@Param('id') id: string, @Req() req: any) {
     return this.assets.findOne(id, req.user);
   }
 
+  @RequirePermissions('assets', 'goods_in', 'scan')
   @Get(':id/history')
   findHistory(@Param('id') id: string, @Req() req: any) {
     return this.assets.findHistory(id, req.user);
   }
 
+  @RequirePermissions('assets', 'goods_in', 'scan', 'amazon_audit')
   @Get(':id/audits')
   findAudits(@Param('id') id: string, @Req() req: any) {
     return this.assets.findAudits(id, req.user);
   }
 
-  // Open to any role, unlike create/update/delete — recording a physical
+  // Requires a perform-audit permission — recording a physical
   // ITAD audit (grading, testing, data wipe) is field work a technician
   // does, not an admin/manager-only action.
+  @RequirePermissions('perform_goods_in_audit', 'perform_amazon_audit')
   @Post(':id/audits')
   createAudit(
     @Param('id') id: string,
@@ -82,8 +87,10 @@ export class AssetsController {
     return this.assets.createAudit(id, dto, req.user.userId);
   }
 
-  // Certificate of Data Erasure (PDF). Any authed role — a technician who wiped
-  // the unit may need to produce the certificate for the customer.
+  // Certificate of Data Erasure (PDF). Requires assets, goods_in, or
+  // amazon_audit — a technician who wiped the unit may need to produce the
+  // certificate for the customer.
+  @RequirePermissions('assets', 'goods_in', 'amazon_audit')
   @Get(':id/erasure-certificate.pdf')
   @Header('Cache-Control', 'no-store')
   async erasureCertificate(@Param('id') id: string, @Req() req: any): Promise<StreamableFile> {
@@ -94,6 +101,7 @@ export class AssetsController {
     });
   }
 
+  @RequirePermissions('assets', 'goods_in', 'scan')
   @Get(':id/barcode')
   @Header('Content-Type', 'image/png')
   @Header('Cache-Control', 'no-store')
@@ -116,28 +124,28 @@ export class AssetsController {
     return new StreamableFile(buffer);
   }
 
-  @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.TECHNICIAN)
+  @RequirePermissions('assets', 'goods_in')
   @Post()
   create(@Body() dto: CreateAssetDto, @Req() req: any) {
     return this.assets.create(dto, req.user);
   }
 
-  @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.TECHNICIAN)
+  @RequirePermissions('assets', 'goods_in')
   @Patch(':id')
   update(@Param('id') id: string, @Body() dto: UpdateAssetDto, @Req() req: any) {
     return this.assets.update(id, dto, req.user);
   }
 
-  // Selling is normal warehouse work — any role. Locking is what's restricted.
+  // Selling is normal warehouse work — requires sell_items. Locking is what's restricted.
   // salePrice is optional; when given it feeds the revenue/profit reports.
-  @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.TECHNICIAN)
+  @RequirePermissions('sell_items')
   @Post(':id/sell')
   sell(@Param('id') id: string, @Body() body: { salePrice?: number }, @Req() req: any) {
     return this.assets.sell(id, req.user, body?.salePrice);
   }
 
-  // Returning a sold item to inventory is admin-only, per the Sold workflow.
-  @Roles(UserRole.ADMIN)
+  // Returning a sold item to inventory requires return_sold, per the Sold workflow.
+  @RequirePermissions('return_sold')
   @Post(':id/return')
   returnFromSold(
     @Param('id') id: string,
@@ -147,7 +155,7 @@ export class AssetsController {
     return this.assets.returnFromSold(id, body?.batchId, req.user);
   }
 
-  @Roles(UserRole.ADMIN)
+  @RequirePermissions('delete_asset')
   @Delete(':id')
   remove(@Param('id') id: string, @Req() req: any) {
     return this.assets.remove(id, req.user.userId);

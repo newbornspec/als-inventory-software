@@ -11,9 +11,8 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { Roles } from '../auth/guards/roles.decorator';
-import { RolesGuard } from '../auth/guards/roles.guard';
-import { UserRole } from '../users/user.entity';
+import { PermissionsGuard } from '../auth/guards/permissions.guard';
+import { RequirePermissions } from '../auth/guards/permissions.decorator';
 import { BatchesService } from './batches.service';
 import { CreateBatchDto } from './dto/create-batch.dto';
 import { UpdateBatchDto } from './dto/update-batch.dto';
@@ -21,31 +20,31 @@ import { ReassignOwnerDto } from './dto/reassign-owner.dto';
 import { CertificatesService } from '../assets/certificates.service';
 
 @Controller('batches')
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, PermissionsGuard)
 export class BatchesController {
   constructor(
     private batches: BatchesService,
     private certificates: CertificatesService,
   ) {}
 
-  // Any role can view — technicians select an open batch to receive against
-  // on the scan page. Managers are scoped to their own lots; admins/technicians
-  // see all (see common/ownership.ts).
+  // Viewing needs goods_in or assets — technicians select an open batch to
+  // receive against on the scan page. Managers are scoped to their own lots;
+  // admins/technicians see all (see common/ownership.ts).
+  @RequirePermissions('goods_in', 'assets')
   @Get()
   findAll(@Req() req: any) {
     return this.batches.findAll(req.user);
   }
 
+  @RequirePermissions('goods_in', 'assets')
   @Get(':id')
   findOne(@Param('id') id: string, @Req() req: any) {
     return this.batches.findOne(id, req.user);
   }
 
-  // Technicians included deliberately: they already see the lot and every
-  // device in it on screen, so the spreadsheet exposes nothing new — it is the
-  // same data in a printable form, and they are the ones working the lot.
+  // Requires the export permission.
   // generateReport still applies per-user scoping via req.user.
-  @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.TECHNICIAN)
+  @RequirePermissions('export')
   @Get(':id/report.xlsx')
   async report(@Param('id') id: string, @Req() req: any): Promise<StreamableFile> {
     const { buffer, filename } = await this.batches.generateReport(id, req.user);
@@ -56,6 +55,7 @@ export class BatchesController {
   }
 
   // Bulk Certificate of Data Erasure for every wiped device in the lot (PDF).
+  @RequirePermissions('goods_in', 'assets')
   @Get(':id/erasure-certificate.pdf')
   async erasureCertificate(@Param('id') id: string, @Req() req: any): Promise<StreamableFile> {
     const { buffer, filename } = await this.certificates.lotErasureCertificate(id, req.user);
@@ -65,36 +65,35 @@ export class BatchesController {
     });
   }
 
-  // Technicians (floor staff) can create + input, same as managers; only
-  // delete/reassign stay admin-only.
-  @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.TECHNICIAN)
+  // Creating requires create_batch; editing requires edit_batch.
+  @RequirePermissions('create_batch')
   @Post()
   create(@Body() dto: CreateBatchDto, @Req() req: any) {
     return this.batches.create(dto, req.user);
   }
 
-  @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.TECHNICIAN)
+  @RequirePermissions('edit_batch')
   @Patch(':id')
   update(@Param('id') id: string, @Body() dto: UpdateBatchDto, @Req() req: any) {
     return this.batches.update(id, dto, req.user);
   }
 
   // Sell the whole lot: marks every remaining device Sold and the lot 'sold'.
-  // Selling is normal warehouse work — any role (the lock is what's restricted).
-  @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.TECHNICIAN)
+  // Requires the sell_items permission (the lock is what's restricted).
+  @RequirePermissions('sell_items')
   @Post(':id/sell')
   sellBatch(@Param('id') id: string, @Body() body: { saleTotal?: number }, @Req() req: any) {
     return this.batches.sellBatch(id, req.user, body?.saleTotal);
   }
 
-  // Reassign a lot to another owner — admin only.
-  @Roles(UserRole.ADMIN)
+  // Reassign a lot to another owner — requires manage_ownership.
+  @RequirePermissions('manage_ownership')
   @Patch(':id/owner')
   reassignOwner(@Param('id') id: string, @Body() dto: ReassignOwnerDto, @Req() req: any) {
     return this.batches.reassignOwner(id, dto.ownerId, req.user);
   }
 
-  @Roles(UserRole.ADMIN)
+  @RequirePermissions('delete_batch')
   @Delete(':id')
   remove(@Param('id') id: string, @Req() req: any) {
     return this.batches.remove(id, req.user.userId);
