@@ -16,6 +16,10 @@ function row(over: Partial<DayEventRow>): DayEventRow {
     data_wipe_status: null,
     data_wipe_method: null,
     notes: null,
+    audit_kind: null,
+    operator_name: null,
+    restore_image_status: null,
+    restore_image_name: null,
     asset_name: 'Latitude 7490',
     asset_tag: 'SN123',
     unit_id: 'U-000001',
@@ -72,6 +76,27 @@ describe('groupDayEvents', () => {
     expect(devices[0].events.map((e) => e.id)).toEqual(['e3', 'e1']);
     expect(devices[0].firstAt).toBe('2026-08-22T09:00:00Z');
     expect(devices[0].lastAt).toBe('2026-08-22T11:00:00Z');
+  });
+
+  it('prefers the station operator over the shared kiosk account name', () => {
+    // Every kiosk row's audited_by is the one shared login; operator_name is
+    // the only field that names the human. When present it must win.
+    const d = groupDayEvents([
+      row({ id: 'e1', created_at: '2026-08-22T09:00:00Z', auditor_name: 'Ada Admin', operator_name: 'John Doe' }),
+      row({ id: 'e2', created_at: '2026-08-22T09:30:00Z', auditor_name: 'Ada Admin' }),
+    ])[0];
+    expect(d.auditors).toEqual(['John Doe', 'Ada Admin']);
+    expect(d.events.find((e) => e.id === 'e1')!.auditor).toBe('John Doe');
+  });
+
+  it('merges kind and restore-image facts like every other field', () => {
+    const d = groupDayEvents([
+      row({ id: 'e1', created_at: '2026-08-22T09:00:00Z', audit_kind: 'amazon' }),
+      row({ id: 'e2', created_at: '2026-08-22T10:00:00Z', restore_image_status: 'installed', restore_image_name: 'Win11 Pro 23H2' }),
+    ])[0];
+    expect(d.auditKind).toBe('amazon');
+    expect(d.restoreImageStatus).toBe('installed');
+    expect(d.restoreImageName).toBe('Win11 Pro 23H2');
   });
 
   it('collects distinct auditors and tolerates the NULL-author history', () => {

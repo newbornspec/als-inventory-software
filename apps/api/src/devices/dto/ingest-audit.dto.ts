@@ -1,4 +1,15 @@
-import { IsBoolean, IsEnum, IsInt, IsObject, IsOptional, IsString, IsUUID, Min } from 'class-validator';
+import {
+  IsBoolean,
+  IsEnum,
+  IsIn,
+  IsInt,
+  IsObject,
+  IsOptional,
+  IsString,
+  IsUUID,
+  MaxLength,
+  Min,
+} from 'class-validator';
 import type { HardwareProfile } from '../hardware-profile.type';
 import { DataWipeStatus } from '../../assets/asset-audit.entity';
 import { AssetAuditStatus, AssetConditionGrade } from '../../assets/asset.entity';
@@ -54,4 +65,22 @@ export class IngestAuditDto {
   // True when a human entered this via the "Add asset" form rather than the
   // capture tool — only affects the history-note wording (provenance).
   @IsOptional() @IsBoolean() manual?: boolean;
+
+  // --- phase-5 fields. ALL optional forever: USB sticks are updated by hand,
+  // so payloads without them must keep working indefinitely. ---
+
+  // Which workflow filed this: 'amazon' (Audit Station) or 'goods_in'
+  // (receiving). Absent -> stored NULL -> shown as Unclassified.
+  @IsOptional() @IsIn(['amazon', 'goods_in']) auditKind?: string;
+
+  // The human at the station. The kiosk authenticates as one shared account,
+  // so this is the only place the actual operator's name can travel.
+  @IsOptional() @IsString() @MaxLength(120) operatorName?: string;
+
+  // OS restore outcome, posted by the kiosk's install callback. @IsIn matters
+  // for the same reason as cosmeticGrade above: a rejected payload is queued
+  // and retried forever by the stick, so garbage must be a clean 400 here.
+  @IsOptional() @IsIn(['installed', 'failed']) restoreImageStatus?: string;
+
+  @IsOptional() @IsString() @MaxLength(200) restoreImageName?: string;
 }

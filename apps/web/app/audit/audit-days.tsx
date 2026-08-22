@@ -18,6 +18,9 @@ interface AuditEvent {
   cosmeticGrade: string | null;
   dataWipeStatus: string | null;
   dataWipeMethod: string | null;
+  restoreImageStatus: string | null;
+  restoreImageName: string | null;
+  auditKind: string | null;
   notes: string | null;
   auditor: string | null;
 }
@@ -35,6 +38,9 @@ interface AuditDayDevice {
   cosmeticGrade: string | null;
   dataWipeStatus: string | null;
   dataWipeMethod: string | null;
+  auditKind: string | null;
+  restoreImageStatus: string | null;
+  restoreImageName: string | null;
   auditors: string[];
   events: AuditEvent[];
 }
@@ -44,7 +50,7 @@ interface AuditDayDevice {
 // alarms.
 function chipClass(value: string): string {
   const bad = ['failed_testing', 'no_power', 'post_failed', 'data_wipe_failed', 'ber', 'failed'];
-  const good = ['passed_testing', 'ready_for_sale', 'refurbished', 'data_wiped', 'wiped'];
+  const good = ['passed_testing', 'ready_for_sale', 'refurbished', 'data_wiped', 'wiped', 'installed'];
   if (bad.includes(value)) return 'bg-red-50 text-red-800 border-red-200';
   if (good.includes(value)) return 'bg-emerald-50 text-emerald-800 border-emerald-200';
   return 'bg-neutral-100 text-neutral-700 border-neutral-200';
@@ -71,7 +77,7 @@ function timeLabel(at: string): string {
   return new Date(at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
 }
 
-export function AuditDays({ days }: { days: AuditDaySummary[] }) {
+export function AuditDays({ days, kind }: { days: AuditDaySummary[]; kind?: string }) {
   const [openDays, setOpenDays] = useState<Set<string>>(new Set());
   const [openDevices, setOpenDevices] = useState<Set<string>>(new Set());
   const [cache, setCache] = useState<Record<string, AuditDayDevice[] | 'loading' | 'error'>>({});
@@ -85,7 +91,7 @@ export function AuditDays({ days }: { days: AuditDaySummary[] }) {
     });
     if (!cache[day]) {
       setCache((c) => ({ ...c, [day]: 'loading' }));
-      fetch(`/api/audits/days/${day}`)
+      fetch(`/api/audits/days/${day}${kind ? `?kind=${kind}` : ''}`)
         .then((res) => (res.ok ? res.json() : Promise.reject(new Error(String(res.status)))))
         .then((devices: AuditDayDevice[]) => setCache((c) => ({ ...c, [day]: devices })))
         .catch(() => setCache((c) => ({ ...c, [day]: 'error' })));
@@ -192,6 +198,16 @@ export function AuditDays({ days }: { days: AuditDaySummary[] }) {
                                   <dd>{d.auditors.length ? d.auditors.join(', ') : '—'}</dd>
                                 </div>
                                 <div>
+                                  <dt className="text-xs text-neutral-500">Workflow</dt>
+                                  <dd>
+                                    {d.auditKind ? (
+                                      formatLabel(d.auditKind)
+                                    ) : (
+                                      <span className="text-neutral-500">Unclassified</span>
+                                    )}
+                                  </dd>
+                                </div>
+                                <div>
                                   <dt className="text-xs text-neutral-500">Audit status</dt>
                                   <dd>{d.auditStatus ? <Chip value={d.auditStatus} /> : '—'}</dd>
                                 </div>
@@ -217,13 +233,24 @@ export function AuditDays({ days }: { days: AuditDaySummary[] }) {
                                   </dd>
                                 </div>
                                 <div>
-                                  {/* Captured by the Audit Station but not yet
-                                      reported to the server — lights up when the
-                                      kiosk upload ships. Shown so the column's
-                                      absence reads as "not recorded", never as
-                                      "not restored". */}
+                                  {/* "Not recorded" — never "not restored": most
+                                      events predate the kiosk reporting installs,
+                                      and old sticks keep filing without it. */}
                                   <dt className="text-xs text-neutral-500">Restore image</dt>
-                                  <dd className="text-neutral-500">Not recorded</dd>
+                                  <dd>
+                                    {d.restoreImageStatus ? (
+                                      <>
+                                        <Chip value={d.restoreImageStatus} />
+                                        {d.restoreImageName && (
+                                          <span className="ml-1.5 text-xs text-neutral-600">
+                                            {d.restoreImageName}
+                                          </span>
+                                        )}
+                                      </>
+                                    ) : (
+                                      <span className="text-neutral-500">Not recorded</span>
+                                    )}
+                                  </dd>
                                 </div>
                               </dl>
 
@@ -238,6 +265,7 @@ export function AuditDays({ days }: { days: AuditDaySummary[] }) {
                                     {e.dataWipeStatus && e.dataWipeStatus !== 'not_started' && (
                                       <Chip value={e.dataWipeStatus} />
                                     )}
+                                    {e.restoreImageStatus && <Chip value={e.restoreImageStatus} />}
                                     {e.cosmeticGrade && (
                                       <span className="text-xs text-neutral-600">
                                         {formatLabel(e.cosmeticGrade)}

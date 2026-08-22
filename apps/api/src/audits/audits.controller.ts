@@ -1,8 +1,14 @@
-import { Controller, Get, Param, Query, Req, UseGuards } from '@nestjs/common';
+import { BadRequestException, Controller, Get, Param, Query, Req, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../auth/guards/permissions.guard';
 import { RequirePermissions } from '../auth/guards/permissions.decorator';
-import { AuditsService } from './audits.service';
+import { AUDIT_KIND_FILTERS, AuditKindFilter, AuditsService } from './audits.service';
+
+function parseKind(kind?: string): AuditKindFilter | undefined {
+  if (!kind) return undefined;
+  if ((AUDIT_KIND_FILTERS as readonly string[]).includes(kind)) return kind as AuditKindFilter;
+  throw new BadRequestException(`kind must be one of: ${AUDIT_KIND_FILTERS.join(', ')}`);
+}
 
 // The Audit workspace's read side: a chronological, day-grouped feed across
 // ALL devices — deliberately not reachable through a lot, matching how the
@@ -16,13 +22,13 @@ export class AuditsController {
 
   @RequirePermissions('amazon_audit')
   @Get('days')
-  days(@Req() req: any, @Query('limit') limit?: string) {
-    return this.audits.days(req.user, limit ? parseInt(limit, 10) || 30 : 30);
+  days(@Req() req: any, @Query('limit') limit?: string, @Query('kind') kind?: string) {
+    return this.audits.days(req.user, limit ? parseInt(limit, 10) || 30 : 30, parseKind(kind));
   }
 
   @RequirePermissions('amazon_audit')
   @Get('days/:day')
-  day(@Param('day') day: string, @Req() req: any) {
-    return this.audits.day(day, req.user);
+  day(@Param('day') day: string, @Req() req: any, @Query('kind') kind?: string) {
+    return this.audits.day(day, req.user, parseKind(kind));
   }
 }

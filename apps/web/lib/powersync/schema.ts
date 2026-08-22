@@ -31,6 +31,12 @@ export const AppSchema = new Schema({
   asset_audits: new Table({
     asset_id: column.text,
     audit_status: column.text,
+    // Phase-5 provenance columns — must exist here BEFORE the audit form
+    // writes them, or the local INSERT fails on devices that just updated.
+    audit_kind: column.text,
+    operator_name: column.text,
+    restore_image_status: column.text,
+    restore_image_name: column.text,
     manufacturer: column.text,
     model: column.text,
     serial_number: column.text,

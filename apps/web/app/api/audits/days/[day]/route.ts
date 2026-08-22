@@ -5,7 +5,7 @@ import { NextRequest, NextResponse } from 'next/server';
 // on expand (the API needs the httpOnly auth cookie, which client fetch can't
 // read). Same pattern as /api/assets.
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ day: string }> },
 ) {
   const store = await cookies();
@@ -20,7 +20,9 @@ export async function GET(
     return NextResponse.json({ message: 'Invalid day' }, { status: 400 });
   }
 
-  const res = await fetch(`${process.env.API_URL}/audits/days/${day}`, {
+  const kind = req.nextUrl.searchParams.get('kind');
+  const qs = kind ? `?kind=${encodeURIComponent(kind)}` : '';
+  const res = await fetch(`${process.env.API_URL}/audits/days/${day}${qs}`, {
     headers: { Authorization: `Bearer ${token}` },
     cache: 'no-store',
   });

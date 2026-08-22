@@ -129,6 +129,29 @@ export class AssetAudit {
   })
   finalDisposition: FinalDisposition | null;
 
+  // Which workflow filed this event: 'amazon' (the Audit Station) or
+  // 'goods_in' (receiving). NULL = recorded before the kind existed, or by a
+  // USB stick that predates it — rendered as "Unclassified", never guessed.
+  // varchar, not a pg enum: kiosk-fed vocabularies grow, and an enum turns
+  // each new value into a migration. The DTOs validate the values instead.
+  @Column({ name: 'audit_kind', type: 'varchar', nullable: true })
+  auditKind: string | null;
+
+  // The human at the Audit Station. Free text, not a users FK — the station
+  // authenticates as one shared account, so audited_by_id cannot name the
+  // operator, and station operators aren't necessarily app users.
+  @Column({ name: 'operator_name', type: 'varchar', nullable: true })
+  operatorName: string | null;
+
+  // OS restore result ('installed' | 'failed') and which image was used. The
+  // kiosk performs installs; before these columns the result was never
+  // reported anywhere.
+  @Column({ name: 'restore_image_status', type: 'varchar', nullable: true })
+  restoreImageStatus: string | null;
+
+  @Column({ name: 'restore_image_name', type: 'varchar', nullable: true })
+  restoreImageName: string | null;
+
   @Column({ type: 'varchar', nullable: true })
   notes: string | null;
 

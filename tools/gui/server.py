@@ -63,6 +63,11 @@ STATE = {
     "error": None,
     "capturing": False,
     "userName": "",
+    # The human at the station this session. The stick logs in as ONE shared
+    # account, so this is the only place the actual operator's name exists.
+    # Deliberately per-boot: a fresh shift starts blank rather than inheriting
+    # yesterday's name.
+    "operator": "",
 }
 # One background job per kind (only one wipe/install runs at a time).
 JOBS = {"wipe": None, "install": None}
@@ -339,6 +344,20 @@ def queue_count():
 
 
 UPLOAD_LOCK = threading.Lock()
+
+
+def stamp_provenance(payload):
+    """Phase-5 provenance on every record this station files: the station IS
+    the Amazon audit workflow (auditKind), and the operator field names the
+    human the shared login cannot. Servers that predate these fields reject
+    unknown properties is NOT a concern here -- the API's DTOs ignore extras
+    only after validation, so these two are validated, optional fields there.
+    """
+    payload["auditKind"] = "amazon"
+    op = (STATE.get("operator") or "").strip()
+    if op:
+        payload["operatorName"] = op[:120]
+    return payload
 
 
 def upload_audit(payload):
@@ -1560,6 +1579,7 @@ class Handler(BaseHTTPRequestHandler):
                 "server": STATE["conf"].get("AUDIT_URL", ""),
                 "currentUser": (STATE.get("userName")
                                 or STATE["conf"].get("AUDIT_EMAIL", "") or "Operator"),
+                "operator": STATE.get("operator", ""),
                 "adminPinSet": bool(STATE["conf"].get("AUDIT_ADMIN_PIN", "")),
                 "launch": launch_info(),
                 "waiting": queue_count(),   # records held offline, retrying
@@ -1665,6 +1685,12 @@ class Handler(BaseHTTPRequestHandler):
             threading.Thread(target=refresh, daemon=True).start()
             return self._send(200, {"started": True})
 
+        if u.path == "/api/operator":
+            # Session-scoped, not PIN-gated: it is a name label on the records
+            # this station files, reversible, and a fresh boot clears it.
+            STATE["operator"] = (body.get("name") or "").strip()[:120]
+            return self._send(200, {"ok": True, "operator": STATE["operator"]})
+
         if u.path == "/api/audit":
             if not STATE["profile"]:
                 return self._send(400, {"message": "hardware not captured yet"})
@@ -1681,6 +1707,7 @@ class Handler(BaseHTTPRequestHandler):
             grade = (body.get("cosmeticGrade") or "").strip()
             if grade in GRADES:
                 payload["cosmeticGrade"] = grade
+            stamp_provenance(payload)
             out, queued, err = upload_audit(payload)
             PRIOR_CACHE["key"] = None       # this device's history just changed
             if queued:
@@ -1753,6 +1780,7 @@ class Handler(BaseHTTPRequestHandler):
                     payload["lotId"] = lot_id
                 if sub_lot_id:
                     payload["subLotId"] = sub_lot_id
+                stamp_provenance(payload)
                 out, queued, err = upload_audit(payload)
                 if queued:
                     # The erase itself succeeded; only the upload is pending.
@@ -1797,9 +1825,45 @@ class Handler(BaseHTTPRequestHandler):
             if not root:
                 return self._send(400, {"message": "no image library available"})
             os.environ["ALS_IMAGES_ROOT"] = root
+
+            # After the restore, record the result against the device -- the
+            # same shape as record_wipe. Until this existed the install result
+            # died in the JOBS dict and a browser banner; the API never learned
+            # a restore happened at all.
+            image_name = (body.get("imageName") or image or "").strip()
+            install_lot = body.get("lotId") or None
+
+            def record_install(result):
+                if result.get("status") not in ("installed", "failed"):
+                    return
+                if not STATE["profile"]:
+                    # Common bench case: re-imaging without a fresh capture.
+                    # Same rule as record_wipe -- no identity, no record -- but
+                    # say so instead of silently recording nothing.
+                    result["recordError"] = ("restore finished but was not recorded -- "
+                                             "run Start audit first so the device is identified")
+                    return
+                payload = {
+                    "profile": STATE["profile"],
+                    "restoreImageStatus": result.get("status"),
+                }
+                if image_name:
+                    payload["restoreImageName"] = image_name[:200]
+                if install_lot:
+                    payload["lotId"] = install_lot
+                stamp_provenance(payload)
+                out, queued, err = upload_audit(payload)
+                if queued:
+                    result["queued"] = True
+                    result["waiting"] = queue_count()
+                    result["recordError"] = ("no connection -- the restore record is saved "
+                                             "on this machine and will upload automatically")
+                    return
+                result["recorded"] = bool(out and out.get("assetId"))
+
             started = start_job("install", ["bash", INSTALL_SH, image, device],
-                                "INSTALL_RESULT ", device, watch_writes=True,
-                                noun="restore",
+                                "INSTALL_RESULT ", device, on_done=record_install,
+                                watch_writes=True, noun="restore",
                                 hint="Open Show details for Clonezilla's last output.")
             if not started:
                 return self._send(409, {"message": "an install is already running"})
