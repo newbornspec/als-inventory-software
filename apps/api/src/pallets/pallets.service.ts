@@ -28,7 +28,7 @@ import { MergePalletsDto } from './dto/merge-pallets.dto';
 import { LookupsService } from '../lookups/lookups.service';
 import { ActivityService } from '../activity/activity.service';
 import { sanitizeUser } from '../users/sanitize-user';
-import { Asset } from '../assets/asset.entity';
+import { Asset, AssetStockStatus } from '../assets/asset.entity';
 import { AssetEventType, AssetHistory } from '../assets/asset-history.entity';
 import { Batch } from '../batches/batch.entity';
 import {
@@ -74,6 +74,12 @@ export interface PalletAssetRow {
   auditStatus: string | null;
   movedToPalletAt: Date | null;
   movedToPalletByName: string | null;
+  // Set once the device sold WITH the pallet (whole-pallet sale keeps the
+  // link — the manifest of what shipped is the pallet's record). Individual
+  // sales off a live pallet clear the link instead, so an OPEN pallet never
+  // shows sold rows.
+  soldAt: Date | null;
+  salePrice: number | null;
 }
 
 // "256GB NVMe + 1TB HDD" from the profile's drive list — same composition the
@@ -214,6 +220,8 @@ export class PalletsService {
               movedToPalletByName: a.movedToPalletBy
                 ? sanitizeUser(a.movedToPalletBy).name
                 : null,
+              soldAt: a.soldAt,
+              salePrice: a.salePrice,
             };
           })
         : [];
@@ -362,16 +370,18 @@ export class PalletsService {
     saleTotal?: number,
   ): Promise<{ soldLines: number; soldUnits: number }> {
     const pallet = await this.assertPallet(palletId);
-    // Selling an asset pallet AS a pallet is deliberately unsupported: a lump
-    // price would have to be invented across serialized units the client never
-    // specified pricing rules for, and wrong money silently poisons the profit
-    // reports. The devices themselves sell individually exactly as before.
-    const deviceCount = await this.assets.count({ where: { palletId } });
-    if (deviceCount > 0 || pallet.entryLayout === PalletEntryLayout.ASSET) {
+    if (pallet.entryLayout === PalletEntryLayout.ASSET) {
+      return this.sellAssetPallet(pallet, userId, saleTotal);
+    }
+    // Defensive: a line pallet must never hold devices (one or the other,
+    // never both) — refuse rather than ship a pallet whose devices stay
+    // in stock and double-count.
+    const strayDevices = await this.assets.count({ where: { palletId } });
+    if (strayDevices > 0) {
       throw new ConflictException(
-        `${pallet.palletNumber} holds ${deviceCount} serialized device${
-          deviceCount === 1 ? '' : 's'
-        }. Selling an asset pallet as one unit isn't supported yet — sell the devices individually, or remove them from the pallet first.`,
+        `${pallet.palletNumber} unexpectedly holds ${strayDevices} serialized device${
+          strayDevices === 1 ? '' : 's'
+        } — remove them before selling it as a line pallet.`,
       );
     }
     const lines = await this.lines.find({ where: { palletId } });
@@ -1472,6 +1482,67 @@ export class PalletsService {
 
   // --- asset allocation (Goods In -> Move to Pallet) ---
 
+  // Whole-pallet sale for serialized devices. Pricing mirrors the line-pallet
+  // precedent exactly — an optional lump total, split across the units (equal
+  // shares here, since every device is quantity one), remainder on the last so
+  // the stored sum equals what was entered. The money lands as per-device
+  // salePrice ONLY: no pallet_sold_lines row is written, because revenue
+  // reporting reads both archives and writing both would double-count.
+  //
+  // The pallet ships WITH its devices: their pallet link is KEPT, so the
+  // shipped pallet remains the manifest of exactly what left — unlike an
+  // individual sale off a live pallet, which clears the link because that
+  // device left alone.
+  // Returns sellPallet's shape: soldUnits = devices, soldLines = 0 (there are
+  // no quantity lines to count), so the one caller reads one contract.
+  private async sellAssetPallet(
+    pallet: Pallet,
+    userId: string,
+    saleTotal?: number,
+  ): Promise<{ soldLines: number; soldUnits: number }> {
+    const devices = await this.assets.find({
+      where: { palletId: pallet.id },
+    });
+    const unsold = devices.filter((d) => d.stockStatus !== AssetStockStatus.SOLD);
+    if (unsold.length === 0) {
+      throw new ConflictException('This pallet has nothing left to sell.');
+    }
+
+    const shares = splitSaleTotal(saleTotal, unsold.length);
+    const soldAt = new Date();
+    for (let i = 0; i < unsold.length; i++) {
+      const d = unsold[i];
+      await this.assets.update(d.id, {
+        stockStatus: AssetStockStatus.SOLD,
+        soldAt,
+        soldById: userId,
+        salePrice: shares[i],
+      });
+      await this.assetHistory.save(
+        this.assetHistory.create({
+          assetId: d.id,
+          eventType: AssetEventType.STATUS_CHANGED,
+          userId,
+          notes: `${d.stockStatus} -> sold (sold with ${pallet.palletNumber})`,
+        }),
+      );
+    }
+    await this.pallets.update(pallet.id, {
+      status: PalletStatus.SHIPPED,
+      shippedAt: soldAt,
+    });
+    await this.activity.record({
+      userId,
+      action: 'pallet.sold',
+      entityType: 'pallet',
+      entityId: pallet.id,
+      summary: `Sold ${pallet.palletNumber} — ${unsold.length} device${
+        unsold.length === 1 ? '' : 's'
+      }${saleTotal != null ? ` for £${saleTotal}` : ''}`,
+    });
+    return { soldLines: 0, soldUnits: unsold.length };
+  }
+
   // Batch-level transfer (client spec: Goods In -> Transfer Entire Batch):
   // create a NEW auto-numbered asset pallet and move every ELIGIBLE serialized
   // device from the lot onto it in one action. Eligible = not sold, not
@@ -1650,6 +1721,13 @@ export class PalletsService {
       }
       if (a.palletId == null) {
         skipped.push({ id, reason: `${a.tag} is not on a pallet` });
+        continue;
+      }
+      if (a.stockStatus === AssetStockStatus.SOLD) {
+        // Sold-with-the-pallet: the link IS the shipped manifest. Undoing a
+        // sale goes through the Sold page's admin return, which also clears
+        // the allocation.
+        skipped.push({ id, reason: `${a.tag} is sold — return it from the Sold page first` });
         continue;
       }
       if (isScopedManager(user)) {
@@ -2005,6 +2083,22 @@ export const VARIANT_WIDTHS: number[] = [16, 16, 22, 10, 14, 8, 10, 12, 14, 16];
 // Asset-pallet export columns. Pinned by pallets-export.spec so a change
 // fails the build rather than shipping quietly — same contract as the other
 // two layouts.
+// Split an optional lump sale total into n equal 2dp shares, remainder on the
+// last so the stored sum equals what was entered — the same arithmetic the
+// line-pallet sale applies per quantity, specialised to quantity-one units.
+// No total -> all-null shares (unpriced sale, same as an unpriced line sale).
+export function splitSaleTotal(
+  total: number | null | undefined,
+  n: number,
+): (number | null)[] {
+  if (total == null || total < 0 || n <= 0) return Array(n).fill(null);
+  const share = Math.round((total / n) * 100) / 100;
+  const shares: (number | null)[] = Array(n).fill(share);
+  const allocated = Math.round(share * (n - 1) * 100) / 100;
+  shares[n - 1] = Math.round((total - allocated) * 100) / 100;
+  return shares;
+}
+
 export const ASSET_HEADERS: string[] = [
   'Pallet number',
   'Unit ID',

@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { removeAssetsFromPallet, type PalletAssetRow } from '@/lib/actions/pallets';
 import { formatLabel } from '@/lib/asset-options';
+import { money } from '@/lib/money';
 
 // The device table on an asset pallet's page. Every row links to the device
 // (it never left the register). Remove is ADMIN-GRADE per the client's
@@ -91,7 +92,15 @@ export function PalletAssets({
                 {a.conditionGrade ? formatLabel(a.conditionGrade) : '—'}
               </td>
               <td className="px-4 py-2 text-neutral-600">
-                {a.auditStatus ? formatLabel(a.auditStatus) : '—'}
+                {a.soldAt ? (
+                  <span className="inline-block rounded border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-xs text-emerald-800">
+                    Sold{a.salePrice != null ? ` · ${money(a.salePrice)}` : ''}
+                  </span>
+                ) : a.auditStatus ? (
+                  formatLabel(a.auditStatus)
+                ) : (
+                  '—'
+                )}
               </td>
               <td className="px-4 py-2 whitespace-nowrap text-neutral-600">
                 {a.movedToPalletAt ? new Date(a.movedToPalletAt).toLocaleString('en-GB') : '—'}
@@ -99,15 +108,19 @@ export function PalletAssets({
               <td className="px-4 py-2 text-neutral-600">{a.movedToPalletByName ?? '—'}</td>
               {canReturn && (
                 <td className="px-4 py-2 text-right">
-                  <button
-                    type="button"
-                    onClick={() => remove(a.id, a.name)}
-                    disabled={busy === a.id}
-                    aria-label={`Remove ${a.name} from this pallet`}
-                    className="text-xs text-neutral-700 underline hover:text-neutral-950 disabled:opacity-50"
-                  >
-                    {busy === a.id ? 'Removing…' : 'Remove'}
-                  </button>
+                  {a.soldAt ? (
+                    <span className="text-xs text-neutral-400">Sold</span>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => remove(a.id, a.name)}
+                      disabled={busy === a.id}
+                      aria-label={`Remove ${a.name} from this pallet`}
+                      className="text-xs text-neutral-700 underline hover:text-neutral-950 disabled:opacity-50"
+                    >
+                      {busy === a.id ? 'Removing…' : 'Remove'}
+                    </button>
+                  )}
                 </td>
               )}
             </tr>

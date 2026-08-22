@@ -59,10 +59,13 @@ export default async function PalletDetailPage({ params }: { params: Promise<{ i
   // page just doesn't offer them.
   if (pallet.entryLayout === 'asset') {
     const devices = pallet.assets ?? [];
+    const unsoldCount = devices.filter((d) => !d.soldAt).length;
+    const isShipped = pallet.status === 'shipped';
     // Returning devices to Goods In is admin-grade (client's correction) —
     // gated on the same permission the API's remove endpoint enforces.
     const access = await getSessionAccess();
-    const canReturn = hasPermission(access, 'return_from_pallet') && !isMerged;
+    const canReturn = hasPermission(access, 'return_from_pallet') && !isMerged && !isShipped;
+    const canSell = hasPermission(access, 'sell_items') && !isMerged && !isShipped;
     return (
       <>
         <Nav />
@@ -79,11 +82,19 @@ export default async function PalletDetailPage({ params }: { params: Promise<{ i
                 device{pallet.totalQuantity === 1 ? '' : 's'} · {formatLabel(pallet.status)}
               </p>
               <p className="mt-1 max-w-2xl text-xs text-neutral-500">
-                Devices here stay in the Assets register and are sold individually from their
-                own pages. Selling or merging this pallet as one unit isn&rsquo;t supported yet.
+                {isShipped
+                  ? 'Shipped — this page is the manifest of what left. Returning a device is an admin action on the Sold page.'
+                  : 'Devices stay in the Assets register. Sell the whole pallet here (an optional total splits equally per device), or sell devices individually from their own pages. Merging asset pallets is not supported yet.'}
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
+              {canSell && unsoldCount > 0 && (
+                <SellPalletButton
+                  palletId={pallet.id}
+                  palletNumber={pallet.palletNumber}
+                  totalQuantity={unsoldCount}
+                />
+              )}
               <a
                 href={`/api/pallets/${pallet.id}/report`}
                 className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm font-medium text-neutral-800 hover:bg-neutral-50"
