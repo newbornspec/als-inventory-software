@@ -60,7 +60,32 @@ export class AuthService {
       accessToken,
       refreshToken,
       tokenType: 'bearer',
-      user: { id: user.id, name: user.name, email: user.email, role: user.role },
+      // permissions ride in the RESPONSE BODY, never the token: the JWT's
+      // shape is a contract with PowerSync (aud/kid above), and a token-borne
+      // grant would outlive an admin's edit by up to 12 hours anyway.
+      user: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        permissions: user.permissions,
+      },
+    };
+  }
+
+  // DB-fresh identity for /auth/me — role and permissions as they are NOW,
+  // not as they were when the token was minted. This is what the web reads to
+  // decide nav/landing, so an admin's grant edit shows up on the next page
+  // load instead of after a token refresh.
+  async me(userId: string) {
+    const user = await this.users.findOne({ where: { id: userId } });
+    if (!user) throw new UnauthorizedException('This account no longer exists');
+    return {
+      userId: user.id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      permissions: user.permissions,
     };
   }
 }

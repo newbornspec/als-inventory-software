@@ -9,6 +9,7 @@ export interface AppUser {
   name: string;
   email: string;
   role: 'admin' | 'manager' | 'technician';
+  permissions: string[];
 }
 
 export interface ActionState {
@@ -21,6 +22,10 @@ export async function createUser(_prev: ActionState, formData: FormData): Promis
     email: String(formData.get('email') ?? '').trim(),
     password: String(formData.get('password') ?? ''),
     role: String(formData.get('role') ?? 'technician'),
+    // Repeated checkbox fields from the ACCESS/ACTIONS grid. Always present —
+    // the picker renders on the form — so an all-unticked grid deliberately
+    // means "no permissions", not "use the role default".
+    permissions: formData.getAll('permissions').map(String),
   };
 
   if (!dto.name || !dto.email || dto.password.length < 8) {
@@ -37,10 +42,33 @@ export async function createUser(_prev: ActionState, formData: FormData): Promis
   redirect('/users');
 }
 
+// The inline role dropdown on the Users list. Sends ONLY the role, which the
+// API documents as "reset permissions to the new role's baseline" — the list
+// page says so next to the control.
 export async function updateUserRole(id: string, formData: FormData): Promise<void> {
   const role = String(formData.get('role') ?? '');
   await apiFetch(`/users/${id}`, { method: 'PATCH', body: JSON.stringify({ role }) });
   revalidatePath('/users');
+}
+
+// The Access page: role and the full permissions grid together, so a role
+// change made here keeps the grants exactly as ticked.
+export async function updateUserAccess(
+  id: string,
+  _prev: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const dto = {
+    role: String(formData.get('role') ?? ''),
+    permissions: formData.getAll('permissions').map(String),
+  };
+  try {
+    await apiFetch(`/users/${id}`, { method: 'PATCH', body: JSON.stringify(dto) });
+  } catch (err) {
+    return { error: err instanceof ApiError ? err.message : 'Failed to update access.' };
+  }
+  revalidatePath('/users');
+  redirect('/users');
 }
 
 export async function deleteUser(id: string): Promise<void> {

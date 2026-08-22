@@ -1,6 +1,7 @@
 import * as bcrypt from 'bcrypt';
 import AppDataSource from './data-source';
 import { User, UserRole } from '../users/user.entity';
+import { DEFAULT_PERMISSIONS } from '../auth/permissions';
 import { Location } from '../locations/location.entity';
 import { Asset, AssetAuditStatus, AssetConditionGrade, AssetStockStatus } from '../assets/asset.entity';
 import { AssetHistory, AssetEventType } from '../assets/asset-history.entity';
@@ -32,6 +33,7 @@ async function seed() {
       email: 'admin@als.com',
       passwordHash,
       role: UserRole.ADMIN,
+      permissions: DEFAULT_PERMISSIONS.admin,
     }),
   );
 
@@ -41,6 +43,7 @@ async function seed() {
       email: 'manager@als.com',
       passwordHash,
       role: UserRole.MANAGER,
+      permissions: DEFAULT_PERMISSIONS.manager,
     }),
   );
 
@@ -50,6 +53,7 @@ async function seed() {
       email: 'tech@als.com',
       passwordHash,
       role: UserRole.TECHNICIAN,
+      permissions: DEFAULT_PERMISSIONS.technician,
     }),
   );
 

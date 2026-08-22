@@ -10,6 +10,7 @@ import { Location } from './locations/location.entity';
 import { Asset } from './assets/asset.entity';
 import { AssetHistory } from './assets/asset-history.entity';
 import { AuthModule } from './auth/auth.module';
+import { AuthzModule } from './auth/authz.module';
 import { ActivityModule } from './activity/activity.module';
 import { LookupsModule } from './lookups/lookups.module';
 import { PowerSyncModule } from './powersync/powersync.module';
@@ -47,6 +48,7 @@ import { DashboardModule } from './dashboard/dashboard.module';
     }),
     TypeOrmModule.forFeature([User, Location, Asset, AssetHistory]),
     AuthModule,
+    AuthzModule,
     ActivityModule,
     LookupsModule,
     PowerSyncModule,

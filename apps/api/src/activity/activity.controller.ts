@@ -1,17 +1,16 @@
 import { Controller, Get, Query, Req, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { Roles } from '../auth/guards/roles.decorator';
-import { RolesGuard } from '../auth/guards/roles.guard';
-import { UserRole } from '../users/user.entity';
+import { PermissionsGuard } from '../auth/guards/permissions.guard';
+import { RequirePermissions } from '../auth/guards/permissions.decorator';
 import { ActivityService } from './activity.service';
 
 @Controller('activity')
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, PermissionsGuard)
 export class ActivityController {
   constructor(private readonly activity: ActivityService) {}
 
-  // Recent system-wide activity. Admin + manager (accountability view).
-  @Roles(UserRole.ADMIN, UserRole.MANAGER)
+  // Recent system-wide activity. Requires the 'activity' permission (accountability view).
+  @RequirePermissions('activity')
   @Get()
   list(@Req() req: any, @Query('limit') limit?: string) {
     return this.activity.list(limit ? parseInt(limit, 10) || 100 : 100, req.user);

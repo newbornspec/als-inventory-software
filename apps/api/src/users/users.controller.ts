@@ -1,17 +1,18 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Req, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { Roles } from '../auth/guards/roles.decorator';
-import { RolesGuard } from '../auth/guards/roles.guard';
-import { UserRole } from './user.entity';
+import { PermissionsGuard } from '../auth/guards/permissions.guard';
+import { RequirePermissions } from '../auth/guards/permissions.decorator';
 import { UsersService } from './users.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 
-// Admin-only, unlike /assets — user management is not something managers
-// or technicians should see or touch.
+// The 'users' module permission gates all of user management — seeing
+// accounts, creating them, and editing what they're allowed to do. Only
+// admins hold it by default, but unlike the old @Roles(ADMIN), an admin can
+// now delegate it deliberately.
 @Controller('users')
-@UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(UserRole.ADMIN)
+@UseGuards(JwtAuthGuard, PermissionsGuard)
+@RequirePermissions('users')
 export class UsersController {
   constructor(private users: UsersService) {}
 
