@@ -28,6 +28,8 @@ export interface Asset {
   // physically sits.
   palletId?: string | null;
   pallet?: { id: string; palletNumber: string } | null;
+  // Identity of the origin lot only — list rows never carry lot costs/notes.
+  batch?: { id: string; batchNumber: string } | null;
   // Auto-captured hardware audit (Phase 4). hardwareProfile is only present on
   // the detail fetch (select:false on the server); it's an open-ended document.
   serialNumber?: string | null;

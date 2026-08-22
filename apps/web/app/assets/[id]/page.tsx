@@ -102,6 +102,41 @@ export default async function AssetDetailPage({
     }
   }
 
+  // One stream for the device's whole life: warehouse events and audit events
+  // interleaved in the order they happened, oldest first — the story reads
+  // Received → Audited → Allocated → Sold, the way the lifecycle actually ran.
+  //
+  // 'audited' history events are excluded: every ingest path (kiosk, manual
+  // add, web form, offline sync) writes BOTH an asset_audits row and an
+  // 'audited' history twin for the same capture, and the audit row is the
+  // richer record. Keeping both would show every audit twice — and an audit
+  // captured offline would split into a pair hours apart, because the audit
+  // row carries the capture-time clock while its twin is stamped at sync time.
+  const lifecycle = [
+    ...history
+      .filter((h) => h.eventType !== 'audited')
+      .map((h) => ({
+        id: `h-${h.id}`,
+        at: h.createdAt,
+        isAudit: false,
+        title: formatLabel(h.eventType),
+        lines: h.notes ? [h.notes] : [],
+      })),
+    ...audits.map((a) => ({
+      id: `a-${a.id}`,
+      at: a.createdAt,
+      isAudit: true,
+      title: `Audit${a.auditStatus ? ` — ${formatLabel(a.auditStatus)}` : ' recorded'}${
+        a.cosmeticGrade ? ` · ${formatLabel(a.cosmeticGrade)}` : ''
+      }`,
+      lines: [
+        ...(a.finalDisposition ? [`Disposition: ${formatLabel(a.finalDisposition)}`] : []),
+        ...(a.dataWipeStatus ? [`Data wipe: ${formatLabel(a.dataWipeStatus)}`] : []),
+        ...(a.notes ? [a.notes] : []),
+      ],
+    })),
+  ].sort((x, y) => new Date(x.at).getTime() - new Date(y.at).getTime());
+
   return (
     <>
       <Nav />
@@ -112,6 +147,13 @@ export default async function AssetDetailPage({
           <div>
             <h1 className="text-2xl font-semibold">{asset.name}</h1>
             <p className="mt-1 text-sm text-neutral-500">
+              {asset.unitId && (
+                <>
+                  Unit ID:{' '}
+                  <span className="font-mono font-medium text-neutral-900">{asset.unitId}</span>
+                  {' · '}
+                </>
+              )}
               Tag: <span className="text-neutral-900">{asset.tag}</span> · {asset.category}
               {asset.serialNumber && asset.serialNumber !== asset.tag && (
                 <> · S/N: <span className="text-neutral-900">{asset.serialNumber}</span></>
@@ -187,6 +229,59 @@ export default async function AssetDetailPage({
             )}
           </section>
 
+          <section>
+            <h2 className="text-sm font-medium text-neutral-500">Origin</h2>
+            {/* Branch on asset.batchId, never on the lot fetch: the fetch's
+                catch(() => null) covers transient failures and narrower
+                permissions, and a failed fetch must degrade neutrally — not
+                assert "no lot" about a device that has one. This is the
+                provenance card on an ITAD traceability page. */}
+            {asset.batchId ? (
+              lot ? (
+                <dl className="mt-4 space-y-2 text-sm">
+                  <div className="flex justify-between max-w-sm">
+                    <dt className="text-neutral-500">Goods In lot</dt>
+                    <dd>
+                      <Link
+                        href={`/batches/${lot.id}`}
+                        className="text-[#1a6ef5] hover:underline"
+                      >
+                        {lot.batchNumber}
+                      </Link>
+                    </dd>
+                  </div>
+                  <div className="flex justify-between max-w-sm">
+                    <dt className="text-neutral-500">Supplier</dt>
+                    <dd>{lot.source ?? '—'}</dd>
+                  </div>
+                  <div className="flex justify-between max-w-sm">
+                    <dt className="text-neutral-500">Purchase order</dt>
+                    <dd>{lot.purchaseOrder ?? '—'}</dd>
+                  </div>
+                  <div className="flex justify-between max-w-sm">
+                    <dt className="text-neutral-500">Received</dt>
+                    {/* Raw date string, exactly as the lot page shows it — no Date()
+                        round-trip that could shift a day across timezones. */}
+                    <dd>{lot.receivedDate ?? '—'}</dd>
+                  </div>
+                </dl>
+              ) : (
+                <p className="mt-4 text-sm text-neutral-500">
+                  This device belongs to a lot, but its details could not be loaded.{' '}
+                  <Link href={`/batches/${asset.batchId}`} className="underline">
+                    Open lot →
+                  </Link>
+                </p>
+              )
+            ) : (
+              <p className="mt-4 text-sm text-neutral-500">
+                {audits.some((a) => a.auditKind === 'amazon')
+                  ? 'No lot — this device entered through the Amazon Audit workspace, which files devices without one.'
+                  : 'No lot — this device was created directly, outside Goods In.'}
+              </p>
+            )}
+          </section>
+
           <AuditSection assetId={asset.id} audits={audits} />
 
           <HardwareSection profile={asset.hardwareProfile} />
@@ -248,19 +343,28 @@ export default async function AssetDetailPage({
           )}
 
           <section>
-            <h2 className="text-sm font-medium text-neutral-500">History</h2>
+            <h2 className="text-sm font-medium text-neutral-500">Lifecycle</h2>
             <ul className="mt-4 space-y-3">
-              {history.map((h) => (
-                <li key={h.id} className="border-l-2 border-neutral-200 pl-3 text-sm">
-                  <div className="text-neutral-900">{formatLabel(h.eventType)}</div>
-                  {h.notes && <div className="text-neutral-500">{h.notes}</div>}
+              {lifecycle.map((e) => (
+                <li
+                  key={e.id}
+                  className={`border-l-2 pl-3 text-sm ${
+                    e.isAudit ? 'border-emerald-200' : 'border-neutral-200'
+                  }`}
+                >
+                  <div className="text-neutral-900">{e.title}</div>
+                  {e.lines.map((line, i) => (
+                    <div key={i} className="text-neutral-500">
+                      {line}
+                    </div>
+                  ))}
                   <div className="text-xs text-neutral-500">
-                    {new Date(h.createdAt).toLocaleString()}
+                    {new Date(e.at).toLocaleString()}
                   </div>
                 </li>
               ))}
-              {history.length === 0 && (
-                <li className="text-sm text-neutral-500">No history yet.</li>
+              {lifecycle.length === 0 && (
+                <li className="text-sm text-neutral-500">No events yet.</li>
               )}
             </ul>
           </section>

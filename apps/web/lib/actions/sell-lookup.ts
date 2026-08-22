@@ -26,7 +26,20 @@ export async function findSellable(
     // An exact tag or unit id wins outright — that is a scanner, and offering a
     // list of near-matches after a successful scan is just friction.
     const exact = rows.filter((a) => a.tag === q || a.unitId === q);
-    const use = exact.length > 0 ? exact : rows;
+    // The API search also matches lot/pallet numbers and location names now, so
+    // a typed serial fragment can drag in every device of a lot whose NUMBER
+    // shares the digits. Rank devices matched on their OWN identity ahead of
+    // those relational matches before capping the list, so the device the
+    // operator actually typed never falls off the end.
+    const needle = q.toLowerCase();
+    const ownFieldMatch = (a: Asset) =>
+      [a.tag, a.unitId, a.serialNumber, a.name, a.manufacturer, a.model].some(
+        (v) => v != null && v.toLowerCase().includes(needle),
+      );
+    const use =
+      exact.length > 0
+        ? exact
+        : [...rows.filter(ownFieldMatch), ...rows.filter((a) => !ownFieldMatch(a))];
     return {
       matches: use.slice(0, 25).map((a) => ({
         id: a.id,

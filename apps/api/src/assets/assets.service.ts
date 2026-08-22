@@ -61,6 +61,10 @@ export class AssetsService {
     // Palletised devices stay in lists (the register keeps them) — join the
     // pallet so rows can show and link the allocation.
     qb.leftJoinAndSelect('asset.pallet', 'pallet');
+    // The register's Lot column and the typed lot search need the batch, but
+    // list rows only carry its identity — not costs or notes. Joined under its
+    // own alias; the manager-scoping innerJoin above keeps 'ownerBatch'.
+    qb.leftJoin('asset.batch', 'batch').addSelect(['batch.id', 'batch.batchNumber']);
     // Sold assets are out of active inventory: excluded from every list/search
     // unless the caller explicitly filters by a status (e.g. the Sold archive
     // asking for stockStatus=sold).
@@ -69,8 +73,11 @@ export class AssetsService {
     }
 
     if (query.search) {
+      // Identity search (§7 register redesign): a typed lot number, pallet
+      // number or location name resolves too — warehouse staff search by what
+      // is written on the thing in front of them, not by internal UUIDs.
       qb.andWhere(
-        '(asset.tag ILIKE :search OR asset.unitId ILIKE :search OR asset.name ILIKE :search OR asset.serialNumber ILIKE :search OR asset.expressServiceCode ILIKE :search)',
+        '(asset.tag ILIKE :search OR asset.unitId ILIKE :search OR asset.name ILIKE :search OR asset.serialNumber ILIKE :search OR asset.expressServiceCode ILIKE :search OR asset.manufacturer ILIKE :search OR asset.model ILIKE :search OR batch.batchNumber ILIKE :search OR pallet.palletNumber ILIKE :search OR location.name ILIKE :search)',
         { search: `%${query.search}%` },
       );
     }
@@ -110,6 +117,9 @@ export class AssetsService {
     }
     if (query.onPallet === 'false') {
       qb.andWhere('asset.palletId IS NULL');
+    }
+    if (query.palletId) {
+      qb.andWhere('asset.palletId = :palletId', { palletId: query.palletId });
     }
     if (query.lotId) {
       qb.andWhere('asset.lotId = :lotId', { lotId: query.lotId });
