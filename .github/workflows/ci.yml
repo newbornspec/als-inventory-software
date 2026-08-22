@@ -1,0 +1,111 @@
+# CI for every PR and push to master. Mirrors the local verification that has
+# caught real bugs in this repo — most notably the 55P04 class: a migration
+# that works on the long-lived production database but kills every FRESH one,
+# because TypeORM runs the whole chain in a single transaction. Vercel builds
+# the web app on every PR already, so this deliberately covers what Vercel
+# cannot: API typecheck, the test suite, the full migration chain from
+# scratch against a real Postgres, the seed, the newest migration's down/up,
+# and an API boot smoke (Nest DI failures only surface at runtime — tsc
+# passes happily with a missing provider).
+name: CI
+
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [master]
+
+jobs:
+  api:
+    name: typecheck, tests, migrations, boot
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: als_inventory
+          POSTGRES_PASSWORD: als_inventory_ci
+          POSTGRES_DB: als_inventory
+        ports:
+          - 5432:5432
+        # Don't start the steps until the database is actually accepting
+        # connections — migration:run against a half-started container is a
+        # flaky red that teaches people to ignore CI.
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DB_HOST: localhost
+      DB_PORT: '5432'
+      DB_USERNAME: als_inventory
+      DB_PASSWORD: als_inventory_ci
+      DB_NAME: als_inventory
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install (workspace root)
+        run: npm ci
+
+      - name: Typecheck API
+        run: npx tsc --noEmit -p apps/api/tsconfig.json
+
+      - name: Typecheck web
+        # Vercel runs the full Next build on PRs; this is the fast tsc-level
+        # signal so a web type error fails here in seconds, not there in minutes.
+        run: npx tsc --noEmit -p apps/web/tsconfig.json
+
+      - name: API tests
+        run: npm test --workspace=apps/api
+
+      - name: Migration chain from scratch
+        # The 55P04 net. Every migration, one transaction, empty database —
+        # exactly what a rebuilt Railway DB, CI, or a new developer machine runs.
+        working-directory: apps/api
+        run: npm run migration:run
+
+      - name: Seed
+        working-directory: apps/api
+        run: npm run seed
+
+      - name: Newest migration reverts and re-applies
+        # Proves the latest down() actually works and that re-running up()
+        # against LIVE data (the seed) is safe — the same revert/re-run dance
+        # used to dry-run every migration in this repo before shipping it.
+        working-directory: apps/api
+        run: |
+          npm run migration:revert
+          npm run migration:run
+
+      - name: API boots against the migrated schema
+        # DI wiring is runtime-only: a guard with an unprovided dependency
+        # passes tsc and kills the app at startup. Boot the compiled server
+        # and require the public health root to answer.
+        working-directory: apps/api
+        env:
+          PORT: '3100'
+        run: |
+          npm run build
+          node dist/main.js &
+          APP=$!
+          for i in $(seq 1 30); do
+            sleep 2
+            if curl -sf http://localhost:3100/ >/dev/null; then
+              echo "API boot OK"
+              kill $APP
+              exit 0
+            fi
+          done
+          echo "API failed to boot within 60s"
+          kill $APP || true
+          exit 1
