@@ -48,6 +48,16 @@ export class PowerSyncService {
 
     switch (entry.op) {
       case 'PUT':
+        // Attribute an offline audit to the person who recorded it. The offline
+        // audit form's INSERT carries no audited_by_id (the client doesn't know
+        // its own user id — see audit-form.tsx), so before this every audit
+        // recorded offline landed with a NULL author, permanently. The uploader
+        // IS the author: a PowerSync upload rides the recording user's own JWT.
+        // Filling it in here also repairs rows from older clients as they sync.
+        // Never overwrites an author a future client may supply.
+        if (entry.table === 'asset_audits' && data.auditedById == null) {
+          data = { ...data, auditedById: userId };
+        }
         // Upsert: covers both "new asset created offline" and first-sync of an update.
         await repo.upsert({ ...data, id: entry.id }, ['id']);
         if (entry.table === 'asset_audits') {

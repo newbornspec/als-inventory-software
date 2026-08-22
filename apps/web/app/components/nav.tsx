@@ -8,7 +8,6 @@ import {
   BarChart3,
   Box,
   Boxes,
-  ClipboardCheck,
   Droplet,
   Grid3x3,
   LayoutDashboard,
@@ -34,12 +33,9 @@ const BASE_LINKS: { href: string; label: string; icon: LucideIcon }[] = [
   // supplier manifest. Called "Lots" until the word was needed elsewhere — the
   // route stays /batches, since the label was never tied to it.
   { href: '/batches', label: 'Goods In', icon: Boxes },
-  // Auditing is its own section, not a renamed intake: it reads asset_audits,
-  // one row per audit EVENT, and a device is re-audited over its life
-  // (received, pre-resale, post-repair). Those rows hang off the ASSET — asset_id
-  // is NOT NULL — so an audit is reached through the device, not through the lot
-  // it happened to arrive in.
-  { href: '/audit', label: 'Audit', icon: ClipboardCheck },
+  // The Audit section (an /audit link) returns here when the Amazon Audit
+  // workspace ships — the route has no page yet, so linking it now sends every
+  // click to a 404. Middleware already protects /audit for when it lands.
   { href: '/scan', label: 'Scan', icon: Scan },
   { href: '/assets', label: 'Assets', icon: Zap },
   { href: '/pallets', label: 'Pallets', icon: Grid3x3 },
