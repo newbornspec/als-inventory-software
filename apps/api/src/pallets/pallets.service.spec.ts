@@ -16,6 +16,7 @@ import {
   ASSET_HEADERS,
   ASSET_WIDTHS,
   assetReportRow,
+  splitSaleTotal,
 } from './pallets.service';
 
 // composeLineVariant fills pallet_lines.variant, which is NOT NULL and is read
@@ -227,6 +228,27 @@ describe('report columns', () => {
 // The merge validator is pure so it can be tested without a database — and so
 // the workspace can grey out the Merge button WITH a reason rather than letting
 // someone discover the problem via a 409.
+describe('splitSaleTotal', () => {
+  it('splits evenly and puts the remainder on the last unit', () => {
+    expect(splitSaleTotal(300, 3)).toEqual([100, 100, 100]);
+    expect(splitSaleTotal(100, 3)).toEqual([33.33, 33.33, 33.34]);
+    expect(splitSaleTotal(0.01, 2)).toEqual([0.01, 0]);
+  });
+
+  it('the stored sum always equals what was entered', () => {
+    for (const [total, n] of [[100, 3], [999.99, 7], [0.05, 4], [1234.56, 22]] as const) {
+      const shares = splitSaleTotal(total, n) as number[];
+      const sum = Math.round(shares.reduce((s, x) => s + x, 0) * 100) / 100;
+      expect(sum).toBe(total);
+    }
+  });
+
+  it('no total means unpriced, never zero-priced', () => {
+    expect(splitSaleTotal(undefined, 3)).toEqual([null, null, null]);
+    expect(splitSaleTotal(null, 2)).toEqual([null, null]);
+  });
+});
+
 describe('mergeBlockers', () => {
   const p = (over: Partial<MergeCandidate>): MergeCandidate => ({
     id: over.id ?? 'a',

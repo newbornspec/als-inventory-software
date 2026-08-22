@@ -351,6 +351,13 @@ export class AssetsService {
       soldAt: null,
       soldById: null,
       salePrice: null, // the sale was undone
+      // A device sold WITH a pallet kept its link as the shipped manifest;
+      // undoing the sale brings the device back WITHOUT the pallet — it
+      // returns to its lot's pool, and the shipped pallet's record shrinks
+      // accordingly.
+      palletId: null,
+      movedToPalletAt: null,
+      movedToPalletById: null,
       batchId: targetBatch,
       ...(movingLots ? { lotId: null } : {}),
     });

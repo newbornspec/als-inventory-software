@@ -66,6 +66,10 @@ export interface PalletAssetRow {
   auditStatus: string | null;
   movedToPalletAt: string | null;
   movedToPalletByName: string | null;
+  // Set when the device sold WITH the pallet (the link stays as the shipped
+  // manifest). An open pallet never shows sold rows.
+  soldAt: string | null;
+  salePrice: number | null;
 }
 
 export interface Pallet {
