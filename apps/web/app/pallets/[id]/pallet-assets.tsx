@@ -7,25 +7,33 @@ import { removeAssetsFromPallet, type PalletAssetRow } from '@/lib/actions/palle
 import { formatLabel } from '@/lib/asset-options';
 
 // The device table on an asset pallet's page. Every row links to the device
-// (it never left the register), and Remove sends it back to its lot's pool —
-// same permission as the move, full history logged either way.
+// (it never left the register). Remove is ADMIN-GRADE per the client's
+// correction — the pallet owns its devices; a reason is asked for and lands
+// on the device's history line.
 export function PalletAssets({
   palletId,
   assets,
-  canMove,
+  canReturn,
 }: {
   palletId: string;
   assets: PalletAssetRow[];
-  canMove: boolean;
+  canReturn: boolean;
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  async function remove(assetId: string) {
+  async function remove(assetId: string, name: string) {
+    // prompt doubles as the confirmation: Cancel aborts, empty is allowed
+    // (the reason is preferred, not mandatory).
+    const reason = window.prompt(
+      `Return ${name} to its Goods In lot?\n\nReason (optional):`,
+      '',
+    );
+    if (reason === null) return;
     setBusy(assetId);
     setError(null);
-    const result = await removeAssetsFromPallet([assetId], palletId);
+    const result = await removeAssetsFromPallet([assetId], palletId, reason || undefined);
     setBusy(null);
     if (result.error) {
       setError(result.error);
@@ -54,7 +62,7 @@ export function PalletAssets({
             <th scope="col" className="px-4 py-2">Audit status</th>
             <th scope="col" className="px-4 py-2">Moved</th>
             <th scope="col" className="px-4 py-2">By</th>
-            {canMove && <th scope="col" className="px-4 py-2"><span className="sr-only">Actions</span></th>}
+            {canReturn && <th scope="col" className="px-4 py-2"><span className="sr-only">Actions</span></th>}
           </tr>
         </thead>
         <tbody>
@@ -76,11 +84,11 @@ export function PalletAssets({
                 {a.movedToPalletAt ? new Date(a.movedToPalletAt).toLocaleString('en-GB') : '—'}
               </td>
               <td className="px-4 py-2 text-neutral-600">{a.movedToPalletByName ?? '—'}</td>
-              {canMove && (
+              {canReturn && (
                 <td className="px-4 py-2 text-right">
                   <button
                     type="button"
-                    onClick={() => remove(a.id)}
+                    onClick={() => remove(a.id, a.name)}
                     disabled={busy === a.id}
                     aria-label={`Remove ${a.name} from this pallet`}
                     className="text-xs text-neutral-700 underline hover:text-neutral-950 disabled:opacity-50"

@@ -434,15 +434,41 @@ export async function moveAssetsToPallet(
   }
 }
 
-// The reverse: back into each device's lot pool. Same permission as the move.
+// Batch-level transfer: new auto-numbered pallet, every eligible device from
+// the lot. Redirects to the new pallet on success (the spec's "show the newly
+// created pallet"), so only failures ever return to the caller.
+export async function transferBatchToPallet(
+  batchId: string,
+): Promise<{ error: string } | never> {
+  let palletId: string;
+  try {
+    const result = await apiFetch<{ palletId: string; palletNumber: string; moved: number }>(
+      '/pallets/transfer-batch',
+      { method: 'POST', body: JSON.stringify({ batchId }) },
+    );
+    palletId = result.palletId;
+  } catch (err) {
+    return {
+      error: err instanceof ApiError ? err.message : 'Could not transfer the batch.',
+    };
+  }
+  revalidatePath('/batches');
+  revalidatePath('/pallets');
+  redirect(`/pallets/${palletId}`);
+}
+
+// The reverse: back into each device's lot pool. Admin-grade per the client's
+// correction — the pallet owns its devices; the optional reason lands on the
+// device's history line.
 export async function removeAssetsFromPallet(
   assetIds: string[],
   palletId: string,
+  reason?: string,
 ): Promise<{ error: string | null; removed: number }> {
   try {
     const result = await apiFetch<{ removed: number }>('/pallets/assets/remove', {
       method: 'POST',
-      body: JSON.stringify({ assetIds }),
+      body: JSON.stringify({ assetIds, reason }),
     });
     revalidatePath('/batches');
     revalidatePath('/pallets');
