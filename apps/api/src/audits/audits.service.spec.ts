@@ -1,4 +1,4 @@
-import { groupDayEvents, type DayEventRow } from './audits.service';
+import { groupDayEvents, hasComponents, type DayEventRow } from './audits.service';
 
 // The merge the Audit workspace's honesty depends on: the kiosk files SEVERAL
 // asset_audits rows for one machine in one session (the capture posts one,
@@ -53,6 +53,94 @@ describe('groupDayEvents', () => {
     ])[0];
     expect(d.dataWipeStatus).toBe('wiped');
     expect(d.auditStatus).toBe('power_on');
+  });
+
+  it('keeps the components the capture recorded when the wipe event carries none', () => {
+    // The session's first event holds the hardware; the wipe row that follows
+    // has every spec column null. Blanking on the later row would leave the
+    // workspace showing a machine with no components — the exact failure the
+    // last-non-null rule exists to prevent.
+    const d = groupDayEvents([
+      row({
+        id: 'e1',
+        created_at: '2026-08-22T09:00:00Z',
+        audit_status: 'power_on',
+        hardware_profile: { cpu: { model: 'Core i7-4770' } },
+        cpu: 'Core i7-4770',
+        ram_gb: 8,
+        storage_capacity: '256GB',
+      }),
+      row({ id: 'e2', created_at: '2026-08-22T09:40:00Z', data_wipe_status: 'wiped' }),
+    ])[0];
+    expect(d.spec.hardwareProfile).toEqual({ cpu: { model: 'Core i7-4770' } });
+    expect(d.spec.cpu).toBe('Core i7-4770');
+    expect(d.spec.ramGb).toBe(8);
+    expect(d.spec.storageCapacity).toBe('256GB');
+  });
+
+  it('an identity-only profile stub never displaces a real capture', () => {
+    // The shape live traffic actually produces: ingest normalises and stores a
+    // profile on EVERY event, so a wipe filed against a known machine lands as
+    // {identification:{serialNumber}} — non-null but component-free. A plain
+    // last-non-null rule let that stub win and the workspace rendered a laptop
+    // with no components. Caught in the browser, not by the first test here.
+    const d = groupDayEvents([
+      row({
+        id: 'e1',
+        created_at: '2026-08-22T09:00:00Z',
+        hardware_profile: {
+          identification: { serialNumber: 'GJDNG63' },
+          cpu: { model: 'Core i5-8265U' },
+          storage: [{ capacity: '256GB', serialNumber: 'S4EV' }],
+        },
+      }),
+      row({
+        id: 'e2',
+        created_at: '2026-08-22T09:40:00Z',
+        data_wipe_status: 'wiped',
+        hardware_profile: { identification: { serialNumber: 'GJDNG63' } },
+      }),
+    ])[0];
+    expect(d.spec.hardwareProfile).toMatchObject({ cpu: { model: 'Core i5-8265U' } });
+  });
+
+  it('hasComponents distinguishes a real capture from a stub', () => {
+    expect(hasComponents(null)).toBe(false);
+    expect(hasComponents({})).toBe(false);
+    expect(hasComponents({ identification: { serialNumber: 'X' } })).toBe(false);
+    expect(hasComponents({ storage: [] })).toBe(false); // present but empty
+    expect(hasComponents({ cpu: {} })).toBe(false); // section with nothing in it
+    expect(hasComponents({ cpu: { model: 'i7' } })).toBe(true);
+    expect(hasComponents({ storage: [{ capacity: '256GB' }] })).toBe(true);
+    expect(hasComponents({ battery: { cycleCount: 12 } })).toBe(true);
+  });
+
+  it('a later, fuller capture supersedes an earlier partial one', () => {
+    const d = groupDayEvents([
+      row({ id: 'e1', created_at: '2026-08-22T09:00:00Z', ram_gb: 8 }),
+      row({ id: 'e2', created_at: '2026-08-22T11:00:00Z', ram_gb: 16, cpu: 'Core i5-8365U' }),
+    ])[0];
+    expect(d.spec.ramGb).toBe(16);
+    expect(d.spec.cpu).toBe('Core i5-8365U');
+  });
+
+  it('records no components when the audits carried none', () => {
+    const d = groupDayEvents([row({ id: 'e1', audit_status: 'power_on' })])[0];
+    expect(d.spec.hardwareProfile).toBeNull();
+    expect(d.spec.cpu).toBeNull();
+  });
+
+  it('the profile blob rides once per device, never on each event', () => {
+    // A day of 100 machines would otherwise ship the same blob four times over
+    // for a single session.
+    const d = groupDayEvents([
+      row({ id: 'e1', hardware_profile: { cpu: { model: 'i7' } } }),
+      row({ id: 'e2', created_at: '2026-08-22T09:40:00Z' }),
+    ])[0];
+    expect(d.spec.hardwareProfile).not.toBeNull();
+    for (const e of d.events) {
+      expect(e).not.toHaveProperty('hardwareProfile');
+    }
   });
 
   it('counts devices, not events — the dual-disk double-wipe case', () => {
