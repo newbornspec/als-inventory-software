@@ -25,6 +25,61 @@ import {
   type RequestUser,
 } from '../common/ownership';
 
+// --- Lifecycle states -------------------------------------------------------
+//
+// The register's tabs and its status pill describe a DERIVED state, not a
+// stored column: a device's place in the ITAD lifecycle is a reading of its
+// stock status and its audit verdict together. Defined once here, mirrored in
+// the web's lib/asset-lifecycle.ts for the pill, and kept honest by an E2E
+// check that every row a tab returns renders that tab's pill.
+//
+// Precedence matters and is encoded in the predicates: sold outranks
+// everything (a sold device is SOLD whatever its verdict said), and quarantine
+// outranks the verdict (a failed wipe is not merely "audited"). The states
+// therefore partition the register — every device is in exactly one.
+// Devices that have LEFT the building. Same vocabulary the dashboard uses
+// (dashboard.service.ts GONE) — a unit can leave by sale, by dispatch, or by
+// destruction, and none of those is live stock. Classifying only 'sold' as
+// terminal put a recycled machine that had been graded under "Ready", with an
+// emerald pill, as if it were sellable. 'shipped' is written by the sales
+// service and 'disposed' is settable from the asset edit form, so both are
+// reachable states, not theoretical ones.
+const GONE = `asset.stockStatus IN ('sold', 'shipped', 'disposed')`;
+const NOT_SOLD = `asset.stockStatus != 'sold'`;
+// IS NOT DISTINCT FROM, not `=`: audit_status is nullable, and in SQL
+// `NULL = 'data_wipe_failed'` is NULL, so `(false OR NULL)` is NULL and
+// `NOT NULL` is NULL — which is not TRUE. A bare comparison therefore dropped
+// every never-audited device out of EVERY live tab: they vanished from the
+// register instead of appearing under "In processing". NULL-safe equality
+// always yields TRUE or FALSE. (A ::text cast would also work, but TypeORM
+// cannot map an aliased property through a cast — it looks for a column
+// literally named "auditStatus" and the query 500s.)
+const QUARANTINED = `(asset.stockStatus = 'quarantined' OR asset.auditStatus IS NOT DISTINCT FROM 'data_wipe_failed')`;
+const LIVE = `NOT ${GONE} AND NOT ${QUARANTINED}`;
+
+export const LIFECYCLE_PREDICATES: Record<string, string> = {
+  // 'all' is the only view with no restriction at all — the register is the
+  // identity record of every unit that ever existed, so it shows devices that
+  // have left (sold, shipped, disposed) alongside live stock. Every other
+  // value is a state in the live pipeline, plus 'sold' for the archive.
+  all: '',
+  sold: `asset.stockStatus = 'sold'`,
+  quarantine: `NOT ${GONE} AND ${QUARANTINED}`,
+  ready: `${LIVE} AND asset.auditStatus = 'ready_for_sale'`,
+  wiped: `${LIVE} AND asset.auditStatus = 'data_wiped'`,
+  audited: `${LIVE} AND asset.auditStatus IS NOT NULL AND asset.auditStatus NOT IN ('ready_for_sale', 'data_wiped')`,
+  in_processing: `${LIVE} AND asset.auditStatus IS NULL`,
+};
+
+export interface AssetSummary {
+  assets: number;
+  held: number;
+  wiped: number;
+  ready: number;
+  sold: number;
+  quarantine: number;
+}
+
 @Injectable()
 export class AssetsService {
   constructor(
@@ -67,9 +122,16 @@ export class AssetsService {
     qb.leftJoin('asset.batch', 'batch').addSelect(['batch.id', 'batch.batchNumber']);
     // Sold assets are out of active inventory: excluded from every list/search
     // unless the caller explicitly filters by a status (e.g. the Sold archive
-    // asking for stockStatus=sold).
-    if (!query.stockStatus) {
+    // asking for stockStatus=sold) — or asks for a lifecycle view, which
+    // states its own position on sold devices.
+    if (!query.stockStatus && !query.lifecycle) {
       qb.andWhere('asset.stockStatus != :soldStatus', { soldStatus: AssetStockStatus.SOLD });
+    }
+    if (query.lifecycle) {
+      const predicate = LIFECYCLE_PREDICATES[query.lifecycle];
+      // Unknown values can't reach here (the DTO validates the set), and 'all'
+      // is deliberately empty — no restriction at all.
+      if (predicate) qb.andWhere(`(${predicate})`);
     }
 
     if (query.search) {
@@ -110,6 +172,11 @@ export class AssetsService {
     if (query.noAudit === 'true') {
       qb.andWhere('asset.auditStatus IS NULL');
     }
+    if (query.noSerial === 'true') {
+      // Empty string counts as missing: a capture that reported a blank serial
+      // is as unidentifiable as one that reported none.
+      qb.andWhere("(asset.serialNumber IS NULL OR asset.serialNumber = '')");
+    }
     // Palletised devices STAY in the register (labels must keep scanning to a
     // hit) -- this filter is how the Goods In pool excludes them instead.
     if (query.onPallet === 'true') {
@@ -126,6 +193,43 @@ export class AssetsService {
     }
 
     return qb.getMany();
+  }
+
+  // The register's headline counts. Computed in SQL over the whole register
+  // (not over a loaded page), and from the SAME predicates the tabs filter by,
+  // so a card can never disagree with the tab beside it. Manager scoping is
+  // the same rule every other list applies.
+  async summary(user?: RequestUser): Promise<AssetSummary> {
+    const qb = this.assets.createQueryBuilder('asset');
+    if (isScopedManager(user)) {
+      qb.innerJoin('asset.batch', 'ownerBatch').andWhere(managerBatchCondition('ownerBatch'), {
+        ownerUid: user!.userId,
+      });
+    }
+    const count = (predicate: string) =>
+      predicate ? `COUNT(*) FILTER (WHERE ${predicate})` : 'COUNT(*)';
+    const row = await qb
+      .select(count(''), 'assets')
+      // Everything still in the building: not sold, not shipped, not disposed.
+      // Deliberately NOT called "in stock" on the page — the dashboard's tile
+      // of that name counts a narrower set (its AVAILABLE list), and two
+      // pages showing different numbers under one label is a support ticket.
+      .addSelect(count(`NOT ${GONE}`), 'held')
+      .addSelect(count(LIFECYCLE_PREDICATES.wiped), 'wiped')
+      .addSelect(count(LIFECYCLE_PREDICATES.ready), 'ready')
+      .addSelect(count(LIFECYCLE_PREDICATES.sold), 'sold')
+      .addSelect(count(LIFECYCLE_PREDICATES.quarantine), 'quarantine')
+      .getRawOne<Record<string, string>>();
+
+    const n = (v: string | undefined) => Number(v ?? 0);
+    return {
+      assets: n(row?.assets),
+      held: n(row?.held),
+      wiped: n(row?.wiped),
+      ready: n(row?.ready),
+      sold: n(row?.sold),
+      quarantine: n(row?.quarantine),
+    };
   }
 
   async findOne(id: string, user?: RequestUser): Promise<Asset> {

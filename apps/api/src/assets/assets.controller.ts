@@ -48,6 +48,14 @@ export class AssetsController {
     return this.assets.findSold();
   }
 
+  // Register headline counts. Also declared before ':id'. Same audience as the
+  // list above — a technician looking at the register sees its totals.
+  @RequirePermissions('assets', 'goods_in', 'scan')
+  @Get('summary')
+  summary(@Req() req: any) {
+    return this.assets.summary(req.user);
+  }
+
   // Bulk return from the Sold page — requires return_sold, like single returns.
   // No batchId -> each asset returns to its own original lot.
   @RequirePermissions('return_sold')
