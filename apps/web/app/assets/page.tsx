@@ -63,18 +63,26 @@ export default async function AssetsPage({
   const params = await searchParams;
   const user = await getSessionUser();
   const canCreate = user?.role === 'admin' || user?.role === 'manager';
-  // A tab is only "chosen" when the URL says so. Arriving from a dashboard or
-  // report deep link (which carry filters but no lifecycle) must keep the
-  // app-wide default of excluding sold devices — sending lifecycle=all would
-  // suppress that guard server-side and make /assets?noBatch=true disagree
-  // with the Inventory count that links to it.
   const chosen =
     params.lifecycle && LIFECYCLE_TABS.some((t) => t.value === params.lifecycle)
       ? params.lifecycle
       : null;
   const tab = chosen ?? 'all';
+  const hasFilters = FILTER_KEYS.some((k) => params[k]);
 
-  const listQuery = queryFrom(params, { lifecycle: chosen ?? undefined });
+  // What the register sends, and why it is not simply `tab`:
+  //
+  // • An explicit lifecycle wins — the user picked a tab.
+  // • The BARE register (no tab, no filters) is the All view and must show
+  //   everything the register holds, sold devices included: it is the identity
+  //   record of every unit that ever existed, and a sold unit still has to be
+  //   findable by its serial.
+  // • A deep link that carries FILTERS but no lifecycle keeps its caller's
+  //   semantics instead. The dashboard, the reports tiles and Inventory all
+  //   compute their counts over live stock; if the list they link to silently
+  //   added sold devices, the count and the list would disagree.
+  const effective = chosen ?? (hasFilters ? undefined : 'all');
+  const listQuery = queryFrom(params, { lifecycle: effective });
   const [rows, summary] = await Promise.all([
     apiFetch<Asset[]>(`/assets?${listQuery.toString()}`),
     // Headline counts are computed server-side over the WHOLE register, not
@@ -135,10 +143,11 @@ export default async function AssetsPage({
               return (
                 <Link
                   key={t.value}
-                  href={`/assets?${queryFrom(params, { lifecycle: t.value === 'all' ? undefined : t.value }).toString()}`}
-                  // 'all' clears the parameter rather than sending
-                  // lifecycle=all, so the default view keeps the app-wide
-                  // sold exclusion and every deep link keeps its meaning.
+                  // Every tab states itself explicitly, All included: choosing
+                  // All is a decision to see everything, sold devices and all,
+                  // and it must not be confused with a filtered deep link that
+                  // merely omitted the parameter.
+                  href={`/assets?${queryFrom(params, { lifecycle: t.value }).toString()}`}
                   aria-current={on ? 'page' : undefined}
                   className={
                     'mb-[-1px] rounded-t-md px-3 py-2 text-xs font-semibold uppercase tracking-wide ' +
