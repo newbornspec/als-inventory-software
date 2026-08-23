@@ -22,11 +22,15 @@ interface Action {
 // it opens from. Fixed positioning off the trigger's rect is the way out.
 export function RowActions({
   pallet,
-  canManage,
+  canExport,
+  canMerge,
   onMerge,
 }: {
   pallet: Pallet;
-  canManage: boolean;
+  // Separate flags, matching the API's separate permissions — a merge-only
+  // user must not see an Export item that 403s, nor the reverse.
+  canExport: boolean;
+  canMerge: boolean;
   onMerge: (id: string) => void;
 }) {
   const router = useRouter();
@@ -53,13 +57,13 @@ export function RowActions({
       onSelect: () => router.push(`/pallets/${pallet.id}`),
     });
   }
-  if (canManage) {
+  if (canExport) {
     actions.push({
       label: 'Export to Excel',
       onSelect: () => window.open(`/api/pallets/${pallet.id}/report`, '_self'),
     });
   }
-  if (canManage && !isMerged && !isShipped && !isEmpty) {
+  if (canMerge && !isMerged && !isShipped && !isEmpty) {
     actions.push({
       label: 'Merge with…',
       hint: 'Selects this pallet — pick one more',

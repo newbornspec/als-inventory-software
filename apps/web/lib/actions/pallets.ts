@@ -243,6 +243,66 @@ export async function deletePallet(id: string): Promise<void> {
   redirect('/pallets');
 }
 
+// Bulk results report per-pallet failures BY NUMBER, not id — the operator
+// reads pallet numbers, and a partial failure ("2 of 5 refused: not empty")
+// must say which two without a lookup.
+export interface BulkPalletResult {
+  done: number;
+  failed: { palletNumber: string; error: string }[];
+}
+
+// Change status on a selection, one PATCH per pallet — the same endpoint and
+// permission as the single-row change; a selection is just a bigger hand.
+// Each failure (e.g. a merged pallet, which PATCH rejects by design) is
+// collected rather than aborting the rest.
+export async function setPalletsStatus(
+  pallets: { id: string; palletNumber: string }[],
+  status: string,
+): Promise<BulkPalletResult> {
+  const failed: BulkPalletResult['failed'] = [];
+  let done = 0;
+  for (const p of pallets) {
+    try {
+      await apiFetch(`/pallets/${p.id}`, { method: 'PATCH', body: JSON.stringify({ status }) });
+      done += 1;
+    } catch (err) {
+      failed.push({
+        palletNumber: p.palletNumber,
+        error: err instanceof ApiError ? err.message : 'Failed to update.',
+      });
+    }
+  }
+  revalidatePath('/pallets');
+  return { done, failed };
+}
+
+// Bulk delete. The server refuses a pallet that still holds lines or devices
+// (that is the delete guard, not an error in the UI) — those come back in
+// `failed` with the server's own explanation.
+export async function deletePallets(
+  pallets: { id: string; palletNumber: string }[],
+): Promise<BulkPalletResult> {
+  const failed: BulkPalletResult['failed'] = [];
+  let done = 0;
+  for (const p of pallets) {
+    try {
+      await apiFetch(`/pallets/${p.id}`, { method: 'DELETE' });
+      done += 1;
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) {
+        done += 1; // already gone — the goal is met
+        continue;
+      }
+      failed.push({
+        palletNumber: p.palletNumber,
+        error: err instanceof ApiError ? err.message : 'Failed to delete.',
+      });
+    }
+  }
+  revalidatePath('/pallets');
+  return { done, failed };
+}
+
 // One row of the Layout 1 table. Every field optional so an edit can send just
 // the one that changed — the API recomposes the display label from the merged
 // row, so a partial patch never blanks the rest.
