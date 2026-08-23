@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { ArrowRight, Check, ChevronDown, ChevronRight } from 'lucide-react';
+import { ArrowRight, Check, ChevronDown, ChevronRight, RotateCw } from 'lucide-react';
 import type { Batch } from '@/lib/actions/batches';
 import type { Asset } from '@/lib/actions/assets';
 import { setAuditLot } from '@/lib/actions/devices';
@@ -348,19 +348,96 @@ export function GoodsInWorkspace({
   const lotReq = useRef<string | null>(null);
   const unitReq = useRef<string | null>(null);
 
-  async function loadUnits(lotId: string) {
+  // --- Refresh -----------------------------------------------------------
+  // The audit station writes into the selected lot from another machine, so
+  // this panel goes stale the moment a unit is captured. Refresh re-fetches
+  // the devices AND re-runs the server component (the lot-level chips above
+  // the table are server data), then reports what actually arrived — a silent
+  // repaint of a table that looks identical can't be told apart from a button
+  // that does nothing, and a re-audit changes a verdict without changing the
+  // row count.
+  const [refreshing, setRefreshing] = useState(false);
+  const [changeNote, setChangeNote] = useState<string | null>(null);
+  const [lastLoaded, setLastLoaded] = useState<string | null>(null);
+  const prevSig = useRef<Map<string, string> | null>(null);
+
+  function signatureOf(assets: Asset[]): Map<string, string> {
+    return new Map(
+      assets.map((a) => [
+        a.id,
+        [a.auditStatus ?? '', a.conditionGrade ?? '', a.stockStatus, a.palletId ?? ''].join('|'),
+      ]),
+    );
+  }
+
+  async function loadUnits(lotId: string, mode: 'initial' | 'refresh' = 'initial') {
     lotReq.current = lotId;
-    setUnits({ loading: true, error: null, assets: [] });
+    // A refresh keeps the current rows on screen — blanking the table to a
+    // spinner for a re-fetch loses the operator's place for no reason. Only a
+    // first load has nothing to show.
+    if (mode === 'initial') setUnits({ loading: true, error: null, assets: [] });
+    else setRefreshing(true);
     try {
       const res = await fetch(`/api/assets?batchId=${lotId}`);
       if (!res.ok) throw new Error('failed');
-      const assets = await res.json();
+      const assets: Asset[] = await res.json();
       if (lotReq.current !== lotId) return; // a newer selection superseded this
       setUnits({ loading: false, error: null, assets });
+      setLastLoaded(
+        new Date().toLocaleTimeString('en-GB', {
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+        }),
+      );
+
+      const prev = prevSig.current;
+      const next = signatureOf(assets);
+      prevSig.current = next;
+      if (mode === 'refresh' && prev) {
+        let added = 0;
+        let updated = 0;
+        for (const [id, sig] of next) {
+          const before = prev.get(id);
+          if (before === undefined) added += 1;
+          else if (before !== sig) updated += 1;
+        }
+        let removed = 0;
+        for (const id of prev.keys()) if (!next.has(id)) removed += 1;
+        const parts: string[] = [];
+        if (added > 0) parts.push(`${added} new device${added === 1 ? '' : 's'}`);
+        if (updated > 0) parts.push(`${updated} updated`);
+        if (removed > 0) parts.push(`${removed} no longer in this lot`);
+        setChangeNote(parts.length > 0 ? parts.join(' · ') : 'No changes yet.');
+      }
+      // A device can leave the pool between loads (someone else palletised
+      // it); keep only picks that are still movable rather than sending a
+      // stale id into Move to Pallet.
+      setPicked((cur) => {
+        const pool = new Set(assets.filter((a) => !a.palletId).map((a) => a.id));
+        return cur.filter((id) => pool.has(id));
+      });
     } catch {
       if (lotReq.current !== lotId) return;
-      setUnits({ loading: false, error: 'Could not load this lot’s devices.', assets: [] });
+      if (mode === 'refresh') {
+        // The rows on screen are still the last good ones — say the refresh
+        // failed instead of wiping a table that is merely stale.
+        setChangeNote('Could not refresh — the devices shown may be out of date.');
+      } else {
+        setUnits({ loading: false, error: 'Could not load this lot’s devices.', assets: [] });
+      }
+    } finally {
+      if (mode === 'refresh') setRefreshing(false);
     }
+  }
+
+  function onRefresh() {
+    if (!selectedLotId) return;
+    setChangeNote(null);
+    void loadUnits(selectedLotId, 'refresh');
+    // The Stat chips (Total/Audited/Pending/Unallocated) and the Lots Registry
+    // are server-rendered, so they need the route re-run to move too.
+    router.refresh();
   }
 
   useEffect(() => {
@@ -368,6 +445,11 @@ export function GoodsInWorkspace({
     setSelectedUnitId(null);
     setDetail({ loading: false, error: null, asset: null });
     setUnitFilter('all');
+    // A different lot means the previous lot's comparison and its "1 new
+    // device" note are meaningless — start clean rather than reporting one
+    // lot's changes against another's.
+    setChangeNote(null);
+    prevSig.current = null;
     if (selectedLotId) void loadUnits(selectedLotId);
     else setUnits({ loading: false, error: null, assets: [] });
   }, [selectedLotId]);
@@ -573,32 +655,67 @@ export function GoodsInWorkspace({
         open={openUnits}
         onToggle={() => setOpenUnits((v) => !v)}
         right={
-          lot &&
-          !units.error && (
-            <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Filter units by audit state">
-              {/* While the fetch is in flight the derived counts would read a
-                  confident (0) — an ellipsis is the honest value. On error the
-                  chips hide entirely rather than filter a table that isn't there. */}
-              {(
-                [
-                  ['audited', `Audited (${units.loading ? '…' : audited.length})`],
-                  ['pending', `Pending (${units.loading ? '…' : pendingUnits.length})`],
-                ] as const
-              ).map(([key, label]) => (
-                <button
-                  key={key}
-                  onClick={() => setUnitFilter((f) => (f === key ? 'all' : key))}
-                  aria-pressed={unitFilter === key}
-                  className={
-                    'rounded-md border px-3 py-1 text-xs font-medium ' +
-                    (unitFilter === key
-                      ? 'border-blue-200 bg-blue-50 text-[#1a6ef5]'
-                      : 'border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50')
-                  }
+          lot && (
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+              {!units.error && (
+                <div
+                  className="flex flex-wrap items-center gap-1.5"
+                  role="group"
+                  aria-label="Filter units by audit state"
                 >
-                  {label}
-                </button>
-              ))}
+                  {/* While the fetch is in flight the derived counts would read a
+                      confident (0) — an ellipsis is the honest value. On error the
+                      chips hide entirely rather than filter a table that isn't there. */}
+                  {(
+                    [
+                      ['audited', `Audited (${units.loading ? '…' : audited.length})`],
+                      ['pending', `Pending (${units.loading ? '…' : pendingUnits.length})`],
+                    ] as const
+                  ).map(([key, label]) => (
+                    <button
+                      key={key}
+                      onClick={() => setUnitFilter((f) => (f === key ? 'all' : key))}
+                      aria-pressed={unitFilter === key}
+                      className={
+                        'rounded-md border px-3 py-1 text-xs font-medium ' +
+                        (unitFilter === key
+                          ? 'border-blue-200 bg-blue-50 text-[#1a6ef5]'
+                          : 'border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50')
+                      }
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              <button
+                type="button"
+                onClick={onRefresh}
+                disabled={refreshing || units.loading}
+                aria-label={`Refresh the devices in ${lot.batchNumber}`}
+                className="inline-flex shrink-0 items-center gap-2 rounded-md border border-[var(--control-border)] px-3 py-1 text-xs font-medium text-neutral-800 transition-colors hover:bg-neutral-50 disabled:opacity-60"
+              >
+                <RotateCw
+                  className={refreshing ? 'size-3.5 animate-spin' : 'size-3.5'}
+                  aria-hidden="true"
+                />
+                {refreshing ? 'Refreshing…' : 'Refresh'}
+              </button>
+              {lastLoaded && (
+                <span className="text-xs text-neutral-500">Updated {lastLoaded}</span>
+              )}
+              {/* Only the outcome is live — the timestamp changes on every load
+                  and would otherwise be announced each time for no reason. */}
+              <span
+                aria-live="polite"
+                className={
+                  'text-xs font-medium ' +
+                  (changeNote?.startsWith('Could not') ? 'text-red-700' : 'text-neutral-700')
+                }
+              >
+                {changeNote ?? ''}
+              </span>
             </div>
           )
         }
@@ -689,7 +806,10 @@ export function GoodsInWorkspace({
                 selectedIds={picked}
                 onMoved={() => {
                   setPicked([]);
-                  void loadUnits(lot.id);
+                  // Refresh mode: the rows stay on screen through the reload,
+                  // and the moved devices are reported as updated rather than
+                  // the table blinking and looking untouched.
+                  void loadUnits(lot.id, 'refresh');
                   router.refresh();
                 }}
               />
