@@ -1,4 +1,4 @@
-import { groupDayEvents, type DayEventRow } from './audits.service';
+import { groupDayEvents, hasComponents, type DayEventRow } from './audits.service';
 
 // The merge the Audit workspace's honesty depends on: the kiosk files SEVERAL
 // asset_audits rows for one machine in one session (the capture posts one,
@@ -76,6 +76,43 @@ describe('groupDayEvents', () => {
     expect(d.spec.cpu).toBe('Core i7-4770');
     expect(d.spec.ramGb).toBe(8);
     expect(d.spec.storageCapacity).toBe('256GB');
+  });
+
+  it('an identity-only profile stub never displaces a real capture', () => {
+    // The shape live traffic actually produces: ingest normalises and stores a
+    // profile on EVERY event, so a wipe filed against a known machine lands as
+    // {identification:{serialNumber}} — non-null but component-free. A plain
+    // last-non-null rule let that stub win and the workspace rendered a laptop
+    // with no components. Caught in the browser, not by the first test here.
+    const d = groupDayEvents([
+      row({
+        id: 'e1',
+        created_at: '2026-08-22T09:00:00Z',
+        hardware_profile: {
+          identification: { serialNumber: 'GJDNG63' },
+          cpu: { model: 'Core i5-8265U' },
+          storage: [{ capacity: '256GB', serialNumber: 'S4EV' }],
+        },
+      }),
+      row({
+        id: 'e2',
+        created_at: '2026-08-22T09:40:00Z',
+        data_wipe_status: 'wiped',
+        hardware_profile: { identification: { serialNumber: 'GJDNG63' } },
+      }),
+    ])[0];
+    expect(d.spec.hardwareProfile).toMatchObject({ cpu: { model: 'Core i5-8265U' } });
+  });
+
+  it('hasComponents distinguishes a real capture from a stub', () => {
+    expect(hasComponents(null)).toBe(false);
+    expect(hasComponents({})).toBe(false);
+    expect(hasComponents({ identification: { serialNumber: 'X' } })).toBe(false);
+    expect(hasComponents({ storage: [] })).toBe(false); // present but empty
+    expect(hasComponents({ cpu: {} })).toBe(false); // section with nothing in it
+    expect(hasComponents({ cpu: { model: 'i7' } })).toBe(true);
+    expect(hasComponents({ storage: [{ capacity: '256GB' }] })).toBe(true);
+    expect(hasComponents({ battery: { cycleCount: 12 } })).toBe(true);
   });
 
   it('a later, fuller capture supersedes an earlier partial one', () => {

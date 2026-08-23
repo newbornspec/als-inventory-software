@@ -125,6 +125,36 @@ export interface AuditDayDevice {
   }[];
 }
 
+// Does this profile blob actually describe components, or is it just an
+// identity stub?
+//
+// Every event stores a normalised profile, so a wipe posted for an already
+// known machine lands as {identification:{serialNumber}} — non-null, but
+// carrying no hardware. A plain last-non-null rule lets that stub overwrite
+// the capture's full profile and the workspace then renders a machine with no
+// components. Only a blob holding at least one component section may replace
+// the one already merged.
+const COMPONENT_SECTIONS = [
+  'cpu',
+  'memory',
+  'storage',
+  'graphics',
+  'display',
+  'battery',
+  'system',
+] as const;
+
+export function hasComponents(profile: unknown): boolean {
+  if (profile == null || typeof profile !== 'object') return false;
+  const p = profile as Record<string, unknown>;
+  return COMPONENT_SECTIONS.some((k) => {
+    const v = p[k];
+    if (v == null) return false;
+    if (Array.isArray(v)) return v.length > 0;
+    return typeof v === 'object' && Object.keys(v as object).length > 0;
+  });
+}
+
 // Collapse a day's event rows (ordered oldest-first) into one entry per
 // device. Exported for its spec — this is the merge the whole workspace's
 // honesty depends on.
@@ -173,9 +203,9 @@ export function groupDayEvents(rows: DayEventRow[]): AuditDayDevice[] {
     if (r.audit_kind != null) d.auditKind = r.audit_kind;
     if (r.restore_image_status != null) d.restoreImageStatus = r.restore_image_status;
     if (r.restore_image_name != null) d.restoreImageName = r.restore_image_name;
-    // Same last-non-null rule as the fields above: a wipe event carries no
-    // hardware, so it must not blank the capture event's components.
-    if (r.hardware_profile != null) d.spec.hardwareProfile = r.hardware_profile;
+    // Not simply last-non-null: see hasComponents above — an identity-only
+    // stub must not displace a real capture.
+    if (hasComponents(r.hardware_profile)) d.spec.hardwareProfile = r.hardware_profile;
     if (r.manufacturer != null) d.spec.manufacturer = r.manufacturer;
     if (r.model != null) d.spec.model = r.model;
     if (r.cpu != null) d.spec.cpu = r.cpu;
