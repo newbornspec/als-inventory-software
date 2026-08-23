@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { ChevronDown, Plus } from 'lucide-react';
 import { createEmptySpecPallet } from '@/lib/actions/pallets';
 
 // Add future entry methods here (CSV import, audit import…) and they appear in
@@ -87,9 +88,13 @@ export function NewPalletButton() {
         ref={openerRef}
         onClick={() => setOpen(true)}
         aria-haspopup="dialog"
-        className="rounded-md bg-[#1a6ef5] hover:bg-blue-600 px-4 py-2 text-sm font-medium text-white"
+        className="inline-flex items-center gap-1.5 rounded-md bg-[#1a6ef5] hover:bg-blue-600 px-4 py-2 text-sm font-medium text-white"
       >
+        <Plus className="size-4" aria-hidden="true" />
         New Pallet
+        {/* The chevron says "options follow" — the click opens the layout
+            chooser dialog, not a bare form. */}
+        <ChevronDown className="size-4" aria-hidden="true" />
       </button>
 
       {open && (

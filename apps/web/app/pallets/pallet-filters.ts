@@ -6,6 +6,9 @@ import type { Pallet } from '@/lib/actions/pallets';
 export const LAYOUT_LABEL: Record<string, string> = {
   variant: 'Layout 1',
   spec: 'Layout 2',
+  // Device-holding pallets (entry_layout='asset'). Falling through to
+  // 'Layout 1' mislabeled every serialized pallet in the list.
+  asset: 'Serialized',
 };
 
 export function layoutLabel(entryLayout?: string): string {
@@ -39,7 +42,9 @@ export interface PalletFilterState {
   from: string; // yyyy-mm-dd, only meaningful when preset === 'custom'
   to: string;
   layout: string; // '' = all
-  status: string;
+  // Multi-select: a warehouse question is usually "everything still workable"
+  // (Open + Ready together), which a single-select can't ask. [] = all.
+  statuses: string[];
   location: string;
   supplier: string;
 }
@@ -50,7 +55,7 @@ export const EMPTY_FILTERS: PalletFilterState = {
   from: '',
   to: '',
   layout: '',
-  status: '',
+  statuses: [],
   location: '',
   supplier: '',
 };
@@ -97,7 +102,7 @@ export function countActiveFilters(f: PalletFilterState): number {
   if (f.search.trim()) n += 1;
   if (f.preset !== 'any') n += 1;
   if (f.layout) n += 1;
-  if (f.status) n += 1;
+  if (f.statuses.length > 0) n += 1;
   if (f.location) n += 1;
   if (f.supplier) n += 1;
   return n;
@@ -132,7 +137,7 @@ export function applyFilters(pallets: Pallet[], f: PalletFilterState): Pallet[] 
   return pallets.filter((p) => {
     if (q && !matchesSearch(p, q)) return false;
     if (f.layout && (p.entryLayout ?? 'variant') !== f.layout) return false;
-    if (f.status && p.status !== f.status) return false;
+    if (f.statuses.length > 0 && !f.statuses.includes(p.status)) return false;
     if (f.location && (p.location?.id ?? '') !== f.location) return false;
     if (f.supplier && (p.supplier ?? '') !== f.supplier) return false;
     if (range) {
