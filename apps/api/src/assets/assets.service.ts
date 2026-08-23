@@ -439,7 +439,14 @@ export class AssetsService {
       id,
       AssetEventType.STATUS_CHANGED,
       user.userId,
-      `${before.stockStatus} -> sold (marked as Sold)`,
+      // Name the pallet it was sold OFF. The allocation itself has to be
+      // cleared above (an open pallet must not keep claiming stock that has
+      // gone), which destroys the only record of where the device sat — so
+      // the trail has to carry it, or "which pallet did this sell from?"
+      // becomes unanswerable.
+      `${before.stockStatus} -> sold (marked as Sold${
+        before.pallet ? `, from ${before.pallet.palletNumber}` : ''
+      })`,
     );
     await this.activity.record({
       userId: user.userId,
