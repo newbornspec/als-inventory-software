@@ -1,8 +1,9 @@
 'use client';
 
-import { useMemo, useState, useTransition } from 'react';
+import { useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import { RotateCw } from 'lucide-react';
 import type { Asset } from '@/lib/actions/assets';
 import type { Lot } from '@/lib/actions/batches';
 import { assignSubLot, moveAssetToBatch, deleteAssetFromLot } from '@/lib/actions/batches';
@@ -36,6 +37,64 @@ export function LotAssets({
   // -- they have already left the pool and show where they sit instead.
   const [selected, setSelected] = useState<string[]>([]);
   const router = useRouter();
+
+  // --- Refresh -----------------------------------------------------------
+  // The audit station writes into this lot from a different machine, so the
+  // page a technician is looking at goes stale the moment a unit is captured.
+  // Refresh re-runs the server component (router.refresh()) rather than
+  // re-rendering a cached payload, and then says WHAT arrived -- "audit a
+  // device, press refresh, see it" is the whole workflow, and a button that
+  // silently repaints the same table can't be told apart from a broken one.
+  const [refreshing, startRefresh] = useTransition();
+  const [lastLoaded, setLastLoaded] = useState<string | null>(null);
+  const [changeNote, setChangeNote] = useState<string | null>(null);
+  // id -> the fields a fresh audit actually changes. Compared across loads.
+  const prevSig = useRef<Map<string, string> | null>(null);
+  const awaitingRefresh = useRef(false);
+
+  useEffect(() => {
+    const next = new Map(
+      assets.map((a) => [
+        a.id,
+        [a.auditStatus ?? '', a.conditionGrade ?? '', a.stockStatus, a.palletId ?? ''].join('|'),
+      ]),
+    );
+    const prev = prevSig.current;
+    prevSig.current = next;
+    // Rendered only after mount (and in the reader's own timezone), so the
+    // server and client markup can't disagree.
+    setLastLoaded(
+      new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+    );
+
+    if (!prev || !awaitingRefresh.current) {
+      awaitingRefresh.current = false;
+      return;
+    }
+    awaitingRefresh.current = false;
+
+    let added = 0;
+    let updated = 0;
+    for (const [id, sig] of next) {
+      const before = prev.get(id);
+      if (before === undefined) added += 1;
+      else if (before !== sig) updated += 1;
+    }
+    let removed = 0;
+    for (const id of prev.keys()) if (!next.has(id)) removed += 1;
+
+    const parts: string[] = [];
+    if (added > 0) parts.push(`${added} new device${added === 1 ? '' : 's'}`);
+    if (updated > 0) parts.push(`${updated} updated`);
+    if (removed > 0) parts.push(`${removed} no longer in this lot`);
+    setChangeNote(parts.length > 0 ? parts.join(' · ') : 'No changes yet.');
+  }, [assets]);
+
+  function onRefresh() {
+    setChangeNote(null);
+    awaitingRefresh.current = true;
+    startRefresh(() => router.refresh());
+  }
 
   const filtered = useMemo(() => {
     const needle = q.trim().toLowerCase();
@@ -103,12 +162,46 @@ export function LotAssets({
     });
   }
 
+  // A plain element, not a nested component: a component declared inside the
+  // render would be a new type every pass and remount (losing the button's
+  // focus mid-refresh).
+  const refreshControl = (
+    <div className="flex flex-wrap items-center gap-2">
+      <button
+        type="button"
+        onClick={onRefresh}
+        disabled={refreshing}
+        aria-label="Refresh this lot's devices"
+        className="inline-flex shrink-0 items-center gap-2 rounded-lg border border-[var(--control-border)] px-3 py-1.5 text-xs font-medium text-neutral-800 transition-colors hover:bg-neutral-50 disabled:opacity-60"
+      >
+        <RotateCw
+          className={refreshing ? 'size-3.5 animate-spin' : 'size-3.5'}
+          aria-hidden="true"
+        />
+        {refreshing ? 'Refreshing…' : 'Refresh'}
+      </button>
+      <span className="text-xs text-neutral-500">
+        {lastLoaded ? `Updated ${lastLoaded}` : ''}
+      </span>
+      {/* Only the outcome is live — the timestamp changes on every load and
+          would otherwise be read out each time for no reason. */}
+      <span aria-live="polite" className="text-xs font-medium text-neutral-700">
+        {changeNote ?? ''}
+      </span>
+    </div>
+  );
+
   if (assets.length === 0) {
     return (
-      <p className="mt-3 text-sm text-neutral-500">
-        No assets scanned into this lot yet — audit devices into it, or use Receiving mode on the
-        Scan page.
-      </p>
+      <div className="mt-3">
+        <p className="text-sm text-neutral-500">
+          No assets scanned into this lot yet — audit devices into it, or use Receiving mode on the
+          Scan page.
+        </p>
+        {/* Deliberately still here: an empty lot is exactly when someone is
+            standing at the audit station waiting for the first unit to land. */}
+        <div className="mt-3">{refreshControl}</div>
+      </div>
     );
   }
 
@@ -129,7 +222,7 @@ export function LotAssets({
 
   return (
     <div className="mt-3">
-      <div className="flex items-center justify-between gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <input
           aria-label="Search devices in this sub-lot"
           value={q}
@@ -137,9 +230,12 @@ export function LotAssets({
           placeholder="Search this lot — name, make, model, serial, service tag…"
           className="field-underline w-full max-w-md px-3 py-1.5 text-sm"
         />
-        <span className="shrink-0 text-xs text-neutral-500">
-          {filtered.length} of {assets.length}
-        </span>
+        <div className="flex flex-wrap items-center gap-3">
+          <span className="shrink-0 text-xs text-neutral-500">
+            {filtered.length} of {assets.length}
+          </span>
+          {refreshControl}
+        </div>
       </div>
 
       {canMove && selected.length > 0 && (
