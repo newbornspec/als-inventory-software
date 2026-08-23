@@ -1,11 +1,11 @@
 import Link from 'next/link';
 import { ChevronRight, Plus, Target } from 'lucide-react';
-import { apiFetch, getSessionAccess } from '@/lib/api-server';
+import { apiFetch, getSessionAccess, getSessionUser } from '@/lib/api-server';
 import { hasPermission } from '@/lib/permissions';
 import type { Batch } from '@/lib/actions/batches';
 import type { AuditTarget } from '@/lib/actions/devices';
 import { Nav } from '@/app/components/nav';
-import { LotsAccordion } from './lots-accordion';
+import { GoodsInWorkspace } from './goods-in-workspace';
 
 // `filter` narrows the list for the dashboard's Attention Required and Incoming
 // links. Every one is computed from the lots themselves rather than from a
@@ -66,9 +66,10 @@ export default async function LotsPage({
     rawFilter === 'discrepancy' || rawFilter === 'overdue' || rawFilter === 'incoming'
       ? rawFilter
       : null;
-  const [allLots, user, auditTarget] = await Promise.all([
+  const [allLots, user, sessionUser, auditTarget] = await Promise.all([
     apiFetch<Batch[]>('/batches'),
     getSessionAccess(),
+    getSessionUser(),
     apiFetch<AuditTarget | null>('/devices/audit-target').catch(() => null),
   ]);
   // Derived from the same permissions the API enforces, so the buttons on this
@@ -100,7 +101,7 @@ export default async function LotsPage({
             <p className="mt-3 max-w-2xl text-sm leading-6 text-neutral-600">
               {copy
                 ? copy.blurb
-                : 'Operational workspace — receive, scan, audit and monitor each incoming lot. Expand a lot to see its devices, or open it to reconcile.'}
+                : 'Operational workspace — receive, scan, audit and monitor each incoming lot. Select a lot to see its devices and their captured hardware, or open it to reconcile.'}
             </p>
             {copy && (
               <p className="mt-2 text-sm">
@@ -150,12 +151,13 @@ export default async function LotsPage({
             {copy.empty}
           </p>
         ) : (
-        <LotsAccordion
+        <GoodsInWorkspace
           lots={lots}
           canExport={canCreate}
           canMove={canMove}
           canDelete={canDelete}
           activeAuditLotId={auditTarget?.batchId ?? null}
+          viewer={sessionUser?.email ?? sessionUser?.role ?? 'signed in'}
         />
         )}
       </main>
