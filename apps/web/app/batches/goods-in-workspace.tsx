@@ -8,6 +8,7 @@ import type { Batch } from '@/lib/actions/batches';
 import type { Asset } from '@/lib/actions/assets';
 import { setAuditLot } from '@/lib/actions/devices';
 import { formatLabel } from '@/lib/asset-options';
+import { ComponentSpecsTable } from '@/app/components/component-specs';
 import { specRows, type HardwareProfileLike } from '@/lib/hardware-spec';
 import { DeleteBatchButton } from './delete-batch-button';
 import { MoveToPallet } from './move-to-pallet';
@@ -841,46 +842,13 @@ export function GoodsInWorkspace({
             </Link>
           </p>
         ) : (
-          <div role="region" aria-label="Component specs" tabIndex={0} className="overflow-x-auto">
-            <table className="w-full border-collapse text-left">
-              <caption className="sr-only">
-                Hardware components captured for {selectedUnit.unitId ?? selectedUnit.tag}
-              </caption>
-              <thead className="bg-neutral-50">
-                <tr>
-                  <th scope="col" className={TH}>Category</th>
-                  <th scope="col" className={`${TH} text-right`}>Qty</th>
-                  <th scope="col" className={TH}>Manufacturer</th>
-                  <th scope="col" className={TH}>Model</th>
-                  {/* Serial is chain-of-custody data — kept visible from sm so
-                      a tablet on the bench can verify a wiped drive. */}
-                  <th scope="col" className={`${TH} hidden sm:table-cell`}>Serial No</th>
-                  <th scope="col" className={TH}>Size</th>
-                  <th scope="col" className={`${TH} hidden sm:table-cell`}>Speed</th>
-                  <th scope="col" className={`${TH} hidden md:table-cell`}>Details</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((r, i) => (
-                  <tr key={`${r.category}-${i}`} className="border-t border-neutral-200">
-                    <th scope="row" className={`${TD} text-xs font-semibold uppercase tracking-wide text-neutral-700`}>
-                      {r.category}
-                    </th>
-                    <td className={`${TD} text-right tabular-nums`}>{r.qty}</td>
-                    <td className={`${TD} text-neutral-700`}>{r.manufacturer}</td>
-                    <td className={`${TD} font-medium text-neutral-900`}>{r.model}</td>
-                    <td className={`${TD} hidden font-mono text-xs text-neutral-600 sm:table-cell`}>
-                      {r.serial}
-                    </td>
-                    <td className={`${TD} text-neutral-700`}>{r.size}</td>
-                    <td className={`${TD} hidden text-neutral-700 sm:table-cell`}>{r.speed}</td>
-                    <td className={`${TD} hidden text-xs text-neutral-500 md:table-cell`}>
-                      {r.details}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          // The same table the Audit workspace renders — one presentation of a
+          // machine's components, wherever you meet it.
+          <div className="px-5 pb-4">
+            <ComponentSpecsTable
+              rows={rows}
+              caption={`Hardware components captured for ${selectedUnit.unitId ?? selectedUnit.tag}`}
+            />
           </div>
         )}
       </Panel>
