@@ -66,4 +66,18 @@ export class QueryAssetsDto {
   @IsOptional()
   @IsUUID()
   palletId?: string;
+
+  // The register's lifecycle tab. A derived state, not a stored column: see
+  // LIFECYCLE_PREDICATES in assets.service.ts for the one definition both the
+  // filter and the status pill follow. 'all' includes sold devices; every
+  // other value except 'sold' excludes them.
+  @IsOptional()
+  @IsIn(['all', 'in_processing', 'audited', 'wiped', 'ready', 'sold', 'quarantine'])
+  lifecycle?: string;
+
+  // 'true' → devices with no serial recorded. Same string-flag reason as
+  // noBatch: it is an "is null" question, not a value to match.
+  @IsOptional()
+  @IsString()
+  noSerial?: string;
 }
