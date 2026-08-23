@@ -1,12 +1,16 @@
-// Flattening a captured hardware profile into component rows.
+// Turning a captured hardware profile into the component-specification rows
+// the app shows wherever a device's hardware is displayed.
 //
-// Shared so the Goods In workspace and the Audit workspace present a device's
-// components identically — the same machine must not read one way on one
-// screen and another way on the next.
+// The presentation is deliberately dense: one row per component, with the
+// parameters COMPOSED into a single readable cell ("i3-8145U 2.10GHz (3.9GHz
+// boost, 2c/4t, 8th Gen)") rather than spread across a column per attribute.
+// A wide sparse grid forced the reader to scan sideways past empty cells to
+// assemble the one sentence they wanted.
+//
+// Shared so the Audit workspace and the Goods In panel render a machine
+// identically — the same device must not read one way on one screen and
+// another way on the next.
 
-// The subset of the captured profile these tables render. Every field is
-// optional: a wiped, live-booted machine yields a different set each time, and
-// hand-entered devices may carry almost nothing.
 export interface HardwareProfileLike {
   identification?: { manufacturer?: string; model?: string; productName?: string };
   system?: {
@@ -14,6 +18,7 @@ export interface HardwareProfileLike {
     osVersion?: string;
     biosVersion?: string;
     bootMode?: string;
+    secureBoot?: string;
     tpmVersion?: string;
   };
   cpu?: {
@@ -43,8 +48,11 @@ export interface HardwareProfileLike {
     serialNumber?: string;
   }>;
   graphics?: Array<{ manufacturer?: string; model?: string; type?: string; vram?: string }>;
-  display?: { size?: string; resolution?: string; touchscreen?: string };
+  // manufacturer/panel are not captured by every tool, but the schema is
+  // open-ended and some report them — shown when present.
+  display?: { manufacturer?: string; size?: string; resolution?: string; touchscreen?: string };
   battery?: {
+    manufacturer?: string;
     health?: string;
     designCapacity?: string;
     fullChargeCapacity?: string;
@@ -52,19 +60,27 @@ export interface HardwareProfileLike {
   };
 }
 
-export interface SpecRow {
-  category: string;
-  qty: number;
-  manufacturer: string;
-  model: string;
-  serial: string;
-  size: string;
-  speed: string;
-  details: string;
+// A flag rendered beside the parameters — reserved for facts an operator must
+// not miss, like a drive that failed SMART.
+export interface SpecFlag {
+  label: string;
+  tone: 'bad' | 'warn' | 'good';
 }
 
-// The flat summary an audit event records even when no full profile blob was
-// captured (the offline audit form writes only these promoted columns).
+export interface SpecRow {
+  component: string;
+  qty: number;
+  // The manufacturer, or the architecture token that identifies the part:
+  // "Intel" for a CPU, "DDR4" for memory, "NVMe Samsung" for a drive,
+  // "BIOS 1.7.4" for the system row.
+  mfgArch: string;
+  // The part and its parameters, composed into one line.
+  params: string;
+  // Chain-of-custody detail (drive serials), shown small under the params.
+  sub?: string;
+  flag?: SpecFlag;
+}
+
 export interface PromotedSpec {
   cpu?: string | null;
   ramGb?: number | null;
@@ -74,32 +90,43 @@ export interface PromotedSpec {
   batteryHealth?: string | null;
 }
 
-const join = (parts: (string | number | undefined | null | false)[]) =>
-  parts.filter(Boolean).join(' · ');
+const DASH = '—';
+const text = (parts: (string | number | undefined | null | false)[], sep = ' ') =>
+  parts.filter((p) => p !== undefined && p !== null && p !== false && p !== '').join(sep);
+// "a, b, c" wrapped in parentheses — omitted entirely when nothing qualifies.
+const paren = (parts: (string | number | undefined | null | false)[]) => {
+  const inner = text(parts, ', ');
+  return inner ? `(${inner})` : '';
+};
 
-// Rows for the categories the profile actually carries. A category is emitted
-// only when the capture holds something for it — an empty line says nothing
-// worth a row. Each guard covers EVERY field its row can render, so a partial
-// capture (a battery with only a cycle count, say) is never silently dropped.
+// A drive that failed SMART is the single most consequential thing on this
+// table: it decides whether the unit can be sold or must be destroyed.
+function smartFlag(status?: string): SpecFlag | undefined {
+  if (!status) return undefined;
+  const s = status.toUpperCase();
+  if (s.includes('FAIL')) return { label: 'SMART FAILED', tone: 'bad' };
+  return undefined;
+}
+
 export function specRows(p: HardwareProfileLike | null | undefined): SpecRow[] {
   if (!p) return [];
   const rows: SpecRow[] = [];
 
   if (p.cpu?.model || p.cpu?.manufacturer) {
+    const c = p.cpu;
     rows.push({
-      category: 'CPU',
+      component: 'CPU',
       qty: 1,
-      manufacturer: p.cpu.manufacturer ?? '—',
-      model: p.cpu.model ?? '—',
-      serial: '—',
-      size: '—',
-      speed: join([p.cpu.baseClock, p.cpu.maxClock && `boost ${p.cpu.maxClock}`]) || '—',
-      details:
-        join([
-          p.cpu.cores != null && `${p.cpu.cores} cores`,
-          p.cpu.threads != null && `${p.cpu.threads} threads`,
-          p.cpu.generation,
-        ]) || '—',
+      mfgArch: c.manufacturer || DASH,
+      params:
+        text([
+          text([c.model, c.baseClock]),
+          paren([
+            c.maxClock && `${c.maxClock} boost`,
+            c.cores != null && `${c.cores}c${c.threads != null ? `/${c.threads}t` : ''}`,
+            c.generation,
+          ]),
+        ]) || DASH,
     });
   }
 
@@ -109,59 +136,53 @@ export function specRows(p: HardwareProfileLike | null | undefined): SpecRow[] {
     p.memory?.speed ||
     p.memory?.modules != null
   ) {
+    const m = p.memory;
     rows.push({
-      category: 'RAM',
-      qty: p.memory.modules ?? 1,
-      manufacturer: '—',
-      model: p.memory.type ?? '—',
-      serial: '—',
-      size: p.memory.totalGb != null ? `${p.memory.totalGb} GB` : '—',
-      speed: p.memory.speed ?? '—',
-      details:
-        join([
-          p.memory.slots != null && `${p.memory.slots} slots`,
-          p.memory.maxGb != null && `max ${p.memory.maxGb} GB`,
-        ]) || '—',
+      component: 'RAM',
+      qty: 1,
+      mfgArch: m.type || DASH,
+      params:
+        text([
+          text([m.totalGb != null && `${m.totalGb}GB`, m.speed]),
+          paren([
+            m.modules != null && `${m.modules} slot${m.modules === 1 ? '' : 's'}`,
+            m.slots != null && m.modules == null && `${m.slots} slots`,
+            m.maxGb != null && `max ${m.maxGb}GB`,
+          ]),
+        ]) || DASH,
     });
   }
 
   for (const d of p.storage ?? []) {
     rows.push({
-      category: 'Storage',
+      component: 'Storage',
       qty: 1,
-      manufacturer: d.manufacturer ?? '—',
-      model: d.model ?? '—',
-      serial: d.serialNumber ?? '—',
-      size: d.capacity ?? '—',
-      speed: d.interface ?? '—',
-      details: join([d.type, d.smartStatus && `SMART ${d.smartStatus}`]) || '—',
+      mfgArch: text([d.type || d.interface, d.manufacturer]) || DASH,
+      params: text([d.capacity, d.model && d.model !== d.capacity && d.model]) || DASH,
+      sub: d.serialNumber ? `S/N ${d.serialNumber}` : undefined,
+      flag: smartFlag(d.smartStatus),
     });
   }
 
   for (const g of p.graphics ?? []) {
     rows.push({
-      category: 'Graphics',
+      component: 'Graphics',
       qty: 1,
-      manufacturer: g.manufacturer ?? '—',
-      model: g.model ?? '—',
-      serial: '—',
-      size: g.vram ?? '—',
-      speed: '—',
-      details: g.type ?? '—',
+      mfgArch: g.manufacturer || DASH,
+      params: text([g.model, g.type, g.vram]) || DASH,
     });
   }
 
   if (p.display?.size || p.display?.resolution) {
     rows.push({
-      category: 'Display',
+      component: 'Display',
       qty: 1,
-      manufacturer: '—',
-      model: '—',
-      serial: '—',
-      size: p.display.size ?? '—',
-      speed: '—',
-      details:
-        join([p.display.resolution, p.display.touchscreen === 'yes' && 'touchscreen']) || '—',
+      mfgArch: p.display.manufacturer || DASH,
+      params:
+        text([
+          text([p.display.size, p.display.resolution]),
+          p.display.touchscreen === 'yes' ? '(touchscreen)' : '',
+        ]) || DASH,
     });
   }
 
@@ -171,66 +192,68 @@ export function specRows(p: HardwareProfileLike | null | undefined): SpecRow[] {
     p.battery?.designCapacity ||
     p.battery?.cycleCount != null
   ) {
+    const b = p.battery;
     rows.push({
-      category: 'Battery',
+      component: 'Battery',
       qty: 1,
-      manufacturer: '—',
-      model: '—',
-      serial: '—',
-      size: p.battery.fullChargeCapacity ?? p.battery.designCapacity ?? '—',
-      speed: '—',
-      details:
-        join([
-          p.battery.health && `health ${p.battery.health}`,
-          p.battery.cycleCount != null && `${p.battery.cycleCount} cycles`,
-        ]) || '—',
+      mfgArch: b.manufacturer || DASH,
+      params:
+        text([
+          b.health ? `Health: ${b.health}` : '',
+          paren([
+            b.fullChargeCapacity &&
+              text([b.fullChargeCapacity, b.designCapacity && `of ${b.designCapacity}`]),
+            b.cycleCount != null && `${b.cycleCount} cycles`,
+          ]),
+        ]) || DASH,
     });
   }
 
   if (p.system?.os || p.system?.biosVersion || p.system?.bootMode || p.system?.tpmVersion) {
+    const s = p.system;
     rows.push({
-      category: 'System',
+      component: 'System',
       qty: 1,
-      manufacturer: '—',
-      model: join([p.system.os, p.system.osVersion]) || '—',
-      serial: '—',
-      size: '—',
-      speed: '—',
-      details:
-        join([
-          p.system.biosVersion && `BIOS ${p.system.biosVersion}`,
-          p.system.bootMode,
-          p.system.tpmVersion && `TPM ${p.system.tpmVersion}`,
-        ]) || '—',
+      mfgArch: s.biosVersion ? `BIOS ${s.biosVersion}` : DASH,
+      params:
+        text([
+          s.bootMode,
+          s.tpmVersion && `TPM ${s.tpmVersion}`,
+          s.secureBoot && `Secure Boot ${s.secureBoot}`,
+        ]) || DASH,
+      sub: text([s.os, s.osVersion]) || undefined,
     });
   }
 
   return rows;
 }
 
-// Fallback for an audit that stored no profile blob — the offline audit form
-// writes only the promoted columns. A short summary of what WAS recorded beats
+// Fallback for an audit that stored no profile blob — the offline form records
+// only these promoted columns. A short summary of what WAS recorded beats
 // "nothing captured" printed over data that exists.
 export function promotedSpecRows(s: PromotedSpec | null | undefined): SpecRow[] {
   if (!s) return [];
-  const blank = { manufacturer: '—', model: '—', serial: '—', size: '—', speed: '—', details: '—' };
   const rows: SpecRow[] = [];
-  if (s.cpu) rows.push({ ...blank, category: 'CPU', qty: 1, model: s.cpu });
-  if (s.ramGb != null) rows.push({ ...blank, category: 'RAM', qty: 1, size: `${s.ramGb} GB` });
+  if (s.cpu) rows.push({ component: 'CPU', qty: 1, mfgArch: DASH, params: s.cpu });
+  if (s.ramGb != null) rows.push({ component: 'RAM', qty: 1, mfgArch: DASH, params: `${s.ramGb}GB` });
   if (s.storageCapacity) {
-    rows.push({ ...blank, category: 'Storage', qty: 1, size: s.storageCapacity });
+    rows.push({ component: 'Storage', qty: 1, mfgArch: DASH, params: s.storageCapacity });
   }
   if (s.screenSize || s.screenResolution) {
     rows.push({
-      ...blank,
-      category: 'Display',
+      component: 'Display',
       qty: 1,
-      size: s.screenSize ?? '—',
-      details: s.screenResolution ?? '—',
+      mfgArch: DASH,
+      params: text([s.screenSize, s.screenResolution]),
     });
   }
   if (s.batteryHealth) {
-    rows.push({ ...blank, category: 'Battery', qty: 1, details: `health ${s.batteryHealth}` });
+    rows.push({
+      component: 'Battery',
+      qty: 1,
+      mfgArch: DASH,
+      params: `Health: ${s.batteryHealth}`,
+    });
   }
   return rows;
 }
