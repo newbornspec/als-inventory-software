@@ -55,6 +55,57 @@ describe('groupDayEvents', () => {
     expect(d.auditStatus).toBe('power_on');
   });
 
+  it('keeps the components the capture recorded when the wipe event carries none', () => {
+    // The session's first event holds the hardware; the wipe row that follows
+    // has every spec column null. Blanking on the later row would leave the
+    // workspace showing a machine with no components — the exact failure the
+    // last-non-null rule exists to prevent.
+    const d = groupDayEvents([
+      row({
+        id: 'e1',
+        created_at: '2026-08-22T09:00:00Z',
+        audit_status: 'power_on',
+        hardware_profile: { cpu: { model: 'Core i7-4770' } },
+        cpu: 'Core i7-4770',
+        ram_gb: 8,
+        storage_capacity: '256GB',
+      }),
+      row({ id: 'e2', created_at: '2026-08-22T09:40:00Z', data_wipe_status: 'wiped' }),
+    ])[0];
+    expect(d.spec.hardwareProfile).toEqual({ cpu: { model: 'Core i7-4770' } });
+    expect(d.spec.cpu).toBe('Core i7-4770');
+    expect(d.spec.ramGb).toBe(8);
+    expect(d.spec.storageCapacity).toBe('256GB');
+  });
+
+  it('a later, fuller capture supersedes an earlier partial one', () => {
+    const d = groupDayEvents([
+      row({ id: 'e1', created_at: '2026-08-22T09:00:00Z', ram_gb: 8 }),
+      row({ id: 'e2', created_at: '2026-08-22T11:00:00Z', ram_gb: 16, cpu: 'Core i5-8365U' }),
+    ])[0];
+    expect(d.spec.ramGb).toBe(16);
+    expect(d.spec.cpu).toBe('Core i5-8365U');
+  });
+
+  it('records no components when the audits carried none', () => {
+    const d = groupDayEvents([row({ id: 'e1', audit_status: 'power_on' })])[0];
+    expect(d.spec.hardwareProfile).toBeNull();
+    expect(d.spec.cpu).toBeNull();
+  });
+
+  it('the profile blob rides once per device, never on each event', () => {
+    // A day of 100 machines would otherwise ship the same blob four times over
+    // for a single session.
+    const d = groupDayEvents([
+      row({ id: 'e1', hardware_profile: { cpu: { model: 'i7' } } }),
+      row({ id: 'e2', created_at: '2026-08-22T09:40:00Z' }),
+    ])[0];
+    expect(d.spec.hardwareProfile).not.toBeNull();
+    for (const e of d.events) {
+      expect(e).not.toHaveProperty('hardwareProfile');
+    }
+  });
+
   it('counts devices, not events — the dual-disk double-wipe case', () => {
     const devices = groupDayEvents([
       row({ id: 'e1', asset_id: 'a1', created_at: '2026-08-22T09:00:00Z' }),

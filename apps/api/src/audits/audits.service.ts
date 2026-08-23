@@ -54,6 +54,35 @@ export interface DayEventRow {
   serial_number: string | null;
   device_type: string | null;
   auditor_name: string | null;
+  // The components AS THIS EVENT RECORDED THEM. Deliberately the audit row's
+  // own snapshot, not the asset's current profile: this feed is the compliance
+  // trail, and it must show the machine as it was when the technician saw it,
+  // even if the device was re-audited or re-fitted afterwards. Optional so
+  // callers constructing rows for the grouping logic need not supply them.
+  hardware_profile?: unknown;
+  manufacturer?: string | null;
+  model?: string | null;
+  cpu?: string | null;
+  ram_gb?: number | null;
+  storage_capacity?: string | null;
+  screen_size?: string | null;
+  screen_resolution?: string | null;
+  battery_health?: string | null;
+}
+
+// The device's components for the day, merged like every other field here:
+// last non-null wins, so a later event's fuller capture supersedes an earlier
+// partial one without erasing what the earlier one established.
+export interface AuditDaySpec {
+  hardwareProfile: unknown | null;
+  manufacturer: string | null;
+  model: string | null;
+  cpu: string | null;
+  ramGb: number | null;
+  storageCapacity: string | null;
+  screenSize: string | null;
+  screenResolution: string | null;
+  batteryHealth: string | null;
 }
 
 export interface AuditDayDevice {
@@ -78,6 +107,9 @@ export interface AuditDayDevice {
   // Who touched the device that day: the station's operator_name where the
   // event carries one (the human), else the account that uploaded it.
   auditors: string[];
+  // Carried once per DEVICE, never per event: a day of 100 machines would
+  // otherwise ship the same profile blob four times over for one session.
+  spec: AuditDaySpec;
   events: {
     id: string;
     at: string;
@@ -118,6 +150,17 @@ export function groupDayEvents(rows: DayEventRow[]): AuditDayDevice[] {
         restoreImageStatus: null,
         restoreImageName: null,
         auditors: [],
+        spec: {
+          hardwareProfile: null,
+          manufacturer: null,
+          model: null,
+          cpu: null,
+          ramGb: null,
+          storageCapacity: null,
+          screenSize: null,
+          screenResolution: null,
+          batteryHealth: null,
+        },
         events: [],
       };
       byAsset.set(r.asset_id, d);
@@ -130,6 +173,17 @@ export function groupDayEvents(rows: DayEventRow[]): AuditDayDevice[] {
     if (r.audit_kind != null) d.auditKind = r.audit_kind;
     if (r.restore_image_status != null) d.restoreImageStatus = r.restore_image_status;
     if (r.restore_image_name != null) d.restoreImageName = r.restore_image_name;
+    // Same last-non-null rule as the fields above: a wipe event carries no
+    // hardware, so it must not blank the capture event's components.
+    if (r.hardware_profile != null) d.spec.hardwareProfile = r.hardware_profile;
+    if (r.manufacturer != null) d.spec.manufacturer = r.manufacturer;
+    if (r.model != null) d.spec.model = r.model;
+    if (r.cpu != null) d.spec.cpu = r.cpu;
+    if (r.ram_gb != null) d.spec.ramGb = r.ram_gb;
+    if (r.storage_capacity != null) d.spec.storageCapacity = r.storage_capacity;
+    if (r.screen_size != null) d.spec.screenSize = r.screen_size;
+    if (r.screen_resolution != null) d.spec.screenResolution = r.screen_resolution;
+    if (r.battery_health != null) d.spec.batteryHealth = r.battery_health;
     // The station's operator field names the human; the joined account name is
     // the shared kiosk login and only stands in when no operator was recorded.
     const who = r.operator_name || r.auditor_name;
@@ -214,6 +268,9 @@ export class AuditsService {
               aa."cosmetic_grade", aa."data_wipe_status", aa."data_wipe_method",
               aa."notes", aa."audit_kind", aa."operator_name",
               aa."restore_image_status", aa."restore_image_name",
+              aa."hardware_profile", aa."manufacturer", aa."model", aa."cpu",
+              aa."ram_gb", aa."storage_capacity", aa."screen_size",
+              aa."screen_resolution", aa."battery_health",
               a."name" AS asset_name, a."tag" AS asset_tag, a."unit_id",
               a."serial_number", a."device_type",
               u."name" AS auditor_name

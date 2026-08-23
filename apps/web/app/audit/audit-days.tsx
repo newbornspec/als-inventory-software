@@ -4,6 +4,12 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { formatLabel } from '@/lib/asset-options';
+import {
+  promotedSpecRows,
+  specRows,
+  type HardwareProfileLike,
+  type PromotedSpec,
+} from '@/lib/hardware-spec';
 
 export interface AuditDaySummary {
   day: string; // YYYY-MM-DD
@@ -42,6 +48,9 @@ interface AuditDayDevice {
   restoreImageStatus: string | null;
   restoreImageName: string | null;
   auditors: string[];
+  // The components as the day's audit events recorded them — the trail's own
+  // snapshot, not the device's current profile.
+  spec?: (PromotedSpec & { hardwareProfile: HardwareProfileLike | null }) | null;
   events: AuditEvent[];
 }
 
@@ -75,6 +84,94 @@ function dayLabel(day: string): string {
 
 function timeLabel(at: string): string {
   return new Date(at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+}
+
+// What this audit captured of the machine's hardware. Sourced from the audit
+// rows themselves, so a device re-fitted or re-audited later still shows what
+// the technician actually saw on the day — that is what makes it a trail.
+function ComponentSpecs({ device }: { device: AuditDayDevice }) {
+  const spec = device.spec ?? null;
+  const rows = spec
+    ? specRows(spec.hardwareProfile).length > 0
+      ? specRows(spec.hardwareProfile)
+      : // No profile blob (an audit filed from the offline form records only
+        // the promoted columns) — show what WAS recorded rather than nothing.
+        promotedSpecRows(spec)
+    : [];
+
+  return (
+    <>
+      <h3 className="mt-3 text-xs font-medium uppercase tracking-wide text-neutral-500">
+        Component specs
+        {rows.length > 0 && (
+          <span className="ml-2 font-normal normal-case tracking-normal text-neutral-400">
+            as recorded by this audit
+          </span>
+        )}
+      </h3>
+      {rows.length === 0 ? (
+        <p className="mt-1 text-sm text-neutral-500">
+          No hardware captured with this audit
+          {spec?.hardwareProfile == null && ' — it was filed by hand or by a tool that sends none'}.{' '}
+          <Link
+            href={`/assets/${device.assetId}`}
+            className="text-blue-800 underline hover:text-blue-950"
+          >
+            Open the device record
+          </Link>
+        </p>
+      ) : (
+        <div className="mt-1 overflow-x-auto">
+          <table className="w-full border-collapse text-left text-sm">
+            <caption className="sr-only">
+              Hardware components recorded for {device.unitId ?? device.tag} on this day
+            </caption>
+            <thead>
+              <tr className="text-xs uppercase tracking-wide text-neutral-500">
+                <th scope="col" className="py-1 pr-4 font-medium">Category</th>
+                <th scope="col" className="py-1 pr-4 text-right font-medium">Qty</th>
+                <th scope="col" className="hidden py-1 pr-4 font-medium sm:table-cell">
+                  Manufacturer
+                </th>
+                <th scope="col" className="py-1 pr-4 font-medium">Model</th>
+                <th scope="col" className="hidden py-1 pr-4 font-medium sm:table-cell">
+                  Serial no
+                </th>
+                <th scope="col" className="py-1 pr-4 font-medium">Size</th>
+                <th scope="col" className="hidden py-1 pr-4 font-medium sm:table-cell">Speed</th>
+                <th scope="col" className="hidden py-1 font-medium md:table-cell">Details</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-neutral-100">
+              {rows.map((r, i) => (
+                <tr key={`${r.category}-${i}`}>
+                  <th
+                    scope="row"
+                    className="py-1.5 pr-4 text-xs font-semibold uppercase tracking-wide text-neutral-700"
+                  >
+                    {r.category}
+                  </th>
+                  <td className="py-1.5 pr-4 text-right tabular-nums">{r.qty}</td>
+                  <td className="hidden py-1.5 pr-4 text-neutral-700 sm:table-cell">
+                    {r.manufacturer}
+                  </td>
+                  <td className="py-1.5 pr-4 font-medium text-neutral-900">{r.model}</td>
+                  <td className="hidden py-1.5 pr-4 font-mono text-xs text-neutral-600 sm:table-cell">
+                    {r.serial}
+                  </td>
+                  <td className="py-1.5 pr-4 text-neutral-700">{r.size}</td>
+                  <td className="hidden py-1.5 pr-4 text-neutral-700 sm:table-cell">{r.speed}</td>
+                  <td className="hidden py-1.5 text-xs text-neutral-500 md:table-cell">
+                    {r.details}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </>
+  );
 }
 
 export function AuditDays({ days, kind }: { days: AuditDaySummary[]; kind?: string }) {
@@ -253,6 +350,8 @@ export function AuditDays({ days, kind }: { days: AuditDaySummary[]; kind?: stri
                                   </dd>
                                 </div>
                               </dl>
+
+                              <ComponentSpecs device={d} />
 
                               <h3 className="mt-3 text-xs font-medium uppercase tracking-wide text-neutral-500">
                                 Events ({d.events.length})
