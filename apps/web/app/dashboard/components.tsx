@@ -3,7 +3,11 @@ import { AlertTriangle, ArrowRight, CheckCircle2, Info } from 'lucide-react';
 
 // Shared building blocks for the dashboard.
 //
-// Two rules run through all of them:
+// The presentation matches the rest of the redesigned app — bordered cards on a
+// tinted page, small uppercase section headings, hairline-separated metric
+// cells, and pills that always print their state in words.
+//
+// Two rules run through all of them and must survive any restyle:
 //   * meaning is never carried by colour alone (WCAG 1.4.1) — every state also
 //     carries a word and an icon, so "5 low stock" reads the same to someone
 //     who cannot see the amber;
@@ -25,19 +29,30 @@ export function Section({
   children: React.ReactNode;
 }) {
   return (
-    <section aria-labelledby={id} className="mt-10 min-w-0">
-      <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <h2 id={id} className="text-base font-semibold text-neutral-950">
-          {title}
-        </h2>
+    <section
+      aria-labelledby={id}
+      className="mt-4 min-w-0 overflow-hidden rounded-xl border border-neutral-200 bg-white"
+    >
+      <div className="flex flex-wrap items-baseline justify-between gap-2 border-b border-neutral-200 px-4 py-3">
+        <div className="min-w-0">
+          <h2
+            id={id}
+            className="text-xs font-semibold uppercase tracking-wide text-neutral-900"
+          >
+            {title}
+          </h2>
+          {description && <p className="mt-1 text-sm text-neutral-600">{description}</p>}
+        </div>
         {action}
       </div>
-      {description && <p className="mt-1 text-sm text-neutral-600">{description}</p>}
-      <div className="mt-3">{children}</div>
+      <div className="p-4">{children}</div>
     </section>
   );
 }
 
+// A metric cell. Sits inside MetricGrid, which draws the hairlines — a cell
+// carries no border of its own, so eight of them read as one instrument panel
+// rather than eight competing boxes.
 export function Tile({
   label,
   value,
@@ -49,15 +64,16 @@ export function Tile({
   value: string | number;
   sub?: string;
   href?: string;
-  // 'alert' adds a warning icon and a border — never colour on its own.
+  // 'alert'/'critical' add a warning icon and tint the figure — never colour on
+  // its own: the label already names what the number is.
   emphasis?: 'alert' | 'critical';
 }) {
-  const border =
+  const tone =
     emphasis === 'critical'
-      ? 'border-red-300'
+      ? 'text-red-700'
       : emphasis === 'alert'
-        ? 'border-amber-300'
-        : 'border-neutral-200';
+        ? 'text-amber-700'
+        : 'text-neutral-950';
 
   const body = (
     <>
@@ -68,24 +84,38 @@ export function Tile({
             aria-hidden="true"
           />
         )}
-        <span className="text-2xl font-semibold tabular-nums">{value}</span>
+        <span className={`text-2xl font-semibold tabular-nums ${tone}`}>{value}</span>
       </div>
-      <span className="mt-1 block text-sm text-neutral-600">{label}</span>
+      <span className="mt-1 block text-[11px] uppercase tracking-wide text-neutral-500">
+        {label}
+      </span>
       {sub && <span className="mt-0.5 block text-xs text-neutral-600">{sub}</span>}
     </>
   );
 
   if (href) {
     return (
-      <Link
-        href={href}
-        className={`block rounded-lg border ${border} bg-white p-4 transition-colors hover:bg-neutral-50`}
-      >
+      <Link href={href} className="block bg-white p-4 transition-colors hover:bg-neutral-50">
         {body}
       </Link>
     );
   }
-  return <div className={`rounded-lg border ${border} bg-white p-4`}>{body}</div>;
+  return <div className="bg-white p-4">{body}</div>;
+}
+
+// gap-px over a grey ground draws the rules between cells. Grid-aware, unlike
+// divide-x/border-b, which are DOM-ordered and leave gaps at the wrap points.
+export function MetricGrid({ cols = 4, children }: { cols?: 2 | 4; children: React.ReactNode }) {
+  return (
+    <div
+      className={
+        'grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-neutral-200 bg-neutral-200 ' +
+        (cols === 4 ? 'sm:grid-cols-4' : '')
+      }
+    >
+      {children}
+    </div>
+  );
 }
 
 // A bar that is purely decorative: the figure it represents is always rendered
@@ -99,14 +129,16 @@ export function Bar({ value, max }: { value: number; max: number }) {
   );
 }
 
+const PILL = 'inline-flex items-center gap-1 rounded px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide';
+
 export function SeverityBadge({ severity }: { severity: 'critical' | 'warning' }) {
   return severity === 'critical' ? (
-    <span className="inline-flex items-center gap-1 rounded-full border border-red-300 bg-red-50 px-2 py-0.5 text-xs font-medium text-red-800">
+    <span className={`${PILL} bg-red-50 text-red-700`}>
       <AlertTriangle className="size-3" aria-hidden="true" />
       Critical
     </span>
   ) : (
-    <span className="inline-flex items-center gap-1 rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-800">
+    <span className={`${PILL} bg-amber-50 text-amber-800`}>
       <Info className="size-3" aria-hidden="true" />
       Warning
     </span>
@@ -115,7 +147,7 @@ export function SeverityBadge({ severity }: { severity: 'critical' | 'warning' }
 
 export function OkBadge() {
   return (
-    <span className="inline-flex items-center gap-1 rounded-full border border-emerald-300 bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-800">
+    <span className={`${PILL} bg-emerald-50 text-emerald-700`}>
       <CheckCircle2 className="size-3" aria-hidden="true" />
       Clear
     </span>
@@ -136,7 +168,7 @@ export function RowLink({
   return (
     <Link
       href={href}
-      className="inline-flex items-center gap-1 rounded font-medium text-blue-800 hover:underline"
+      className="inline-flex items-center gap-1 rounded text-sm font-medium text-[#1a6ef5] hover:underline"
     >
       {action}
       <span className="sr-only"> {context}</span>
@@ -147,13 +179,20 @@ export function RowLink({
 
 // Tables live inside this: a scrollable region must be reachable by keyboard,
 // which means it needs a tabindex and an accessible name (WCAG 2.1.1).
+//
+// `relative` is load-bearing. The tables are wider than a phone, and they carry
+// sr-only captions and link context — which Tailwind implements as
+// position:absolute. Without a positioned ancestor those resolve against the
+// initial containing block, so they sit at the table's *unscrolled* width, out
+// past the viewport, and overflow:hidden further up cannot clip them: the whole
+// page then scrolls sideways on mobile.
 export function TableScroll({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div
       role="region"
       aria-label={label}
       tabIndex={0}
-      className="min-w-0 overflow-x-auto rounded-lg border border-neutral-200"
+      className="relative min-w-0 overflow-x-auto rounded-lg border border-neutral-200"
     >
       {children}
     </div>
@@ -161,5 +200,5 @@ export function TableScroll({ label, children }: { label: string; children: Reac
 }
 
 export function Empty({ children }: { children: React.ReactNode }) {
-  return <p className="rounded-lg border border-neutral-200 bg-white p-4 text-sm text-neutral-600">{children}</p>;
+  return <p className="text-sm text-neutral-600">{children}</p>;
 }

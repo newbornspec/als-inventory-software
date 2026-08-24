@@ -42,16 +42,20 @@ const ACTIONS: {
 export function QuickActions({ canManage }: { canManage: boolean }) {
   const actions = ACTIONS.filter((a) => !a.managerOnly || canManage);
   return (
-    <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+    <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
       {actions.map(({ href, label, hint, icon: Icon }) => (
         <li key={href}>
           <Link
             href={href}
-            className="flex h-full flex-col gap-1 rounded-lg border border-neutral-200 bg-white p-3 transition-colors hover:border-neutral-300 hover:bg-neutral-50"
+            className="flex h-full items-start gap-3 rounded-lg border border-neutral-200 bg-neutral-50 p-3 transition-colors hover:border-neutral-300 hover:bg-white"
           >
-            <Icon className="size-5 text-[#2b7fff]" aria-hidden="true" />
-            <span className="mt-1 text-sm font-medium text-neutral-950">{label}</span>
-            <span className="text-xs text-neutral-600">{hint}</span>
+            <span className="grid size-9 shrink-0 place-items-center rounded-lg border border-neutral-200 bg-white">
+              <Icon className="size-4.5 text-[#2b7fff]" aria-hidden="true" />
+            </span>
+            <span className="min-w-0">
+              <span className="block text-sm font-medium text-neutral-950">{label}</span>
+              <span className="mt-0.5 block text-xs leading-5 text-neutral-600">{hint}</span>
+            </span>
           </Link>
         </li>
       ))}
