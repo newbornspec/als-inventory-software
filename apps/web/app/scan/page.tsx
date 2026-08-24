@@ -220,41 +220,37 @@ export default function ScanPage() {
   return (
     <>
       <Nav />
-      <main id="main-content" tabIndex={-1} className="min-h-screen bg-white text-neutral-950 px-4 py-6 sm:p-8">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-semibold">Scan Asset</h1>
-            <p className="mt-1 text-sm text-neutral-500">
-              {mode === 'keyboard'
-                ? 'Point a USB/Bluetooth scanner here, or type a tag and press Enter.'
-                : "Point your phone's camera at a QR code or barcode."}{' '}
-              Works offline.
-            </p>
-          </div>
-          <div className="flex rounded-md border border-neutral-200 text-sm">
-            <button
-              onClick={() => setMode('keyboard')}
-              aria-pressed={mode === 'keyboard'}
-              className={
-                'px-3 py-1.5 ' + (mode === 'keyboard' ? 'bg-neutral-100 text-neutral-900' : 'text-neutral-700')
-              }
-            >
-              Keyboard
-            </button>
-            <button
-              onClick={() => setMode('camera')}
-              aria-pressed={mode === 'camera'}
-              className={
-                'px-3 py-1.5 ' + (mode === 'camera' ? 'bg-neutral-100 text-neutral-900' : 'text-neutral-700')
-              }
-            >
-              Camera
-            </button>
-          </div>
+      <main
+        id="main-content"
+        tabIndex={-1}
+        className="min-h-screen bg-neutral-50 text-neutral-950 px-4 py-6 sm:px-8 sm:py-8"
+      >
+        <div className="mx-auto max-w-[90rem]">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">Scan Asset</h1>
+          <p className="mt-1 max-w-2xl text-sm leading-6 text-neutral-600">
+            {mode === 'keyboard'
+              ? 'Point a USB/Bluetooth scanner here, or type a tag and press Enter.'
+              : "Point your phone's camera at a QR code or barcode."}{' '}
+            Works offline.
+          </p>
         </div>
 
-        <div className="mt-6 max-w-sm rounded-md border border-neutral-200 bg-neutral-50 p-3">
-          <label htmlFor="scan-lot" className="block text-xs text-neutral-700">
+        {/* Two columns on a desktop, one on a phone.
+            Every element on this page used to be max-w-sm stacked down the
+            left, which is right on the handset an operator actually scans with
+            and wrong at a bench: the result of the scan — the thing you read
+            while holding the device — sat under the controls instead of beside
+            them, and on a wide screen the page was 95% empty.
+            Controls left, feedback right; on a phone it stacks back exactly as
+            it was. */}
+        <div className="mt-4 grid items-start gap-4 lg:grid-cols-[minmax(0,26rem)_minmax(0,1fr)]">
+          <div className="space-y-4">
+        <div className="rounded-xl border border-neutral-200 bg-white p-4">
+          <label
+            htmlFor="scan-lot"
+            className="block text-[11px] uppercase tracking-wide text-neutral-500"
+          >
             Receiving into lot (optional)
           </label>
           <select
@@ -275,7 +271,7 @@ export default function ScanPage() {
               <p className="text-neutral-700">
                 {receivedCount} / {selectedBatch.expected_unit_count ?? '—'} units received.
               </p>
-              <p className="mt-0.5 text-xs text-neutral-500">
+              <p className="mt-0.5 text-xs text-neutral-600">
                 {expectedIndex
                   ? `Verifying against the uploaded list (${expectedIndex.size} items) — only listed items are accepted.`
                   : 'No uploaded list — anything scanned is added as a new device.'}
@@ -284,8 +280,44 @@ export default function ScanPage() {
           )}
         </div>
 
+        {/* The Keyboard/Camera toggle used to live in the page's top-right
+            corner, over a thousand pixels from the field it switches. It now
+            sits on the card it controls. */}
+        <div className="rounded-xl border border-neutral-200 bg-white p-4">
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-[11px] uppercase tracking-wide text-neutral-500">
+              Scan input
+            </span>
+            <div className="flex overflow-hidden rounded-md border border-neutral-300 text-xs font-semibold uppercase tracking-wide">
+              <button
+                onClick={() => setMode('keyboard')}
+                aria-pressed={mode === 'keyboard'}
+                className={
+                  'px-3 py-1.5 ' +
+                  (mode === 'keyboard'
+                    ? 'bg-[#1a6ef5] text-white'
+                    : 'bg-white text-neutral-700 hover:bg-neutral-50')
+                }
+              >
+                Keyboard
+              </button>
+              <button
+                onClick={() => setMode('camera')}
+                aria-pressed={mode === 'camera'}
+                className={
+                  'border-l border-neutral-300 px-3 py-1.5 ' +
+                  (mode === 'camera'
+                    ? 'bg-[#1a6ef5] text-white'
+                    : 'bg-white text-neutral-700 hover:bg-neutral-50')
+                }
+              >
+                Camera
+              </button>
+            </div>
+          </div>
+
         {mode === 'keyboard' ? (
-          <form onSubmit={handleFormScan} className="mt-6 max-w-sm">
+          <form onSubmit={handleFormScan} className="mt-3">
             <label htmlFor="scan-tag" className="sr-only">
               Asset tag — scan or type
             </label>
@@ -300,7 +332,7 @@ export default function ScanPage() {
             />
           </form>
         ) : (
-          <div className="mt-6">
+          <div className="mt-3">
             <CameraScanner
               onDecode={processScan}
               onReadText={(t) => {
@@ -312,11 +344,15 @@ export default function ScanPage() {
             />
           </div>
         )}
+        </div>
+          </div>
 
+          {/* Feedback column: what just happened, and what happened before it. */}
+          <div className="space-y-4">
         <div aria-live="polite" aria-atomic="true">
         {result?.status === 'ok' && (
-          <div className="mt-4 max-w-sm space-y-3">
-            <div className="rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm">
+          <div className="space-y-3">
+            <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm">
               <div>
                 Scanned <strong>{result.asset.name}</strong> ({result.asset.tag}) — status:{' '}
                 {formatLabel(result.asset.stock_status)}
@@ -337,8 +373,8 @@ export default function ScanPage() {
           </div>
         )}
         {result?.status === 'received_new' && (
-          <div className="mt-4 max-w-sm space-y-3">
-            <div className="rounded-md border border-sky-200 bg-sky-50 p-3 text-sm">
+          <div className="space-y-3">
+            <div className="rounded-xl border border-sky-200 bg-sky-50 p-4 text-sm">
               <div>
                 Received new device <strong>{result.asset.tag}</strong>
                 {selectedBatch ? ' into ' + selectedBatch.batch_number : ''}.{' '}
@@ -359,7 +395,7 @@ export default function ScanPage() {
           </div>
         )}
         {result?.status === 'not_found' && (
-          <div className="mt-4 max-w-sm rounded-md border border-amber-200 bg-amber-50 p-3 text-sm">
+          <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm">
             No asset found for tag &quot;{result.tag}&quot;.{' '}
             <span className="text-amber-700">
               Select a lot above to receive it as a new device.
@@ -367,30 +403,46 @@ export default function ScanPage() {
           </div>
         )}
         {result?.status === 'not_on_list' && (
-          <div className="mt-4 max-w-sm rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+          <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
             &quot;{result.tag}&quot; is not on the uploaded inventory list for this lot — ignored.
           </div>
         )}
         {result?.status === 'already' && (
-          <div className="mt-4 max-w-sm rounded-md border border-neutral-200 bg-white p-3 text-sm text-neutral-700">
+          <div className="rounded-xl border border-neutral-200 bg-white p-4 text-sm text-neutral-700">
             <strong>{result.asset.tag}</strong> is already received in this lot — not counted again.
           </div>
         )}
         </div>
 
+        {!result && recent.length === 0 && (
+          <p className="rounded-xl border border-dashed border-neutral-300 bg-white p-6 text-sm text-neutral-600">
+            Nothing scanned yet. Results appear here as you scan.
+          </p>
+        )}
+
         {recent.length > 0 && (
-          <div className="mt-8 max-w-sm">
-            <h2 className="text-sm font-medium text-neutral-500">Recent scans this session</h2>
-            <ul className="mt-2 space-y-1 text-sm">
+          <div className="overflow-hidden rounded-xl border border-neutral-200 bg-white">
+            <div className="flex items-baseline justify-between gap-2 border-b border-neutral-200 px-4 py-3">
+              <h2 className="text-xs font-semibold uppercase tracking-wide text-neutral-900">
+                Recent scans this session
+              </h2>
+              <span className="text-xs text-neutral-600 tabular-nums">
+                {recent.length} scanned
+              </span>
+            </div>
+            <ul className="divide-y divide-neutral-200 text-sm">
               {recent.map((r, i) => (
-                <li key={i} className="flex justify-between text-neutral-700">
-                  <span>{r.name}</span>
-                  <span className="text-neutral-500">{r.when}</span>
+                <li key={i} className="flex justify-between gap-3 px-4 py-2.5 text-neutral-800">
+                  <span className="min-w-0 truncate">{r.name}</span>
+                  <span className="shrink-0 text-neutral-600 tabular-nums">{r.when}</span>
                 </li>
               ))}
             </ul>
           </div>
         )}
+          </div>
+        </div>
+        </div>
       </main>
   </>
   );
