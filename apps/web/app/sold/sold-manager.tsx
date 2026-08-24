@@ -26,7 +26,12 @@ interface Dest {
   label: string;
 }
 
-const TH = 'px-4 py-3 text-left text-xs font-medium text-neutral-500';
+// The last table in the app still in sentence case. Every other register,
+// report and workspace uses this 11px small-caps header, and one page reading
+// "Pallet / Lot ID" beside eight reading "PALLET #" is just an inconsistency
+// with no reason behind it.
+const TH =
+  'px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wide text-neutral-500';
 const TD = 'px-4 py-3 text-sm';
 const FILTER =
   'rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700 focus:border-neutral-500 focus:outline-none';
