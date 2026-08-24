@@ -36,14 +36,19 @@ export default async function PalletsPage() {
   return (
     <>
       <Nav />
-      <main id="main-content" tabIndex={-1} className="min-h-screen bg-white text-neutral-950 px-4 py-6 sm:p-8">
+      <main
+        id="main-content"
+        tabIndex={-1}
+        className="min-h-screen bg-neutral-50 text-neutral-950 px-4 py-6 sm:px-8 sm:py-8"
+      >
+        <div className="mx-auto max-w-[90rem]">
         <Breadcrumbs
           items={[{ label: 'Dashboard', href: '/dashboard' }, { label: 'Pallets' }]}
         />
 
         <div className="mt-3 flex flex-wrap items-start justify-between gap-3">
           <div>
-            <h1 className="text-2xl font-semibold">Pallets</h1>
+            <h1 className="text-2xl font-semibold tracking-tight">Pallets</h1>
             <p className="mt-1 text-sm text-neutral-600">
               View and manage all pallets. Filter by status to quickly find what you need.
             </p>
@@ -52,6 +57,7 @@ export default async function PalletsPage() {
         </div>
 
         <PalletWorkspace pallets={pallets} can={can} />
+        </div>
       </main>
     </>
   );

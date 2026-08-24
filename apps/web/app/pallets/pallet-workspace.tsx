@@ -41,7 +41,8 @@ import {
 } from './pallet-filters';
 
 const FIELD = 'field-underline px-2 py-1.5 text-sm';
-const TH = 'px-3 py-2 text-left text-xs font-medium uppercase tracking-wide text-neutral-600';
+const TH =
+  'px-3 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wide text-neutral-500';
 const TD = 'px-3 py-2 text-sm';
 const PAGE_SIZE = 10;
 
@@ -114,7 +115,10 @@ function SortHeader({
     >
       <button
         onClick={onSort}
-        className="inline-flex items-center gap-1 hover:text-neutral-900"
+        // uppercase is not inherited: a button carries the UA stylesheet's
+        // `text-transform: none`, which left the sortable columns in sentence
+        // case beside uppercase ones in the same row.
+        className="inline-flex items-center gap-1 uppercase hover:text-neutral-900"
         aria-label={`Sort by ${label}${active ? `, currently ${dir === 'asc' ? asc : desc}` : ''}`}
       >
         {label}
@@ -143,13 +147,15 @@ function StatCard({
   action?: { label: string; onClick?: () => void; href?: string };
 }) {
   return (
-    <div className="flex items-start gap-3 rounded-lg border border-neutral-200 bg-white p-4">
-      <span className="rounded-lg bg-blue-50 p-2 text-[#1a6ef5]" aria-hidden="true">
+    // A cell, not a card: the strip below draws the hairlines, so five of these
+    // read as one instrument panel rather than five competing boxes.
+    <div className="flex items-start gap-3 bg-white p-4">
+      <span className="rounded-lg border border-neutral-200 bg-neutral-50 p-2 text-[#2b7fff]" aria-hidden="true">
         {icon}
       </span>
       <div className="min-w-0">
-        <div className="text-xs text-neutral-600">{label}</div>
-        <div className="mt-0.5 text-xl font-semibold leading-tight tabular-nums text-neutral-950">
+        <div className="text-[11px] uppercase tracking-wide text-neutral-500">{label}</div>
+        <div className="mt-1 text-xl font-semibold leading-tight tabular-nums text-neutral-950">
           {value}
         </div>
         {action &&
@@ -423,7 +429,7 @@ export function PalletWorkspace({
   return (
     <div className="mt-6">
       {/* --- KPI strip ----------------------------------------------------- */}
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+      <div className="grid gap-px overflow-hidden rounded-xl border border-neutral-200 bg-neutral-200 sm:grid-cols-2 lg:grid-cols-5">
         <StatCard
           icon={<Package className="size-5" />}
           label="Total pallets"
@@ -466,7 +472,7 @@ export function PalletWorkspace({
       </div>
 
       {/* --- search + filters ---------------------------------------------- */}
-      <div className="mt-4 rounded-lg border border-neutral-200 bg-neutral-50/60 p-3">
+      <div className="mt-4 rounded-xl border border-neutral-200 bg-white p-3">
         <div className="flex flex-wrap items-center gap-3">
           <div className="relative min-w-0 flex-1 sm:max-w-md">
             <label htmlFor="pallet-search" className="sr-only">
@@ -528,7 +534,7 @@ export function PalletWorkspace({
         <div
           id="pallet-filters"
           hidden={!showFilters}
-          className="mt-3 grid gap-3 rounded-lg border border-neutral-200 bg-white p-4 sm:grid-cols-2 lg:grid-cols-3"
+          className="mt-3 grid gap-3 rounded-lg border border-neutral-200 bg-neutral-50 p-4 sm:grid-cols-2 lg:grid-cols-3"
         >
           <div>
             <label htmlFor="f-created" className="block text-sm text-neutral-700">
@@ -677,8 +683,18 @@ export function PalletWorkspace({
       )}
 
       {/* --- table ----------------------------------------------------------- */}
-      <div className="mt-4 rounded-lg border border-neutral-200">
-        <div role="region" aria-label="Pallets" tabIndex={0} className="overflow-x-auto">
+      <div className="mt-4 overflow-hidden rounded-xl border border-neutral-200 bg-white">
+        {/* `relative` is load-bearing: the table is wider than a phone and
+            carries sr-only text, which Tailwind implements as
+            position:absolute. With no positioned ancestor it resolves against
+            the initial containing block, landing past the viewport where
+            nothing can clip it — and the whole page scrolls sideways. */}
+        <div
+          role="region"
+          aria-label="Pallets"
+          tabIndex={0}
+          className="relative overflow-x-auto"
+        >
           {/* The min-width applies only where every column is on show. Forcing
               832px at phone width made the reader pan horizontally on every row —
               which is precisely what the disclosure row exists to avoid. */}
