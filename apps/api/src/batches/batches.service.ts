@@ -8,6 +8,7 @@ import { ExpectedLineItem } from './expected-line-item.entity';
 import { CreateBatchDto } from './dto/create-batch.dto';
 import { UpdateBatchDto } from './dto/update-batch.dto';
 import { Asset, AssetStockStatus } from '../assets/asset.entity';
+import { GONE } from '../assets/stock-status';
 import { sanitizeUser, type SafeUser } from '../users/sanitize-user';
 import { ActivityService } from '../activity/activity.service';
 import { assertOwnsBatch, accessibleBatchWhere, type RequestUser } from '../common/ownership';
@@ -22,6 +23,13 @@ export interface BatchWithCount extends Omit<Batch, 'receivedBy' | 'owner' | 'cr
   // Sold-inclusive. actualUnitCount deliberately omits sold devices, so only this
   // one is safe to show before a destructive action.
   totalUnitCount: number;
+  // Still physically HELD: not sold, and also not shipped or disposed.
+  // actualUnitCount cannot answer this — it means "still part of this lot's
+  // story", which is why a shipped device stays in it and a lot does not read
+  // "Missing 6" against its manifest after dispatch. A roll-up headlined
+  // "total units held" needs the other question, so it gets its own figure
+  // rather than a redefinition that would move every lot's counts.
+  heldUnitCount: number;
   // Real row counts for the two other things a batch delete destroys. Needed so a
   // delete confirmation can never claim a lot is empty while it still holds a
   // supplier manifest or planned sub-lots.
@@ -470,11 +478,17 @@ export class BatchesService {
     //           Pallet can still move, and what drains to zero.
     const LIVE = `asset.stock_status != 'sold'`;
     const POOL = `${LIVE} AND asset.pallet_id IS NULL`;
+    // HELD is a third notion, additive to the two above: devices that have not
+    // left the building at all. Same GONE vocabulary the dashboard and the
+    // assets register use — see assets/stock-status.ts.
+    const goneList = GONE.map((s) => `'${s}'`).join(', ');
+    const HELD = `asset.stock_status NOT IN (${goneList})`;
     const rows = await this.assets
       .createQueryBuilder('asset')
       .select('asset.batchId', 'batchId')
       .addSelect(`COUNT(*) FILTER (WHERE ${LIVE})`, 'total')
       .addSelect('COUNT(*)', 'everything')
+      .addSelect(`COUNT(*) FILTER (WHERE ${HELD})`, 'held')
       .addSelect(
         `COUNT(*) FILTER (WHERE asset.audit_status = 'ready_for_sale' AND ${LIVE})`,
         'readyForSale',
@@ -494,6 +508,7 @@ export class BatchesService {
         batchId: string;
         total: string;
         everything: string;
+        held: string;
         readyForSale: string;
         scrap: string;
         quarantine: string;
@@ -535,6 +550,7 @@ export class BatchesService {
         createdBy: b.createdBy ? sanitizeUser(b.createdBy) : null,
         actualUnitCount: r ? parseInt(r.total, 10) : 0,
         totalUnitCount: r ? parseInt(r.everything, 10) : 0,
+        heldUnitCount: r ? parseInt(r.held, 10) : 0,
         subLotCount: subLots.get(b.id) ?? 0,
         expectedLineCount: expected.get(b.id) ?? 0,
         readyForSale: r ? parseInt(r.readyForSale, 10) : 0,

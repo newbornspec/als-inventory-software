@@ -24,6 +24,14 @@ export class QueryAssetsDto {
   @IsIn(['true'])
   available?: string;
 
+  // 'true' → devices still physically held: anything not sold, shipped or
+  // disposed. Broader than `available`, which also excludes quarantined and
+  // committed stock — a quarantined device is still in the building. The
+  // /inventory roll-up counts this set.
+  @IsOptional()
+  @IsIn(['true'])
+  held?: string;
+
   @IsOptional()
   @IsEnum(AssetConditionGrade)
   conditionGrade?: AssetConditionGrade;
