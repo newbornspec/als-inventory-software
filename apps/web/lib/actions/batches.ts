@@ -24,6 +24,13 @@ export interface Batch {
   // Sold-inclusive. actualUnitCount omits sold devices, so a fully-sold lot reads
   // as 0 units — only this count is safe to show before a destructive action.
   totalUnitCount: number;
+  // Still physically held: not sold, and also not shipped or disposed.
+  // actualUnitCount keeps counting shipped and disposed devices on purpose —
+  // it means "still part of this lot's story", so a dispatched lot does not
+  // read "Missing 6" against its manifest. Anything headlined "held" wants
+  // this one. Optional because web and API deploy independently; absent means
+  // the API predates it and callers fall back to actualUnitCount.
+  heldUnitCount?: number;
   // Real row counts, unrelated to the hand-typed expectedUnitCount below.
   subLotCount: number;
   expectedLineCount: number;

@@ -7,7 +7,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Asset, AssetStockStatus } from './asset.entity';
-import { AVAILABLE } from './stock-status';
+import { AVAILABLE, GONE as GONE_STATUSES } from './stock-status';
 import { nextUnitId } from './unit-id';
 import { Batch, BatchStatus } from '../batches/batch.entity';
 import { AssetEventType, AssetHistory } from './asset-history.entity';
@@ -45,7 +45,9 @@ import {
 // emerald pill, as if it were sellable. 'shipped' is written by the sales
 // service and 'disposed' is settable from the asset edit form, so both are
 // reachable states, not theoretical ones.
-const GONE = `asset.stockStatus IN ('sold', 'shipped', 'disposed')`;
+// Built from the shared list rather than restated, so this predicate and the
+// `held=true` filter below can never fall out of step.
+const GONE = `asset.stockStatus IN (${GONE_STATUSES.map((s) => `'${s}'`).join(', ')})`;
 const NOT_SOLD = `asset.stockStatus != 'sold'`;
 // IS NOT DISTINCT FROM, not `=`: audit_status is nullable, and in SQL
 // `NULL = 'data_wipe_failed'` is NULL, so `(false OR NULL)` is NULL and
@@ -164,6 +166,14 @@ export class AssetsService {
     if (query.available === 'true') {
       qb.andWhere('asset.stockStatus IN (:...availableStatuses)', {
         availableStatuses: [...AVAILABLE],
+      });
+    }
+    // Everything that has not left the building. Quarantined and committed
+    // devices ARE held — they are still on site — so this is deliberately
+    // wider than `available`.
+    if (query.held === 'true') {
+      qb.andWhere('asset.stockStatus NOT IN (:...goneStatuses)', {
+        goneStatuses: [...GONE_STATUSES],
       });
     }
     if (query.conditionGrade) {
