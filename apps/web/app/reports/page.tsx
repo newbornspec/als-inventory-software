@@ -234,7 +234,11 @@ export default async function ReportsPage({
     return (
       <>
         <Nav />
-        <main id="main-content" tabIndex={-1} className="min-h-screen bg-white text-neutral-950 px-4 py-6 sm:p-8">
+        <main
+        id="main-content"
+        tabIndex={-1}
+        className="min-h-screen bg-neutral-50 text-neutral-950 px-4 py-6 sm:px-8 sm:py-8"
+      >
           <h1 className="text-2xl font-semibold">Reports</h1>
           <p className="mt-4 text-sm text-neutral-500">
             {canSee ? 'Reports are temporarily unavailable — try again shortly.' : 'Reports are available to managers and admins.'}
@@ -290,12 +294,32 @@ export default async function ReportsPage({
     { label: 'Users', value: String(k.users), href: '/users' },
   ];
 
+  // The jump index, built from the SAME conditions that render each section
+  // below — seven of the nine are conditional, so a static list would hand the
+  // reader dead anchors on any report where a slice has no data.
+  const reportSections = [
+    { id: 'inventory-analytics', label: 'Inventory', show: true },
+    { id: 'sales-finance', label: 'Sales & finance', show: Boolean(sales) },
+    { id: 'supplier-performance', label: 'Suppliers', show: suppliers.length > 0 },
+    { id: 'batch-performance', label: 'Batch & lot', show: true },
+    { id: 'pallet-analytics', label: 'Pallets', show: Boolean(palletAnalytics) },
+    { id: 'warehouse-operations', label: 'Warehouse', show: Boolean(warehouse) },
+    { id: 'consumables', label: 'Consumables', show: Boolean(consumables) },
+    { id: 'user-performance', label: 'Users', show: userPerf.length > 0 },
+    { id: 'activity-timeline', label: 'Activity', show: activity.length > 0 },
+  ].filter((sec) => sec.show);
+
   return (
     <>
       <Nav />
-      <main id="main-content" tabIndex={-1} className="min-h-screen bg-white text-neutral-950 px-4 py-6 sm:p-8">
+      <main
+        id="main-content"
+        tabIndex={-1}
+        className="min-h-screen bg-neutral-50 text-neutral-950 px-4 py-6 sm:px-8 sm:py-8"
+      >
+        <div className="mx-auto max-w-[90rem]">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <h1 className="text-2xl font-semibold">Reports</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">Reports</h1>
           <div className="flex flex-wrap items-center gap-3 text-sm">
             <a
               href={`/api/reports/export-xlsx?${deviceQs.toString()}`}
@@ -363,27 +387,50 @@ export default async function ReportsPage({
           </p>
         )}
 
-        {/* Executive summary */}
-        <section className="mt-6">
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+        {/* Jump index. Eleven sections over ~5,500px: without this the only way
+            to reach Warehouse operations is to scroll past everything above it.
+            Plain anchors so they work before hydration; the targets are the
+            section headings, which are focusable, so the keyboard lands on the
+            heading rather than the viewport merely moving. */}
+        <nav aria-label="Report sections" className="mt-4">
+          <ul className="flex flex-wrap gap-x-2 gap-y-1.5">
+            {reportSections.map((sec) => (
+              <li key={sec.id}>
+                <a
+                  href={`#${sec.id}`}
+                  className="inline-block rounded-full border border-neutral-200 bg-white px-3 py-1 text-xs font-medium text-neutral-700 transition-colors hover:border-neutral-300 hover:text-neutral-950"
+                >
+                  {sec.label}
+                </a>
+              </li>
+            ))}
+          </ul>
+        </nav>
+
+        {/* Executive summary. Named even though it carries no visible heading:
+            the KPI figures are self-describing on screen, but an unnamed
+            <section> is announced as an anonymous region, which is noise in a
+            document that already has nine named ones. */}
+        <section aria-label="Executive summary" className="mt-4">
+          <div className="grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-neutral-200 bg-neutral-200 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
             {kpiCards.map((c) => (
               <Link
                 key={c.label}
                 href={c.href}
-                className="rounded-lg border border-neutral-200 bg-neutral-50 p-4 transition hover:border-neutral-300"
+                className="bg-white p-4 transition-colors hover:bg-neutral-50"
               >
-                <div className="text-xs uppercase tracking-wide text-neutral-500">{c.label}</div>
+                <div className="text-[11px] uppercase tracking-wide text-neutral-500">{c.label}</div>
                 <div className="mt-1 text-2xl font-semibold tabular-nums">{c.value}</div>
-                {c.sub && <div className="mt-0.5 text-xs text-neutral-500">{c.sub}</div>}
+                {c.sub && <div className="mt-0.5 text-xs text-neutral-600">{c.sub}</div>}
               </Link>
             ))}
           </div>
         </section>
 
         {/* Inventory analytics — active (unsold) inventory */}
-        <section className="mt-8">
-          <h2 className="text-sm font-medium text-neutral-500">
-            Inventory analytics <span className="text-neutral-500">(active inventory)</span>
+        <section aria-labelledby="inventory-analytics" className="mt-8">
+          <h2 id="inventory-analytics" tabIndex={-1} className="scroll-mt-24 text-sm font-semibold text-neutral-900 focus:outline-none">
+            Inventory analytics <span className="font-normal text-neutral-600">(active inventory)</span>
           </h2>
           <div className="mt-3 grid gap-4 lg:grid-cols-2">
             <div className="min-w-0 rounded-lg border border-neutral-200 bg-white p-4">
@@ -457,9 +504,9 @@ export default async function ReportsPage({
 
         {/* Sales & Finance analytics */}
         {sales && (
-          <section className="mt-8">
-            <h2 className="text-sm font-medium text-neutral-500">
-              Sales &amp; finance <span className="text-neutral-500">({rangeLabel})</span>
+          <section aria-labelledby="sales-finance" className="mt-8">
+            <h2 id="sales-finance" tabIndex={-1} className="scroll-mt-24 text-sm font-semibold text-neutral-900 focus:outline-none">
+              Sales &amp; finance <span className="font-normal text-neutral-600">({rangeLabel})</span>
             </h2>
 
             <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
@@ -487,7 +534,7 @@ export default async function ReportsPage({
             <div className="mt-4 grid gap-4 lg:grid-cols-3">
               <div className="min-w-0 rounded-lg border border-neutral-200 bg-white p-4 lg:col-span-2">
                 <h3 className="text-sm font-medium text-neutral-700">
-                  Revenue &amp; profit <span className="text-neutral-500">(last 12 months)</span>
+                  Revenue &amp; profit <span className="font-normal text-neutral-600">(last 12 months)</span>
                 </h3>
                 <div className="mt-3">
                   <MonthlyTrend
@@ -574,9 +621,9 @@ export default async function ReportsPage({
 
         {/* Supplier performance */}
         {suppliers.length > 0 && (
-          <section className="mt-8">
-            <h2 className="text-sm font-medium text-neutral-500">
-              Supplier performance <span className="text-neutral-500">(revenue/profit: {rangeLabel})</span>
+          <section aria-labelledby="supplier-performance" className="mt-8">
+            <h2 id="supplier-performance" tabIndex={-1} className="scroll-mt-24 text-sm font-semibold text-neutral-900 focus:outline-none">
+              Supplier performance <span className="font-normal text-neutral-600">(revenue/profit: {rangeLabel})</span>
             </h2>
             <div role="region" aria-label="Sales by supplier" tabIndex={0} className="mt-3 overflow-x-auto rounded-lg border border-neutral-200">
               <table className="w-full text-left text-sm">
@@ -632,11 +679,11 @@ export default async function ReportsPage({
         )}
 
         {/* Batch & lot performance — expandable Batch → Sub-lot drill-down */}
-        <section className="mt-8">
+        <section aria-labelledby="batch-performance" className="mt-8">
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <h2 className="text-sm font-medium text-neutral-500">
+            <h2 id="batch-performance" tabIndex={-1} className="scroll-mt-24 text-sm font-semibold text-neutral-900 focus:outline-none">
               Batch &amp; lot performance{' '}
-              <span className="text-neutral-500">
+              <span className="font-normal text-neutral-600">
                 (revenue/profit: {rangeLabel} · totals:{' '}
                 {money(profitTotals.revenue)} rev / {money(profitTotals.profit)} profit)
               </span>
@@ -655,10 +702,10 @@ export default async function ReportsPage({
 
         {/* Pallet analytics — standalone pallet list */}
         {palletAnalytics && (
-          <section className="mt-8">
-            <h2 className="text-sm font-medium text-neutral-500">
+          <section aria-labelledby="pallet-analytics" className="mt-8">
+            <h2 id="pallet-analytics" tabIndex={-1} className="scroll-mt-24 text-sm font-semibold text-neutral-900 focus:outline-none">
               Pallet analytics{' '}
-              <span className="text-neutral-500">
+              <span className="font-normal text-neutral-600">
                 ({palletAnalytics.summary.activePallets} active ·{' '}
                 {palletAnalytics.summary.shippedPallets} shipped ·{' '}
                 {palletAnalytics.summary.unitsOnHand.toLocaleString('en-GB')} units on hand ·{' '}
@@ -739,9 +786,9 @@ export default async function ReportsPage({
 
         {/* Warehouse operations — throughput over the range */}
         {warehouse && (
-          <section className="mt-8">
-            <h2 className="text-sm font-medium text-neutral-500">
-              Warehouse operations <span className="text-neutral-500">({rangeLabel})</span>
+          <section aria-labelledby="warehouse-operations" className="mt-8">
+            <h2 id="warehouse-operations" tabIndex={-1} className="scroll-mt-24 text-sm font-semibold text-neutral-900 focus:outline-none">
+              Warehouse operations <span className="font-normal text-neutral-600">({rangeLabel})</span>
             </h2>
 
             <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-7">
@@ -772,7 +819,7 @@ export default async function ReportsPage({
             <div className="mt-4 rounded-lg border border-neutral-200 bg-white p-4">
               <h3 className="text-sm font-medium text-neutral-700">
                 Throughput per day{' '}
-                <span className="text-neutral-500">({warehouse.windowLabel})</span>
+                <span className="font-normal text-neutral-600">({warehouse.windowLabel})</span>
               </h3>
               <div className="mt-3">
                 <DailyBars data={warehouse.daily} />
@@ -788,9 +835,9 @@ export default async function ReportsPage({
 
         {/* Consumables — bulk stock usage */}
         {consumables && (
-          <section className="mt-8">
-            <h2 className="text-sm font-medium text-neutral-500">
-              Consumables <span className="text-neutral-500">({rangeLabel})</span>
+          <section aria-labelledby="consumables" className="mt-8">
+            <h2 id="consumables" tabIndex={-1} className="scroll-mt-24 text-sm font-semibold text-neutral-900 focus:outline-none">
+              Consumables <span className="font-normal text-neutral-600">({rangeLabel})</span>
             </h2>
 
             <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
@@ -813,7 +860,7 @@ export default async function ReportsPage({
             <div className="mt-4 grid gap-4 lg:grid-cols-3">
               <div className="min-w-0 rounded-lg border border-neutral-200 bg-white p-4 lg:col-span-2">
                 <h3 className="text-sm font-medium text-neutral-700">
-                  Consumption &amp; replenishment <span className="text-neutral-500">(last 12 months)</span>
+                  Consumption &amp; replenishment <span className="font-normal text-neutral-600">(last 12 months)</span>
                 </h3>
                 <div className="mt-3">
                   <MonthlyTrend
@@ -881,9 +928,9 @@ export default async function ReportsPage({
 
         {/* User performance — comparison table */}
         {userPerf.length > 0 && (
-          <section className="mt-8">
-            <h2 className="text-sm font-medium text-neutral-500">
-              User performance <span className="text-neutral-500">({rangeLabel})</span>
+          <section aria-labelledby="user-performance" className="mt-8">
+            <h2 id="user-performance" tabIndex={-1} className="scroll-mt-24 text-sm font-semibold text-neutral-900 focus:outline-none">
+              User performance <span className="font-normal text-neutral-600">({rangeLabel})</span>
             </h2>
             <div role="region" aria-label="Consumable stock" tabIndex={0} className="mt-3 overflow-x-auto rounded-lg border border-neutral-200">
               <table className="w-full text-left text-sm">
@@ -932,9 +979,9 @@ export default async function ReportsPage({
 
         {/* Activity timeline — the live feed of recent actions */}
         {activity.length > 0 && (
-          <section className="mt-8">
+          <section aria-labelledby="activity-timeline" className="mt-8">
             <div className="flex items-center justify-between">
-              <h2 className="text-sm font-medium text-neutral-500">Activity timeline</h2>
+              <h2 id="activity-timeline" tabIndex={-1} className="scroll-mt-24 text-sm font-semibold text-neutral-900 focus:outline-none">Activity timeline</h2>
               <Link href="/activity" className="text-sm text-neutral-500 hover:text-neutral-900">
                 View all →
               </Link>
@@ -972,6 +1019,7 @@ export default async function ReportsPage({
             </ol>
           </section>
         )}
+        </div>
       </main>
   </>
   );
