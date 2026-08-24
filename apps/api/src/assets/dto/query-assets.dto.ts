@@ -14,6 +14,16 @@ export class QueryAssetsDto {
   @IsEnum(AssetStockStatus)
   stockStatus?: AssetStockStatus;
 
+  // 'true' → devices on the shelf and free to allocate: the AVAILABLE set in
+  // assets/stock-status.ts, which is what the dashboard's "In stock" tile
+  // counts. It needs its own flag because stockStatus matches a single value
+  // and this is a set of five — and because filtering on 'in_stock' alone
+  // finds almost nothing: the column defaults to 'received' and the audit
+  // ingest writes 'audited'.
+  @IsOptional()
+  @IsIn(['true'])
+  available?: string;
+
   @IsOptional()
   @IsEnum(AssetConditionGrade)
   conditionGrade?: AssetConditionGrade;

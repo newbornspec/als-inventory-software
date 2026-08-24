@@ -25,6 +25,9 @@ interface AssetSummary {
 const FILTER_KEYS = [
   'search',
   'stockStatus',
+  // The dashboard's "In stock" tile lands here. Listed so it survives a tab
+  // click or a search rather than silently widening the list under the reader.
+  'available',
   'conditionGrade',
   'auditStatus',
   'category',

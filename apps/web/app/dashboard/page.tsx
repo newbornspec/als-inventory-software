@@ -139,7 +139,15 @@ export default async function DashboardPage() {
           >
             <MetricGrid>
               <Tile label="Total inventory" value={metrics.totalInventory} sub="Devices still held" href="/inventory" />
-              <Tile label="In stock" value={metrics.inStock} sub="On the shelf, uncommitted" href="/assets?stockStatus=in_stock" />
+              <Tile
+                label="In stock"
+                value={metrics.inStock}
+                sub="On the shelf, uncommitted"
+                // Counts the AVAILABLE set, so it must link to that set. It used to
+                // link to stockStatus=in_stock, which is a single status the app
+                // almost never writes — the figure and the list disagreed.
+                href="/assets?available=true"
+              />
               <Tile
                 label="Low stock"
                 value={metrics.lowStockLines}
