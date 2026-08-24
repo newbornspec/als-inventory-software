@@ -9,7 +9,7 @@ import {
   type PalletLine,
   type PalletLinePatch,
 } from '@/lib/actions/pallets';
-import type { LookupValue } from '@/lib/actions/lookups';
+import type { LookupValue } from '@/lib/lookups';
 import { sellPalletLine } from '@/lib/actions/sold';
 import { money } from '@/lib/money';
 import {
