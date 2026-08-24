@@ -69,7 +69,10 @@ export function SellForm() {
 
   return (
     <div className="max-w-xl">
-      <form onSubmit={search} className="flex flex-wrap items-end gap-3">
+      <form
+        onSubmit={search}
+        className="flex flex-wrap items-end gap-3 rounded-xl border border-neutral-200 bg-white p-4"
+      >
         <div className="min-w-0 flex-1 space-y-1">
           <label htmlFor="sell-q" className="block text-sm text-neutral-700">
             Scan or type a tag, serial or name
@@ -120,10 +123,10 @@ export function SellForm() {
 
       {matches && matches.length > 1 && !chosen && (
         <div className="mt-4">
-          <h2 className="text-sm font-medium text-neutral-700">
+          <h2 className="text-xs font-semibold uppercase tracking-wide text-neutral-900">
             {matches.length} matches — pick one
           </h2>
-          <ul className="mt-2 divide-y divide-neutral-200 rounded-lg border border-neutral-200">
+          <ul className="mt-2 divide-y divide-neutral-200 overflow-hidden rounded-xl border border-neutral-200 bg-white">
             {matches.map((m) => (
               <li key={m.id}>
                 <button
@@ -144,8 +147,8 @@ export function SellForm() {
       )}
 
       {chosen && (
-        <div className="mt-4 rounded-lg border border-neutral-200 p-4">
-          <h2 className="text-sm font-medium text-neutral-700">Confirm the sale</h2>
+        <div className="mt-4 rounded-xl border border-neutral-200 bg-white p-4">
+          <h2 className="text-xs font-semibold uppercase tracking-wide text-neutral-900">Confirm the sale</h2>
           <dl className="mt-2 space-y-1 text-sm">
             <div className="flex justify-between gap-4">
               <dt className="text-neutral-600">Device</dt>
