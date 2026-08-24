@@ -32,9 +32,9 @@ export function AuditSection({ assetId, audits }: { assetId: string; audits: Ass
   }, [saved, showForm]);
 
   return (
-    <section>
+    <section className="rounded-xl border border-neutral-200 bg-white p-4">
       <div className="flex items-center justify-between">
-        <h2 className="text-sm font-medium text-neutral-500">ITAD Audits</h2>
+        <h2 className="text-xs font-semibold uppercase tracking-wide text-neutral-900">ITAD Audits</h2>
         {!showForm && (
           <button
             ref={addRef}

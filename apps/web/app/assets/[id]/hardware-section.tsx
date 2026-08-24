@@ -141,9 +141,9 @@ export function HardwareSection({ profile }: { profile: Record<string, unknown> 
   const ordered = [...known, ...extra];
 
   return (
-    <section className="md:col-span-2">
+    <section className="md:col-span-2 rounded-xl border border-neutral-200 bg-white p-4">
       <div className="flex items-baseline gap-3">
-        <h2 className="text-sm font-medium text-neutral-500">Hardware profile</h2>
+        <h2 className="text-xs font-semibold uppercase tracking-wide text-neutral-900">Hardware profile</h2>
         <span className="text-xs text-neutral-500">Auto-captured · read-only</span>
       </div>
       <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
