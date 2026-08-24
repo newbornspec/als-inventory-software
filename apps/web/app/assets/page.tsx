@@ -43,8 +43,17 @@ const FILTER_KEYS = [
 // be emitted as hidden inputs — see the form below.
 const POPOVER_KEYS = ['stockStatus', 'conditionGrade', 'auditStatus'] as const;
 
-type Params = Partial<Record<(typeof FILTER_KEYS)[number] | 'lifecycle', string>>;
+type Params = Partial<Record<(typeof FILTER_KEYS)[number] | 'lifecycle' | 'page', string>>;
 
+// The register is the whole device history, so it grows without bound — a
+// production lot of a few thousand devices rendered every row into one page.
+// 50 is a register's page: enough to scan a supplier's intake in one screen,
+// small enough that the browser is not laying out thousands of rows.
+const PAGE_SIZE = 50;
+
+// `page` is deliberately NOT carried: changing tab or filter changes what is
+// being listed, and keeping the old page number lands the reader on an empty
+// table. Only the pager itself passes a page, via `overrides`.
 function queryFrom(params: Params, overrides: Record<string, string | undefined> = {}) {
   const q = new URLSearchParams();
   for (const k of FILTER_KEYS) if (params[k]) q.set(k, params[k]!);
@@ -99,6 +108,16 @@ export default async function AssetsPage({
     Object.entries(v.params).every(([k, val]) => (params as Record<string, string>)[k] === val),
   );
   const filtersOn = FILTER_KEYS.filter((k) => params[k]).length;
+
+  // Paging is in the URL, not component state: a page of the register is a
+  // thing worth linking to and bookmarking, it survives a refresh, and the
+  // pager still works with JavaScript off. A page number outside the range is
+  // clamped rather than 404'd — the list shrinks under filters all the time,
+  // and stranding the reader on a blank table would be the wrong answer.
+  const pageCount = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
+  const page = Math.min(pageCount, Math.max(1, Number(params.page) || 1));
+  const pageStart = (page - 1) * PAGE_SIZE;
+  const pageRows = rows.slice(pageStart, pageStart + PAGE_SIZE);
 
   const cards: { label: string; value: number | null }[] = [
     { label: 'Assets', value: summary?.assets ?? null },
@@ -286,7 +305,7 @@ export default async function AssetsPage({
                 </tr>
               </thead>
               <tbody>
-                {rows.map((a) => {
+                {pageRows.map((a) => {
                   const state = lifecycleOf(a);
                   const style = LIFECYCLE_STYLE[state];
                   // A device that left names HOW it left rather than reading
@@ -368,16 +387,84 @@ export default async function AssetsPage({
             </table>
           </div>
 
-          <p className="mt-3 text-xs text-neutral-500">
-            Showing {N(rows.length)} record{rows.length === 1 ? '' : 's'}
-            {summary && tab === 'all' && filtersOn === 0
-              ? ` of ${N(summary.assets)}`
-              : ' in this view'}{' '}
-            · Inventory answers quantity; Assets answer identity.
-          </p>
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+            <p className="text-xs text-neutral-600">
+              {rows.length > 0 && (
+                <>
+                  Showing{' '}
+                  <span className="font-medium text-neutral-900 tabular-nums">
+                    {N(pageStart + 1)}–{N(Math.min(pageStart + PAGE_SIZE, rows.length))}
+                  </span>{' '}
+                  of{' '}
+                </>
+              )}
+              <span className="font-medium text-neutral-900 tabular-nums">{N(rows.length)}</span>{' '}
+              record{rows.length === 1 ? '' : 's'}
+              {summary && tab === 'all' && filtersOn === 0
+                ? ` of ${N(summary.assets)}`
+                : ' in this view'}{' '}
+              · Inventory answers quantity; Assets answer identity.
+            </p>
+            {pageCount > 1 && (
+              <nav aria-label="Pagination" className="flex items-center gap-2">
+                <PageLink
+                  params={params}
+                  to={page - 1}
+                  disabled={page === 1}
+                  label="Previous"
+                />
+                <span className="text-xs text-neutral-600 tabular-nums">
+                  Page {N(page)} of {N(pageCount)}
+                </span>
+                <PageLink
+                  params={params}
+                  to={page + 1}
+                  disabled={page === pageCount}
+                  label="Next"
+                />
+              </nav>
+            )}
+          </div>
         </div>
       </main>
     </>
+  );
+}
+
+// A real link, so the page is bookmarkable and middle-clickable. The disabled
+// end is rendered as a span rather than a dead link — a link that goes nowhere
+// is still announced and focusable, which is worse than not offering it.
+function PageLink({
+  params,
+  to,
+  disabled,
+  label,
+}: {
+  params: Params;
+  to: number;
+  disabled: boolean;
+  label: string;
+}) {
+  const base =
+    'rounded-md border px-3 py-1.5 text-xs font-semibold uppercase tracking-wide transition-colors';
+  if (disabled) {
+    return (
+      <span
+        aria-disabled="true"
+        className={`${base} border-neutral-200 bg-white text-neutral-400`}
+      >
+        {label}
+      </span>
+    );
+  }
+  return (
+    <Link
+      href={`/assets?${queryFrom(params, { page: String(to) }).toString()}`}
+      aria-label={`${label} page`}
+      className={`${base} border-neutral-300 bg-white text-neutral-800 hover:bg-neutral-50`}
+    >
+      {label}
+    </Link>
   );
 }
 
