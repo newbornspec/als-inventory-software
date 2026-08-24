@@ -2,6 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Asset, AssetAuditStatus, AssetConditionGrade, AssetStockStatus } from '../assets/asset.entity';
+import { isAvailable } from '../assets/stock-status';
 import { AssetHistory } from '../assets/asset-history.entity';
 import { Batch } from '../batches/batch.entity';
 import { Lot } from '../batches/lot.entity';
@@ -614,7 +615,11 @@ export class ReportsService {
       kpis: {
         totalAssets: assets.length,
         activeAssets: active.length,
-        inStock: active.filter((a) => a.stockStatus === AssetStockStatus.IN_STOCK).length,
+        // AVAILABLE, not IN_STOCK: the column defaults to 'received' and the
+        // audit ingest writes 'audited', so counting the single 'in_stock'
+        // status reported ~0 for a warehouse full of stock. Same definition
+        // the dashboard uses — see assets/stock-status.ts.
+        inStock: active.filter((a) => isAvailable(a.stockStatus)).length,
         awaitingAudit: active.filter((a) => a.auditStatus == null).length,
         readyForSale: active.filter((a) => a.auditStatus === AssetAuditStatus.READY_FOR_SALE).length,
         soldUnits: soldAssetsInRange.length + soldRowsInRange.reduce((s, r) => s + r.quantity, 0),

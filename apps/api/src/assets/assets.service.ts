@@ -7,6 +7,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Asset, AssetStockStatus } from './asset.entity';
+import { AVAILABLE } from './stock-status';
 import { nextUnitId } from './unit-id';
 import { Batch, BatchStatus } from '../batches/batch.entity';
 import { AssetEventType, AssetHistory } from './asset-history.entity';
@@ -155,6 +156,15 @@ export class AssetsService {
     }
     if (query.stockStatus) {
       qb.andWhere('asset.stockStatus = :stockStatus', { stockStatus: query.stockStatus });
+    }
+    // The same AVAILABLE set the dashboard's "In stock" tile counts, so the
+    // figure and the list it links to are one query. Sold/shipped/disposed are
+    // excluded by construction — AVAILABLE names only held statuses — so this
+    // does not lean on the sold-exclusion rule above.
+    if (query.available === 'true') {
+      qb.andWhere('asset.stockStatus IN (:...availableStatuses)', {
+        availableStatuses: [...AVAILABLE],
+      });
     }
     if (query.conditionGrade) {
       qb.andWhere('asset.conditionGrade = :conditionGrade', {

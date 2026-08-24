@@ -270,7 +270,7 @@ export default async function ReportsPage({
 
   const kpiCards: { label: string; value: string; sub?: string; href: string; ranged?: boolean }[] = [
     { label: 'Total devices', value: String(k.totalAssets), sub: `${k.activeAssets} active`, href: '/assets' },
-    { label: 'In stock', value: String(k.inStock), href: '/assets?stockStatus=in_stock' },
+    { label: 'In stock', value: String(k.inStock), href: '/assets?available=true' },
     { label: 'Awaiting audit', value: String(k.awaitingAudit), href: '/assets' },
     { label: 'Ready for sale', value: String(k.readyForSale), href: '/assets?auditStatus=ready_for_sale' },
     { label: 'Units sold', value: String(k.soldUnits), sub: rangeLabel, href: '/sold', ranged: true },

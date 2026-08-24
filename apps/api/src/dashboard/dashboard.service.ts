@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Asset } from '../assets/asset.entity';
+import { AVAILABLE, COMMITTED, GONE } from '../assets/stock-status';
 import { LOW_STOCK_THRESHOLD } from '../stock/stock.service';
 import { UserRole } from '../users/user.entity';
 import { isScopedManager, type RequestUser } from '../common/ownership';
@@ -18,16 +19,14 @@ import type {
 // --- Status vocabulary -------------------------------------------------------
 // The codebase had five different, mutually inconsistent answers to "is this
 // device still ours?" (the old dashboard's version counted SOLD devices into
-// stock value, because it only tested for SHIPPED). These three lists are the
-// single definition this endpoint uses, and every query below refers to them by
-// name rather than restating a status list inline.
-
-// Gone: no longer inventory we hold.
-const GONE = ['sold', 'shipped', 'disposed'] as const;
-// On the shelf and free to allocate.
-const AVAILABLE = ['in_stock', 'received', 'audited', 'awaiting_audit', 'returned'] as const;
-// Spoken for but still on site.
-const COMMITTED = ['allocated', 'picked', 'packed'] as const;
+// stock value, because it only tested for SHIPPED). GONE/AVAILABLE/COMMITTED
+// are the single definition, and every query below refers to them by name
+// rather than restating a status list inline.
+//
+// They now live in assets/stock-status.ts rather than here, so the Assets
+// register can filter on exactly the sets this endpoint counts — the "In stock"
+// tile counted AVAILABLE while linking to a list filtered on 'in_stock' alone,
+// and a shared definition is what stops that happening again.
 
 // Devices in stock this long are reported as slow-moving. 180 days is the point
 // the ageing table's last bucket starts, so the two agree by construction.
