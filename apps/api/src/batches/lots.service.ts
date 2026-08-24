@@ -14,7 +14,15 @@ import {
 } from '../common/ownership';
 
 export interface LotWithCount extends Lot {
+  // LIVE — sold devices excluded, exactly like Batch.actualUnitCount
+  // (batches.service.ts:479) and like every list the register serves
+  // (assets.service.ts:137-139). This is the figure a sub-lot is DISPLAYED
+  // with, so its number always matches the rows you can actually see in it.
   actualUnitCount: number;
+  // Sold-inclusive, for the same reason the parent batch carries one: a
+  // destructive action has to be measured against everything the bucket holds,
+  // not just what is still sellable.
+  totalUnitCount: number;
 }
 
 @Injectable()
@@ -82,17 +90,34 @@ export class LotsService {
     await this.lots.delete(id);
   }
 
+  // This used to be a bare COUNT(*), which made a sub-lot the only count in the
+  // app that included sold devices. Everything it was compared against excludes
+  // them -- the parent's actualUnitCount, and the /assets lists that fill both
+  // the sub-lot table and the lot table -- so the arithmetic mixed two different
+  // populations: a lot that had sold a tranche out of its buckets reported
+  // "20 of 12 grouped", and its per-sub-lot bars sat at 100% on devices that had
+  // already left. Same split as the parent now: LIVE for what is displayed,
+  // everything for what a destructive action is measured against.
   private async withCounts(lots: Lot[]): Promise<LotWithCount[]> {
     if (lots.length === 0) return [];
+    const LIVE = `asset.stock_status != 'sold'`;
     const counts = await this.assets
       .createQueryBuilder('asset')
       .select('asset.lotId', 'lotId')
-      .addSelect('COUNT(*)', 'count')
+      .addSelect(`COUNT(*) FILTER (WHERE ${LIVE})`, 'live')
+      .addSelect('COUNT(*)', 'everything')
       .where('asset.lotId IN (:...ids)', { ids: lots.map((l) => l.id) })
       .groupBy('asset.lotId')
-      .getRawMany<{ lotId: string; count: string }>();
-    const countMap = new Map(counts.map((c) => [c.lotId, parseInt(c.count, 10)]));
-    return lots.map((l) => ({ ...l, actualUnitCount: countMap.get(l.id) ?? 0 }));
+      .getRawMany<{ lotId: string; live: string; everything: string }>();
+    const countMap = new Map(counts.map((c) => [c.lotId, c]));
+    return lots.map((l) => {
+      const r = countMap.get(l.id);
+      return {
+        ...l,
+        actualUnitCount: r ? parseInt(r.live, 10) : 0,
+        totalUnitCount: r ? parseInt(r.everything, 10) : 0,
+      };
+    });
   }
 
   private async nextLotNumber(): Promise<string> {
