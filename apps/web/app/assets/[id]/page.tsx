@@ -2,7 +2,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { apiFetch, ApiError, getSessionUser } from '@/lib/api-server';
 import { getLocations } from '@/lib/data';
-import { deleteAsset, type Asset } from '@/lib/actions/assets';
+import type { Asset } from '@/lib/actions/assets';
 import type { Batch } from '@/lib/actions/batches';
 import { Nav } from '@/app/components/nav';
 import { Breadcrumbs, type Crumb } from '@/app/components/breadcrumbs';
@@ -11,6 +11,7 @@ import { money } from '@/lib/money';
 import type { PhotoMeta } from '@/lib/actions/photos';
 import { AssetEditForm } from './edit-form';
 import { SellAssetButton } from './sell-button';
+import { DeleteAssetButton } from './delete-asset-button';
 import { AuditSection, type AssetAuditRecord } from './audit-section';
 import { PhotosSection } from './photos-section';
 import { HardwareSection } from './hardware-section';
@@ -140,13 +141,18 @@ export default async function AssetDetailPage({
   return (
     <>
       <Nav />
-      <main id="main-content" tabIndex={-1} className="min-h-screen bg-white text-neutral-950 px-4 py-6 sm:p-8">
+      <main
+        id="main-content"
+        tabIndex={-1}
+        className="min-h-screen bg-neutral-50 text-neutral-950 px-4 py-6 sm:px-8 sm:py-8"
+      >
+        <div className="mx-auto max-w-[90rem]">
         <Breadcrumbs items={crumbs} />
 
-        <div className="mt-3 flex items-start justify-between">
+        <div className="mt-3 flex flex-wrap items-start justify-between gap-3">
           <div>
-            <h1 className="text-2xl font-semibold">{asset.name}</h1>
-            <p className="mt-1 text-sm text-neutral-500">
+            <h1 className="text-2xl font-semibold tracking-tight">{asset.name}</h1>
+            <p className="mt-1 text-sm text-neutral-600">
               {asset.unitId && (
                 <>
                   Unit ID:{' '}
@@ -163,20 +169,18 @@ export default async function AssetDetailPage({
           <div className="flex items-center gap-2">
             {canSell && <SellAssetButton assetId={asset.id} name={asset.name} />}
             {canDelete && !isSold && (
-              <form action={deleteAsset.bind(null, asset.id)}>
-                <button
-                  type="submit"
-                  className="rounded-md border border-red-200 px-3 py-1.5 text-sm text-red-700 hover:bg-red-50"
-                >
-                  Delete
-                </button>
-              </form>
+              <DeleteAssetButton
+                assetId={asset.id}
+                name={asset.name}
+                tag={asset.tag}
+                auditCount={audits.length}
+              />
             )}
           </div>
         </div>
 
         {isSold && (
-          <div className="mt-4 max-w-2xl rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-700">
+          <div className="mt-4 max-w-2xl rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
             <strong>SOLD</strong> — this asset has left active inventory and is locked.
             {user?.role === 'admin' ? (
               <>
@@ -189,9 +193,13 @@ export default async function AssetDetailPage({
           </div>
         )}
 
-        <div className="mt-8 grid gap-8 md:grid-cols-2">
-          <section>
-            <h2 className="text-sm font-medium text-neutral-500">Details</h2>
+        {/* items-start, not the default stretch: these panels differ hugely in
+            height (Origin is one line, Details is a whole form), and stretching
+            them left tall empty boxes. Carded, the differences read as separate
+            things rather than as gaps in a column. */}
+        <div className="mt-4 grid items-start gap-4 md:grid-cols-2">
+          <section className="rounded-xl border border-neutral-200 bg-white p-4">
+            <h2 className="text-xs font-semibold uppercase tracking-wide text-neutral-900">Details</h2>
             {canEdit ? (
               <AssetEditForm asset={asset} locations={locations} />
             ) : (
@@ -229,8 +237,8 @@ export default async function AssetDetailPage({
             )}
           </section>
 
-          <section>
-            <h2 className="text-sm font-medium text-neutral-500">Origin</h2>
+          <section className="rounded-xl border border-neutral-200 bg-white p-4">
+            <h2 className="text-xs font-semibold uppercase tracking-wide text-neutral-900">Origin</h2>
             {/* Branch on asset.batchId, never on the lot fetch: the fetch's
                 catch(() => null) covers transient failures and narrower
                 permissions, and a failed fetch must degrade neutrally — not
@@ -291,8 +299,8 @@ export default async function AssetDetailPage({
           </div>
 
           {canEdit && costing && (
-            <section>
-              <h2 className="text-sm font-medium text-neutral-500">Costing &amp; profit</h2>
+            <section className="rounded-xl border border-neutral-200 bg-white p-4">
+              <h2 className="text-xs font-semibold uppercase tracking-wide text-neutral-900">Costing &amp; profit</h2>
               <dl className="mt-4 max-w-sm space-y-2 text-sm">
                 <div className="flex items-baseline justify-between">
                   <dt className="text-neutral-500">Allocated cost</dt>
@@ -342,8 +350,8 @@ export default async function AssetDetailPage({
             </section>
           )}
 
-          <section>
-            <h2 className="text-sm font-medium text-neutral-500">Lifecycle</h2>
+          <section className="rounded-xl border border-neutral-200 bg-white p-4">
+            <h2 className="text-xs font-semibold uppercase tracking-wide text-neutral-900">Lifecycle</h2>
             <ul className="mt-4 space-y-3">
               {lifecycle.map((e) => (
                 <li
@@ -369,8 +377,8 @@ export default async function AssetDetailPage({
             </ul>
           </section>
 
-          <section>
-            <h2 className="text-sm font-medium text-neutral-500">Label</h2>
+          <section className="rounded-xl border border-neutral-200 bg-white p-4">
+            <h2 className="text-xs font-semibold uppercase tracking-wide text-neutral-900">Label</h2>
             <div className="mt-4 flex items-start gap-6">
               <img
                 src={`/api/assets/${asset.id}/barcode?type=qr`}
@@ -390,6 +398,7 @@ export default async function AssetDetailPage({
               Open printable label →
             </Link>
           </section>
+        </div>
         </div>
       </main>
   </>

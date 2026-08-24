@@ -84,8 +84,8 @@ export function PhotosSection({
   }
 
   return (
-    <section>
-      <h2 className="text-sm font-medium text-neutral-500">Photos</h2>
+    <section className="rounded-xl border border-neutral-200 bg-white p-4">
+      <h2 className="text-xs font-semibold uppercase tracking-wide text-neutral-900">Photos</h2>
 
       <div className="mt-3 flex flex-wrap items-center gap-2">
         <input
