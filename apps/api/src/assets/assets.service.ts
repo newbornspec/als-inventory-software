@@ -116,6 +116,13 @@ export class AssetsService {
     // Palletised devices stay in lists (the register keeps them) — join the
     // pallet so rows can show and link the allocation.
     qb.leftJoinAndSelect('asset.pallet', 'pallet');
+    // ...and the pallet a sold device came off, so the register can answer
+    // "sold from where?" for a device whose live allocation was cleared.
+    // Identity only — this is a label, not a claim on stock.
+    qb.leftJoin('asset.soldFromPallet', 'soldFromPallet').addSelect([
+      'soldFromPallet.id',
+      'soldFromPallet.palletNumber',
+    ]);
     // The register's Lot column and the typed lot search need the batch, but
     // list rows only carry its identity — not costs or notes. Joined under its
     // own alias; the manager-scoping innerJoin above keeps 'ownerBatch'.
@@ -430,7 +437,9 @@ export class AssetsService {
       salePrice: salePrice != null && salePrice >= 0 ? salePrice : null,
       // A sold device has physically left the building, so it leaves its
       // pallet too -- otherwise the pallet's device count claims stock that
-      // is gone. The sell event in history records who and when.
+      // is gone. Where it sat is kept as history on sold_from_pallet_id,
+      // which nothing counts, so the record survives without the claim.
+      soldFromPalletId: before.palletId ?? before.soldFromPalletId ?? null,
       palletId: null,
       movedToPalletAt: null,
       movedToPalletById: null,
@@ -475,7 +484,9 @@ export class AssetsService {
       // A device sold WITH a pallet kept its link as the shipped manifest;
       // undoing the sale brings the device back WITHOUT the pallet — it
       // returns to its lot's pool, and the shipped pallet's record shrinks
-      // accordingly.
+      // accordingly. "Sold from" goes with it: the device is live stock again,
+      // so there is no sale for it to have come from.
+      soldFromPalletId: null,
       palletId: null,
       movedToPalletAt: null,
       movedToPalletById: null,

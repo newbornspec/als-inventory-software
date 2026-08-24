@@ -28,6 +28,11 @@ export interface Asset {
   // physically sits.
   palletId?: string | null;
   pallet?: { id: string; palletNumber: string } | null;
+  // Where a SOLD device came off. History, not allocation — the live pallet
+  // link is cleared on an individual sale so no open pallet keeps claiming
+  // stock that has gone.
+  soldFromPalletId?: string | null;
+  soldFromPallet?: { id: string; palletNumber: string } | null;
   // Identity of the origin lot only — list rows never carry lot costs/notes.
   batch?: { id: string; batchNumber: string } | null;
   // Auto-captured hardware audit (Phase 4). hardwareProfile is only present on
