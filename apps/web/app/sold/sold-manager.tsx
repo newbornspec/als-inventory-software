@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { ChevronDown, ChevronRight, PackageCheck, ShieldAlert } from 'lucide-react';
 import {
   bulkReturnSoldAssets,
   bulkReturnSoldPalletLines,
@@ -9,19 +10,26 @@ import {
   type SoldPalletLine,
 } from '@/lib/actions/sold';
 
-// The Sold page as a structured module, not a flat archive: sold devices are
-// grouped Batch → Sub-lot (mirroring the app's hierarchy), pallet goods by
-// pallet; groups expand/collapse; rows are checkbox-selectable for bulk
-// actions — admin returns (to the original location by default, or a chosen
-// destination) and CSV export.
+// The Sold archive: one row per sold line, newest first, with the pallet it
+// left on and whether that pallet still exists. Everything the old grouped
+// tree could do is still here — search, filters, selection, admin returns to
+// the original location or a chosen one, and CSV export of a selection.
+//
+// Serialized devices are kept as their own section rather than mixed into the
+// table: a pallet line is a QUANTITY of an anonymous variant, a device is ONE
+// identified unit, and the "Pallet status" column means nothing for a device
+// that was never on a pallet. The strip above the table always states how many
+// there are, so they can never be silently missing.
 
 interface Dest {
   id: string;
   label: string;
 }
 
-const cellCls = 'px-3 py-2';
-const filterCls = 'field-underline px-2 py-1.5 text-sm';
+const TH = 'px-4 py-3 text-left text-xs font-medium text-neutral-500';
+const TD = 'px-4 py-3 text-sm';
+const FILTER =
+  'rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700 focus:border-neutral-500 focus:outline-none';
 
 export function SoldManager({
   assets,
@@ -46,11 +54,12 @@ export function SoldManager({
   const [fPallet, setFPallet] = useState('');
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
+  const [showDates, setShowDates] = useState(false);
 
-  // --- selection + tree state ---
   const [selA, setSelA] = useState<Set<string>>(new Set());
   const [selP, setSelP] = useState<Set<string>>(new Set());
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [showSerialized, setShowSerialized] = useState(false);
   const [destBatch, setDestBatch] = useState('');
   const [destPallet, setDestPallet] = useState('');
   const [busy, setBusy] = useState(false);
@@ -59,7 +68,11 @@ export function SoldManager({
 
   const man = (a: SoldAsset) => a.manufacturer ?? a.product?.manufacturer ?? '';
   const mod = (a: SoldAsset) => a.model ?? a.product?.model ?? '';
-  const date = (d: string | null | undefined) => (d ? new Date(d).toLocaleString('en-GB') : '—');
+  const dateTime = (d: string | null | undefined) =>
+    d ? new Date(d).toLocaleString('en-GB') : '—';
+  // The table wants the day only — the full timestamp lives in the expanded row.
+  const dateOnly = (d: string | null | undefined) =>
+    d ? new Date(d).toLocaleDateString('en-GB', { timeZone: 'Europe/London' }) : '—';
 
   const inDates = (d: string | null | undefined) => {
     if (!from && !to) return true;
@@ -85,81 +98,42 @@ export function SoldManager({
 
   const filteredPallet = useMemo(() => {
     const needle = q.trim().toLowerCase();
-    return palletLines.filter((l) => {
-      // Same key shape as palletOptions below, or filtering to a deleted
-      // pallet would match nothing.
-      if (fPallet && (l.palletId ?? `deleted:${l.palletNumber}`) !== fPallet) return false;
-      if (fSoldBy && (l.soldBy?.name ?? '') !== fSoldBy) return false;
-      if (!inDates(l.soldAt)) return false;
-      if (!needle) return true;
-      return [l.variant, l.palletNumber].some((v) => (v ?? '').toLowerCase().includes(needle));
-    });
-  }, [palletLines, q, fPallet, fSoldBy, from, to]);
+    return palletLines
+      .filter((l) => {
+        // Same key shape as palletOptions below, or filtering to a deleted
+        // pallet would match nothing.
+        if (fPallet && (l.palletId ?? `deleted:${l.palletNumber}`) !== fPallet) return false;
+        if (fSoldBy && (l.soldBy?.name ?? '') !== fSoldBy) return false;
+        if (fMan && (l.product?.manufacturer ?? '') !== fMan) return false;
+        // A lot filter is about devices; pallet quantities have no lot, so the
+        // table empties rather than pretending the filter did not apply.
+        if (fBatch) return false;
+        if (!inDates(l.soldAt)) return false;
+        if (!needle) return true;
+        return [l.variant, l.palletNumber, l.soldBy?.name].some((v) =>
+          (v ?? '').toLowerCase().includes(needle),
+        );
+      })
+      .sort((x, y) => (Date.parse(y.soldAt ?? '') || 0) - (Date.parse(x.soldAt ?? '') || 0));
+  }, [palletLines, q, fPallet, fSoldBy, fMan, fBatch, from, to]);
 
-  // --- grouping: Batch → Sub-lot → devices ---
-  const assetGroups = useMemo(() => {
-    const byBatch = new Map<string, { label: string; lots: Map<string, { label: string; items: SoldAsset[] }> }>();
-    for (const a of filteredAssets) {
-      const bKey = a.batch?.id ?? 'none';
-      const bLabel = a.batch?.batchNumber ?? 'No lot';
-      if (!byBatch.has(bKey)) byBatch.set(bKey, { label: bLabel, lots: new Map() });
-      const g = byBatch.get(bKey)!;
-      const lKey = a.lot?.id ?? 'none';
-      const lLabel = a.lot?.lotNumber ?? 'No sub-lot';
-      if (!g.lots.has(lKey)) g.lots.set(lKey, { label: lLabel, items: [] });
-      g.lots.get(lKey)!.items.push(a);
-    }
-    return [...byBatch.entries()]
-      .map(([key, g]) => ({
-        key,
-        label: g.label,
-        count: [...g.lots.values()].reduce((s, l) => s + l.items.length, 0),
-        lots: [...g.lots.entries()]
-          .map(([lk, l]) => ({ key: `${key}|${lk}`, label: l.label, items: l.items }))
-          .sort((x, y) => x.label.localeCompare(y.label)),
-      }))
-      .sort((x, y) => y.label.localeCompare(x.label));
-  }, [filteredAssets]);
-
-  const palletGroups = useMemo(() => {
-    const byPallet = new Map<string, { label: string; items: SoldPalletLine[]; last: number }>();
-    for (const l of filteredPallet) {
-      // Namespace the fallback key. pallet_sold_lines.pallet_id is ON DELETE SET
-      // NULL, so a deleted pallet's rows survive with only their number — and
-      // numbers are typed by the operator now, so one can legitimately be reused.
-      // Keying a live pallet on a bare number would merge the dead pallet's
-      // history into it.
-      const key = l.palletId ?? `deleted:${l.palletNumber}`;
-      const label = l.palletNumber + (l.palletId ? '' : ' (pallet deleted)');
-      const at = Date.parse(l.soldAt ?? '') || 0;
-      if (!byPallet.has(key)) byPallet.set(key, { label, items: [], last: at });
-      const g = byPallet.get(key)!;
-      g.items.push(l);
-      if (at > g.last) g.last = at;
-    }
-    return [...byPallet.entries()]
-      .map(([key, g]) => ({
-        key: `p:${key}`,
-        label: g.label,
-        units: g.items.reduce((s, x) => s + x.quantity, 0),
-        items: g.items,
-        last: g.last,
-      }))
-      // Most recently sold first. Sorting on the label was only chronological
-      // because generated numbers were zero-padded; with typed numbers "10"
-      // sorts before "9".
-      .sort((x, y) => y.last - x.last);
-  }, [filteredPallet]);
-
-  // Filter dropdown options come from the full (unfiltered) data.
+  // Filter options come from the FULL data, so a filter can never offer a
+  // value that matches nothing.
   const batchOptions = useMemo(() => {
     const m = new Map<string, string>();
     for (const a of assets) m.set(a.batch?.id ?? 'none', a.batch?.batchNumber ?? 'No lot');
     return [...m.entries()].sort((x, y) => y[1].localeCompare(x[1]));
   }, [assets]);
   const manOptions = useMemo(
-    () => [...new Set(assets.map(man).filter(Boolean))].sort(),
-    [assets],
+    () =>
+      [
+        ...new Set(
+          [...assets.map(man), ...palletLines.map((l) => l.product?.manufacturer ?? '')].filter(
+            Boolean,
+          ),
+        ),
+      ].sort(),
+    [assets, palletLines],
   );
   const soldByOptions = useMemo(
     () =>
@@ -172,18 +146,12 @@ export function SoldManager({
     return [...m.entries()].sort((x, y) => y[1].localeCompare(x[1]));
   }, [palletLines]);
 
-  const hasFilters = q || fBatch || fMan || fSoldBy || fPallet || from || to;
+  const hasFilters = Boolean(q || fBatch || fMan || fSoldBy || fPallet || from || to);
+  const dispatched =
+    palletLines.reduce((s, l) => s + l.quantity, 0) + assets.length;
 
-  // --- selection helpers ---
-  const toggleIn = (set: Set<string>, ids: string[], on: boolean) => {
-    const next = new Set(set);
-    for (const id of ids) (on ? next.add(id) : next.delete(id));
-    return next;
-  };
-  const allIn = (set: Set<string>, ids: string[]) => ids.length > 0 && ids.every((id) => set.has(id));
-
-  function toggleCollapse(key: string) {
-    setCollapsed((c) => {
+  function toggleExpand(key: string) {
+    setExpanded((c) => {
       const next = new Set(c);
       if (next.has(key)) next.delete(key);
       else next.add(key);
@@ -191,7 +159,7 @@ export function SoldManager({
     });
   }
 
-  // --- bulk actions ---
+  // --- bulk actions (unchanged behaviour) ---
   async function doReturnAssets(batchId?: string) {
     const ids = [...selA];
     const where = batchId
@@ -203,11 +171,10 @@ export function SoldManager({
     setNotice(null);
     const res = await bulkReturnSoldAssets(ids, batchId);
     setBusy(false);
-    if (res.error) {
-      setError(res.error);
-      return;
-    }
-    setNotice(`Returned ${res.returned} device${res.returned === 1 ? '' : 's'}${res.skipped ? ` (${res.skipped} skipped)` : ''}.`);
+    if (res.error) return setError(res.error);
+    setNotice(
+      `Returned ${res.returned} device${res.returned === 1 ? '' : 's'}${res.skipped ? ` (${res.skipped} skipped)` : ''}.`,
+    );
     setSelA(new Set());
     router.refresh();
   }
@@ -217,17 +184,15 @@ export function SoldManager({
     const where = palletId
       ? palletDests.find((d) => d.id === palletId)?.label ?? 'the selected pallet'
       : 'their original pallets';
-    if (!confirm(`Return ${ids.length} sold quantit${ids.length === 1 ? 'y' : 'ies'} to ${where}?`)) return;
+    if (!confirm(`Return ${ids.length} sold quantit${ids.length === 1 ? 'y' : 'ies'} to ${where}?`))
+      return;
     setBusy(true);
     setError(null);
     setNotice(null);
     const res = await bulkReturnSoldPalletLines(ids, palletId);
     setBusy(false);
-    if (res.error) {
-      setError(res.error);
-      return;
-    }
-    // The reasons matter more than the count: the usual cause of a skip now is
+    if (res.error) return setError(res.error);
+    // The reasons matter more than the count: the usual cause of a skip is
     // that the original pallet was merged, and the message names where to
     // return to instead.
     const why = res.reasons?.length ? ` ${res.reasons.join(' ')}` : '';
@@ -247,33 +212,47 @@ export function SoldManager({
     a.click();
   }
 
+  function exportPallet() {
+    const rows = filteredPallet.filter((l) => selP.has(l.id));
+    downloadCsv(
+      'sold-pallet-goods.csv',
+      ['Item', 'Quantity', 'Pallet', 'Pallet status', 'Date sold', 'Sold by'],
+      rows.map((l) => [
+        l.variant,
+        String(l.quantity),
+        l.palletNumber,
+        l.palletId ? 'Active' : 'Deleted',
+        dateTime(l.soldAt),
+        l.soldBy?.name ?? '',
+      ]),
+    );
+  }
+
   function exportAssets() {
     const rows = filteredAssets.filter((a) => selA.has(a.id));
     downloadCsv(
       'sold-devices.csv',
       ['Name', 'Manufacturer', 'Model', 'Serial', 'Tag', 'Lot', 'Sub-lot', 'Date sold', 'Sold by'],
       rows.map((a) => [
-        a.name, man(a), mod(a), a.serialNumber ?? '', a.tag,
-        a.batch?.batchNumber ?? '', a.lot?.lotNumber ?? '', date(a.soldAt), a.soldBy?.name ?? '',
+        a.name,
+        man(a),
+        mod(a),
+        a.serialNumber ?? '',
+        a.tag,
+        a.batch?.batchNumber ?? '',
+        a.lot?.lotNumber ?? '',
+        dateTime(a.soldAt),
+        a.soldBy?.name ?? '',
       ]),
     );
   }
 
-  function exportPallet() {
-    const rows = filteredPallet.filter((l) => selP.has(l.id));
-    downloadCsv(
-      'sold-pallet-goods.csv',
-      ['Item', 'Quantity', 'Pallet', 'Date sold', 'Sold by'],
-      rows.map((l) => [l.variant, String(l.quantity), l.palletNumber, date(l.soldAt), l.soldBy?.name ?? '']),
-    );
-  }
-
-  const chk = 'h-4 w-4 accent-emerald-600';
   const btn =
-    'rounded-md border border-[var(--control-border)] px-2.5 py-1 text-xs text-neutral-900 hover:bg-neutral-100 disabled:opacity-50';
+    'rounded-md border border-[var(--control-border)] bg-white px-3 py-1.5 text-xs font-medium text-neutral-800 hover:bg-neutral-50 disabled:opacity-50';
 
   function BulkBar({
     count,
+    noun,
     dests,
     dest,
     setDest,
@@ -283,6 +262,7 @@ export function SoldManager({
     onClear,
   }: {
     count: number;
+    noun: string;
     dests: Dest[];
     dest: string;
     setDest: (v: string) => void;
@@ -293,339 +273,439 @@ export function SoldManager({
   }) {
     if (count === 0) return null;
     return (
-      <div className="mt-2 flex flex-wrap items-center gap-2 rounded-md border border-neutral-200 bg-neutral-50 px-3 py-2">
-        <span className="text-xs font-medium text-neutral-900">{count} selected</span>
-        {isAdmin && (
-          <>
-            <button onClick={onOriginal} disabled={busy} className={btn}>
-              {busy ? 'Working…' : 'Return to original location'}
-            </button>
-            <span className="flex items-center gap-1">
-              <select aria-label="Return destination" value={dest} onChange={(e) => setDest(e.target.value)} className={filterCls + ' py-1 text-xs'}>
-                <option value="">— other destination —</option>
+      <div className="mb-3 flex flex-wrap items-center gap-3 rounded-lg border border-[#1a6ef5] bg-blue-50 px-4 py-2.5">
+        <span className="text-sm font-medium text-neutral-950">
+          {count} {noun}
+          {count === 1 ? '' : 's'} selected
+        </span>
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          {isAdmin && (
+            <>
+              <button onClick={onOriginal} disabled={busy} className={btn}>
+                Return to original
+              </button>
+              <select
+                value={dest}
+                onChange={(e) => setDest(e.target.value)}
+                aria-label={`Return ${noun}s to a chosen destination`}
+                className={FILTER}
+              >
+                <option value="">Choose destination…</option>
                 {dests.map((d) => (
-                  <option key={d.id} value={d.id}>{d.label}</option>
+                  <option key={d.id} value={d.id}>
+                    {d.label}
+                  </option>
                 ))}
               </select>
               <button onClick={onChosen} disabled={busy || !dest} className={btn}>
                 Return there
               </button>
-            </span>
-          </>
-        )}
-        <button onClick={onExport} disabled={busy} className={btn}>
-          Export selected (CSV)
-        </button>
-        <button onClick={onClear} disabled={busy} className="text-xs text-neutral-500 hover:text-neutral-700">
-          Clear
-        </button>
+            </>
+          )}
+          <button onClick={onExport} disabled={busy} className={btn}>
+            Export selected (CSV)
+          </button>
+          <button onClick={onClear} disabled={busy} className="text-xs text-neutral-600 hover:underline">
+            Clear
+          </button>
+        </div>
       </div>
     );
   }
 
   return (
     <div className="mt-6">
-      {/* Filters */}
-      <div className="flex flex-wrap items-center gap-2">
-        <input
-          aria-label="Search sold items"
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          placeholder="Search tag, serial, name, make, model, lot…"
-          className={filterCls + ' w-full min-w-0 flex-1 sm:w-auto sm:min-w-[16rem]'}
-        />
-        <select aria-label="Filter by lot" value={fBatch} onChange={(e) => setFBatch(e.target.value)} className={filterCls}>
-          <option value="">All lots</option>
-          {batchOptions.map(([id, label]) => (
-            <option key={id} value={id}>{label}</option>
-          ))}
-        </select>
-        <select aria-label="Filter by pallet" value={fPallet} onChange={(e) => setFPallet(e.target.value)} className={filterCls}>
-          <option value="">All pallets</option>
-          {palletOptions.map(([id, label]) => (
-            <option key={id} value={id}>{label}</option>
-          ))}
-        </select>
-        <select aria-label="Filter by manufacturer" value={fMan} onChange={(e) => setFMan(e.target.value)} className={filterCls}>
-          <option value="">All manufacturers</option>
-          {manOptions.map((m) => (
-            <option key={m} value={m}>{m}</option>
-          ))}
-        </select>
-        <select aria-label="Filter by who sold it" value={fSoldBy} onChange={(e) => setFSoldBy(e.target.value)} className={filterCls}>
-          <option value="">Sold by anyone</option>
-          {soldByOptions.map((s) => (
-            <option key={s} value={s}>{s}</option>
-          ))}
-        </select>
-        <label className="flex items-center gap-1 text-xs text-neutral-500">
-          from <input type="date" aria-label="Sold from date" value={from} onChange={(e) => setFrom(e.target.value)} className={filterCls} />
-        </label>
-        <label className="flex items-center gap-1 text-xs text-neutral-500">
-          to <input type="date" aria-label="Sold to date" value={to} onChange={(e) => setTo(e.target.value)} className={filterCls} />
-        </label>
-        {hasFilters && (
-          <button
-            onClick={() => { setQ(''); setFBatch(''); setFMan(''); setFSoldBy(''); setFPallet(''); setFrom(''); setTo(''); }}
-            className="text-xs text-neutral-500 hover:text-neutral-700"
+      {/* --- search + filters ------------------------------------------- */}
+      <div className="rounded-xl border border-neutral-200 bg-white p-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <label htmlFor="sold-search" className="sr-only">
+            Search pallets, items or operator
+          </label>
+          <input
+            id="sold-search"
+            type="search"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Search pallets, items, or operator…"
+            className={`${FILTER} min-w-0 flex-1`}
+          />
+          <select
+            value={fBatch}
+            onChange={(e) => setFBatch(e.target.value)}
+            aria-label="Filter by lot"
+            className={FILTER}
           >
-            Clear filters
+            <option value="">All lots</option>
+            {batchOptions.map(([id, label]) => (
+              <option key={id} value={id}>
+                {label}
+              </option>
+            ))}
+          </select>
+          <select
+            value={fPallet}
+            onChange={(e) => setFPallet(e.target.value)}
+            aria-label="Filter by pallet"
+            className={FILTER}
+          >
+            <option value="">All pallets</option>
+            {palletOptions.map(([id, label]) => (
+              <option key={id} value={id}>
+                {label}
+              </option>
+            ))}
+          </select>
+          <select
+            value={fMan}
+            onChange={(e) => setFMan(e.target.value)}
+            aria-label="Filter by manufacturer"
+            className={FILTER}
+          >
+            <option value="">All manufacturers</option>
+            {manOptions.map((m) => (
+              <option key={m} value={m}>
+                {m}
+              </option>
+            ))}
+          </select>
+          <select
+            value={fSoldBy}
+            onChange={(e) => setFSoldBy(e.target.value)}
+            aria-label="Filter by who sold it"
+            className={FILTER}
+          >
+            <option value="">Sold by anyone</option>
+            {soldByOptions.map((n) => (
+              <option key={n} value={n}>
+                {n}
+              </option>
+            ))}
+          </select>
+          {/* Date range kept from the previous page — behind a toggle so the
+              bar reads as the mockup until you need it. */}
+          <button
+            type="button"
+            onClick={() => setShowDates((v) => !v)}
+            aria-expanded={showDates}
+            className={FILTER + (from || to ? ' border-[#1a6ef5] text-[#1a6ef5]' : '')}
+          >
+            Dates{from || to ? ' •' : ''}
           </button>
+          {hasFilters && (
+            <button
+              onClick={() => {
+                setQ('');
+                setFBatch('');
+                setFMan('');
+                setFSoldBy('');
+                setFPallet('');
+                setFrom('');
+                setTo('');
+              }}
+              className="text-sm text-neutral-600 hover:underline"
+            >
+              Clear
+            </button>
+          )}
+        </div>
+        {showDates && (
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <label htmlFor="sold-from" className="text-xs text-neutral-600">
+              Sold from
+            </label>
+            <input
+              id="sold-from"
+              type="date"
+              value={from}
+              onChange={(e) => setFrom(e.target.value)}
+              className={FILTER}
+            />
+            <label htmlFor="sold-to" className="text-xs text-neutral-600">
+              to
+            </label>
+            <input
+              id="sold-to"
+              type="date"
+              value={to}
+              onChange={(e) => setTo(e.target.value)}
+              className={FILTER}
+            />
+          </div>
         )}
       </div>
 
-      {(notice || error) && (
-        <p
-          role={error ? 'alert' : 'status'}
-          className={`mt-3 text-sm ${error ? 'text-red-700' : 'text-emerald-800'}`}
-        >
-          {error ?? notice}
+      {/* --- serialized devices strip -----------------------------------
+          Always states the number, so serialized stock can never be quietly
+          missing from a page that claims to show what was sold. */}
+      <div className="mt-3 flex flex-wrap items-center gap-3 rounded-xl border border-neutral-200 bg-neutral-50 px-4 py-3">
+        <ShieldAlert className="size-4 shrink-0 text-neutral-500" aria-hidden="true" />
+        <p className="text-sm text-neutral-700">
+          Serialized devices: <span className="font-medium">{filteredAssets.length} sold</span>
+          {filteredAssets.length === 0 && (
+            <span className="text-neutral-500"> (no serialized items match this view)</span>
+          )}
+        </p>
+        {filteredAssets.length > 0 && (
+          <button
+            type="button"
+            onClick={() => setShowSerialized((v) => !v)}
+            aria-expanded={showSerialized}
+            className="text-sm font-medium text-[#1a6ef5] hover:underline"
+          >
+            {showSerialized ? 'Hide devices' : 'Show devices'}
+          </button>
+        )}
+        <span className="ml-auto text-xs text-neutral-500">
+          Counted separately — a device is one identified unit, not a quantity
+        </span>
+      </div>
+
+      {notice && (
+        <p role="status" className="mt-3 text-sm text-emerald-700">
+          {notice}
+        </p>
+      )}
+      {error && (
+        <p role="alert" className="mt-3 text-sm text-red-700">
+          {error}
         </p>
       )}
 
-      {/* ============ Serialized devices: Batch → Sub-lot → device ============ */}
-      <section className="mt-6">
-        <div className="flex flex-wrap items-center gap-3">
-          <label className="flex items-center gap-2 text-sm font-medium text-neutral-700">
-            <input
-              type="checkbox"
-              className={chk}
-              checked={allIn(selA, filteredAssets.map((a) => a.id))}
-              onChange={(e) => setSelA(toggleIn(selA, filteredAssets.map((a) => a.id), e.target.checked))}
-              aria-label="Select all devices"
-            />
-          </label>
-          <h2 className="text-sm font-medium text-neutral-800">Serialized devices</h2>
-          <span className="text-sm text-neutral-500">
-            {filteredAssets.length}{hasFilters ? ` of ${assets.length}` : ''} sold
-          </span>
-        </div>
+      {/* --- serialized devices table (revealed from the strip) ---------- */}
+      {showSerialized && filteredAssets.length > 0 && (
+        <section className="mt-3">
+          <BulkBar
+            count={selA.size}
+            noun="device"
+            dests={batchDests}
+            dest={destBatch}
+            setDest={setDestBatch}
+            onOriginal={() => doReturnAssets()}
+            onChosen={() => doReturnAssets(destBatch)}
+            onExport={exportAssets}
+            onClear={() => setSelA(new Set())}
+          />
+          <div role="region" aria-label="Sold devices" tabIndex={0} className="overflow-x-auto rounded-xl border border-neutral-200 bg-white">
+            <table className="w-full border-collapse text-left">
+              <caption className="sr-only">Serialized devices that have been sold</caption>
+              <thead className="border-b border-neutral-200">
+                <tr>
+                  <th scope="col" className={`${TH} w-10`}>
+                    <span className="sr-only">Select</span>
+                  </th>
+                  <th scope="col" className={TH}>Unit</th>
+                  <th scope="col" className={TH}>Device</th>
+                  <th scope="col" className={`${TH} hidden sm:table-cell`}>Lot</th>
+                  <th scope="col" className={TH}>Date sold</th>
+                  <th scope="col" className={TH}>Sold by</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredAssets.map((a) => (
+                  <tr key={a.id} className="border-b border-neutral-100 last:border-b-0">
+                    <td className={TD}>
+                      <input
+                        type="checkbox"
+                        checked={selA.has(a.id)}
+                        onChange={(e) =>
+                          setSelA((s) => {
+                            const n = new Set(s);
+                            if (e.target.checked) n.add(a.id);
+                            else n.delete(a.id);
+                            return n;
+                          })
+                        }
+                        aria-label={`Select ${a.name}`}
+                        className="size-4 accent-[#1a6ef5]"
+                      />
+                    </td>
+                    <td className={`${TD} font-mono text-xs text-neutral-700`}>{a.tag}</td>
+                    <td className={`${TD} text-neutral-900`}>
+                      {[man(a), mod(a)].filter(Boolean).join(' ') || a.name}
+                      {a.serialNumber && (
+                        <span className="ml-2 font-mono text-xs text-neutral-500">
+                          {a.serialNumber}
+                        </span>
+                      )}
+                    </td>
+                    <td className={`${TD} hidden text-neutral-600 sm:table-cell`}>
+                      {a.batch?.batchNumber ?? '—'}
+                    </td>
+                    <td className={`${TD} text-neutral-500`}>{dateOnly(a.soldAt)}</td>
+                    <td className={`${TD} text-neutral-700`}>{a.soldBy?.name ?? '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
 
-        <BulkBar
-          count={selA.size}
-          dests={batchDests}
-          dest={destBatch}
-          setDest={setDestBatch}
-          onOriginal={() => void doReturnAssets()}
-          onChosen={() => void doReturnAssets(destBatch)}
-          onExport={exportAssets}
-          onClear={() => setSelA(new Set())}
-        />
-
-        <div className="mt-3 space-y-3">
-          {assetGroups.map((g) => {
-            const gIds = g.lots.flatMap((l) => l.items.map((a) => a.id));
-            const open = !collapsed.has(g.key);
-            return (
-              <div key={g.key} className="rounded-lg border border-neutral-200">
-                <div className="flex items-center gap-2 bg-white px-3 py-2">
-                  <button
-                    onClick={() => toggleCollapse(g.key)}
-                    aria-expanded={open}
-                    aria-label={`${open ? 'Collapse' : 'Expand'} ${g.label}`}
-                    className="w-5 text-neutral-600 hover:text-neutral-900"
-                  >
-                    <span aria-hidden="true">{open ? '▾' : '▸'}</span>
-                  </button>
-                  <input
-                    type="checkbox"
-                    className={chk}
-                    checked={allIn(selA, gIds)}
-                    onChange={(e) => setSelA(toggleIn(selA, gIds, e.target.checked))}
-                    aria-label={`Select all in ${g.label}`}
-                  />
-                  <h3 className="font-medium text-neutral-950">{g.label}</h3>
-                  <span className="text-xs text-neutral-500">
-                    {g.count} item{g.count === 1 ? '' : 's'} sold
-                  </span>
-                </div>
-
-                {open &&
-                  g.lots.map((l) => {
-                    const lIds = l.items.map((a) => a.id);
-                    const lOpen = !collapsed.has(l.key);
-                    return (
-                      <div key={l.key} className="border-t border-neutral-200">
-                        <div className="flex items-center gap-2 px-3 py-1.5 pl-8">
-                          <button
-                            onClick={() => toggleCollapse(l.key)}
-                            aria-expanded={lOpen}
-                            aria-label={`${lOpen ? 'Collapse' : 'Expand'} ${l.label}`}
-                            className="w-5 text-neutral-600 hover:text-neutral-900"
-                          >
-                            <span aria-hidden="true">{lOpen ? '▾' : '▸'}</span>
-                          </button>
-                          <input
-                            type="checkbox"
-                            className={chk}
-                            checked={allIn(selA, lIds)}
-                            onChange={(e) => setSelA(toggleIn(selA, lIds, e.target.checked))}
-                            aria-label={`Select all in ${l.label}`}
-                          />
-                          <span className="text-sm text-neutral-700">{l.label}</span>
-                          <span className="text-xs text-neutral-500">{l.items.length} item{l.items.length === 1 ? '' : 's'}</span>
-                        </div>
-                        {lOpen && (
-                          <div role="region" aria-label="Sold devices by lot" tabIndex={0} className="overflow-x-auto">
-                            <table className="w-full text-left text-xs">
-                              <caption className="sr-only">
-                                Sold devices with tag, specification, sale price and who sold them
-                              </caption>
-                              <thead className="text-neutral-500">
-                                <tr>
-                                  <th scope="col" className="w-10 px-3 py-1.5" />
-                                  <th scope="col" className={cellCls}>Name</th>
-                                  <th scope="col" className={cellCls}>Manufacturer</th>
-                                  <th scope="col" className={cellCls}>Model</th>
-                                  <th scope="col" className={cellCls}>Serial</th>
-                                  <th scope="col" className={cellCls}>Tag</th>
-                                  <th scope="col" className={cellCls}>Date sold</th>
-                                  <th scope="col" className={cellCls}>Sold by</th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {l.items.map((a) => (
-                                  <tr key={a.id} className="border-t border-neutral-200 hover:bg-neutral-50">
-                                    <td className="px-3 py-1.5 pl-12">
-                                      <input
-                                        type="checkbox"
-                                        className={chk}
-                                        checked={selA.has(a.id)}
-                                        onChange={(e) => setSelA(toggleIn(selA, [a.id], e.target.checked))}
-                                        aria-label={`Select ${a.name}`}
-                                      />
-                                    </td>
-                                    <td className={`${cellCls} text-neutral-950`}>{a.name}</td>
-                                    <td className={`${cellCls} text-neutral-500`}>{man(a) || '—'}</td>
-                                    <td className={`${cellCls} text-neutral-500`}>{mod(a) || '—'}</td>
-                                    <td className={`${cellCls} text-neutral-500`}>{a.serialNumber ?? '—'}</td>
-                                    <td className={`${cellCls} text-neutral-500`}>{a.tag}</td>
-                                    <td className={`${cellCls} text-neutral-500`}>{date(a.soldAt)}</td>
-                                    <td className={`${cellCls} text-neutral-500`}>{a.soldBy?.name ?? '—'}</td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-              </div>
-            );
-          })}
-          {assetGroups.length === 0 && (
-            <p className="rounded-lg border border-neutral-200 px-4 py-6 text-center text-sm text-neutral-500">
-              {hasFilters ? 'No sold devices match the filters.' : 'No sold devices yet.'}
-            </p>
-          )}
-        </div>
-      </section>
-
-      {/* ============ Pallet goods: grouped by pallet ============ */}
-      <section className="mt-8">
-        <div className="flex flex-wrap items-center gap-3">
-          <label className="flex items-center gap-2 text-sm font-medium text-neutral-700">
-            <input
-              type="checkbox"
-              className={chk}
-              checked={allIn(selP, filteredPallet.map((l) => l.id))}
-              onChange={(e) => setSelP(toggleIn(selP, filteredPallet.map((l) => l.id), e.target.checked))}
-              aria-label="Select all pallet goods"
-            />
-          </label>
-          <h2 className="text-sm font-medium text-neutral-800">Pallet goods</h2>
-          <span className="text-sm text-neutral-500">
-            {filteredPallet.reduce((s, l) => s + l.quantity, 0)} units
-            {hasFilters ? ` shown of ${palletLines.reduce((s, l) => s + l.quantity, 0)}` : ''}
-          </span>
-        </div>
-
+      {/* --- the pallet archive ------------------------------------------ */}
+      <section className="mt-3">
         <BulkBar
           count={selP.size}
+          noun="sold quantity"
           dests={palletDests}
           dest={destPallet}
           setDest={setDestPallet}
-          onOriginal={() => void doReturnPallet()}
-          onChosen={() => void doReturnPallet(destPallet)}
+          onOriginal={() => doReturnPallet()}
+          onChosen={() => doReturnPallet(destPallet)}
           onExport={exportPallet}
           onClear={() => setSelP(new Set())}
         />
 
-        <div className="mt-3 space-y-3">
-          {palletGroups.map((g) => {
-            const gIds = g.items.map((x) => x.id);
-            const open = !collapsed.has(g.key);
-            return (
-              <div key={g.key} className="rounded-lg border border-neutral-200">
-                <div className="flex items-center gap-2 bg-white px-3 py-2">
-                  <button
-                    onClick={() => toggleCollapse(g.key)}
-                    aria-expanded={open}
-                    aria-label={`${open ? 'Collapse' : 'Expand'} ${g.label}`}
-                    className="w-5 text-neutral-600 hover:text-neutral-900"
-                  >
-                    <span aria-hidden="true">{open ? '▾' : '▸'}</span>
-                  </button>
-                  <input
-                    type="checkbox"
-                    className={chk}
-                    checked={allIn(selP, gIds)}
-                    onChange={(e) => setSelP(toggleIn(selP, gIds, e.target.checked))}
-                    aria-label={`Select all from ${g.label}`}
-                  />
-                  <h3 className="font-medium text-neutral-950">{g.label}</h3>
-                  <span className="text-xs text-neutral-500">
-                    {g.units} unit{g.units === 1 ? '' : 's'} · {g.items.length} row{g.items.length === 1 ? '' : 's'}
-                  </span>
-                </div>
-                {open && (
-                  <div role="region" aria-label="Sold pallet lines" tabIndex={0} className="overflow-x-auto">
-                    <table className="w-full text-left text-xs">
-                      <caption className="sr-only">
-                        Sold pallet lines with quantity, sale price and who sold them
-                      </caption>
-                      <thead className="text-neutral-500">
-                        <tr>
-                          <th scope="col" className="w-10 px-3 py-1.5" />
-                          <th scope="col" className={cellCls}>Item</th>
-                          <th scope="col" className={cellCls}>Qty</th>
-                          <th scope="col" className={cellCls}>Date sold</th>
-                          <th scope="col" className={cellCls}>Sold by</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {g.items.map((l) => (
-                          <tr key={l.id} className="border-t border-neutral-200 hover:bg-neutral-50">
-                            <td className="px-3 py-1.5 pl-8">
-                              <input
-                                type="checkbox"
-                                className={chk}
-                                checked={selP.has(l.id)}
-                                onChange={(e) => setSelP(toggleIn(selP, [l.id], e.target.checked))}
-                                aria-label={`Select ${l.variant}`}
-                              />
-                            </td>
-                            <td className={`${cellCls} text-neutral-950`}>{l.variant}</td>
-                            <td className={`${cellCls} font-medium tabular-nums`}>{l.quantity}</td>
-                            <td className={`${cellCls} text-neutral-500`}>{date(l.soldAt)}</td>
-                            <td className={`${cellCls} text-neutral-500`}>{l.soldBy?.name ?? '—'}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </div>
-            );
-          })}
-          {palletGroups.length === 0 && (
-            <p className="rounded-lg border border-neutral-200 px-4 py-6 text-center text-sm text-neutral-500">
-              {hasFilters ? 'No sold pallet goods match the filters.' : 'No sold pallet goods yet.'}
-            </p>
-          )}
+        <div role="region" aria-label="Sold pallet goods" tabIndex={0} className="overflow-x-auto rounded-xl border border-neutral-200 bg-white">
+          <table className="w-full border-collapse text-left">
+            <caption className="sr-only">
+              Pallet quantities that have been sold, newest first
+            </caption>
+            <thead className="border-b border-neutral-200">
+              <tr>
+                <th scope="col" className={TH}>Pallet / Lot ID</th>
+                <th scope="col" className={TH}>Items sold details</th>
+                <th scope="col" className={`${TH} text-right`}>Qty</th>
+                <th scope="col" className={`${TH} hidden sm:table-cell`}>Date sold</th>
+                <th scope="col" className={`${TH} hidden md:table-cell`}>Sold by</th>
+                <th scope="col" className={TH}>Pallet status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredPallet.map((l) => {
+                const open = expanded.has(l.id);
+                const live = Boolean(l.palletId);
+                const p = l.product;
+                return (
+                  <tr key={l.id} className="border-b border-neutral-100 align-top last:border-b-0">
+                    <th scope="row" className={`${TD} font-normal`}>
+                      <button
+                        type="button"
+                        onClick={() => toggleExpand(l.id)}
+                        aria-expanded={open}
+                        className="flex items-center gap-1.5 text-left"
+                      >
+                        {open ? (
+                          <ChevronDown className="size-4 shrink-0 text-neutral-400" aria-hidden="true" />
+                        ) : (
+                          <ChevronRight className="size-4 shrink-0 text-neutral-400" aria-hidden="true" />
+                        )}
+                        <span className="font-mono text-sm font-semibold text-neutral-900">
+                          {l.palletNumber}
+                        </span>
+                      </button>
+                    </th>
+                    <td className={TD}>
+                      <span className="flex items-start gap-2">
+                        <input
+                          type="checkbox"
+                          checked={selP.has(l.id)}
+                          onChange={(e) =>
+                            setSelP((s) => {
+                              const n = new Set(s);
+                              if (e.target.checked) n.add(l.id);
+                              else n.delete(l.id);
+                              return n;
+                            })
+                          }
+                          aria-label={`Select ${l.variant} from ${l.palletNumber}`}
+                          className="mt-0.5 size-4 shrink-0 accent-[#1a6ef5]"
+                        />
+                        <span className="min-w-0">
+                          <span className="block text-neutral-800">{l.variant}</span>
+                          {open && (
+                            <span className="mt-1 block text-xs text-neutral-500">
+                              {[
+                                p?.manufacturer,
+                                p?.model,
+                                p?.chassis,
+                                p?.cpu,
+                                p?.gen,
+                                p?.ramGb ? `${p.ramGb}GB` : null,
+                                p?.storage,
+                              ]
+                                .filter(Boolean)
+                                .join(' · ') || 'No specification recorded for this line'}
+                              <span className="mt-0.5 block">Sold {dateTime(l.soldAt)}</span>
+                              {!live && (
+                                <span className="mt-0.5 block">
+                                  The pallet record has been deleted — this sale is kept as history.
+                                </span>
+                              )}
+                            </span>
+                          )}
+                        </span>
+                      </span>
+                    </td>
+                    <td className={`${TD} text-right font-semibold tabular-nums text-neutral-900`}>
+                      {l.quantity}
+                    </td>
+                    <td className={`${TD} hidden whitespace-nowrap text-neutral-500 sm:table-cell`}>
+                      {dateOnly(l.soldAt)}
+                    </td>
+                    <td className={`${TD} hidden md:table-cell`}>
+                      <span className="flex items-center gap-2 text-neutral-700">
+                        <span className="size-1.5 rounded-full bg-neutral-400" aria-hidden="true" />
+                        {l.soldBy?.name ?? '—'}
+                      </span>
+                    </td>
+                    <td className={TD}>
+                      {/* Real state, not decoration: pallet_sold_lines.pallet_id
+                          is ON DELETE SET NULL, so a null id means the pallet
+                          record itself is gone while the sale survives. */}
+                      <span
+                        className={
+                          'rounded px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide ' +
+                          (live
+                            ? 'bg-emerald-50 text-emerald-700'
+                            : 'bg-red-50 text-red-700')
+                        }
+                      >
+                        {live ? 'Active' : 'Deleted'}
+                      </span>
+                    </td>
+                  </tr>
+                );
+              })}
+              {filteredPallet.length === 0 && (
+                <tr>
+                  <td colSpan={6} className="px-4 py-12 text-center text-sm text-neutral-500">
+                    {palletLines.length === 0
+                      ? 'Nothing has been sold from a pallet yet.'
+                      : 'No sold pallet goods match this view.'}
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
         </div>
+
+        <p className="mt-3 text-xs text-neutral-500">
+          Showing {filteredPallet.length} of {palletLines.length} sold pallet line
+          {palletLines.length === 1 ? '' : 's'}
+          {dispatched > 0 && <> · {dispatched.toLocaleString('en-GB')} units dispatched in total</>}
+          {isAdmin
+            ? ' · Returns put stock back where it came from, or somewhere you choose.'
+            : ' · Only an administrator can return items to inventory.'}
+        </p>
       </section>
+    </div>
+  );
+}
+
+export function DispatchedCard({ units }: { units: number }) {
+  return (
+    <div className="flex shrink-0 items-center gap-3 rounded-xl border border-neutral-200 bg-white px-4 py-3">
+      <span className="rounded-lg bg-blue-50 p-2 text-[#1a6ef5]" aria-hidden="true">
+        <PackageCheck className="size-5" />
+      </span>
+      <span>
+        <span className="block text-[11px] uppercase tracking-wide text-neutral-500">
+          Total units dispatched
+        </span>
+        <span className="block text-xl font-semibold tabular-nums text-neutral-950">
+          {units.toLocaleString('en-GB')} Units
+        </span>
+      </span>
     </div>
   );
 }

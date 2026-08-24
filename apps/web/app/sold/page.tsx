@@ -3,7 +3,7 @@ import type { SoldAsset, SoldPalletLine } from '@/lib/actions/sold';
 import type { Batch } from '@/lib/actions/batches';
 import type { Pallet } from '@/lib/actions/pallets';
 import { Nav } from '@/app/components/nav';
-import { SoldManager } from './sold-manager';
+import { DispatchedCard, SoldManager } from './sold-manager';
 
 // The Sold module: everything sold, organised in the app's own hierarchy —
 // devices grouped Batch → Sub-lot, pallet goods grouped by pallet — with
@@ -35,21 +35,15 @@ export default async function SoldPage() {
     <>
       <Nav />
       <main id="main-content" tabIndex={-1} className="min-h-screen bg-white text-neutral-950 px-4 py-6 sm:p-8">
-        <div className="flex flex-wrap items-end justify-between gap-4">
+        <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
-            <h1 className="text-2xl font-semibold">Sold</h1>
-            <p className="mt-1 max-w-2xl text-sm text-neutral-500">
-              Everything sold, organised by where it came from — expand a lot or pallet to see its
-              items, select rows for bulk actions.
-              {isAdmin
-                ? ' Returns go to the original location by default, or a destination you choose.'
-                : ' Only an administrator can return items to inventory.'}
+            <h1 className="text-2xl font-semibold tracking-tight">Sold</h1>
+            <p className="mt-1 max-w-2xl text-sm leading-6 text-neutral-600">
+              View and track all inventory that has been finalised and marked as sold. Expand a row
+              for its specification, or select rows for bulk actions.
             </p>
           </div>
-          <div className="text-right">
-            <div className="text-3xl font-semibold tabular-nums">{totalUnits.toLocaleString('en-GB')}</div>
-            <div className="text-xs uppercase tracking-wide text-neutral-500">units sold</div>
-          </div>
+          <DispatchedCard units={totalUnits} />
         </div>
 
         <SoldManager
