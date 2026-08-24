@@ -1509,6 +1509,10 @@ export class PalletsService {
         soldAt,
         soldById: userId,
         salePrice: shares[i],
+        // Recorded here too, so EVERY sold device answers "sold from which
+        // pallet?" the same way — whether it shipped with the pallet (which
+        // also keeps pallet_id as the manifest) or was sold on its own.
+        soldFromPalletId: pallet.id,
       });
       await this.assetHistory.save(
         this.assetHistory.create({

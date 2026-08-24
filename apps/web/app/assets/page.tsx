@@ -328,13 +328,22 @@ export default async function AssetsPage({
                         {a.auditStatus ? formatLabel(a.auditStatus) : '—'}
                       </td>
                       <td className="hidden px-4 py-3 md:table-cell">
-                        {a.pallet ? (
-                          <Link
-                            href={`/pallets/${a.pallet.id}`}
-                            className="font-mono text-xs text-neutral-700 hover:underline"
-                          >
-                            {a.pallet.palletNumber}
-                          </Link>
+                        {/* A device sold on its own has no live allocation — an
+                            open pallet must not keep claiming it — so the
+                            pallet it sold FROM is shown instead, and labelled
+                            as such rather than passed off as where it sits. */}
+                        {a.pallet || a.soldFromPallet ? (
+                          <span className="inline-flex flex-col">
+                            <Link
+                              href={`/pallets/${(a.pallet ?? a.soldFromPallet)!.id}`}
+                              className="font-mono text-xs text-neutral-700 hover:underline"
+                            >
+                              {(a.pallet ?? a.soldFromPallet)!.palletNumber}
+                            </Link>
+                            {!a.pallet && a.soldFromPallet && (
+                              <span className="text-[10px] text-neutral-400">sold from</span>
+                            )}
+                          </span>
                         ) : (
                           <span className="text-neutral-400">—</span>
                         )}

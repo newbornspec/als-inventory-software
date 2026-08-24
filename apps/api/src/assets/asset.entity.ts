@@ -165,6 +165,18 @@ export class Asset {
   @JoinColumn({ name: 'pallet_id' })
   pallet: Pallet | null;
 
+  // Which pallet the device was sold FROM. History, not allocation: pallet_id
+  // above is the live claim on stock and is cleared on an individual sale so
+  // no open pallet keeps counting a device that has gone — which used to
+  // destroy the only record of where it sat. Nothing counts this column, so it
+  // can never move a stock total. Cleared again on an admin return.
+  @Column({ name: 'sold_from_pallet_id', type: 'uuid', nullable: true })
+  soldFromPalletId: string | null;
+
+  @ManyToOne(() => Pallet, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'sold_from_pallet_id' })
+  soldFromPallet: Pallet | null;
+
   @Column({ name: 'moved_to_pallet_at', type: 'timestamp', nullable: true })
   movedToPalletAt: Date | null;
 
