@@ -317,7 +317,7 @@ export function AuditDays({ days, kind }: { days: AuditDaySummary[]; kind?: stri
   }
 
   return (
-    <div className="mt-6 divide-y divide-neutral-200 rounded-lg border border-neutral-200">
+    <div className="mt-4 divide-y divide-neutral-200 overflow-hidden rounded-xl border border-neutral-200 bg-white">
       {days.map(({ day, devices, events }) => {
         const open = openDays.has(day);
         const loaded = cache[day];
@@ -338,7 +338,7 @@ export function AuditDays({ days, kind }: { days: AuditDaySummary[]; kind?: stri
                 <span className="text-sm font-semibold text-neutral-950">{dayLabel(day)}</span>
                 <span className="ml-auto text-sm text-neutral-600">
                   {devices} {devices === 1 ? 'device' : 'devices'}
-                  <span className="text-neutral-400"> · {events} {events === 1 ? 'event' : 'events'}</span>
+                  <span className="text-neutral-600"> · {events} {events === 1 ? 'event' : 'events'}</span>
                 </span>
               </button>
             </h2>
