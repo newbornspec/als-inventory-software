@@ -1,10 +1,11 @@
 import Link from 'next/link';
-import { ChevronRight, Plus, Target } from 'lucide-react';
+import { Plus, Target } from 'lucide-react';
 import { apiFetch, getSessionAccess, getSessionUser } from '@/lib/api-server';
 import { hasPermission } from '@/lib/permissions';
 import type { Batch } from '@/lib/actions/batches';
 import type { AuditTarget } from '@/lib/actions/devices';
 import { Nav } from '@/app/components/nav';
+import { Breadcrumbs } from '@/app/components/breadcrumbs';
 import { GoodsInWorkspace } from './goods-in-workspace';
 
 // `filter` narrows the list for the dashboard's Attention Required and Incoming
@@ -84,18 +85,17 @@ export default async function LotsPage({
   return (
     <>
       <Nav />
-      <main id="main-content" tabIndex={-1} className="min-h-screen bg-white text-neutral-950 px-4 py-6 sm:p-8">
-        <div className="flex items-center gap-2 text-sm leading-5 text-neutral-500">
-          <Link href="/dashboard" className="transition-colors hover:text-neutral-900">
-            Dashboard
-          </Link>
-          <ChevronRight className="size-4" aria-hidden="true" />
-          <span className="font-medium text-neutral-950">Goods In</span>
-        </div>
+      <main
+        id="main-content"
+        tabIndex={-1}
+        className="min-h-screen bg-neutral-50 text-neutral-950 px-4 py-6 sm:px-8 sm:py-8"
+      >
+        <div className="mx-auto max-w-[90rem]">
+        <Breadcrumbs items={[{ label: 'Dashboard', href: '/dashboard' }, { label: 'Goods In' }]} />
 
-        <div className="mt-8 flex flex-wrap items-start justify-between gap-4 sm:gap-6">
+        <div className="mt-3 flex flex-wrap items-start justify-between gap-4 sm:gap-6">
           <div className="min-w-0 max-w-3xl">
-            <h1 className="text-3xl leading-9 font-semibold tracking-tight text-neutral-950 sm:text-4xl sm:leading-10">
+            <h1 className="text-2xl font-semibold tracking-tight text-neutral-950">
               {copy ? copy.title : 'Goods In'}
             </h1>
             <p className="mt-3 max-w-2xl text-sm leading-6 text-neutral-600">
@@ -108,7 +108,7 @@ export default async function LotsPage({
                 <span className="text-neutral-700">
                   {lots.length} of {allLots.length} lots ·{' '}
                 </span>
-                <Link href="/batches" className="font-medium text-blue-800 hover:underline">
+                <Link href="/batches" className="font-medium text-[#1a6ef5] hover:underline">
                   Show all lots
                 </Link>
               </p>
@@ -117,7 +117,7 @@ export default async function LotsPage({
           {canCreate && (
             <Link
               href="/batches/new"
-              className="flex shrink-0 items-center gap-2 rounded-xl bg-[#1a6ef5] px-4 py-2 text-sm leading-5 font-medium text-white shadow-sm shadow-blue-500/15 transition-colors hover:bg-blue-600"
+              className="flex shrink-0 items-center gap-2 rounded-md bg-[#1a6ef5] px-4 py-2 text-xs font-semibold uppercase tracking-wide text-white transition-colors hover:bg-blue-600"
             >
               <Plus className="size-4" aria-hidden="true" />
               New Lot
@@ -125,29 +125,34 @@ export default async function LotsPage({
           )}
         </div>
 
-        <div className="mt-8 rounded-2xl border border-blue-100 bg-blue-50/70 px-5 py-4 text-sm leading-5 text-neutral-950 shadow-[0_8px_24px_rgba(59,130,246,0.06)]">
-          <div className="flex items-center gap-3">
-            <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-[#1a6ef5]/10 text-[#2b7fff]">
-              <Target className="size-4" aria-hidden="true" />
-            </div>
-            <p className="leading-6 text-neutral-500">
-              Hardware audit target:{' '}
-              {auditTarget ? (
-                <span className="font-semibold text-neutral-950">{auditTarget.batchNumber}</span>
-              ) : (
-                <span className="font-medium text-neutral-500">
-                  none selected — set one on a lot below
-                </span>
-              )}
-              <span className="ml-2 text-neutral-600">
-                — the capture tool files audits into this lot
+        {/* Where the USB capture tool files its audits. Stated plainly rather
+            than as a coloured banner: it is a setting a reader needs to be able
+            to check at a glance, and the whole line is load-bearing, so none of
+            it sits on low-contrast grey. */}
+        <div className="mt-4 flex items-center gap-3 rounded-xl border border-neutral-200 bg-white px-4 py-3">
+          <span className="flex size-8 shrink-0 items-center justify-center rounded-lg border border-neutral-200 bg-neutral-50 text-[#2b7fff]">
+            <Target className="size-4" aria-hidden="true" />
+          </span>
+          <p className="text-sm leading-6 text-neutral-600">
+            <span className="text-[11px] uppercase tracking-wide text-neutral-500">
+              Hardware audit target
+            </span>
+            <span className="mx-2" aria-hidden="true">
+              ·
+            </span>
+            {auditTarget ? (
+              <span className="font-semibold text-neutral-950">{auditTarget.batchNumber}</span>
+            ) : (
+              <span className="font-medium text-neutral-700">
+                none selected — set one on a lot below
               </span>
-            </p>
-          </div>
+            )}
+            <span className="ml-2">— the capture tool files audits into this lot</span>
+          </p>
         </div>
 
         {copy && lots.length === 0 ? (
-          <p className="mt-8 rounded-lg border border-neutral-200 bg-white p-4 text-sm text-neutral-700">
+          <p className="mt-4 rounded-xl border border-neutral-200 bg-white p-4 text-sm text-neutral-700">
             {copy.empty}
           </p>
         ) : (
@@ -160,6 +165,7 @@ export default async function LotsPage({
           viewer={sessionUser?.email ?? sessionUser?.role ?? 'signed in'}
         />
         )}
+        </div>
       </main>
   </>
   );
