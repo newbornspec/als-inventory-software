@@ -20,7 +20,14 @@ import { TransferBatch } from './transfer-batch';
 // the old accordion could do still happens here: the per-lot actions moved
 // into the units panel's toolbar, where they act on the selected lot.
 
-const TH = 'px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wide text-neutral-500';
+// A lot can hold hundreds of devices. Rendering all of them pushed the
+// Component Specs panel — the payoff of the whole drill-down — below an
+// unbounded wall of rows, so the third panel was effectively unreachable on a
+// real lot. The list pages.
+const UNITS_PER_PAGE = 25;
+
+const TH =
+  'px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wide text-neutral-500';
 const TD = 'px-4 py-2.5 text-sm';
 
 // Lot status → pill tone. Text always accompanies the colour.
@@ -82,8 +89,8 @@ function Panel({
   children: React.ReactNode;
 }) {
   return (
-    <section className="rounded-2xl border border-neutral-200 bg-white shadow-[0_10px_30px_rgba(15,23,42,0.04)]">
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 px-5 py-3.5">
+    <section className="rounded-xl border border-neutral-200 bg-white">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3">
         <button
           onClick={onToggle}
           aria-expanded={open}
@@ -95,13 +102,13 @@ function Panel({
           ) : (
             <ChevronRight className="size-4 shrink-0 text-neutral-500" aria-hidden="true" />
           )}
-          <span className="text-xs font-semibold uppercase tracking-widest text-neutral-900">
+          <span className="text-xs font-semibold uppercase tracking-wide text-neutral-900">
             {title}
           </span>
           {/* neutral-500, not 400 — this line is load-bearing (it names the
               selected lot/unit the panel's actions will hit), so it must meet
               small-text contrast. */}
-          {subtitle && <span className="text-xs text-neutral-500">{subtitle}</span>}
+          {subtitle && <span className="text-xs text-neutral-600">{subtitle}</span>}
         </button>
         {right && <div className="ml-auto flex flex-wrap items-center gap-3">{right}</div>}
       </div>
@@ -157,6 +164,7 @@ export function GoodsInWorkspace({
   // included, with their pallet linked), same as the lot detail page.
   const [units, setUnits] = useState<LotUnits>({ loading: false, error: null, assets: [] });
   const [unitFilter, setUnitFilter] = useState<'all' | 'audited' | 'pending'>('all');
+  const [unitPage, setUnitPage] = useState(1);
   const [picked, setPicked] = useState<string[]>([]); // pool rows ticked for Move to Pallet
   const [selectedUnitId, setSelectedUnitId] = useState<string | null>(null);
   const [detail, setDetail] = useState<UnitDetail>({ loading: false, error: null, asset: null });
@@ -302,8 +310,24 @@ export function GoodsInWorkspace({
   const pendingUnits = units.assets.filter((a) => a.auditStatus == null);
   const shownUnits =
     unitFilter === 'audited' ? audited : unitFilter === 'pending' ? pendingUnits : units.assets;
-  const poolShown = shownUnits.filter((a) => !a.palletId);
+  const pageCount = Math.max(1, Math.ceil(shownUnits.length / UNITS_PER_PAGE));
+  const pageStart = (unitPage - 1) * UNITS_PER_PAGE;
+  const pageUnits = shownUnits.slice(pageStart, pageStart + UNITS_PER_PAGE);
+  // Selection is scoped to the page the checkbox sits above — a tick that
+  // silently claimed 400 devices from a header over 25 rows would be a nasty
+  // surprise on a real mutation. Selections still ACCUMULATE across pages, and
+  // the move bar states the running total.
+  const poolShown = pageUnits.filter((a) => !a.palletId);
   const allPoolPicked = poolShown.length > 0 && poolShown.every((a) => picked.includes(a.id));
+
+  // Landing on page 7 of a 2-page list shows an empty table, so any change to
+  // what is being listed returns to the first page.
+  useEffect(() => {
+    setUnitPage(1);
+  }, [selectedLotId, unitFilter]);
+  useEffect(() => {
+    if (unitPage > pageCount) setUnitPage(pageCount);
+  }, [unitPage, pageCount]);
 
   const rows = specRows((detail.asset?.hardwareProfile as HardwareProfileLike | null) ?? null);
   const selectedUnit = units.assets.find((a) => a.id === selectedUnitId) ?? null;
@@ -658,15 +682,25 @@ export function GoodsInWorkspace({
                         <th scope="col" className={`${TH} w-8`}>
                           <input
                             type="checkbox"
-                            aria-label="Select every unallocated device shown"
+                            aria-label="Select every unallocated device on this page"
                             checked={allPoolPicked}
                             ref={(el) => {
                               if (el)
                                 el.indeterminate =
                                   picked.length > 0 && !allPoolPicked;
                             }}
+                            // Union/subtract the PAGE's pool rather than
+                            // replacing the whole selection: replacing was
+                            // right when this checkbox covered every row, but
+                            // with paging it silently discarded whatever was
+                            // ticked on the other pages.
                             onChange={() =>
-                              setPicked(allPoolPicked ? [] : poolShown.map((a) => a.id))
+                              setPicked((prev) => {
+                                const pageIds = poolShown.map((a) => a.id);
+                                return allPoolPicked
+                                  ? prev.filter((id) => !pageIds.includes(id))
+                                  : [...new Set([...prev, ...pageIds])];
+                              })
                             }
                             className="size-4 accent-[#1a6ef5]"
                           />
@@ -684,7 +718,7 @@ export function GoodsInWorkspace({
                     </tr>
                   </thead>
                   <tbody>
-                    {shownUnits.map((a) => {
+                    {pageUnits.map((a) => {
                       const isSel = a.id === selectedUnitId;
                       const grade = a.conditionGrade ? GRADE_LETTER[a.conditionGrade] : null;
                       return (
@@ -795,6 +829,56 @@ export function GoodsInWorkspace({
                 </table>
               )}
             </div>
+
+            {/* Says where you are before it offers to move you, and states the
+                full count — otherwise a paged table looks like a short lot. */}
+            {shownUnits.length > 0 && (
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+                <p className="text-xs text-neutral-600" role="status">
+                  Showing{' '}
+                  <span className="font-medium text-neutral-900 tabular-nums">
+                    {pageStart + 1}–{Math.min(pageStart + UNITS_PER_PAGE, shownUnits.length)}
+                  </span>{' '}
+                  of{' '}
+                  <span className="font-medium text-neutral-900 tabular-nums">
+                    {shownUnits.length}
+                  </span>{' '}
+                  {shownUnits.length === 1 ? 'device' : 'devices'}
+                  {picked.length > 0 && (
+                    <>
+                      {' · '}
+                      <span className="font-medium text-neutral-900 tabular-nums">
+                        {picked.length}
+                      </span>{' '}
+                      selected across all pages
+                    </>
+                  )}
+                </p>
+                {pageCount > 1 && (
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setUnitPage((n) => Math.max(1, n - 1))}
+                      disabled={unitPage === 1}
+                      className="rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-neutral-800 transition-colors hover:bg-neutral-50 disabled:opacity-40"
+                    >
+                      Previous
+                    </button>
+                    <span className="text-xs text-neutral-600 tabular-nums">
+                      Page {unitPage} of {pageCount}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setUnitPage((n) => Math.min(pageCount, n + 1))}
+                      disabled={unitPage === pageCount}
+                      className="rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-neutral-800 transition-colors hover:bg-neutral-50 disabled:opacity-40"
+                    >
+                      Next
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
       </Panel>
