@@ -3,7 +3,7 @@ import { notFound } from 'next/navigation';
 import { apiFetch, ApiError, getSessionAccess, getSessionUser } from '@/lib/api-server';
 import { hasPermission } from '@/lib/permissions';
 import { deletePallet, type Pallet } from '@/lib/actions/pallets';
-import type { LookupValue } from '@/lib/actions/lookups';
+import type { LookupValue } from '@/lib/lookups';
 import { getLocations } from '@/lib/data';
 import { Nav } from '@/app/components/nav';
 import { formatLabel, ramCell } from '@/lib/asset-options';

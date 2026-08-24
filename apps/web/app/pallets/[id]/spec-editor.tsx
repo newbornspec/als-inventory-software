@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { savePalletSpec, type PalletLine, type SpecRow } from '@/lib/actions/pallets';
 import { sellPalletLine } from '@/lib/actions/sold';
-import type { LookupValue } from '@/lib/actions/lookups';
+import type { LookupValue } from '@/lib/lookups';
 import type { Location } from '@/lib/data';
 import { PALLET_MANUFACTURERS, SPEC_CPUS, SPEC_RAM, ramCell } from '@/lib/asset-options';
 

@@ -3,27 +3,11 @@
 import { revalidatePath } from 'next/cache';
 import { apiFetch, ApiError } from '@/lib/api-server';
 
-export interface LookupValue {
-  id: string;
-  category: string;
-  value: string;
-  parentId: string | null;
-  active: boolean;
-  sortOrder: number;
-}
-
-// Must match LOOKUP_CATEGORIES in the API's lookup-value.entity.ts. 'gen' was
-// missing here, so the admin screen could not manage it.
-export const LOOKUP_CATEGORIES = [
-  'manufacturer',
-  'model',
-  'chassis',
-  'cpu',
-  'gen',
-  'ram',
-  'storage',
-  'size',
-] as const;
+// LookupValue and LOOKUP_CATEGORIES moved to lib/lookups.ts. A 'use server'
+// module may export ONLY async functions; the exported const array made every
+// action in this file throw
+//   Error: A "use server" file can only export async functions, found object.
+// at load, so add / rename / enable / delete all 500'd and blanked the page.
 
 export async function addLookup(
   category: string,

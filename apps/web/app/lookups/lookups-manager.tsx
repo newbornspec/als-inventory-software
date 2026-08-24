@@ -2,12 +2,8 @@
 
 import { useMemo, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
-import {
-  addLookup,
-  updateLookup,
-  deleteLookup,
-  type LookupValue,
-} from '@/lib/actions/lookups';
+import { addLookup, updateLookup, deleteLookup } from '@/lib/actions/lookups';
+import type { LookupValue } from '@/lib/lookups';
 
 const CATEGORIES: { key: string; label: string }[] = [
   { key: 'manufacturer', label: 'Manufacturer' },
@@ -84,25 +80,43 @@ export function LookupsManager({ all }: { all: LookupValue[] }) {
         }}
         className="flex flex-wrap gap-2"
       >
-        {CATEGORIES.map((c) => (
-          <button
-            key={c.key}
-            role="tab"
-            id={`lookup-tab-${c.key}`}
-            aria-selected={tab === c.key}
-            aria-controls="lookup-panel"
-            tabIndex={tab === c.key ? 0 : -1}
-            onClick={() => setTab(c.key)}
-            className={
-              'rounded-md px-3 py-1.5 text-sm ' +
-              (tab === c.key
-                ? 'bg-neutral-100 font-semibold text-neutral-900 ring-1 ring-neutral-400'
-                : 'border border-[var(--control-border)] text-neutral-700 hover:bg-white')
-            }
-          >
-            {c.label}
-          </button>
-        ))}
+        {CATEGORIES.map((c) => {
+          // Models are scoped to a manufacturer, so a total across every parent
+          // would not describe what the tab opens onto — it gets no count
+          // rather than a misleading one.
+          const n = c.key === 'model' ? null : all.filter((l) => l.category === c.key).length;
+          const off =
+            c.key === 'model'
+              ? 0
+              : all.filter((l) => l.category === c.key && !l.active).length;
+          return (
+            <button
+              key={c.key}
+              role="tab"
+              id={`lookup-tab-${c.key}`}
+              aria-selected={tab === c.key}
+              aria-controls="lookup-panel"
+              tabIndex={tab === c.key ? 0 : -1}
+              onClick={() => setTab(c.key)}
+              className={
+                'rounded-md px-3 py-1.5 text-sm ' +
+                (tab === c.key
+                  ? 'bg-neutral-100 font-semibold text-neutral-900 ring-1 ring-neutral-400'
+                  : 'border border-[var(--control-border)] text-neutral-700 hover:bg-white')
+              }
+            >
+              {c.label}
+              {n !== null && (
+                <span className="ml-1.5 text-xs text-neutral-600 tabular-nums">{n}</span>
+              )}
+              {off > 0 && (
+                <span className="ml-1 text-xs text-amber-700" title={`${off} disabled`}>
+                  · {off} off
+                </span>
+              )}
+            </button>
+          );
+        })}
       </div>
 
       <div id="lookup-panel" role="tabpanel" aria-labelledby={`lookup-tab-${tab}`} tabIndex={0}>
@@ -128,7 +142,7 @@ export function LookupsManager({ all }: { all: LookupValue[] }) {
         </div>
       )}
 
-      <div aria-busy={pending} className={'mt-4 max-w-2xl ' + (pending ? 'cursor-progress' : '')}>
+      <div aria-busy={pending} className={'mt-4 max-w-4xl ' + (pending ? 'cursor-progress' : '')}>
         {/* Add row */}
         {(tab !== 'model' || manufacturerId) && (
           <div className="flex items-center gap-2">
@@ -150,9 +164,13 @@ export function LookupsManager({ all }: { all: LookupValue[] }) {
           </div>
         )}
 
-        <ul className="mt-3 divide-y divide-neutral-200 rounded-lg border border-neutral-200">
+        {/* gap-px over a grey ground draws the rules in BOTH directions, which
+            divide-y cannot do once this is a grid. Two columns from sm up: these
+            are short strings, and a single 600px column of them ran to 2,340px
+            for one category. */}
+        <ul className="mt-3 grid gap-px overflow-hidden rounded-xl border border-neutral-200 bg-neutral-200 sm:grid-cols-2">
           {rows.map((l) => (
-            <li key={l.id} className="flex flex-wrap items-center gap-3 px-3 py-2">
+            <li key={l.id} className="flex items-center gap-3 bg-white px-3 py-2">
               <input
                 aria-label={`Rename ${l.value}`}
                 defaultValue={l.value}
@@ -161,11 +179,11 @@ export function LookupsManager({ all }: { all: LookupValue[] }) {
                   if (next && next !== l.value) run(() => updateLookup(l.id, { value: next }));
                 }}
                 className={
-                  'field-inline w-full px-1 py-1 text-sm ' +
-                  (l.active ? 'text-neutral-950' : 'text-neutral-500 line-through')
+                  'field-inline min-w-0 flex-1 px-1 py-1 text-sm ' +
+                  (l.active ? 'text-neutral-950' : 'text-neutral-600 line-through')
                 }
               />
-              <label className="flex shrink-0 items-center gap-1 text-xs text-neutral-500">
+              <label className="flex shrink-0 items-center gap-1 text-xs text-neutral-600">
                 <input
                   type="checkbox"
                   checked={l.active}
@@ -186,7 +204,7 @@ export function LookupsManager({ all }: { all: LookupValue[] }) {
             </li>
           ))}
           {rows.length === 0 && (
-            <li className="px-3 py-6 text-center text-sm text-neutral-500">
+            <li className="bg-white px-3 py-6 text-center text-sm text-neutral-600 sm:col-span-2">
               {tab === 'model' && !manufacturerId
                 ? 'Select a manufacturer to manage its models.'
                 : 'No values yet — add one above.'}
