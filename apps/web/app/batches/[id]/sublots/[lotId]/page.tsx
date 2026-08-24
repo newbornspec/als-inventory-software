@@ -5,6 +5,7 @@ import type { Batch, Lot } from '@/lib/actions/batches';
 import type { Asset } from '@/lib/actions/assets';
 import { Nav } from '@/app/components/nav';
 import { Breadcrumbs } from '@/app/components/breadcrumbs';
+import { Section, Tile, MetricGrid } from '@/app/dashboard/components';
 import { formatLabel } from '@/lib/asset-options';
 import { LotAssets } from '../../lot-assets';
 import { DeleteSubLotButton } from '../../delete-sublot-button';
@@ -39,7 +40,12 @@ export default async function SubLotDetailPage({
   // Guard against a mismatched URL (sub-lot that isn't in this batch).
   if (lot.batchId && lot.batchId !== id) notFound();
 
-  const canManage = user?.role === 'admin' || user?.role === 'manager';
+  // Matches the parent lot page, which grants technicians the same input rights
+  // under the comment "Technicians can create + input like managers". The same
+  // person looking at the same device used to gain and lose the Sell, Sub-lot
+  // and Move-to controls purely by drilling one level deeper.
+  const canManage =
+    user?.role === 'admin' || user?.role === 'manager' || user?.role === 'technician';
   const canDelete = user?.role === 'admin';
   const otherBatches = allBatches
     .filter((b) => b.id !== id)
@@ -49,83 +55,101 @@ export default async function SubLotDetailPage({
     [lot.manufacturer, lot.model, lot.cpu, lot.ramGb ? `${lot.ramGb}GB` : null, lot.storage, lot.screenSize]
       .filter(Boolean)
       .join(' · ') || lot.description;
+  // lot.actualUnitCount is now the LIVE count (sold excluded), so this headline
+  // and the table below it are finally counting the same devices — it used to be
+  // a plain COUNT(*) and could read "12 assets · 100%" above a list of 8.
+  const held = lot.actualUnitCount;
+  const soldOff = Math.max(0, (lot.totalUnitCount ?? held) - held);
   const pct =
     lot.expectedUnitCount && lot.expectedUnitCount > 0
-      ? Math.min(100, Math.round((lot.actualUnitCount / lot.expectedUnitCount) * 100))
+      ? Math.min(100, Math.round((held / lot.expectedUnitCount) * 100))
       : null;
 
   return (
     <>
       <Nav />
-      <main id="main-content" tabIndex={-1} className="min-h-screen bg-white text-neutral-950 px-4 py-6 sm:p-8">
-        <Breadcrumbs
-          items={[
-            { label: 'Dashboard', href: '/dashboard' },
-            { label: 'Goods In', href: '/batches' },
-            { label: batch.batchNumber, href: `/batches/${id}` },
-            { label: lot.lotNumber },
-          ]}
-        />
+      <main
+        id="main-content"
+        tabIndex={-1}
+        className="min-h-screen bg-neutral-50 text-neutral-950 px-4 py-6 sm:px-8 sm:py-8"
+      >
+        <div className="mx-auto max-w-[90rem]">
+          <Breadcrumbs
+            items={[
+              { label: 'Dashboard', href: '/dashboard' },
+              { label: 'Goods In', href: '/batches' },
+              { label: batch.batchNumber, href: `/batches/${id}` },
+              { label: lot.lotNumber },
+            ]}
+          />
 
-        <div className="mt-3 flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <h1 className="text-2xl font-semibold">{lot.lotNumber}</h1>
-            <p className="mt-1 text-sm text-neutral-500">
-              Sub-lot of{' '}
-              <Link href={`/batches/${id}`} className="underline">
-                {batch.batchNumber}
-              </Link>
-              {spec ? ` · ${spec}` : ''}
-            </p>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="rounded-full border border-neutral-200 px-2 py-0.5 text-xs text-neutral-500">
-              {formatLabel(lot.status)}
-            </span>
+          <div className="mt-3 flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <h1 className="text-2xl font-semibold tracking-tight">{lot.lotNumber}</h1>
+                <span className="rounded-full border border-neutral-300 bg-neutral-100 px-2 py-0.5 text-xs font-medium text-neutral-700">
+                  {formatLabel(lot.status)}
+                </span>
+              </div>
+              <p className="mt-1 text-sm leading-6 text-neutral-600">
+                Sub-lot of{' '}
+                <Link href={`/batches/${id}`} className="text-[#1a6ef5] hover:underline">
+                  {batch.batchNumber}
+                </Link>
+                {spec ? ` · ${spec}` : ''}
+              </p>
+            </div>
             {canDelete && (
-              <DeleteSubLotButton
-                lotId={lot.id}
-                lotNumber={lot.lotNumber}
-                batchId={id}
-                assetCount={lot.actualUnitCount}
-                redirectTo={`/batches/${id}`}
-              />
+              <div className="shrink-0">
+                <DeleteSubLotButton
+                  lotId={lot.id}
+                  lotNumber={lot.lotNumber}
+                  batchId={id}
+                  assetCount={lot.totalUnitCount ?? lot.actualUnitCount}
+                  redirectTo={`/batches/${id}`}
+                />
+              </div>
             )}
           </div>
-        </div>
 
-        <div className="mt-6 max-w-md rounded-lg border border-neutral-200 bg-white p-4">
-          <div className="flex items-baseline justify-between text-sm">
-            <span className="text-neutral-700">
-              <span className="text-2xl font-semibold">{lot.actualUnitCount}</span> asset
-              {lot.actualUnitCount === 1 ? '' : 's'}
-              {lot.expectedUnitCount != null ? ` / ${lot.expectedUnitCount} expected` : ''}
-            </span>
-            {pct != null && <span className="text-neutral-500">{pct}%</span>}
+          <div className="mt-4">
+            <MetricGrid cols={4}>
+              <Tile
+                label="In this sub-lot"
+                value={held}
+                sub={soldOff > 0 ? `${soldOff} sold on` : 'still in active inventory'}
+              />
+              <Tile
+                label="Expected"
+                value={lot.expectedUnitCount ?? '—'}
+                sub={lot.expectedUnitCount != null ? 'declared for this spec' : 'no target set'}
+              />
+              <Tile
+                label="Filled"
+                value={pct != null ? `${pct}%` : '—'}
+                sub={pct != null ? 'of the expected units' : 'nothing to measure against'}
+              />
+              <Tile label="Parent lot" value={batch.batchNumber} sub={batch.source ?? 'no supplier recorded'} />
+            </MetricGrid>
           </div>
-          {pct != null && (
-            <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-neutral-100">
-              <div className="h-full rounded-full bg-emerald-600" style={{ width: `${pct}%` }} />
-            </div>
-          )}
-        </div>
 
-        <section className="mt-8">
-          <h2 className="text-sm font-medium text-neutral-500">Assets in this sub-lot</h2>
-          <p className="mt-1 text-xs text-neutral-500">
-            Use the dropdown to move a device to another sub-lot, or “— No sub-lot —” to send it
-            back to {batch.batchNumber}.
-          </p>
-          <LotAssets
-            assets={assets}
-            subLots={siblings}
-            batchId={id}
-            otherBatches={otherBatches}
-            canManage={canManage}
-            canDelete={canDelete}
-          />
-        </section>
+          <Section
+            id="sublot-devices"
+            title={`Devices (${assets.length})`}
+            description={`Use the sub-lot dropdown to move a device to another bucket, or “— None —” to send it back to ${batch.batchNumber}.`}
+          >
+            <LotAssets
+              assets={assets}
+              subLots={siblings}
+              batchId={id}
+              otherBatches={otherBatches}
+              canManage={canManage}
+              canDelete={canDelete}
+              scopeLabel="sub-lot"
+            />
+          </Section>
+        </div>
       </main>
-  </>
+    </>
   );
 }

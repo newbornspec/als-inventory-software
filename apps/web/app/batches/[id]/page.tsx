@@ -7,6 +7,10 @@ import type { Batch, Lot, ReconciliationResult } from '@/lib/actions/batches';
 import type { Asset } from '@/lib/actions/assets';
 import { Nav } from '@/app/components/nav';
 import { Breadcrumbs } from '@/app/components/breadcrumbs';
+// The dashboard kit is the reference implementation of the app's card, metric
+// and scroll-region shapes. Imported rather than copied a fifth time — it has no
+// dashboard-specific state, and a shared design system is the point.
+import { Section, Tile, MetricGrid, Empty } from '@/app/dashboard/components';
 import { formatLabel } from '@/lib/asset-options';
 import { money } from '@/lib/money';
 import { NewLotForm } from './new-lot-form';
@@ -18,6 +22,7 @@ import { LotAssets } from './lot-assets';
 import { AddAssetForm } from './add-asset-form';
 import { DeleteSubLotButton } from './delete-sublot-button';
 import { ReassignOwner } from './reassign-owner';
+import { ManifestTable } from './manifest-table';
 
 // 404 (deleted lot) -> Next's not-found page instead of a server-side crash.
 async function loadBatch(
@@ -36,6 +41,25 @@ async function loadBatch(
     if (err instanceof ApiError && (err.status === 404 || err.status === 403)) notFound();
     throw err;
   }
+}
+
+const STATUS_TONE: Record<string, string> = {
+  draft: 'border-neutral-300 bg-neutral-100 text-neutral-700',
+  awaiting_arrival: 'border-blue-200 bg-blue-50 text-blue-800',
+  open: 'border-blue-200 bg-blue-50 text-blue-800',
+  receiving: 'border-blue-200 bg-blue-50 text-blue-800',
+  closed: 'border-emerald-200 bg-emerald-50 text-emerald-800',
+  reconciled: 'border-emerald-200 bg-emerald-50 text-emerald-800',
+  sold: 'border-neutral-300 bg-neutral-100 text-neutral-700',
+};
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="min-w-0">
+      <dt className="text-[11px] uppercase tracking-wide text-neutral-500">{label}</dt>
+      <dd className="mt-1 text-sm text-neutral-900">{children}</dd>
+    </div>
+  );
 }
 
 export default async function BatchDetailPage({ params }: { params: Promise<{ id: string }> }) {
@@ -60,380 +84,410 @@ export default async function BatchDetailPage({ params }: { params: Promise<{ id
   const users = isAdmin
     ? await apiFetch<{ id: string; name: string; role: string }[]>('/users').catch(() => [])
     : [];
-  const expected = batch.expectedUnitCount;
-  const discrepancy = expected != null ? batch.actualUnitCount - expected : null;
 
-  // Roll-up: how many of the lot's devices are grouped into sub-lots.
-  const groupedCount = lots.reduce((sum, l) => sum + l.actualUnitCount, 0);
-  const ungroupedCount = Math.max(0, assets.length - groupedCount);
+  // RECONCILIATION IS A GOODS-IN QUESTION: "did what the supplier declared
+  // actually turn up?" It is settled on arrival and nothing that happens to the
+  // devices afterwards can change the answer. It used to be derived from
+  // actualUnitCount, which EXCLUDES sold devices — so selling out of a lot that
+  // had reconciled perfectly made it start reporting units as missing, directly
+  // above a table that still (correctly) said nothing was missing. totalUnitCount
+  // is the sold-inclusive count and is the only one that answers this question.
+  const received = batch.totalUnitCount;
+  const declared = batch.expectedUnitCount;
+  const discrepancy = declared != null ? received - declared : null;
+  const soldOff = Math.max(0, batch.totalUnitCount - batch.actualUnitCount);
+  const heldNow = batch.heldUnitCount ?? batch.actualUnitCount;
+
+  // Both operands counted over the SAME population — the live devices this page
+  // actually lists. Previously grouped came from Lot.actualUnitCount (a plain
+  // COUNT(*), sold included) and the total from assets.length (sold excluded),
+  // which let the line print "20 of 12 grouped" and clamp a real backlog of
+  // ungrouped devices to zero.
+  const groupedCount = assets.filter((a) => a.lotId).length;
+  const ungroupedCount = assets.length - groupedCount;
+
+  const reconciledExactly = discrepancy === 0;
 
   return (
     <>
       <Nav />
-      <main id="main-content" tabIndex={-1} className="min-h-screen bg-white text-neutral-950 px-4 py-6 sm:p-8">
-        <Breadcrumbs
-          items={[
-            { label: 'Dashboard', href: '/dashboard' },
-            { label: 'Goods In', href: '/batches' },
-            { label: batch.batchNumber },
-          ]}
-        />
-        <div className="mt-3 flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <h1 className="text-2xl font-semibold">{batch.batchNumber}</h1>
-            <p className="mt-1 text-sm text-neutral-500">
-              {batch.source ?? 'No supplier recorded'}
-            </p>
-          </div>
-          {canManage && (
-            <div className="flex flex-wrap gap-2">
-              <a
-                href={`/api/batches/${batch.id}/erasure-certificate`}
-                aria-label={`Download the erasure certificate for ${batch.batchNumber}`}
-                className="rounded-md border border-emerald-200 px-3 py-1.5 text-sm text-emerald-700 hover:bg-emerald-50"
-              >
-                Erasure certificate (PDF)
-              </a>
-              <a
-                href={`/api/batches/${batch.id}/report`}
-                aria-label={`Export ${batch.batchNumber} to Excel`}
-                className="rounded-md bg-[#1a6ef5] hover:bg-blue-600 px-3 py-1.5 text-sm font-medium text-white"
-              >
-                Export to Excel
-              </a>
-            </div>
-          )}
-        </div>
+      <main
+        id="main-content"
+        tabIndex={-1}
+        className="min-h-screen bg-neutral-50 text-neutral-950 px-4 py-6 sm:px-8 sm:py-8"
+      >
+        <div className="mx-auto max-w-[90rem]">
+          <Breadcrumbs
+            items={[
+              { label: 'Dashboard', href: '/dashboard' },
+              { label: 'Goods In', href: '/batches' },
+              { label: batch.batchNumber },
+            ]}
+          />
 
-        <dl className="mt-4 flex flex-wrap gap-x-8 gap-y-2 text-sm">
-          <div>
-            <dt className="text-xs uppercase tracking-wide text-neutral-500">Owner</dt>
-            <dd className="text-neutral-900">
-              {batch.owner?.name ?? '—'}
-              {isAdmin && users.length > 0 && (
-                <ReassignOwner
-                  batchId={batch.id}
-                  currentOwnerId={batch.ownerId ?? null}
-                  users={users}
-                />
-              )}
-            </dd>
-          </div>
-          <div>
-            <dt className="text-xs uppercase tracking-wide text-neutral-500">Created by</dt>
-            <dd className="text-neutral-900">
-              {batch.createdBy?.name ?? '—'}
-              <span className="ml-1 text-xs text-neutral-500">
-                {batch.createdAt ? `· ${new Date(batch.createdAt).toLocaleDateString('en-GB')}` : ''}
-              </span>
-            </dd>
-          </div>
-          <div>
-            <dt className="text-xs uppercase tracking-wide text-neutral-500">Purchase order</dt>
-            <dd className="text-neutral-900">{batch.purchaseOrder ?? '—'}</dd>
-          </div>
-          <div>
-            <dt className="text-xs uppercase tracking-wide text-neutral-500">Delivery note</dt>
-            <dd className="text-neutral-900">{batch.deliveryNote ?? '—'}</dd>
-          </div>
-          <div>
-            <dt className="text-xs uppercase tracking-wide text-neutral-500">Purchase date</dt>
-            <dd className="text-neutral-900">{batch.purchaseDate ?? '—'}</dd>
-          </div>
-          <div>
-            <dt className="text-xs uppercase tracking-wide text-neutral-500">Expected arrival</dt>
-            <dd className="text-neutral-900">
-              {canManage ? (
-                <ExpectedArrival
-                  batchId={batch.id}
-                  expectedArrivalDate={batch.expectedArrivalDate}
-                />
-              ) : (
-                (batch.expectedArrivalDate ?? '—')
-              )}
-            </dd>
-          </div>
-          <div>
-            <dt className="text-xs uppercase tracking-wide text-neutral-500">Received date</dt>
-            <dd className="text-neutral-900">{batch.receivedDate ?? '—'}</dd>
-          </div>
-        </dl>
-
-        <div className="mt-4 flex items-center gap-3 text-sm">
-          <span className="text-xs uppercase tracking-wide text-neutral-500">Lot cost</span>
-          {canManage ? (
-            <LotCost batchId={batch.id} totalCost={batch.totalCost} />
-          ) : (
-            <span className="text-neutral-900">
-              {batch.totalCost != null ? money(batch.totalCost) : '—'}
-            </span>
-          )}
-        </div>
-
-        <div className="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-4">
-          <div className="rounded-lg border border-neutral-200 bg-white p-4">
-            <div className="text-2xl font-semibold">{batch.actualUnitCount}</div>
-            <div className="mt-1 text-sm text-neutral-500">Actual units (scanned)</div>
-          </div>
-          <div className="rounded-lg border border-neutral-200 bg-white p-4">
-            <div className="text-2xl font-semibold">{expected ?? '—'}</div>
-            <div className="mt-1 text-sm text-neutral-500">Expected units (manifest)</div>
-          </div>
-          <div className="rounded-lg border border-neutral-200 bg-white p-4">
-            <div
-              className={
-                'text-2xl font-semibold ' +
-                (discrepancy == null || discrepancy === 0
-                  ? ''
-                  : discrepancy < 0
-                    ? 'text-amber-700'
-                    : 'text-red-600')
-              }
-            >
-              {discrepancy == null ? '—' : discrepancy > 0 ? `+${discrepancy}` : discrepancy}
-            </div>
-            <div className="mt-1 text-sm text-neutral-500">
-              {discrepancy == null
-                ? 'No manifest count'
-                : discrepancy === 0
-                  ? 'Reconciled'
-                  : discrepancy < 0
-                    ? 'Short (missing units)'
-                    : 'Over (unexpected units)'}
-            </div>
-          </div>
-          <div className="rounded-lg border border-neutral-200 bg-white p-4">
-            {canManage ? (
-              <BatchStatusSelect batchId={batch.id} status={batch.status} />
-            ) : (
-              <div className="text-2xl font-semibold">{formatLabel(batch.status)}</div>
-            )}
-            <div className="mt-1 text-sm text-neutral-500">Status</div>
-          </div>
-        </div>
-
-        <section className="mt-8">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <h2 className="text-sm font-medium text-neutral-500">Expected inventory &amp; receiving diff</h2>
-            {recon.summary.expectedSerialized > 0 && (
-              <div className="flex gap-2 text-xs">
-                <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-emerald-700">
-                  {recon.summary.found} found
+          <div className="mt-3 flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <h1 className="text-2xl font-semibold tracking-tight">{batch.batchNumber}</h1>
+                <span
+                  className={
+                    'rounded-full border px-2 py-0.5 text-xs font-medium ' +
+                    (STATUS_TONE[batch.status] ?? 'border-neutral-300 bg-neutral-100 text-neutral-700')
+                  }
+                >
+                  {formatLabel(batch.status)}
                 </span>
-                <span className="rounded-full bg-amber-50 px-2 py-0.5 text-amber-700">
-                  {recon.summary.missing} missing
-                </span>
-                <span className="rounded-full bg-red-50 px-2 py-0.5 text-red-700">
-                  {recon.summary.extra} extra
-                </span>
+              </div>
+              <p className="mt-1 text-sm leading-6 text-neutral-600">
+                {batch.source ?? 'No supplier recorded'}
+                {batch.location?.name ? ` · ${batch.location.name}` : ''}
+              </p>
+            </div>
+            {canManage && (
+              <div className="flex shrink-0 flex-wrap gap-2">
+                <a
+                  href={`/api/batches/${batch.id}/erasure-certificate`}
+                  aria-label={`Download the erasure certificate for ${batch.batchNumber}`}
+                  className="rounded-md border border-[var(--control-border)] px-3 py-1.5 text-sm font-medium text-neutral-800 hover:bg-neutral-50"
+                >
+                  Erasure certificate
+                </a>
+                <a
+                  href={`/api/batches/${batch.id}/report`}
+                  aria-label={`Export ${batch.batchNumber} to Excel`}
+                  className="rounded-md bg-[#1a6ef5] px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-600"
+                >
+                  Export to Excel
+                </a>
               </div>
             )}
           </div>
 
-          {recon.lines.length > 0 || recon.quantityOnly.length > 0 ? (
-            <div role="region" aria-label="Expected inventory" tabIndex={0} className="mt-3 overflow-x-auto rounded-lg border border-neutral-200">
-              <table className="w-full text-left text-sm">
-          <caption className="sr-only">Expected inventory from the supplier manifest, compared with what was scanned in</caption>
-                <thead className="bg-neutral-50 text-neutral-500">
-                  <tr>
-                    <th scope="col" className="px-3 py-2">Serial / Tag</th>
-                    <th scope="col" className="px-3 py-2">Manufacturer</th>
-                    <th scope="col" className="px-3 py-2">Model</th>
-                    <th scope="col" className="px-3 py-2">CPU</th>
-                    <th scope="col" className="px-3 py-2">RAM</th>
-                    <th scope="col" className="px-3 py-2">Grade</th>
-                    <th scope="col" className="px-3 py-2">Qty</th>
-                    <th scope="col" className="px-3 py-2">Received</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {recon.lines.map((l) => (
-                    <tr key={l.expected.id} className="border-t border-neutral-200">
-                      <td className="px-3 py-2 text-neutral-700">
-                        {l.expected.serialNumber ?? l.expected.assetTag ?? '—'}
-                      </td>
-                      <td className="px-3 py-2 text-neutral-500">{l.expected.manufacturer ?? '—'}</td>
-                      <td className="px-3 py-2 text-neutral-500">{l.expected.model ?? '—'}</td>
-                      <td className="px-3 py-2 text-neutral-500">{l.expected.cpu ?? '—'}</td>
-                      <td className="px-3 py-2 text-neutral-500">{l.expected.ramGb ?? '—'}</td>
-                      <td className="px-3 py-2 text-neutral-500">{l.expected.grade ?? '—'}</td>
-                      <td className="px-3 py-2 text-neutral-700">{l.expected.quantity}</td>
-                      <td className="px-3 py-2">
-                        {l.status === 'found' ? (
-                          <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-xs text-emerald-700">
-                            Found
-                          </span>
-                        ) : (
-                          <span className="rounded-full bg-amber-50 px-2 py-0.5 text-xs text-amber-700">
-                            Missing
-                          </span>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                  {recon.quantityOnly.map((it) => (
-                    <tr key={it.id} className="border-t border-neutral-200">
-                      <td className="px-3 py-2 text-neutral-500">— (qty only)</td>
-                      <td className="px-3 py-2 text-neutral-500">{it.manufacturer ?? '—'}</td>
-                      <td className="px-3 py-2 text-neutral-500">{it.model ?? '—'}</td>
-                      <td className="px-3 py-2 text-neutral-500">{it.cpu ?? '—'}</td>
-                      <td className="px-3 py-2 text-neutral-500">{it.ramGb ?? '—'}</td>
-                      <td className="px-3 py-2 text-neutral-500">{it.grade ?? '—'}</td>
-                      <td className="px-3 py-2 text-neutral-700">{it.quantity}</td>
-                      <td className="px-3 py-2 text-neutral-500">n/a</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ) : (
-            <p className="mt-3 text-sm text-neutral-500">No supplier list imported yet.</p>
-          )}
-
-          {recon.summary.expectedSerialized > 0 && recon.extras.length > 0 && (
-            <div className="mt-3">
-              <h3 className="text-xs font-medium text-red-700">
-                Extra — scanned but not on the supplier list ({recon.extras.length})
-              </h3>
-              <ul className="mt-1 flex flex-wrap gap-2">
-                {recon.extras.map((e) => (
-                  <li
-                    key={e.id}
-                    className="rounded border border-red-200 px-2 py-0.5 text-xs text-red-600"
-                  >
-                    {e.tag}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-
-          {canManage && (
-            <div className="mt-3 max-w-2xl">
-              <ImportExpected
-                batchId={batch.id}
-                hasExisting={recon.lines.length > 0 || recon.quantityOnly.length > 0}
+          <div className="mt-4">
+            <MetricGrid cols={4}>
+              <Tile
+                label="Received"
+                value={received}
+                sub={
+                  soldOff > 0
+                    ? `${heldNow} still held · ${soldOff} sold on`
+                    : `${heldNow} still held`
+                }
               />
-            </div>
-          )}
-        </section>
-
-        <section className="mt-8">
-          <h2 className="text-sm font-medium text-neutral-500">
-            Assets in this lot ({assets.length})
-          </h2>
-          {canMove && unallocated > 0 && (
-            <div className="mt-3">
-              <TransferBatch
-                batchId={batch.id}
-                batchNumber={batch.batchNumber}
-                eligibleCount={unallocated}
+              <Tile
+                label="Declared on the PO"
+                value={declared ?? '—'}
+                sub={
+                  batch.expectedLineCount > 0
+                    ? `${batch.expectedLineCount} manifest line${batch.expectedLineCount === 1 ? '' : 's'} imported`
+                    : 'no manifest imported'
+                }
               />
-            </div>
-          )}
-          <LotAssets
-            assets={assets}
-            subLots={lots}
-            batchId={batch.id}
-            otherBatches={otherBatches}
-            canManage={canManage}
-            canDelete={canDelete}
-            canMove={canMove}
-          />
-          {canManage && <AddAssetForm batchId={batch.id} subLots={lots} />}
-        </section>
+              <Tile
+                label="Discrepancy"
+                value={
+                  discrepancy == null ? '—' : discrepancy > 0 ? `+${discrepancy}` : discrepancy
+                }
+                sub={
+                  discrepancy == null
+                    ? 'nothing declared to check against'
+                    : discrepancy === 0
+                      ? 'reconciled — every declared unit arrived'
+                      : discrepancy < 0
+                        ? 'short — declared units never arrived'
+                        : 'over — units arrived that were not declared'
+                }
+                // Short is the graver of the two: a device that was declared for
+                // destruction and never turned up is a chain-of-custody gap, not
+                // a paperwork one. Colour never carries this alone — the word is
+                // in the sub-line and an icon comes with the emphasis.
+                emphasis={
+                  discrepancy == null || discrepancy === 0
+                    ? undefined
+                    : discrepancy < 0
+                      ? 'critical'
+                      : 'alert'
+                }
+              />
+              <Tile
+                label="Unallocated"
+                value={unallocated}
+                sub="held here, not yet on a pallet"
+              />
+            </MetricGrid>
+          </div>
 
-        <div className="mt-8">
-          <section>
-            <div className="flex items-baseline justify-between gap-3">
-              <h2 className="text-sm font-medium text-neutral-500">Sub-lots ({lots.length})</h2>
-              {lots.length > 0 && (
-                <span className="text-xs text-neutral-500">
+          <Section id="lot-details" title="Lot details">
+            <dl className="grid gap-x-8 gap-y-4 sm:grid-cols-2 lg:grid-cols-3">
+              <Field label="Owner">
+                {batch.owner?.name ?? '—'}
+                {isAdmin && users.length > 0 && (
+                  <ReassignOwner
+                    batchId={batch.id}
+                    batchNumber={batch.batchNumber}
+                    currentOwnerId={batch.ownerId ?? null}
+                    currentOwnerName={batch.owner?.name ?? null}
+                    users={users}
+                  />
+                )}
+              </Field>
+              <Field label="Created by">
+                {batch.createdBy?.name ?? '—'}
+                {batch.createdAt && (
+                  <span className="ml-1 text-xs text-neutral-500">
+                    · {new Date(batch.createdAt).toLocaleDateString('en-GB')}
+                  </span>
+                )}
+              </Field>
+              <Field label="Status">
+                {canManage ? (
+                  <BatchStatusSelect
+                    batchId={batch.id}
+                    status={batch.status}
+                    unitsAtRisk={batch.actualUnitCount}
+                  />
+                ) : (
+                  formatLabel(batch.status)
+                )}
+              </Field>
+              <Field label="Purchase order">{batch.purchaseOrder ?? '—'}</Field>
+              <Field label="Delivery note">{batch.deliveryNote ?? '—'}</Field>
+              <Field label="Purchase date">{batch.purchaseDate ?? '—'}</Field>
+              <Field label="Expected arrival">
+                {canManage ? (
+                  <ExpectedArrival
+                    batchId={batch.id}
+                    expectedArrivalDate={batch.expectedArrivalDate}
+                  />
+                ) : (
+                  (batch.expectedArrivalDate ?? '—')
+                )}
+              </Field>
+              <Field label="Received date">{batch.receivedDate ?? '—'}</Field>
+              <Field label="Lot cost">
+                {canManage ? (
+                  <LotCost batchId={batch.id} totalCost={batch.totalCost} />
+                ) : batch.totalCost != null ? (
+                  money(batch.totalCost)
+                ) : (
+                  '—'
+                )}
+              </Field>
+              {batch.notes && (
+                <div className="min-w-0 sm:col-span-2 lg:col-span-3">
+                  <dt className="text-[11px] uppercase tracking-wide text-neutral-500">Notes</dt>
+                  <dd className="mt-1 max-w-3xl whitespace-pre-line text-sm text-neutral-700">
+                    {batch.notes}
+                  </dd>
+                </div>
+              )}
+            </dl>
+          </Section>
+
+          <Section
+            id="receiving"
+            title="Receiving"
+            description="What the supplier said would arrive, against what was scanned in."
+            action={
+              recon.summary.expectedSerialized > 0 ? (
+                <div className="flex shrink-0 flex-wrap gap-2 text-xs">
+                  <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 font-medium text-emerald-800 tabular-nums">
+                    {recon.summary.found} found
+                  </span>
+                  <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 font-medium text-amber-800 tabular-nums">
+                    {recon.summary.missing} missing
+                  </span>
+                  <span className="rounded-full border border-red-200 bg-red-50 px-2 py-0.5 font-medium text-red-700 tabular-nums">
+                    {recon.summary.extra} extra
+                  </span>
+                </div>
+              ) : undefined
+            }
+          >
+            {recon.lines.length > 0 || recon.quantityOnly.length > 0 ? (
+              <ManifestTable recon={recon} />
+            ) : (
+              <Empty>
+                No supplier list imported yet — import one below to reconcile this delivery.
+              </Empty>
+            )}
+
+            {recon.summary.expectedSerialized > 0 && recon.extras.length > 0 && (
+              <div className="mt-4 rounded-lg border border-red-200 bg-red-50 p-4">
+                <h3 className="text-sm font-medium text-red-800">
+                  Scanned in but not on the supplier list ({recon.extras.length})
+                </h3>
+                <p className="mt-1 text-sm text-red-700">
+                  These arrived without being declared. Open each one to confirm it belongs to this
+                  delivery.
+                </p>
+                <ul className="mt-3 flex flex-wrap gap-2">
+                  {recon.extras.map((e) => (
+                    <li key={e.id}>
+                      {/* The id was always in the payload; these were dead text. */}
+                      <Link
+                        href={`/assets/${e.id}`}
+                        aria-label={`Open ${e.name}, scanned in but not on the supplier list`}
+                        className="inline-block rounded border border-red-300 bg-white px-2 py-0.5 text-xs font-medium text-red-700 hover:bg-red-100"
+                      >
+                        {e.tag}
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {canManage && (
+              <div className="mt-4 max-w-2xl">
+                <ImportExpected
+                  batchId={batch.id}
+                  batchNumber={batch.batchNumber}
+                  existingLineCount={recon.lines.length + recon.quantityOnly.length}
+                />
+              </div>
+            )}
+          </Section>
+
+          <Section
+            id="sub-lots"
+            title={`Sub-lots (${lots.length})`}
+            description="Spec buckets that group this lot's devices for pricing and sale."
+            action={
+              lots.length > 0 ? (
+                <span className="shrink-0 text-xs text-neutral-500 tabular-nums">
                   {groupedCount} of {assets.length} grouped · {ungroupedCount} unassigned
                 </span>
-              )}
-            </div>
-            <ul className="mt-3 space-y-2">
-              {lots.map((lot) => {
-                const pct =
-                  lot.expectedUnitCount && lot.expectedUnitCount > 0
-                    ? Math.min(100, Math.round((lot.actualUnitCount / lot.expectedUnitCount) * 100))
-                    : null;
-                const spec = [
-                  lot.manufacturer,
-                  lot.model,
-                  lot.cpu,
-                  lot.ramGb ? `${lot.ramGb}GB` : null,
-                  lot.storage,
-                  lot.screenSize,
-                ]
-                  .filter(Boolean)
-                  .join(' · ');
-                const specLabel = spec || lot.description;
-                return (
-                  <li key={lot.id} className="rounded-md border border-neutral-200 p-3 text-sm">
-                    <div className="flex items-center justify-between gap-2">
-                      <Link
-                        href={`/batches/${batch.id}/sublots/${lot.id}`}
-                        className="font-medium text-neutral-900 underline"
-                      >
-                        {lot.lotNumber}
-                      </Link>
-                      <div className="flex items-center gap-2">
-                        <span className="rounded-full border border-neutral-200 px-2 py-0.5 text-xs text-neutral-500">
+              ) : undefined
+            }
+          >
+            {lots.length > 0 ? (
+              <ul className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                {lots.map((lot) => {
+                  const pct =
+                    lot.expectedUnitCount && lot.expectedUnitCount > 0
+                      ? Math.min(
+                          100,
+                          Math.round((lot.actualUnitCount / lot.expectedUnitCount) * 100),
+                        )
+                      : null;
+                  const spec = [
+                    lot.manufacturer,
+                    lot.model,
+                    lot.cpu,
+                    lot.ramGb ? `${lot.ramGb}GB` : null,
+                    lot.storage,
+                    lot.screenSize,
+                  ]
+                    .filter(Boolean)
+                    .join(' · ');
+                  const specLabel = spec || lot.description;
+                  return (
+                    <li
+                      key={lot.id}
+                      className="flex min-w-0 flex-col rounded-lg border border-neutral-200 bg-white p-4"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        {/* One link per card. The card used to carry two to the
+                            same place, doubling every sub-lot's tab stops. */}
+                        <Link
+                          href={`/batches/${batch.id}/sublots/${lot.id}`}
+                          className="min-w-0 text-sm font-medium text-[#1a6ef5] hover:underline"
+                        >
+                          {lot.lotNumber}
+                        </Link>
+                        <span className="shrink-0 rounded-full border border-neutral-300 bg-neutral-100 px-2 py-0.5 text-[11px] font-medium text-neutral-700">
                           {formatLabel(lot.status)}
                         </span>
-                        {canDelete && (
+                      </div>
+                      {specLabel && (
+                        <p className="mt-1 text-sm text-neutral-600">{specLabel}</p>
+                      )}
+                      <div className="mt-3 flex items-baseline justify-between gap-2 text-sm">
+                        <span className="text-neutral-700 tabular-nums">
+                          <span className="font-medium text-neutral-950">
+                            {lot.actualUnitCount}
+                          </span>{' '}
+                          device{lot.actualUnitCount === 1 ? '' : 's'}
+                          {lot.expectedUnitCount != null
+                            ? ` of ${lot.expectedUnitCount} expected`
+                            : ''}
+                        </span>
+                        {pct != null && (
+                          <span className="text-xs text-neutral-600 tabular-nums">{pct}%</span>
+                        )}
+                      </div>
+                      {pct != null && (
+                        <span
+                          aria-hidden="true"
+                          className="mt-2 block h-1.5 w-full overflow-hidden rounded-full bg-neutral-100"
+                        >
+                          <span
+                            className="block h-full rounded-full bg-[#1a6ef5]"
+                            style={{ width: `${pct}%` }}
+                          />
+                        </span>
+                      )}
+                      {canDelete && (
+                        <div className="mt-3 flex justify-end border-t border-neutral-200 pt-3">
                           <DeleteSubLotButton
                             lotId={lot.id}
                             lotNumber={lot.lotNumber}
                             batchId={batch.id}
-                            assetCount={lot.actualUnitCount}
+                            assetCount={lot.totalUnitCount ?? lot.actualUnitCount}
                           />
-                        )}
-                      </div>
-                    </div>
-                    {specLabel && (
-                      <div className="mt-0.5 text-neutral-500">{specLabel}</div>
-                    )}
-                    <div className="mt-2 flex items-baseline justify-between text-xs text-neutral-500">
-                      <span>
-                        <span className="text-neutral-700">{lot.actualUnitCount}</span> asset
-                        {lot.actualUnitCount === 1 ? '' : 's'}
-                        {lot.expectedUnitCount != null
-                          ? ` / ${lot.expectedUnitCount} expected`
-                          : ''}
-                      </span>
-                      {pct != null && <span>{pct}%</span>}
-                    </div>
-                    {pct != null && (
-                      <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-neutral-100">
-                        <div
-                          className="h-full rounded-full bg-emerald-600"
-                          style={{ width: `${pct}%` }}
-                        />
-                      </div>
-                    )}
-                    <Link
-                      href={`/batches/${batch.id}/sublots/${lot.id}`}
-                      aria-label={`View contents of ${lot.lotNumber}`}
-                      className="mt-2 inline-block text-xs text-neutral-700 underline"
-                    >
-                      View contents <span aria-hidden="true">→</span>
-                    </Link>
-                  </li>
-                );
-              })}
-              {lots.length === 0 && (
-                <li className="text-sm text-neutral-500">
-                  No sub-lots yet. Create one below to group these devices by specification.
-                </li>
-              )}
-            </ul>
+                        </div>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            ) : (
+              <Empty>No sub-lots yet — create one to group these devices by specification.</Empty>
+            )}
             {canManage && <NewLotForm batchId={batch.id} />}
-          </section>
+          </Section>
+
+          <Section
+            id="devices"
+            title={`Devices (${assets.length})`}
+            description={
+              soldOff > 0
+                ? `Still in this lot's active inventory. ${soldOff} sold device${soldOff === 1 ? '' : 's'} moved to the Sold archive.`
+                : "Everything scanned into this lot."
+            }
+            action={
+              canMove && unallocated > 0 ? (
+                <div className="shrink-0">
+                  <TransferBatch
+                    batchId={batch.id}
+                    batchNumber={batch.batchNumber}
+                    eligibleCount={unallocated}
+                  />
+                </div>
+              ) : undefined
+            }
+          >
+            <LotAssets
+              assets={assets}
+              subLots={lots}
+              batchId={batch.id}
+              otherBatches={otherBatches}
+              canManage={canManage}
+              canDelete={canDelete}
+              canMove={canMove}
+              scopeLabel="lot"
+            />
+            {canManage && <AddAssetForm batchId={batch.id} subLots={lots} />}
+          </Section>
+
+          {reconciledExactly && recon.summary.missing === 0 && recon.summary.extra === 0 && (
+            <p className="mt-4 text-xs text-neutral-500">
+              This lot reconciles against both the declared unit count and the imported manifest.
+            </p>
+          )}
         </div>
       </main>
-  </>
+    </>
   );
 }

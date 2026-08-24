@@ -166,6 +166,8 @@ export function GoodsInWorkspace({
   const [unitFilter, setUnitFilter] = useState<'all' | 'audited' | 'pending'>('all');
   const [unitPage, setUnitPage] = useState(1);
   const [picked, setPicked] = useState<string[]>([]); // pool rows ticked for Move to Pallet
+  // Outcome of the last Move to Pallet, kept by the component that survives it.
+  const [moveOutcome, setMoveOutcome] = useState<string | null>(null);
   const [selectedUnitId, setSelectedUnitId] = useState<string | null>(null);
   const [detail, setDetail] = useState<UnitDetail>({ loading: false, error: null, asset: null });
 
@@ -649,7 +651,10 @@ export function GoodsInWorkspace({
             {canMove && picked.length > 0 && (
               <MoveToPallet
                 selectedIds={picked}
-                onMoved={() => {
+                onMoved={(outcome) => {
+                  // Held out here because clearing `picked` unmounts the bar
+                  // that produced this text — including its "N skipped" list.
+                  setMoveOutcome(outcome);
                   setPicked([]);
                   // Refresh mode: the rows stay on screen through the reload,
                   // and the moved devices are reported as updated rather than
@@ -658,6 +663,15 @@ export function GoodsInWorkspace({
                   router.refresh();
                 }}
               />
+            )}
+
+            {moveOutcome && (
+              <p
+                role="status"
+                className="mt-3 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-neutral-900"
+              >
+                {moveOutcome}
+              </p>
             )}
 
             <div role="region" aria-label="Lot devices" tabIndex={0} className="mt-3 overflow-x-auto rounded-xl border border-neutral-200">

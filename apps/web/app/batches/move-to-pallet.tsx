@@ -16,12 +16,20 @@ interface PalletOption {
 // pallet (or a new one) and move the selection onto it. Devices leave this
 // lot's pool but stay in the register — the move is reversible from the
 // pallet's page.
+//
+// The success outcome is handed UP rather than rendered here. Both callers show
+// this bar only while something is selected, and both clear the selection in
+// onMoved — so writing "Moved 17 devices — 5 skipped (already on a pallet)" into
+// this component's own state tore it down in the same commit and the operator
+// never saw it. The skipped list is not cosmetic: the API refuses devices that
+// are sold, already on another pallet, or in a lot a scoped manager does not
+// own, and it reports one reason per device.
 export function MoveToPallet({
   selectedIds,
   onMoved,
 }: {
   selectedIds: string[];
-  onMoved: () => void;
+  onMoved: (outcome: string) => void;
 }) {
   const router = useRouter();
   const [pallets, setPallets] = useState<PalletOption[] | null>(null);
@@ -57,11 +65,14 @@ export function MoveToPallet({
       return;
     }
     const skipped = result.skipped?.length ?? 0;
-    setMessage(
+    const outcome =
       `Moved ${result.moved} device${result.moved === 1 ? '' : 's'} to ${result.palletNumber}` +
-        (skipped ? ` — ${skipped} skipped (${result.skipped!.map((s) => s.reason).join('; ')})` : ''),
-    );
-    onMoved();
+      (skipped
+        ? ` — ${skipped} skipped (${result.skipped!.map((s) => s.reason).join('; ')})`
+        : '');
+    // Errors stay here: a failure does not clear the selection, so this bar is
+    // still mounted to show them.
+    onMoved(outcome);
     router.refresh();
   }
 

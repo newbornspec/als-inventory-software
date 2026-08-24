@@ -44,7 +44,16 @@ function toInt(value: unknown): number | undefined {
   return Number.isNaN(n) ? undefined : n;
 }
 
-export function ImportExpected({ batchId, hasExisting }: { batchId: string; hasExisting: boolean }) {
+export function ImportExpected({
+  batchId,
+  batchNumber,
+  existingLineCount,
+}: {
+  batchId: string;
+  batchNumber: string;
+  existingLineCount: number;
+}) {
+  const hasExisting = existingLineCount > 0;
   const router = useRouter();
   const [fileName, setFileName] = useState('');
   const [columns, setColumns] = useState<string[]>([]);
@@ -116,6 +125,25 @@ export function ImportExpected({ batchId, hasExisting }: { batchId: string; hasE
       setError('Map at least one column, then import.');
       return;
     }
+    // Import is replace-on-import server-side (expected-line-items.service.ts
+    // deletes the batch's lines before inserting). That destroys the supplier
+    // manifest this whole page's found/missing/extra reconciliation is derived
+    // from, and it was a single unguarded click — the only warning was passive
+    // grey text next to the file picker, well above the button. Mis-map a column
+    // and the original is unrecoverable unless the operator still has the file.
+    if (
+      hasExisting &&
+      !window.confirm(
+        `Replace the supplier manifest for ${batchNumber}?\n\n` +
+          `• the ${existingLineCount} line${existingLineCount === 1 ? '' : 's'} currently recorded ` +
+          `will be deleted\n` +
+          `• ${items.length} line${items.length === 1 ? '' : 's'} from ${fileName || 'this file'} ` +
+          `will replace them\n` +
+          `• found / missing / extra will be recalculated against the new list\n\n` +
+          `This cannot be undone — the old manifest is not kept.`,
+      )
+    )
+      return;
     setBusy(true);
     setError(null);
     const res = await importExpectedLineItems(batchId, items);
@@ -135,15 +163,18 @@ export function ImportExpected({ batchId, hasExisting }: { batchId: string; hasE
   const preview = rows.slice(0, 3);
 
   return (
-    <div className="rounded-md border border-neutral-200 p-3">
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <h3 className="text-sm font-medium text-neutral-900">Import supplier list</h3>
-          <div className="text-xs text-neutral-500">
-            CSV or Excel. {hasExisting ? 'Re-importing replaces the current expected list.' : ''}
-          </div>
+    <div className="rounded-lg border border-neutral-200 bg-neutral-50 p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h3 className="text-sm font-medium text-neutral-950">Import supplier list</h3>
+          <p className="mt-1 text-sm text-neutral-700">
+            CSV or Excel.{' '}
+            {hasExisting
+              ? `This lot already has ${existingLineCount} manifest line${existingLineCount === 1 ? '' : 's'} — importing replaces them.`
+              : 'Nothing has been imported for this lot yet.'}
+          </p>
         </div>
-        <label className="cursor-pointer rounded-md bg-[#1a6ef5] hover:bg-blue-600 px-3 py-1.5 text-xs font-medium text-white focus-within:outline focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-[#1a6ef5]">
+        <label className="shrink-0 cursor-pointer rounded-md border border-[var(--control-border)] bg-white px-3 py-1.5 text-sm font-medium text-neutral-800 hover:bg-neutral-50 focus-within:outline focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-[#1a6ef5]">
           Choose file
           <input
             type="file"
@@ -157,9 +188,9 @@ export function ImportExpected({ batchId, hasExisting }: { batchId: string; hasE
 
       {fileName && !error && columns.length > 0 && (
         <div className="mt-3 space-y-3">
-          <div className="text-xs text-neutral-500">
-            <span className="text-neutral-900">{fileName}</span> — {rows.length} rows. Map the
-            columns:
+          <div className="text-sm text-neutral-700">
+            <span className="font-medium text-neutral-950">{fileName}</span> — {rows.length} rows.
+            Map the columns:
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
@@ -184,13 +215,22 @@ export function ImportExpected({ batchId, hasExisting }: { batchId: string; hasE
             ))}
           </div>
 
-          <div role="region" aria-label="Import preview" tabIndex={0} className="overflow-x-auto rounded border border-neutral-200">
-            <table className="w-full text-left text-[11px]">
-          <caption className="sr-only">Preview of the imported supplier list</caption>
-              <thead className="bg-neutral-50 text-neutral-500">
+          <div
+            role="region"
+            aria-label="Preview of the file being imported"
+            tabIndex={0}
+            className="relative min-w-0 overflow-x-auto rounded-lg border border-neutral-200 bg-white"
+          >
+            <table className="w-full border-collapse text-left text-sm">
+              <caption className="sr-only">Preview of the imported supplier list</caption>
+              <thead className="bg-neutral-50">
                 <tr>
                   {TARGET_FIELDS.filter((f) => mapping[f.key]).map((f) => (
-                    <th scope="col" key={f.key} className="px-2 py-1 font-normal">
+                    <th
+                      scope="col"
+                      key={f.key}
+                      className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-neutral-500"
+                    >
                       {f.label}
                     </th>
                   ))}
@@ -200,7 +240,7 @@ export function ImportExpected({ batchId, hasExisting }: { batchId: string; hasE
                 {preview.map((row, i) => (
                   <tr key={i} className="border-t border-neutral-200">
                     {TARGET_FIELDS.filter((f) => mapping[f.key]).map((f) => (
-                      <td key={f.key} className="px-2 py-1 text-neutral-700">
+                      <td key={f.key} className="px-3 py-2 text-sm text-neutral-700">
                         {String(row[mapping[f.key] as string] ?? '')}
                       </td>
                     ))}
@@ -213,9 +253,13 @@ export function ImportExpected({ batchId, hasExisting }: { batchId: string; hasE
           <button
             onClick={onImport}
             disabled={busy}
-            className="rounded-md bg-emerald-700 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50"
+            className="rounded-md bg-[#1a6ef5] px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-600 disabled:opacity-50"
           >
-            {busy ? 'Importing…' : `Import ${rows.length} rows`}
+            {busy
+              ? 'Importing…'
+              : hasExisting
+                ? `Replace the manifest with ${rows.length} rows`
+                : `Import ${rows.length} rows`}
           </button>
         </div>
       )}
