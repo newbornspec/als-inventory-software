@@ -34,7 +34,12 @@ export default async function SoldPage() {
   return (
     <>
       <Nav />
-      <main id="main-content" tabIndex={-1} className="min-h-screen bg-white text-neutral-950 px-4 py-6 sm:p-8">
+      <main
+        id="main-content"
+        tabIndex={-1}
+        className="min-h-screen bg-neutral-50 text-neutral-950 px-4 py-6 sm:px-8 sm:py-8"
+      >
+        <div className="mx-auto max-w-[90rem]">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <h1 className="text-2xl font-semibold tracking-tight">Sold</h1>
@@ -53,6 +58,7 @@ export default async function SoldPage() {
           palletDests={palletDests}
           isAdmin={isAdmin}
         />
+        </div>
       </main>
   </>
   );
