@@ -111,6 +111,18 @@ export function hasPermission(access: SessionAccess | null, permission: string):
   return access.role === 'admin' || access.permissions.includes(permission);
 }
 
+// Several API handlers accept ANY of a set — @RequirePermissions('goods_in',
+// 'assets') passes if the caller holds either, because the guard tests
+// required.some(...) (permissions.guard.ts). Mirroring those endpoints with a
+// single hasPermission() call would gate the UI more tightly than the API does
+// and hide a control from someone entitled to use it.
+export function hasAnyPermission(
+  access: SessionAccess | null,
+  permissions: string[],
+): boolean {
+  return permissions.some((p) => hasPermission(access, p));
+}
+
 // May this user open this path? Only says yes for paths it can vouch for.
 export function mayVisit(path: string, access: SessionAccess | null): boolean {
   const hit = PATH_PERMISSIONS.find(([prefix]) => path.startsWith(prefix));
