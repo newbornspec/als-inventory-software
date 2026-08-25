@@ -13,10 +13,16 @@ export function BatchStatusSelect({
   status,
   // Live devices in the lot — what choosing "Sold" would actually sell.
   unitsAtRisk,
+  // "Sold" is not a label here: it routes to POST /batches/:id/sell, which the
+  // API guards with sell_items rather than the edit_batch that covers every
+  // other value in this list. Without that grant the option is not offered —
+  // it would 403, and it is the largest mutation on the page.
+  canSell,
 }: {
   batchId: string;
   status: string;
   unitsAtRisk: number;
+  canSell: boolean;
 }) {
   const router = useRouter();
   const selectRef = useRef<HTMLSelectElement>(null);
@@ -101,7 +107,7 @@ export function BatchStatusSelect({
         onChange={onChange}
         className="field-inline px-2 py-1 text-sm disabled:opacity-50"
       >
-        {BATCH_STATUSES.map((s) => (
+        {BATCH_STATUSES.filter((s) => s !== 'sold' || canSell || status === 'sold').map((s) => (
           <option key={s} value={s} className="bg-white">
             {formatLabel(s)}
           </option>

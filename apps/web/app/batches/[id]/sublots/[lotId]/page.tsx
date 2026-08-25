@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { apiFetch, ApiError, getSessionUser } from '@/lib/api-server';
+import { apiFetch, ApiError, getSessionAccess } from '@/lib/api-server';
+import { hasAnyPermission, hasPermission } from '@/lib/permissions';
 import type { Batch, Lot } from '@/lib/actions/batches';
 import type { Asset } from '@/lib/actions/assets';
 import { Nav } from '@/app/components/nav';
@@ -34,19 +35,22 @@ export default async function SubLotDetailPage({
   params: Promise<{ id: string; lotId: string }>;
 }) {
   const { id, lotId } = await params;
-  const user = await getSessionUser();
+  const access = await getSessionAccess();
   const [lot, assets, siblings, batch, allBatches] = await load(id, lotId);
 
   // Guard against a mismatched URL (sub-lot that isn't in this batch).
   if (lot.batchId && lot.batchId !== id) notFound();
 
-  // Matches the parent lot page, which grants technicians the same input rights
-  // under the comment "Technicians can create + input like managers". The same
-  // person looking at the same device used to gain and lose the Sell, Sub-lot
-  // and Move-to controls purely by drilling one level deeper.
-  const canManage =
-    user?.role === 'admin' || user?.role === 'manager' || user?.role === 'technician';
-  const canDelete = user?.role === 'admin';
+  // Same per-control permissions as the parent lot page, so the identical device
+  // offers the identical actions whichever route you drilled through. This page
+  // used to gate on role alone (admin|manager), which both hid controls from a
+  // technician who was allowed to use them and showed controls to anyone whose
+  // grants had been revoked.
+  const canEditLot = hasPermission(access, 'edit_batch');
+  const canEditDevices = hasAnyPermission(access, ['assets', 'goods_in']);
+  const canSell = hasPermission(access, 'sell_items');
+  const canDeleteDevice = hasPermission(access, 'delete_asset');
+  const canDeleteLot = hasPermission(access, 'delete_batch');
   const otherBatches = allBatches
     .filter((b) => b.id !== id)
     .map((b) => ({ id: b.id, batchNumber: b.batchNumber, source: b.source }));
@@ -99,7 +103,7 @@ export default async function SubLotDetailPage({
                 {spec ? ` · ${spec}` : ''}
               </p>
             </div>
-            {canDelete && (
+            {canDeleteLot && (
               <div className="shrink-0">
                 <DeleteSubLotButton
                   lotId={lot.id}
@@ -143,8 +147,11 @@ export default async function SubLotDetailPage({
               subLots={siblings}
               batchId={id}
               otherBatches={otherBatches}
-              canManage={canManage}
-              canDelete={canDelete}
+              canEdit={canEditDevices}
+              canRegroup={canEditLot}
+              canSell={canSell}
+              canDelete={canDeleteDevice}
+              canSeePallets={hasPermission(access, 'pallets')}
               scopeLabel="sub-lot"
             />
           </Section>

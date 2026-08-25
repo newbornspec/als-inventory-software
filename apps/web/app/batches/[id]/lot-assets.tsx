@@ -37,23 +37,39 @@ function describe(a: Asset): string {
 // hardcoded to "sub-lot", which on the lot page gave a search box visibly
 // labelled "Search this lot" whose accessible name said "sub-lot" — a
 // label-in-name mismatch that also breaks voice control.
+// One `canManage` prop used to gate four columns that the API protects with four
+// different permissions, so a user could be shown Sell without holding
+// sell_items. Each column now carries its own flag, named for the permission
+// behind it:
+//   canEdit    -> assets|goods_in  (PATCH /assets/:id: sub-lot, move to lot)
+//   canRegroup -> edit_batch       (the sub-lot picker also restructures the lot)
+//   canSell    -> sell_items       (POST /assets/:id/sell)
+//   canDelete  -> delete_asset     (DELETE /assets/:id)
+//   canMove    -> move_to_pallet   (unchanged; this one was already right)
 export function LotAssets({
   assets,
   subLots,
   batchId,
   otherBatches,
-  canManage,
+  canEdit,
+  canRegroup,
+  canSell,
   canDelete,
   canMove,
+  canSeePallets,
   scopeLabel = 'sub-lot',
 }: {
   assets: Asset[];
   subLots: Lot[];
   batchId: string;
   otherBatches: { id: string; batchNumber: string; source: string | null }[];
-  canManage: boolean;
+  canEdit: boolean;
+  canRegroup: boolean;
+  canSell: boolean;
   canDelete: boolean;
   canMove?: boolean;
+  // Opens the pallets module — governs whether a pallet reference is a link.
+  canSeePallets?: boolean;
   scopeLabel?: 'lot' | 'sub-lot';
 }) {
   const [pending, startTransition] = useTransition();
@@ -275,14 +291,16 @@ export function LotAssets({
   // tally that counted a "Move to" column existing only when there is somewhere
   // to move to. Browsers clamp an over-large colspan, so nothing was visibly
   // wrong — this just stops the two from being able to drift.
-  const showSubLotCol = canManage && subLots.length > 0;
-  const showMoveCol = canManage && otherBatches.length > 0;
+  // The sub-lot picker regroups the lot's structure, so it needs edit_batch as
+  // well as the device-edit permission; moving between lots is a plain asset edit.
+  const showSubLotCol = canEdit && canRegroup && subLots.length > 0;
+  const showMoveCol = canEdit && otherBatches.length > 0;
   const totalCols =
     (canMove ? 1 : 0) + // select
     11 + // Unit ID … Location
     (showSubLotCol ? 1 : 0) +
     (showMoveCol ? 1 : 0) +
-    (canManage ? 1 : 0) + // Sell
+    (canSell ? 1 : 0) + // Sell
     1 + // Print
     (canDelete ? 1 : 0);
 
@@ -395,7 +413,7 @@ export function LotAssets({
               {showMoveCol && <th scope="col" className={TH}>Move to</th>}
               {/* These three were empty cells, so a screen reader announced
                   nothing at all for the columns that act on a device. */}
-              {canManage && (
+              {canSell && (
                 <th scope="col" className={TH}>
                   <span className="sr-only">Sell</span>
                 </th>
@@ -444,15 +462,23 @@ export function LotAssets({
                   <Link href={`/assets/${a.id}`} className="text-[#1a6ef5] hover:underline">
                     {a.name}
                   </Link>
-                  {a.pallet && (
-                    <Link
-                      href={`/pallets/${a.pallet.id}`}
-                      aria-label={`Open pallet ${a.pallet.palletNumber}`}
-                      className="ml-2 rounded border border-blue-200 bg-blue-50 px-1.5 py-0.5 text-[11px] font-medium text-blue-800 hover:bg-blue-100"
-                    >
-                      {a.pallet.palletNumber}
-                    </Link>
-                  )}
+                  {/* Which pallet a device sits on is worth knowing even without
+                      access to the pallets module — but it is only a LINK for
+                      someone who can open the page it points at. */}
+                  {a.pallet &&
+                    (canSeePallets ? (
+                      <Link
+                        href={`/pallets/${a.pallet.id}`}
+                        aria-label={`Open pallet ${a.pallet.palletNumber}`}
+                        className="ml-2 rounded border border-blue-200 bg-blue-50 px-1.5 py-0.5 text-[11px] font-medium text-blue-800 hover:bg-blue-100"
+                      >
+                        {a.pallet.palletNumber}
+                      </Link>
+                    ) : (
+                      <span className="ml-2 rounded border border-neutral-300 bg-neutral-100 px-1.5 py-0.5 text-[11px] font-medium text-neutral-700">
+                        {a.pallet.palletNumber}
+                      </span>
+                    ))}
                 </td>
                 <td className={`${TD} text-neutral-700`}>{a.manufacturer || '—'}</td>
                 <td className={`${TD} text-neutral-700`}>{a.model || '—'}</td>
@@ -516,7 +542,7 @@ export function LotAssets({
                   </td>
                 )}
 
-                {canManage && (
+                {canSell && (
                   <td className={TD}>
                     <button
                       type="button"

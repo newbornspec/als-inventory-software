@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { apiFetch, ApiError, getSessionAccess, getSessionUser } from '@/lib/api-server';
-import { hasPermission } from '@/lib/permissions';
+import { apiFetch, ApiError, getSessionAccess } from '@/lib/api-server';
+import { hasAnyPermission, hasPermission } from '@/lib/permissions';
 import { TransferBatch } from '../transfer-batch';
 import type { Batch, Lot, ReconciliationResult } from '@/lib/actions/batches';
 import type { Asset } from '@/lib/actions/assets';
@@ -64,24 +64,54 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 
 export default async function BatchDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const user = await getSessionUser();
 
   const [batch, assets, lots, recon, allBatches] = await loadBatch(id);
 
-  // Technicians can create + input like managers; only delete/reassign are gated.
-  const canManage =
-    user?.role === 'admin' || user?.role === 'manager' || user?.role === 'technician';
+  // Gated per control against the permission the API actually enforces, the way
+  // the parent Goods In page already does it (batches/page.tsx:79-81).
+  //
+  // What this replaces: one `canManage` flag standing in for five different
+  // permissions, defined as `role === 'admin' || 'manager' || 'technician'` —
+  // which is EVERY role the system has (user.entity.ts UserRole), so it was true
+  // for every signed-in user and hid nothing from anyone. A technician whose
+  // sell_items and edit_batch grants had been revoked still saw Export, Import,
+  // Add device, Sell, and the status picker that sells the entire lot; each one
+  // 403d on click. The other flag, `canDelete`, was `role === 'admin'` — a real
+  // gate, but the wrong one: the users screen can grant delete_asset or
+  // delete_batch to a manager or technician (permissions-picker.tsx renders every
+  // action slug for every role), and the API honours it, while this page hid the
+  // buttons anyway.
   const access = await getSessionAccess();
-  const canMove = hasPermission(access, 'move_to_pallet');
+
+  const canEditLot = hasPermission(access, 'edit_batch'); // PATCH /batches/:id, POST /lots
+  const canEditDevices = hasAnyPermission(access, ['assets', 'goods_in']); // POST+PATCH /assets
+  const canSell = hasPermission(access, 'sell_items'); // POST /assets|batches/:id/sell
+  const canDeleteDevice = hasPermission(access, 'delete_asset'); // DELETE /assets/:id
+  const canDeleteLot = hasPermission(access, 'delete_batch'); // DELETE /lots/:id
+  // Reassignment needs TWO grants, and the second one is easy to miss: the
+  // action itself is manage_ownership, but the picker has to list candidates
+  // from GET /users, which UsersController guards with 'users' at class level.
+  // While this was gated on role==='admin' the pair was invisible, because an
+  // admin holds everything. A manager granted manage_ownership alone would get
+  // an empty list and a control that could never be used, so it is not offered.
+  const canManageOwnership =
+    hasPermission(access, 'manage_ownership') && hasPermission(access, 'users');
+  const canExport = hasPermission(access, 'export'); // GET /batches/:id/report.xlsx
+  const canViewDocs = hasAnyPermission(access, ['goods_in', 'assets']); // erasure certificate
+  // Same two-grant shape as reassignment: moving devices needs move_to_pallet,
+  // but the destination picker lists pallets from GET /pallets and creating one
+  // is POST /pallets — both guarded with 'pallets'. Without it the bar offers an
+  // empty list and a "New pallet…" that 403s, so it is not offered at all.
+  const canSeePallets = hasPermission(access, 'pallets');
+  const canMove = hasPermission(access, 'move_to_pallet') && canSeePallets;
+
   // The pool still movable to a pallet; register rows keep palletised devices.
   const unallocated = batch.unallocatedCount ?? assets.filter((a) => !a.palletId).length;
-  const canDelete = user?.role === 'admin';
-  const isAdmin = user?.role === 'admin';
   const otherBatches = allBatches
     .filter((b) => b.id !== batch.id)
     .map((b) => ({ id: b.id, batchNumber: b.batchNumber, source: b.source }));
-  // Admins can reassign ownership — load the user list to choose from.
-  const users = isAdmin
+  // Only fetched for someone who can actually act on it.
+  const users = canManageOwnership
     ? await apiFetch<{ id: string; name: string; role: string }[]>('/users').catch(() => [])
     : [];
 
@@ -143,22 +173,30 @@ export default async function BatchDetailPage({ params }: { params: Promise<{ id
                 {batch.location?.name ? ` · ${batch.location.name}` : ''}
               </p>
             </div>
-            {canManage && (
+            {(canViewDocs || canExport) && (
               <div className="flex shrink-0 flex-wrap gap-2">
-                <a
-                  href={`/api/batches/${batch.id}/erasure-certificate`}
-                  aria-label={`Download the erasure certificate for ${batch.batchNumber}`}
-                  className="rounded-md border border-[var(--control-border)] px-3 py-1.5 text-sm font-medium text-neutral-800 hover:bg-neutral-50"
-                >
-                  Erasure certificate
-                </a>
-                <a
-                  href={`/api/batches/${batch.id}/report`}
-                  aria-label={`Export ${batch.batchNumber} to Excel`}
-                  className="rounded-md bg-[#1a6ef5] px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-600"
-                >
-                  Export to Excel
-                </a>
+                {/* Two different permissions, and they were behind one flag: the
+                    certificate needs goods_in or assets, the export needs
+                    `export` — which is revocable, so this button was the one
+                    most likely to be shown and then 403. */}
+                {canViewDocs && (
+                  <a
+                    href={`/api/batches/${batch.id}/erasure-certificate`}
+                    aria-label={`Download the erasure certificate for ${batch.batchNumber}`}
+                    className="rounded-md border border-[var(--control-border)] px-3 py-1.5 text-sm font-medium text-neutral-800 hover:bg-neutral-50"
+                  >
+                    Erasure certificate
+                  </a>
+                )}
+                {canExport && (
+                  <a
+                    href={`/api/batches/${batch.id}/report`}
+                    aria-label={`Export ${batch.batchNumber} to Excel`}
+                    className="rounded-md bg-[#1a6ef5] px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-600"
+                  >
+                    Export to Excel
+                  </a>
+                )}
               </div>
             )}
           </div>
@@ -221,7 +259,7 @@ export default async function BatchDetailPage({ params }: { params: Promise<{ id
             <dl className="grid gap-x-8 gap-y-4 sm:grid-cols-2 lg:grid-cols-3">
               <Field label="Owner">
                 {batch.owner?.name ?? '—'}
-                {isAdmin && users.length > 0 && (
+                {canManageOwnership && users.length > 0 && (
                   <ReassignOwner
                     batchId={batch.id}
                     batchNumber={batch.batchNumber}
@@ -240,11 +278,16 @@ export default async function BatchDetailPage({ params }: { params: Promise<{ id
                 )}
               </Field>
               <Field label="Status">
-                {canManage ? (
+                {/* The picker changes the status (edit_batch) and, for "Sold",
+                    sells the whole lot (sell_items) — two permissions behind one
+                    control, so it needs both to be interactive, and it hides the
+                    Sold option when only the first is held. */}
+                {canEditLot ? (
                   <BatchStatusSelect
                     batchId={batch.id}
                     status={batch.status}
                     unitsAtRisk={batch.actualUnitCount}
+                    canSell={canSell}
                   />
                 ) : (
                   formatLabel(batch.status)
@@ -254,7 +297,7 @@ export default async function BatchDetailPage({ params }: { params: Promise<{ id
               <Field label="Delivery note">{batch.deliveryNote ?? '—'}</Field>
               <Field label="Purchase date">{batch.purchaseDate ?? '—'}</Field>
               <Field label="Expected arrival">
-                {canManage ? (
+                {canEditLot ? (
                   <ExpectedArrival
                     batchId={batch.id}
                     expectedArrivalDate={batch.expectedArrivalDate}
@@ -265,7 +308,7 @@ export default async function BatchDetailPage({ params }: { params: Promise<{ id
               </Field>
               <Field label="Received date">{batch.receivedDate ?? '—'}</Field>
               <Field label="Lot cost">
-                {canManage ? (
+                {canEditLot ? (
                   <LotCost batchId={batch.id} totalCost={batch.totalCost} />
                 ) : batch.totalCost != null ? (
                   money(batch.totalCost)
@@ -338,7 +381,7 @@ export default async function BatchDetailPage({ params }: { params: Promise<{ id
               </div>
             )}
 
-            {canManage && (
+            {canEditLot && (
               <div className="mt-4 max-w-2xl">
                 <ImportExpected
                   batchId={batch.id}
@@ -428,7 +471,7 @@ export default async function BatchDetailPage({ params }: { params: Promise<{ id
                           />
                         </span>
                       )}
-                      {canDelete && (
+                      {canDeleteLot && (
                         <div className="mt-3 flex justify-end border-t border-neutral-200 pt-3">
                           <DeleteSubLotButton
                             lotId={lot.id}
@@ -445,7 +488,7 @@ export default async function BatchDetailPage({ params }: { params: Promise<{ id
             ) : (
               <Empty>No sub-lots yet — create one to group these devices by specification.</Empty>
             )}
-            {canManage && <NewLotForm batchId={batch.id} />}
+            {canEditLot && <NewLotForm batchId={batch.id} />}
           </Section>
 
           <Section
@@ -473,12 +516,15 @@ export default async function BatchDetailPage({ params }: { params: Promise<{ id
               subLots={lots}
               batchId={batch.id}
               otherBatches={otherBatches}
-              canManage={canManage}
-              canDelete={canDelete}
+              canEdit={canEditDevices}
+              canSell={canSell}
+              canDelete={canDeleteDevice}
+              canRegroup={canEditLot}
+              canSeePallets={canSeePallets}
               canMove={canMove}
               scopeLabel="lot"
             />
-            {canManage && <AddAssetForm batchId={batch.id} subLots={lots} />}
+            {canEditDevices && <AddAssetForm batchId={batch.id} subLots={lots} />}
           </Section>
 
           {reconciledExactly && recon.summary.missing === 0 && recon.summary.extra === 0 && (
