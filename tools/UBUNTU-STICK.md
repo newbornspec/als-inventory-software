@@ -20,54 +20,57 @@ the kernel signed by Canonical, so an Ubuntu live stick boots with Secure Boot
 which matters, because a BIOS admin password is one of the things we test for
 and would block you from changing it anyway.
 
-## The one structural difference
+## The build
 
-An Ubuntu ISO written to USB is **read-only ISO9660**. You cannot drop
-`hardware-audit.sh` onto its root the way you could with the archiso stick.
+You need **Ubuntu Desktop LTS** — not Server. Server's live environment is the
+installer: there is a shell, but no desktop session, so the `gui/` kiosk cannot
+run there.
 
-So the stick gets **two partitions**:
+Use **Rufus in ISO Image mode**, not DD.
 
-| Partition | Contents | Filesystem |
-|---|---|---|
-| 1 | The Ubuntu ISO, written with `dd`/Rufus — bootable and signed | ISO9660 (read-only) |
-| 2 | Our tools: `hardware-audit.sh`, `lock-checks.sh`, `gui/`, `audit.conf`, `images/` | FAT32, **label `ALSAUDIT`** |
+DD writes the ISO byte-for-byte, which leaves a read-only ISO9660 stick you
+cannot copy the tools onto. ISO mode creates a **writable FAT32 partition**,
+copies Ubuntu's `EFI/BOOT/bootx64.efi` — the Microsoft-signed shim — across
+intact, and leaves the free space usable. Secure Boot still works, because what
+makes it work is the shim being present, and Rufus copies it rather than
+replacing it. SystemRescue failed for the opposite reason: it ships no shim at
+all.
 
-**The label is load-bearing.** `find-media.sh` locates partition 2 by it, and
-mounts it read-only itself when the live session has not — a bare live shell
-auto-mounts nothing, and without that step the GUI cannot find its own files.
+So the new stick works exactly like the old one: one partition, tools at the
+root, `sync-usb.ps1` unchanged.
 
-## Build
-
-1. **Write the ISO.** Download Ubuntu Desktop LTS. With Rufus, choose
-   **DD image mode** — ISO mode rewrites the bootloader and can break the
-   signed chain. `sudo dd if=ubuntu.iso of=/dev/sdX bs=4M status=progress` also
-   works.
-
-2. **Add the data partition.** In Rufus this is the "persistent partition"
-   slider; otherwise create a second FAT32 partition in the free space with
-   GParted or Disk Management. **Label it `ALSAUDIT`.**
-
-3. **Copy the tools onto it** from Windows:
+1. Download **Ubuntu Desktop LTS** (24.04.x, ~6 GB).
+2. Run Rufus. Select the stick, select the ISO, press START. When it asks about
+   the write mode, choose **ISO Image mode**. Let it format.
+3. Copy the tools onto it from Windows:
    ```powershell
-   .\tools\sync-usb.ps1 -Drive <letter-of-ALSAUDIT> -Apply
+   .\tools\sync-usb.ps1 -Drive <letter> -Apply
    ```
-
-4. **Create `audit.conf`** on that partition from `audit.conf.example`. It is
-   never synced — it holds this stick's Wi-Fi and credentials.
+4. Put `audit.conf` back on it. It is never synced — it holds this stick's Wi-Fi
+   and server credentials — so restore it from your backup or rebuild it from
+   `audit.conf.example`.
 
 ## First boot
 
 1. Boot the stick with **Secure Boot left ON**. Choose *Try Ubuntu*.
-2. Open a terminal and run:
+2. Open a terminal and run it **as root**:
    ```sh
-   sudo bash /media/*/ALSAUDIT/hardware-audit.sh
+   sudo bash /cdrom/hardware-audit.sh
    ```
-   (or `bash gui/start-gui.sh` for the kiosk — it mounts the partition itself.)
+   The path depends on where the live session mounts the stick; `find-media.sh`
+   locates it either way, and the audit prints the path it used.
 
-The script installs what it needs through `apt-get`, including `hivex`,
-`ntfs-3g` and `tpm2-tools` for the lock checks, so **the first run needs
-internet**. Without `hivex` the Autopilot, Intune and Entra checks report
-UNKNOWN rather than failing — correct, but not useful.
+**sudo is not optional.** Almost every lock check reads something only root can
+read — the ACPI tables are mode 0400, efivars is root-only, mounting the Windows
+partition needs root, so does `blkid`. SystemRescue booted you in as root and
+this never came up. Ubuntu does not. Without it every lock check reports
+UNKNOWN; it will not tell you a machine is clear, but it will not tell you
+anything useful either. The audit warns you before it starts.
+
+The first run needs **internet**: it apt-installs `hivex`, `ntfs-3g` and
+`tpm2-tools`. Without `hivex` the Autopilot, Intune and Entra checks cannot read
+the Windows registry at all.
+
 
 ## What still differs from the SystemRescue stick
 
