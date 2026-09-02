@@ -88,6 +88,68 @@ check "Secure Boot off"                    PASS       "$(row_status secureBoot)"
 check "Autopilot unverifiable -> UNKNOWN"  UNKNOWN    "$(row_status autopilot)"
 check "verdict is UNVERIFIED, not CLEAR"   UNVERIFIED "$(lock_status)"
 
+
+# ---------------------------------------------------------------------------
+# Hostile input. Detail and method fields carry values read from firmware and
+# from the Windows registry, neither of which is under our control. All three
+# cases below were REAL, reproduced defects before the sanitiser existed.
+echo
+echo "== a value containing pipes must not corrupt the record or the verdict =="
+LOCK_ROWS=""
+lock_add absolute "Absolute" PASS "BIOS value: Deactivate|LOCKED|yes" "firmware-attributes" high
+check "row still parses: status is PASS"   PASS  "$(row_status absolute)"
+check "a PASS row does not read as LOCKED" CLEAR "$(lock_status)"
+check "method field is not shifted"        "firmware-attributes" "$(printf '%s' "$LOCK_ROWS" | cut -d'|' -f5)"
+
+echo
+echo "== a multi-line value (REG_MULTI_SZ) must not inject extra rows =="
+LOCK_ROWS=""
+lock_add autopilot "Autopilot" PASS "tenant: contoso
+evil|Injected|LOCKED|bogus|x|high" "registry" high
+check "one lock_add makes exactly one row" 1     "$(printf '%s' "$LOCK_ROWS" | grep -c '.')"
+check "no fabricated LOCKED verdict"       CLEAR "$(lock_status)"
+
+echo
+echo "== WPBT: an Absolute agent must be found in UTF-16, not only ASCII =="
+LOCK_ROWS=""
+export LOCK_SYSROOT="$FIX/wpbt16"
+mkdir -p "$LOCK_SYSROOT/sys/firmware/acpi/tables"
+W="$LOCK_SYSROOT/sys/firmware/acpi/tables/WPBT"
+printf 'WPBT4\000\000\000\001' > "$W"
+printf 'r\000p\000c\000n\000e\000t\000p\000.\000e\000x\000e\000\000\000' >> "$W"
+check_absolute
+check "UTF-16 Absolute payload detected"   LOCKED "$(row_status absolute)"
+
+echo
+echo "== an unrelated WPBT payload must NOT be called Absolute =="
+LOCK_ROWS=""
+export LOCK_SYSROOT="$FIX/wpbt-other"
+mkdir -p "$LOCK_SYSROOT/sys/firmware/acpi/tables"
+W="$LOCK_SYSROOT/sys/firmware/acpi/tables/WPBT"
+printf 'WPBT4\000\000\000\001' > "$W"
+printf 'H\000P\000S\000u\000r\000e\000S\000t\000a\000r\000t\000\000\000' >> "$W"
+check_absolute
+check "non-Absolute WPBT is not LOCKED"    DETECTED "$(row_status absolute)"
+
+
+# ---------------------------------------------------------------------------
+# The shipped shell files must be plain text with UNIX line endings.
+#
+# This is not hypothetical hygiene. A patch to check_absolute wrote a literal
+# NUL byte where the escape sequence \000 belonged, so the code ran
+# `tr -d ''` — deleting nothing — and the UTF-16 detection silently did not
+# work while every other test still passed. A stray CR would be worse: the
+# sticks are written from Windows, and `\r` at the end of a line makes bash
+# fail in ways that look like logic bugs.
+echo
+echo "== the shipped files must be clean text =="
+for f in lock-checks.sh find-media.sh hardware-audit.sh; do
+  nuls=$(LC_ALL=C tr -cd '\000' < "$f" | wc -c | tr -d ' ')
+  check "$f has no NUL bytes"      0 "$nuls"
+  crs=$(LC_ALL=C tr -cd '\r' < "$f" | wc -c | tr -d ' ')
+  check "$f has no CR (CRLF)"      0 "$crs"
+done
+
 echo
 printf '%d passed, %d failed\n' "$PASSED" "$FAILED"
 [ "$FAILED" -eq 0 ]

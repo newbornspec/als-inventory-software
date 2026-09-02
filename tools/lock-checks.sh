@@ -34,12 +34,22 @@ LOCK_SYSROOT="${LOCK_SYSROOT:-}"
 # ordering is stable and the whole thing survives being sourced by a plain sh.
 LOCK_ROWS=""
 
+# Strip the two characters that would corrupt a record. Several fields carry
+# values read from firmware or the Windows registry — a BIOS attribute string, a
+# tenant name, a REG_MULTI_SZ value — and none of that is under our control.
+#
+# Both failures were reproduced, not theorised. A pipe shifts every later field,
+# so the report prints the wrong method and confidence. A NEWLINE is worse: it
+# injects a whole extra ROW, and a fabricated "LOCKED" line appeared in the
+# report from a single lock_add call. Sanitise once, here, where rows are made.
+_lock_clean() { printf '%s' "$1" | tr '|\r\n' '   ' | sed 's/   */ /g; s/ *$//'; }
+
 # lock_add <key> <label> <status> <detail> <method> <confidence>
 #   status: PASS | DETECTED | LOCKED | WARNING | UNKNOWN
 #   method: how the answer was obtained — shown to the operator so a surprising
 #           result can be traced back to the thing that produced it
 lock_add() {
-  LOCK_ROWS="$LOCK_ROWS$1|$2|$3|$4|$5|$6
+  LOCK_ROWS="$LOCK_ROWS$(_lock_clean "$1")|$(_lock_clean "$2")|$(_lock_clean "$3")|$(_lock_clean "$4")|$(_lock_clean "$5")|$(_lock_clean "$6")
 "
 }
 
@@ -262,7 +272,12 @@ check_absolute() {
     # grep -a rather than `strings`: strings lives in binutils and is missing
     # from minimal live images, and its absence silently emptied this match —
     # turning an ACTIVE Absolute agent into a mere "table present" note.
-    hits=$(grep -aoiE 'rpcnetp|rpcnet|absolute|computrace' "$wpbt" 2>/dev/null | tr '[:upper:]' '[:lower:]' | sort -u | paste -sd', ' -)
+    # tr -d NUL FIRST. WPBT stores its payload identity as a UTF-16LE string,
+    # so the bytes are r NUL p NUL c NUL … and an ASCII grep for "rpcnetp"
+    # matches nothing at all. Verified: the same grep finds the name in an ASCII
+    # fixture and misses it entirely in a UTF-16 one, which would have quietly
+    # downgraded an ACTIVE Absolute agent to "table present, agent unidentified".
+    hits=$(LC_ALL=C tr -d '\000' < "$wpbt" 2>/dev/null | grep -aoiE 'rpcnetp|rpcnet|absolute|computrace' | tr '[:upper:]' '[:lower:]' | sort -u | paste -sd', ' -)
     if [ -n "$hits" ]; then
       lock_add absolute "Absolute / Computrace" LOCKED \
         "Persistence ACTIVE — firmware injects an agent at boot (WPBT payload: $hits)" \
@@ -494,10 +509,15 @@ run_lock_checks() {
 # called CLEAR when every check actually ran and every one came back negative.
 # Anything we could not look at leaves the whole verdict UNVERIFIED.
 lock_status() {
-  local rows="$LOCK_ROWS"
-  printf '%s' "$rows" | grep -q '|LOCKED|'  && { echo LOCKED; return; }
-  printf '%s' "$rows" | grep -qE '\|(DETECTED|WARNING)\|' && { echo WARNING; return; }
-  printf '%s' "$rows" | grep -q '|UNKNOWN|' && { echo UNVERIFIED; return; }
+  # Parse the STATUS FIELD, never the raw row text. Grepping the whole record
+  # for "|LOCKED|" meant a PASS row whose detail merely mentioned those letters
+  # flipped the entire device verdict — reproduced with a BIOS value of
+  # "Deactivate|LOCKED|yes". Field 3 is the status and nothing else is.
+  local sts
+  sts=$(printf '%s' "$LOCK_ROWS" | cut -d'|' -f3)
+  printf '%s\n' "$sts" | grep -qx 'LOCKED'            && { echo LOCKED; return; }
+  printf '%s\n' "$sts" | grep -qxE 'DETECTED|WARNING' && { echo WARNING; return; }
+  printf '%s\n' "$sts" | grep -qx 'UNKNOWN'           && { echo UNVERIFIED; return; }
   echo CLEAR
 }
 
