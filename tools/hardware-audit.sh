@@ -72,7 +72,20 @@ o_s() { [ -n "$2" ] || return 0; OB="$OB,\"$1\":\"$(esc "$2")\""; }
 o_n() { [ -n "$2" ] || return 0; case "$2" in ''|*[!0-9]*) return 0;; esac; OB="$OB,\"$1\":$2"; }
 o_end() { printf '{%s}' "${OB#,}"; }
 
-online() { curl -s --max-time 6 -o /dev/null "$API" 2>/dev/null; }
+# Reachability, with enough patience for a cold boot.
+#
+# This was one curl with a 6-second budget, which is tight for the FIRST TLS
+# handshake on a freshly booted live USB: no DNS cache, no session to resume,
+# and on a network that advertises IPv6 without it working, curl spends the
+# whole budget on the v6 attempt before it would ever fall back. The machine
+# then reports the server unreachable while its network is perfectly fine.
+#
+# So: a longer budget, a separate connect timeout, and an explicit IPv4 retry
+# rather than waiting for a fallback that never gets the time to happen.
+online() {
+  curl -s --connect-timeout 5 --max-time 12 -o /dev/null "$API" 2>/dev/null && return 0
+  curl -s -4 --connect-timeout 5 --max-time 12 -o /dev/null "$API" 2>/dev/null
+}
 
 # --- connect Wi-Fi automatically (iwd on SystemRescue, nmcli on Ubuntu) ---
 connect_wifi() {
