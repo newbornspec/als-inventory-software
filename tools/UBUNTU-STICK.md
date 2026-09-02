@@ -60,6 +60,20 @@ root, `sync-usb.ps1` unchanged.
    The path depends on where the live session mounts the stick; `find-media.sh`
    locates it either way, and the audit prints the path it used.
 
+**Nothing starts by itself.** The old SystemRescue stick ran `autorun/autorun`
+at boot, which is a SystemRescue feature — Ubuntu's casper has no equivalent, so
+the `autorun` file on this stick is inert and the operator must launch the tool.
+For the graphical Audit Station, run it **without** sudo:
+
+```sh
+bash /cdrom/gui/start-gui.sh
+```
+
+It has to run as the desktop user, because that is the only account whose
+display the browser can attach to; it elevates the audit itself with `sudo -n`.
+The backend serves on <http://127.0.0.1:8800> and now stays up even if the
+browser is closed.
+
 **sudo is not optional.** Almost every lock check reads something only root can
 read — the ACPI tables are mode 0400, efivars is root-only, mounting the Windows
 partition needs root, so does `blkid`. SystemRescue booted you in as root and
@@ -77,7 +91,11 @@ the Windows registry at all.
 - **The kiosk needs `cage`**, which is not on the Ubuntu live image.
   `gui/install-cage.sh` now installs it through apt or pacman, but it needs
   internet on first run.
-- **OS restore images** live on partition 2 under `images/`, found the same way.
+- **OS restore images.** This stick has ONE partition (see the build section),
+  so there is no partition 2 to put them on — an earlier draft of this file said
+  there was, and it was wrong. Images come from the network image server
+  configured in `audit.conf`, or from `images/` at the root of the stick if you
+  have the space for them.
 - **Wiping** works the same — `hardware-audit.sh` uses `hdparm`/`nvme`/`blkdiscard`,
   all present or apt-installable.
 
@@ -85,11 +103,36 @@ the Windows registry at all.
 
 Before trusting it in the yard, confirm the shim is there:
 
+**Do not look for a file called `shim`.** Rufus copies the shim across under
+the name the firmware loads, `bootx64.efi` — which is exactly what the build
+section above says — so globbing for `shim*` finds nothing on a perfectly good
+stick and would talk you into switching Secure Boot off on the machine under
+assessment. That is the one thing this whole rebuild exists to avoid.
+
+Identify it by size and by its companion instead:
+
 ```sh
-ls /media/*/EFI/boot/          # expect: bootx64.efi AND grubx64.efi
-ls /media/*/EFI/boot/shim*     # a Secure Boot capable stick HAS this
+ls -l /media/*/EFI/boot/       # or E:\EFI\boot from Windows
 ```
 
-The old stick fails this test — that is the whole problem. Then boot a machine
-with Secure Boot on and confirm it reaches the desktop rather than the
-signature-verification error.
+On a Secure Boot capable stick:
+
+| file | size | what it is |
+|------|------|------------|
+| `bootx64.efi` | ~950 KB | the **shim**, signed by the Microsoft UEFI CA |
+| `grubx64.efi` | ~2.3 MB | GRUB, signed by Canonical |
+| `mmx64.efi`   | ~850 KB | MokManager — **only ever ships alongside a shim** |
+
+`mmx64.efi` is the giveaway: nothing else installs it. If `bootx64.efi` is
+around 2.3 MB and there is no `mmx64.efi`, then what you have is bare GRUB and
+the stick will fail signature verification.
+
+To be certain rather than confident, check the signature chain from Linux:
+
+```sh
+sbverify --list /media/*/EFI/boot/bootx64.efi
+```
+
+Then boot a machine with Secure Boot on and confirm it reaches the desktop
+rather than the signature-verification error. The old SystemRescue stick fails
+all of this — that is the whole problem.
