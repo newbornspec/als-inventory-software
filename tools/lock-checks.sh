@@ -55,6 +55,30 @@ lock_add() {
 
 lock_field() { printf '%s' "$1" | cut -d'|' -f"$2"; }
 
+# --- privilege ---------------------------------------------------------------
+#
+# Almost everything below reads something only root can read: the ACPI tables
+# are mode 0400, efivars is root-only, mounting the Windows partition needs
+# root, and so does blkid on a raw device.
+#
+# This mattered less on SystemRescue, which boots you in as root. It matters a
+# great deal on the Ubuntu stick, where the live user is NOT root and an
+# operator who forgets sudo would otherwise get a page of confident PASSes from
+# checks that never ran. Six such false passes were reproduced before this gate
+# existed. Refusing to guess is the whole point of this file.
+LOCK_IS_ROOT=0
+[ "$(id -u 2>/dev/null)" = "0" ] && LOCK_IS_ROOT=1
+
+# Usage:  lock_need_root key "Label" && return
+# Returns 0 (and files an UNKNOWN row) when we are NOT root, so the caller stops.
+lock_need_root() {
+  [ "$LOCK_IS_ROOT" = "1" ] && return 1
+  lock_add "$1" "$2" UNKNOWN \
+    "Not running as root, so this check could not read what it needs. Re-run with sudo." \
+    "requires root" low
+  return 0
+}
+
 # --- helpers -----------------------------------------------------------------
 lock_has() { command -v "$1" >/dev/null 2>&1; }
 
@@ -153,6 +177,7 @@ lock_efivar_byte() {
 }
 
 check_secure_boot() {
+  lock_need_root secureBoot "Secure Boot" && return
   if [ ! -d "$LOCK_SYSROOT/sys/firmware/efi" ]; then
     # We booted legacy/CSM, so the UEFI variables are not exposed to us at all.
     # That says nothing about the MACHINE's Secure Boot setting — the firmware
@@ -192,34 +217,43 @@ check_setup_mode() {
 
 check_tpm() {
   if [ ! -d "$LOCK_SYSROOT/sys/class/tpm" ]; then
-    # The kernel has no TPM subsystem exposed here, which is not the same as
-    # the machine having no TPM.
-    lock_add tpm "TPM" UNKNOWN "No TPM subsystem exposed by this kernel — presence could not be determined" "/sys/class/tpm absent" low
+    lock_add tpm "TPM" UNKNOWN "No TPM subsystem exposed by this kernel, so presence could not be determined" "/sys/class/tpm absent" low
     return
   fi
   if [ ! -e "$LOCK_SYSROOT/sys/class/tpm/tpm0" ]; then
-    # Subsystem present, no device: genuinely no TPM exposed. Not a lock — it
-    # is reported because it governs Windows 11 eligibility, and it may mean
-    # the TPM is switched off in firmware rather than missing.
+    # Subsystem present, no device: genuinely no TPM exposed. Not a lock — it is
+    # reported because it governs Windows 11 eligibility, and it may mean the
+    # TPM is switched off in firmware rather than physically absent.
     lock_add tpm "TPM" PASS "No TPM exposed (absent, or disabled in firmware setup)" "/sys/class/tpm" medium
     return
   fi
+
   local ver detail
   ver=$(cat "$LOCK_SYSROOT/sys/class/tpm/tpm0/tpm_version_major" 2>/dev/null)
   detail="Present${ver:+ — TPM ${ver}.0}"
-  # Owned/provisioned state is reported when tpm2-tools can read it. We only
-  # ever READ capabilities; clearing a TPM is destructive and is never done.
-  if lock_has tpm2_getcap; then
-    if tpm2_getcap properties-variable 2>/dev/null | grep -qi 'ownerAuthSet.*1\|TPMA_PERMANENT.*ownerAuthSet'; then
-      detail="$detail, owner authorisation SET (provisioned by a previous owner)"
-      lock_add tpm "TPM" DETECTED "$detail" "/sys/class/tpm + tpm2_getcap" medium
+
+  # Ownership is a bonus, not the point: a TPM can be cleared from firmware by
+  # whoever holds the machine, so a previous owner's TPM is not a resale
+  # blocker. Presence is what matters, and presence is world-readable.
+  #
+  # But the query needs root and a free device, and it FAILS more often than it
+  # errors. Reporting "no owner authorisation set" because a failed command
+  # printed nothing is a claim we did not earn — reproduced, and fixed by
+  # checking the command actually succeeded before reading anything into it.
+  if [ "$LOCK_IS_ROOT" = "1" ] && lock_has tpm2_getcap; then
+    local caps
+    if caps=$(tpm2_getcap properties-variable 2>/dev/null) && [ -n "$caps" ]; then
+      if printf '%s' "$caps" | grep -qi 'ownerAuthSet.*1'; then
+        lock_add tpm "TPM" DETECTED "$detail, owner authorisation SET (provisioned by a previous owner; clearable from firmware)" "/sys/class/tpm + tpm2_getcap" medium
+        return
+      fi
+      lock_add tpm "TPM" PASS "$detail, no owner authorisation set" "/sys/class/tpm + tpm2_getcap" high
       return
     fi
-    detail="$detail, no owner authorisation set"
-    lock_add tpm "TPM" PASS "$detail" "/sys/class/tpm + tpm2_getcap" high
+    lock_add tpm "TPM" PASS "$detail (ownership state not determined — tpm2_getcap did not return)" "/sys/class/tpm" medium
     return
   fi
-  lock_add tpm "TPM" PASS "$detail (ownership state not checked — tpm2-tools absent)" "/sys/class/tpm" medium
+  lock_add tpm "TPM" PASS "$detail (ownership state not checked)" "/sys/class/tpm" medium
 }
 
 # BIOS/UEFI administrator or system password.
@@ -229,27 +263,48 @@ check_tpm() {
 # (Lenovo) and hp-bioscfg (HP). is_enabled reports whether a password is SET.
 # It never reveals or changes the password.
 check_bios_password() {
-  local base found=0 admin sysp detail=""
+  lock_need_root biosPassword "BIOS/UEFI password" && return
+
+  local base found=0 unreadable=0 readany=0 detail="" v
   for base in "$LOCK_SYSROOT"/sys/class/firmware-attributes/*/authentication; do
     [ -d "$base" ] || continue
     found=1
-    admin=$(cat "$base/Admin/is_enabled" 2>/dev/null)
-    sysp=$(cat "$base/System/is_enabled" 2>/dev/null)
-    [ "$admin" = "1" ] && detail="${detail}Admin/Setup password is SET. "
-    [ "$sysp" = "1" ]  && detail="${detail}System/Power-on password is SET. "
+    # Admin/Setup and System/Power-on are reported separately: they are
+    # different passwords with different consequences for a refurbisher.
+    for which in Admin System; do
+      [ -e "$base/$which/is_enabled" ] || continue
+      # A file that EXISTS but cannot be read is not a "no". Treating the empty
+      # result as 0 is how this check used to claim a password-locked machine
+      # was clear — reproduced, and the reason for the unreadable flag.
+      if v=$(cat "$base/$which/is_enabled" 2>/dev/null) && [ -n "$v" ]; then
+        readany=1
+        [ "$v" = "1" ] && detail="${detail}${which} password is SET. "
+      else
+        unreadable=1
+      fi
+    done
   done
 
   if [ "$found" = "0" ]; then
     lock_add biosPassword "BIOS/UEFI password" UNKNOWN \
-      "No firmware-attributes interface on this machine — a BIOS password cannot be confirmed either way" \
+      "No firmware-attributes interface on this machine, so a BIOS password cannot be confirmed either way" \
       "/sys/class/firmware-attributes (dell-wmi-sysman / think-lmi / hp-bioscfg)" low
     return
   fi
   if [ -n "$detail" ]; then
-    lock_add biosPassword "BIOS/UEFI password" WARNING "$detail" "/sys/class/firmware-attributes authentication/*/is_enabled" high
-  else
-    lock_add biosPassword "BIOS/UEFI password" PASS "No BIOS admin or system password set" "/sys/class/firmware-attributes authentication/*/is_enabled" high
+    lock_add biosPassword "BIOS/UEFI password" WARNING "$detail" \
+      "/sys/class/firmware-attributes authentication/*/is_enabled" high
+    return
   fi
+  if [ "$unreadable" = "1" ] || [ "$readany" = "0" ]; then
+    lock_add biosPassword "BIOS/UEFI password" UNKNOWN \
+      "The firmware-attributes interface is present but its password state could not be read" \
+      "/sys/class/firmware-attributes (read failed)" low
+    return
+  fi
+  lock_add biosPassword "BIOS/UEFI password" PASS \
+    "No BIOS admin or system password set" \
+    "/sys/class/firmware-attributes authentication/*/is_enabled" high
 }
 
 # Absolute (formerly Computrace) Persistence.
@@ -260,6 +315,7 @@ check_bios_password() {
 # an Absolute payload sitting in WPBT means the firmware is actively planting
 # it — not that the option exists in a menu.
 check_absolute() {
+  lock_need_root absolute "Absolute / Computrace" && return
   local wpbt="$LOCK_SYSROOT/sys/firmware/acpi/tables/WPBT" hits=""
 
   # No ACPI table directory at all: we cannot see whether firmware publishes a
@@ -340,9 +396,14 @@ lock_locate_hives() {
 # this disk", "Windows present but we lack the tools to read it" and "we read it
 # and found nothing". Only the third can ever be PASS.
 lock_win_blocked() {
-  local key="$1" label="$2"
-  if ! lock_has hivexget && ! lock_has hivexsh; then
-    lock_add "$key" "$label" UNKNOWN "hivex tools not installed on this live image — the Windows registry could not be read" "offline registry (hivex missing)" low
+  local key="$1" label="$2" need="${3:-hivexget}"
+  lock_need_root "$key" "$label" && return 0
+  # Guard on the tool this particular check actually USES. The old guard passed
+  # whenever EITHER hivex tool was present, so a box with hivexget but no
+  # hivexsh sailed through and then reported "not enrolled" — because the
+  # hivexsh call that reads enrolments had silently produced nothing.
+  if ! lock_has "$need"; then
+    lock_add "$key" "$label" UNKNOWN "$need is not installed on this live image, so the Windows registry could not be read" "offline registry ($need missing)" low
     return 0
   fi
   if ! lock_locate_hives; then
@@ -406,7 +467,8 @@ check_autopilot() {
 # that is needed to prove the lock and to chase deregistration, and a former
 # employee's address is nobody's business here. Do not add UPN capture.
 check_mdm() {
-  lock_win_blocked mdm "Intune / MDM enrolment" && return
+  # Needs hivexsh: enrolments are GUID SUBKEYS, which only hivexsh can list.
+  lock_win_blocked mdm "Intune / MDM enrolment" hivexsh && return
 
   local enrolments provider=""
   # Each enrolment is a GUID-named subkey; the provider tells us whose MDM it is.
@@ -432,7 +494,18 @@ check_mdm() {
 
 # --- Entra ID / Azure AD join and domain join --------------------------------
 check_entra() {
-  lock_win_blocked entra "Entra ID / domain join" && return
+  # Needs hivexsh for the JoinInfo subkey listing, not just hivexget.
+  lock_win_blocked entra "Entra ID / domain join" hivexsh && return
+
+  # Both answers live in the SYSTEM hive. Without it we have read nothing, and
+  # the old code fell straight through to PASS — claiming a domain-joined
+  # machine was clear on the strength of two lookups that never ran.
+  if [ -z "$WIN_SYSTEM" ] || [ ! -r "$WIN_SYSTEM" ]; then
+    lock_add entra "Entra ID / domain join" UNKNOWN \
+      "The Windows SYSTEM hive could not be read, so directory membership is unknown" \
+      "offline registry (SYSTEM hive unreadable)" low
+    return
+  fi
 
   local joined=""
   # CloudDomainJoin\JoinInfo holds one subkey per Entra-joined identity.
@@ -442,14 +515,22 @@ check_entra() {
     [ -n "$sub" ] && joined="Entra ID (Azure AD) joined"
   fi
 
+  # NOTE: Tcpip\Parameters\Domain is the DNS domain suffix, which a machine can
+  # carry without being domain-JOINED. It is reported as an indicator, not as
+  # proof, and never on its own as a lock.
   local dom
   dom=$(lock_hive_get "$WIN_SYSTEM" 'ControlSet001\Services\Tcpip\Parameters' Domain 2>/dev/null)
-  [ -n "$dom" ] && joined="${joined:+$joined; }Active Directory domain: $dom"
 
   if [ -n "$joined" ]; then
     lock_add entra "Entra ID / domain join" LOCKED \
-      "$joined — the device is bound to an organisation's directory" \
-      'offline registry SYSTEM\...\CloudDomainJoin, Tcpip\Parameters' high
+      "$joined${dom:+; DNS domain $dom} — the device is bound to an organisation's directory" \
+      'offline registry SYSTEM\...\CloudDomainJoin' high
+    return
+  fi
+  if [ -n "$dom" ]; then
+    lock_add entra "Entra ID / domain join" DETECTED \
+      "Carries the DNS domain suffix $dom. That is an indicator of past domain membership, not proof of a current join." \
+      'offline registry SYSTEM\...\Tcpip\Parameters' low
     return
   fi
   lock_add entra "Entra ID / domain join" PASS "No Entra ID join or AD domain membership found" 'offline registry SYSTEM hive' medium
@@ -460,9 +541,23 @@ check_entra() {
 # without its recovery key is unreadable, and the data on it cannot be verified
 # as wiped without destroying the volume.
 check_bitlocker() {
-  lock_has lsblk || { lock_add bitlocker "BitLocker" UNKNOWN "lsblk unavailable" "block device scan" low; return; }
+  lock_need_root bitlocker "BitLocker" && return
+  if ! lock_has blkid; then
+    lock_add bitlocker "BitLocker" UNKNOWN "blkid unavailable, so volume encryption could not be checked" "block device scan" low
+    return
+  fi
+  # blkid exits 2 when it finds nothing, so a bare exit status cannot separate
+  # "no encrypted volumes" from "could not look". Require actual output before
+  # concluding anything: with no output at all we do not know, and saying PASS
+  # there was a reproduced false negative.
+  local out
+  out=$(blkid 2>/dev/null)
+  if [ -z "$out" ]; then
+    lock_add bitlocker "BitLocker" UNKNOWN "blkid returned nothing, so volume encryption could not be determined" "block device scan (no output)" low
+    return
+  fi
   local enc
-  enc=$(blkid 2>/dev/null | grep -ci 'BitLocker')
+  enc=$(printf '%s' "$out" | grep -ci 'BitLocker')
   if [ "${enc:-0}" -gt 0 ]; then
     lock_add bitlocker "BitLocker" WARNING "$enc encrypted volume(s) found — the recovery key is needed to read or verify them" "blkid volume signatures" high
     return

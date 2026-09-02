@@ -22,6 +22,23 @@
 
 API_DEFAULT="https://als-inventory-software-production.up.railway.app"
 
+# --- privilege warning -------------------------------------------------------
+# SystemRescue boots you in as root, so this never came up. The Ubuntu stick
+# does not, and almost every lock check reads something only root can read:
+# the ACPI tables (0400), efivars, the Windows partition mount, blkid. Those
+# checks report UNKNOWN rather than guessing, but the operator should be told
+# BEFORE the audit runs, not left to notice a page of UNKNOWNs afterwards.
+if [ "$(id -u 2>/dev/null)" != "0" ]; then
+  echo
+  echo "  !!  NOT RUNNING AS ROOT"
+  echo "      The device lock checks (Autopilot, MDM, BIOS password, Absolute,"
+  echo "      Secure Boot, BitLocker) cannot read what they need and will all"
+  echo "      report UNKNOWN. They will NOT report the machine as clear."
+  echo "      Stop and re-run with:   sudo bash $0"
+  echo
+fi
+
+
 # --- load preconfigured settings ---
 SELF_DIR=$(cd "$(dirname "$0")" 2>/dev/null && pwd)
 # On Ubuntu the tools live on a second, writable partition that the live system

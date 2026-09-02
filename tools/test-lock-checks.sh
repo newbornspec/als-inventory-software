@@ -27,6 +27,11 @@ trap 'rm -rf "$FIX"' EXIT
 echo "== a machine with NOTHING probeable: every answer must be UNKNOWN =="
 export LOCK_SYSROOT="$FIX/empty"; mkdir -p "$LOCK_SYSROOT"
 . ./lock-checks.sh
+# The fixtures below ARE the "we can read this" case: they hand the detectors a
+# fake /sys tree that exists and is readable. Simulate root so the privilege
+# gate does not short-circuit the very logic under test. The gate itself is
+# tested separately at the end, where it belongs.
+LOCK_IS_ROOT=1
 check_secure_boot; check_tpm; check_absolute; check_bios_password
 check "secure boot unreadable -> UNKNOWN" UNKNOWN "$(row_status secureBoot)"
 check "tpm unreadable -> UNKNOWN"         UNKNOWN "$(row_status tpm)"
@@ -149,6 +154,76 @@ for f in lock-checks.sh find-media.sh hardware-audit.sh; do
   crs=$(LC_ALL=C tr -cd '\r' < "$f" | wc -c | tr -d ' ')
   check "$f has no CR (CRLF)"      0 "$crs"
 done
+
+
+# ---------------------------------------------------------------------------
+# DEGRADED CONDITIONS — the expensive failure.
+#
+# Every case below was a REPRODUCED false PASS: a probe that could not run was
+# treated as a probe that came back negative, so the tool told a buyer a machine
+# was clear when it had simply failed to look. That is the one outcome this
+# whole file exists to prevent, and none of the earlier fixtures caught any of
+# them, because fixtures only ever describe the happy path.
+echo
+echo "== not root: nothing may claim PASS =="
+LOCK_ROWS=""
+LOCK_IS_ROOT=0
+export LOCK_SYSROOT="$FIX/locked"     # a fixture that WOULD read as locked
+check_secure_boot; check_bios_password; check_absolute; check_bitlocker
+check "no PASS while unprivileged"        0 "$(printf '%s' "$LOCK_ROWS" | cut -d'|' -f3 | grep -c '^PASS$')"
+check "secure boot -> UNKNOWN"      UNKNOWN "$(row_status secureBoot)"
+check "bios password -> UNKNOWN"    UNKNOWN "$(row_status biosPassword)"
+check "absolute -> UNKNOWN"         UNKNOWN "$(row_status absolute)"
+check "verdict is UNVERIFIED"    UNVERIFIED "$(lock_status)"
+LOCK_IS_ROOT=1
+
+echo
+echo "== firmware-attributes present but unreadable: not a 'no password' =="
+LOCK_ROWS=""
+export LOCK_SYSROOT="$FIX/unreadable"
+mkdir -p "$LOCK_SYSROOT/sys/class/firmware-attributes/dell-wmi-sysman/authentication/Admin/is_enabled"
+check_bios_password
+check "unreadable attribute -> UNKNOWN"  UNKNOWN "$(row_status biosPassword)"
+
+echo
+echo "== SOFTWARE hive readable but SYSTEM hive missing: not a 'no domain join' =="
+LOCK_ROWS=""
+_saved_locate=$(declare -f lock_locate_hives)
+lock_locate_hives() { WIN_SOFTWARE="$FIX/sw"; WIN_SYSTEM=""; return 0; }
+mkdir -p "$FIX"; echo x > "$FIX/sw"
+_saved_has=$(declare -f lock_has)
+lock_has() { return 0; }
+check_entra
+check "missing SYSTEM hive -> UNKNOWN"   UNKNOWN "$(row_status entra)"
+
+echo
+echo "== hivexget present but hivexsh missing: not a 'not enrolled' =="
+LOCK_ROWS=""
+lock_has() { case "$1" in hivexsh) return 1;; *) return 0;; esac; }
+check_mdm
+check "missing hivexsh -> UNKNOWN"       UNKNOWN "$(row_status mdm)"
+eval "$_saved_has"; eval "$_saved_locate"
+
+echo
+echo "== blkid silent: not a 'no encrypted volumes' =="
+LOCK_ROWS=""
+blkid() { return 2; }
+check_bitlocker
+check "silent blkid -> UNKNOWN"          UNKNOWN "$(row_status bitlocker)"
+unset -f blkid
+
+echo
+echo "== tpm2_getcap fails: must not claim 'no owner authorisation set' =="
+LOCK_ROWS=""
+export LOCK_SYSROOT="$FIX/tpmfail"
+mkdir -p "$LOCK_SYSROOT/sys/class/tpm/tpm0"; echo 2 > "$LOCK_SYSROOT/sys/class/tpm/tpm0/tpm_version_major"
+tpm2_getcap() { return 1; }
+check_tpm
+case "$(row_detail tpm)" in
+  *"no owner authorisation set"*) bad "failed query must not assert ownership" "no such claim" "$(row_detail tpm)";;
+  *) ok "failed query does not assert ownership";;
+esac
+unset -f tpm2_getcap
 
 echo
 printf '%d passed, %d failed\n' "$PASSED" "$FAILED"
