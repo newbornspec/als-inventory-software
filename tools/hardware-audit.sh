@@ -170,6 +170,42 @@ net_diagnose() {
     dns="not checked"
   fi
   echo "Network check — Ethernet: $eth_state. DNS: $dns."
+
+  # WHY curl failed, not just that it did. "Unreachable" with working DNS sent
+  # us hunting the network when the cause was on this machine.
+  curl_err=$(curl -sS --max-time 10 -o /dev/null "$API" 2>&1)
+  curl_rc=$?
+  case "$curl_rc" in
+    0)  echo "  curl now succeeds — the earlier failure was a timing problem; just Retry." ;;
+    6)  echo "  curl: cannot resolve $host (DNS)." ;;
+    7)  echo "  curl: connection refused or no route to $host." ;;
+    28) echo "  curl: timed out. The network has an address but no route out." ;;
+    35|51|58|59|60|77|83)
+        # THE COMMON ONE ON SECOND-HAND HARDWARE. A live USB on a machine with a
+        # flat CMOS battery boots with a clock years out, every certificate then
+        # looks "not yet valid", and HTTPS fails while DNS works perfectly. It
+        # looks exactly like a network fault and is not one.
+        echo "  curl: TLS/certificate failure (code $curl_rc)."
+        echo "  $curl_err"
+        echo "  CHECK THE CLOCK — this machine says: $(date)"
+        echo "  A wrong clock breaks every HTTPS connection. Fix it with:"
+        echo "      sudo timedatectl set-ntp true      # if anything else can reach the internet"
+        echo "      sudo date -s 'YYYY-MM-DD HH:MM:SS' # otherwise set it by hand, then Retry"
+        ;;
+    *)  echo "  curl exit $curl_rc: $curl_err" ;;
+  esac
+
+  # A clock far from the build date is worth flagging even when curl failed for
+  # another reason, because it will bite the upload later.
+  yr=$(date +%Y 2>/dev/null)
+  case "$yr" in
+    ''|*[!0-9]*) : ;;
+    *) if [ "$yr" -lt 2025 ] || [ "$yr" -gt 2100 ]; then
+         echo "  WARNING: the system clock reads $(date). That is almost certainly wrong"
+         echo "  (flat CMOS battery), and it breaks HTTPS on its own."
+       fi ;;
+  esac
+
   echo "Could not reach $API. Plug in a working Ethernet cable, or set this site's Wi-Fi in Settings, then Retry."
 }
 
