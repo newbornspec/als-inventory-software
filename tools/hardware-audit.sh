@@ -905,8 +905,24 @@ o_begin
 o_s ethernet "$NET_ETH"; o_s wifi "$NET_WIFI"; o_s bluetooth "$NET_BT"; o_s macAddress "$NET_MAC"
 NETWORK=$(o_end)
 
+# --- device locks & management status ---------------------------------------
+# Sourced rather than inlined so detectors can be added without touching this
+# file, and so the whole thing is testable against fixtures
+# (test-lock-checks.sh) — the LOCKED branches cannot be exercised on an
+# unlocked bench machine, and those are the branches that matter.
+LOCKS_JSON=""
+LOCKS_STATUS=""
+if [ -r "$SELF_DIR/lock-checks.sh" ]; then
+  . "$SELF_DIR/lock-checks.sh"
+  run_lock_checks
+  LOCKS_JSON=$(lock_json)
+  LOCKS_STATUS=$(lock_status)
+  BIOS_LOCKED=$(lock_bios_locked)
+fi
+
 o_begin
 o_s tpm "$TPM_VER"; o_s secureBoot "$SECURE_BOOT"
+o_s lockStatus "$LOCKS_STATUS"
 SECURITY=$(o_end)
 
 # Join non-empty sections into the profile.
@@ -922,6 +938,7 @@ p_obj display "$DISPLAY_OBJ"
 p_obj battery "$BATTERY"
 p_obj network "$NETWORK"
 p_obj security "$SECURITY"
+[ -n "$LOCKS_JSON" ] && p_obj locks "$LOCKS_JSON"
 PROFILE="{${PB#,}}"
 
 # ================= summary =================
@@ -942,6 +959,10 @@ printf "  %-14s %s\n" "Drive health" "${SMART_SUMMARY:-n/a}"
 printf "  %-14s %s\n" "Battery"  "${BAT_HEALTH:-n/a}"
 printf "  %-14s %s\n" "TPM/Boot" "${TPM_VER:-none} / ${BOOT_MODE} ${SECURE_BOOT:+(SecureBoot $SECURE_BOOT)}"
 echo
+
+# The reason someone runs this before buying a machine, so it prints in full
+# rather than as a single line in the table above.
+command -v print_lock_report >/dev/null 2>&1 && print_lock_report
 
 if [ "${AUDIT_DEBUG:-0}" = "1" ]; then
   echo "--- captured JSON (debug; not uploaded) ---"
@@ -1022,6 +1043,9 @@ BODY="{\"lotId\":\"$CHOSEN_ID\""
 BODY="$BODY,\"auditKind\":\"goods_in\""
 [ -n "${AUDIT_OPERATOR:-}" ] && BODY="$BODY,\"operatorName\":\"$(esc "$AUDIT_OPERATOR")\""
 [ -n "$WIPE_STATUS" ] && BODY="$BODY,\"dataWipeStatus\":\"$WIPE_STATUS\",\"dataWipeMethod\":\"$(esc "$WIPE_METHOD")\""
+# biosLocked is the API's existing single boolean. Derived from the same rows
+# the report prints, so the flag can never disagree with the detail above it.
+[ -n "${BIOS_LOCKED:-}" ] && BODY="$BODY,\"biosLocked\":$BIOS_LOCKED"
 BODY="$BODY,\"profile\":$PROFILE}"
 
 RESP=$(curl -sS -X POST "$API/devices/hardware-audit" \

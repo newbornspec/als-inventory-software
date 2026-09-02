@@ -100,6 +100,28 @@ export interface HardwareProfile {
     biosPassword?: string;
     [key: string]: unknown;
   };
+  // Device Locks & Management Status, captured by tools/lock-checks.sh.
+  //
+  // Every check reports its own status, HOW it was determined and how much that
+  // method is worth, because the answers are not equally trustworthy: a BIOS
+  // password read straight from firmware-attributes is near-certain, while
+  // "no Autopilot traces in the registry" proves nothing at all — Autopilot
+  // registration lives in Microsoft's cloud against the hardware hash and
+  // survives a wipe. Hence UNKNOWN as a first-class status, distinct from PASS.
+  //
+  // status is the roll-up the buyer acts on. It is only ever CLEAR when every
+  // check actually ran; anything unverifiable makes the whole device UNVERIFIED.
+  locks?: {
+    status?: 'CLEAR' | 'LOCKED' | 'WARNING' | 'UNVERIFIED';
+    checks?: Array<{
+      key?: string;
+      label?: string;
+      status?: 'PASS' | 'DETECTED' | 'LOCKED' | 'WARNING' | 'UNKNOWN';
+      detail?: string;
+      method?: string;
+      confidence?: 'high' | 'medium' | 'low';
+    }>;
+  };
   // Anything the tool starts sending later lands here untouched.
   [key: string]: unknown;
 }
