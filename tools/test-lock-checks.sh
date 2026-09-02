@@ -326,6 +326,81 @@ mkdir -p "$LOCK_SYSROOT/sys/firmware/acpi/tables/WPBT"   # a dir: exists, cannot
 check_absolute
 check "unreadable WPBT -> not PASS" 0 "$([ "$(row_status absolute)" = "PASS" ] && echo 1 || echo 0)"
 
+
+# ---------------------------------------------------------------------------
+# Dell's actual Absolute / Computrace BIOS vocabulary.
+#
+# The first real hardware run reported DEVICE STATUS: LOCKED on an OptiPlex 5080
+# because its Absolute attribute read "Enabled" and the code matched *enable*.
+# Dell's documentation says the opposite of what that assumed:
+#
+#   "The Absolute Persistence Module Interface is Enabled. (This allows the
+#    Absolute OS Activation Agent to Provision the platform and 'Activate' the
+#    platform.)"  ... "Enabled does not mean that the feature is active"
+#
+# and Enable is the FACTORY DEFAULT on modern Dell business machines. The check
+# would therefore have called almost every Dell locked — the false positive that
+# gets a report ignored. Legacy Computrace is a different vocabulary in which
+# "Activate" IS a real, permanent activation.
+#
+# One case per documented state, so the mapping cannot drift back.
+
+# abs_state <dirname> <value> -> runs check_absolute against that attribute
+abs_state() {
+  LOCK_ROWS=""
+  export LOCK_SYSROOT="$FIX/absfw-$1"
+  mkdir -p "$LOCK_SYSROOT/sys/firmware/acpi/tables"
+  mkdir -p "$LOCK_SYSROOT/sys/class/firmware-attributes/dell-wmi-sysman/attributes/$1"
+  printf '%s' "$2" > "$LOCK_SYSROOT/sys/class/firmware-attributes/dell-wmi-sysman/attributes/$1/current_value"
+  check_absolute
+}
+
+echo
+echo "== Dell Absolute states: only a real activation is a lock =="
+
+abs_state Absolute "Enabled"
+check "Absolute 'Enabled' (factory default) is NOT a lock" PASS "$(row_status absolute)"
+case "$(row_detail absolute)" in
+  *"READY to be activated"*) ok "explains that enabled != active" ;;
+  *) bad "explains that enabled != active" "mentions READY to be activated" "$(row_detail absolute)" ;;
+esac
+
+abs_state Absolute "Disabled"
+check "Absolute 'Disabled'"                    PASS "$(row_status absolute)"
+
+abs_state Absolute "Permanently Disabled"
+check "Absolute 'Permanently Disabled'"        PASS "$(row_status absolute)"
+case "$(row_detail absolute)" in
+  *"never be activated"*) ok "notes it can never be activated" ;;
+  *) bad "notes it can never be activated" "mentions never be activated" "$(row_detail absolute)" ;;
+esac
+
+echo
+echo "== legacy Computrace vocabulary: Activate IS a lock, Deactivate is not =="
+
+abs_state Computrace "Activate"
+check "Computrace 'Activate' -> LOCKED"        LOCKED "$(row_status absolute)"
+
+abs_state Computrace "Deactivate"
+check "Computrace 'Deactivate' -> not locked"  PASS "$(row_status absolute)"
+
+abs_state Computrace "Disable"
+check "Computrace 'Disable' -> not locked"     PASS "$(row_status absolute)"
+
+abs_state Absolute "Wibble"
+check "an unrecognised value -> UNKNOWN"       UNKNOWN "$(row_status absolute)"
+
+echo
+echo "== a real agent in WPBT still outranks any BIOS setting =="
+LOCK_ROWS=""
+export LOCK_SYSROOT="$FIX/absfw-both"
+mkdir -p "$LOCK_SYSROOT/sys/firmware/acpi/tables"
+mkdir -p "$LOCK_SYSROOT/sys/class/firmware-attributes/dell-wmi-sysman/attributes/Absolute"
+printf 'Enabled' > "$LOCK_SYSROOT/sys/class/firmware-attributes/dell-wmi-sysman/attributes/Absolute/current_value"
+build_wpbt "$LOCK_SYSROOT/sys/firmware/acpi/tables/WPBT" 22 'r\000p\000c\000n\000e\000t\000p\000.\000e\000x\000e\000'
+check_absolute
+check "WPBT agent beats a benign BIOS value"   LOCKED "$(row_status absolute)"
+
 echo
 printf '%d passed, %d failed\n' "$PASSED" "$FAILED"
 [ "$FAILED" -eq 0 ]

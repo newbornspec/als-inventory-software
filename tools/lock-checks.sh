@@ -447,20 +447,69 @@ check_absolute() {
     return
   fi
 
-  # No WPBT. Corroborate with the vendor's own setting before saying anything.
-  local f state
+  # No WPBT. Fall back to the vendor's own setting — but read it correctly.
+  #
+  # THIS IS THE DISTINCTION THE WHOLE CHECK EXISTS FOR, and it was backwards.
+  # Dell's documentation is explicit about the Absolute Persistence states:
+  #
+  #   Disable              the module interface is disabled
+  #   Enable               "The Absolute Persistence Module Interface is
+  #                         Enabled. (This allows the Absolute OS Activation
+  #                         Agent to Provision the platform and 'Activate' the
+  #                         platform.)"   <- READY to be activated, NOT active
+  #   Permanently Disable  cannot be changed again
+  #
+  # and states plainly that "Enabled does not mean that the feature is active":
+  # it only makes the interface ready for activation by Absolute's server, which
+  # additionally requires the agent to be installed and to authenticate. Once
+  # that has genuinely happened the BIOS option is greyed out.
+  #
+  # ENABLE IS ALSO THE FACTORY DEFAULT on modern Dell business machines (it
+  # changed from Computrace's "Deactivate"). Reporting LOCKED on it therefore
+  # flagged essentially every Dell that has ever come through the door — the
+  # exact false positive that makes a report worth ignoring.
+  #
+  # The legacy Computrace vocabulary is different and DOES have a real
+  # activation state: Deactivate (changeable), Activate (permanent, genuinely
+  # on), Disable (permanently off). Only Computrace's "Activate" is a lock.
+  local f state attr lower
   for f in "$LOCK_SYSROOT"/sys/class/firmware-attributes/*/attributes/*bsolute*/current_value \
            "$LOCK_SYSROOT"/sys/class/firmware-attributes/*/attributes/*omputrace*/current_value; do
     [ -r "$f" ] || continue
     state=$(cat "$f" 2>/dev/null)
-    # ORDER MATTERS: "Deactivate" contains "activate", so negatives first.
-    case "$(printf '%s' "$state" | tr '[:upper:]' '[:lower:]')" in
-      *deactivate*|*disable*|*off*)
-        lock_add absolute "Absolute / Computrace" PASS "No firmware injection, and the BIOS reports Absolute not activated ($state)" "ACPI WPBT absent + firmware-attributes" high; return ;;
-      *activate*|*enable*|*on*)
-        lock_add absolute "Absolute / Computrace" LOCKED "BIOS reports Absolute ACTIVATED ($state)" "firmware-attributes" high; return ;;
+    attr=$(basename "$(dirname "$f")")
+    lower=$(printf '%s' "$state" | tr '[:upper:]' '[:lower:]')
+    # ORDER MATTERS TWICE OVER: "Permanently Disable" contains "disable", and
+    # "Deactivate" contains "activate". Most specific and most negative first.
+    case "$lower" in
+      *permanent*disab*)
+        lock_add absolute "Absolute / Computrace" PASS \
+          "$attr is permanently disabled in BIOS ($state) — it can never be activated" \
+          "firmware-attributes + no WPBT" high; return ;;
+      *deactivat*)
+        lock_add absolute "Absolute / Computrace" PASS \
+          "$attr is deactivated in BIOS ($state)" \
+          "firmware-attributes + no WPBT" high; return ;;
+      *disab*)
+        lock_add absolute "Absolute / Computrace" PASS \
+          "$attr is disabled in BIOS ($state)" \
+          "firmware-attributes + no WPBT" high; return ;;
+      *activat*)
+        # Computrace's "Activate" is a genuine, permanent activation.
+        lock_add absolute "Absolute / Computrace" LOCKED \
+          "$attr reports ACTIVATED in BIOS ($state) — on legacy Computrace this is permanent" \
+          "firmware-attributes" high; return ;;
+      *enabl*)
+        # The factory default. Per Dell, this means the interface is READY for
+        # activation, not that anything is running — and with no WPBT there is
+        # no agent being injected at boot either.
+        lock_add absolute "Absolute / Computrace" PASS \
+          "$attr interface is enabled in BIOS ($state), which is the factory default and means it is READY to be activated, not active. No WPBT injection table is present, so nothing is being planted at boot." \
+          "firmware-attributes + no WPBT" medium; return ;;
       *)
-        lock_add absolute "Absolute / Computrace" UNKNOWN "BIOS exposes an Absolute setting with an unrecognised value ($state)" "firmware-attributes" low; return ;;
+        lock_add absolute "Absolute / Computrace" UNKNOWN \
+          "$attr has an unrecognised value ($state), so its activation state could not be determined" \
+          "firmware-attributes" low; return ;;
     esac
   done
 
