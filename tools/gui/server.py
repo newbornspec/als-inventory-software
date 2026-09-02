@@ -162,9 +162,21 @@ def mount_point(path):
 
 
 def remount(mp, mode):
+    """Remount a mountpoint rw or ro, elevating when we are not root.
+
+    This called plain `mount`, which only root may use. Under SystemRescue the
+    backend WAS root, so it worked; on Ubuntu the backend runs as the desktop
+    user, so every remount failed and Settings could not be saved at all. The
+    operator got "could not be remounted read-write" and was told to run the
+    whole GUI as root - which is exactly what we cannot do, because the browser
+    has to attach to the desktop user's display. sudo is passwordless on the
+    live image, and -n keeps it from blocking on a prompt no kiosk can answer.
+    """
+    cmd = ["mount", "-o", "remount," + mode, mp]
+    if os.geteuid() != 0 and shutil.which("sudo"):
+        cmd = ["sudo", "-n"] + cmd
     try:
-        r = subprocess.run(["mount", "-o", "remount," + mode, mp],
-                           capture_output=True, text=True, timeout=25)
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=25)
         return r.returncode == 0
     except Exception:  # noqa: BLE001
         return False
@@ -190,8 +202,9 @@ def write_boot_file(path, text):
         mp = mount_point(path)
         if not remount(mp, "rw"):
             return ("Could not save: %s is mounted read-only and could not be "
-                    "remounted read-write (%s). Run the GUI as root, or edit "
-                    "audit.conf on the stick from another machine." % (mp, first))
+                    "remounted read-write (%s). Restart the backend with "
+                    "'sudo python3 <media>/gui/server.py', or edit audit.conf "
+                    "on the stick from another machine." % (mp, first))
         try:
             with open(path, "w") as fh:
                 fh.write(text)
@@ -509,7 +522,7 @@ def ensure_token():
 
 
 # --------------------------------------------------------------- capture ----
-def audit_cmd(*args):
+def audit_cmd(*args, env_vars=None):
     """The audit command, elevated when this backend is not already root.
 
     The GUI has to run as the DESKTOP user, because that is the only account
@@ -524,6 +537,17 @@ def audit_cmd(*args):
     the kiosk has no way to answer.
     """
     base = ["bash", SCRIPT, *args]
+    if env_vars:
+        # Pass variables through `env`, NOT through the process environment.
+        #
+        # Ubuntu's sudoers carries `Defaults env_reset`, which wipes the
+        # environment before exec'ing the target. So setting AUDIT_DEBUG=1 in
+        # subprocess(env=...) reached sudo and died there, and the engine ran
+        # its full interactive upload flow instead of printing JSON and
+        # exiting - including a `read -rp` lot prompt the GUI cannot answer.
+        # It only worked before because SystemRescue ran everything as root and
+        # never went through sudo at all.
+        base = ["env"] + ["%s=%s" % (k, v) for k, v in env_vars.items()] + base
     if os.geteuid() != 0 and shutil.which("sudo"):
         return ["sudo", "-n", *base]
     return base
@@ -532,8 +556,11 @@ def audit_cmd(*args):
 def capture():
     if not SCRIPT:
         raise RuntimeError("hardware-audit.sh not found on the boot media.")
-    env = dict(os.environ, AUDIT_DEBUG="1")
-    proc = subprocess.run(audit_cmd(), env=env, capture_output=True, text=True, timeout=300)
+    # AUDIT_DEBUG=1 makes the engine print the profile as JSON and exit rather
+    # than running the interactive upload flow. It has to survive sudo - see
+    # audit_cmd - so it goes in the command, not the environment.
+    proc = subprocess.run(audit_cmd(env_vars={"AUDIT_DEBUG": "1"}),
+                          capture_output=True, text=True, timeout=300)
     out = proc.stdout or ""
     profile, summary = None, []
     for line in out.splitlines():

@@ -104,7 +104,15 @@ echo 0 > "$LOCK_SYSROOT/sys/class/firmware-attributes/dell-wmi-sysman/authentica
 echo 2 > "$LOCK_SYSROOT/sys/class/tpm/tpm0/tpm_version_major"
 
 check_secure_boot; check_setup_mode; check_bios_password; check_absolute; check_tpm
-check "Secure Boot ON detected"            WARNING "$(row_status secureBoot)"
+# Reported, never scored: see check_secure_boot. Scoring ON as WARNING put every
+# machine audited by the documented procedure (Secure Boot left ON) into
+# DEVICE STATUS: WARNING, and made switching Secure Boot OFF - the one thing the
+# docs forbid - the only route to a clean report.
+check "Secure Boot ON is reported, not scored" PASS "$(row_status secureBoot)"
+case "$(row_detail secureBoot)" in
+  *"Not an ownership lock"*) ok "says why Secure Boot is not a lock" ;;
+  *) bad "says why Secure Boot is not a lock" "the explanation" "$(row_detail secureBoot)" ;;
+esac
 check "Setup Mode normal"                  PASS    "$(row_status setupMode)"
 check "BIOS admin password found"          WARNING "$(row_status biosPassword)"
 check "Absolute Persistence ACTIVE"        LOCKED  "$(row_status absolute)"

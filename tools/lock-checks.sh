@@ -194,11 +194,24 @@ check_secure_boot() {
       *enabled*)  b=1 ;;
       *disabled*) b=0 ;;
     esac
-    [ -n "$b" ] && { lock_add secureBoot "Secure Boot" "$([ "$b" = 1 ] && echo WARNING || echo PASS)" \
-      "$([ "$b" = 1 ] && echo 'ON' || echo 'OFF')" "mokutil --sb-state" high; return; }
+    [ -n "$b" ] && { lock_add secureBoot "Secure Boot" PASS \
+      "$([ "$b" = 1 ] && echo 'ON - the normal setting; not an ownership lock' || echo 'OFF')" "mokutil --sb-state" high; return; }
   fi
+  # Secure Boot is REPORTED, never scored against the device.
+  #
+  # It used to score ON as WARNING, and lock_status promotes any WARNING to the
+  # whole-device verdict. Since the documented procedure is to boot this stick
+  # with Secure Boot left ON - which is the entire reason it was rebuilt on
+  # Ubuntu - every machine came back WARNING and CLEAR was unreachable. The
+  # incentive was backwards too: ON scored WARNING and OFF scored PASS, so the
+  # way to a clean report was to switch off the security of a machine we are
+  # supposed to assess without modifying.
+  #
+  # It is also not what this tool is for. Secure Boot is a firmware preference
+  # the next owner can change; whether they CAN change it is the BIOS password
+  # check, which is separate and does score. So: state it, do not judge it.
   case "$b" in
-    1) lock_add secureBoot "Secure Boot" WARNING "ON — unsigned boot media will be refused" "UEFI variable SecureBoot" high ;;
+    1) lock_add secureBoot "Secure Boot" PASS "ON - the normal setting on business machines. Not an ownership lock: it only means unsigned boot media is refused." "UEFI variable SecureBoot" high ;;
     0) lock_add secureBoot "Secure Boot" PASS "OFF" "UEFI variable SecureBoot" high ;;
     *) lock_add secureBoot "Secure Boot" UNKNOWN "Could not read the SecureBoot UEFI variable" "UEFI variable SecureBoot" low ;;
   esac
