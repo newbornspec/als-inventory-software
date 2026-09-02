@@ -495,10 +495,14 @@ check_absolute() {
           "$attr is disabled in BIOS ($state)" \
           "firmware-attributes + no WPBT" high; return ;;
       *activat*)
-        # Computrace's "Activate" is a genuine, permanent activation.
-        lock_add absolute "Absolute / Computrace" LOCKED \
-          "$attr reports ACTIVATED in BIOS ($state) — on legacy Computrace this is permanent" \
-          "firmware-attributes" high; return ;;
+        # Legacy Computrace's "Activate" is a genuine activation and permanent -
+        # it cannot be set back. But this arm is only reached when there is NO
+        # WPBT table, so whatever the BIOS was told to do, firmware is not
+        # planting an agent at boot right now. That is worth flagging loudly
+        # and is not the same as a running lock, so DETECTED rather than LOCKED.
+        lock_add absolute "Absolute / Computrace" DETECTED \
+          "$attr reports ACTIVATED in BIOS ($state). On legacy Computrace that is permanent and cannot be reversed. No WPBT injection table is present, so no agent is being planted at boot - but the interface is armed and an agent installed in Windows could reach the Absolute service." \
+          "firmware-attributes (activated) + no WPBT" high; return ;;
       *enabl*)
         # The factory default. Per Dell, this means the interface is READY for
         # activation, not that anything is running — and with no WPBT there is
@@ -580,33 +584,94 @@ lock_win_blocked() {
 # return PASS on that basis. Absence of local traces is UNKNOWN — the only way
 # to be sure is an OOBE test with a network connection, or the tenant owner
 # checking their own Autopilot device list.
+# Pull a value out of the cached Autopilot policy JSON. The blob is JSON that
+# has been embedded inside another JSON string, so the quotes arrive escaped:
+#   "CloudAssignedTenantDomain\":\"contoso.onmicrosoft.com\"
+# The pattern deliberately requires a real character immediately after the
+# punctuation. An empty domain reads as ...Domain\":\"\",\"CloudAssignedTenantUpn...
+# and a looser match would happily skip the comma and return the NEXT key's
+# name as the tenant.
+_ap_field() {
+  printf '%s' "$2" \
+    | grep -o "$1[\\\":]*[A-Za-z0-9][A-Za-z0-9._:@-]*" \
+    | head -1 \
+    | sed "s/^$1[\\\":]*//"
+}
+
+# hivexget renders a DWORD as a decimal, but be liberal about what we accept.
+_ap_true() {
+  case "$(printf '%s' "$1" | tr -d ' \t\r\n' | sed 's/^dword://; s/^0[xX]//')" in
+    '' | 0 | 00 | 000 | 0000) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
+# The verdict, split out from the registry reads so it can be tested against
+# real-world values without a Windows hive to hand.
+_autopilot_verdict() {
+  local dom="$1" tid="$2" json="$3" avail="$4" jdom when
+
+  jdom=$(_ap_field CloudAssignedTenantDomain "$json")
+  [ -z "$dom" ] && dom="$jdom"
+  when=$(_ap_field AutopilotCreationDate "$json")
+
+  # A named tenant is the unambiguous case: this device belongs to somebody.
+  if [ -n "$dom" ] || [ -n "$tid" ]; then
+    lock_add autopilot "Windows Autopilot" LOCKED \
+      "Registered to an organisation${dom:+ - tenant $dom}${tid:+ (id $tid)}. Removal requires the owning organisation to deregister the device." \
+      'offline registry SOFTWARE\Microsoft\Provisioning' high
+    return
+  fi
+
+  # A profile was assigned even though the tenant was not named locally.
+  if _ap_true "$avail"; then
+    lock_add autopilot "Windows Autopilot" LOCKED \
+      "An Autopilot deployment profile is assigned to this device${when:+, as of $when}, so it is registered to an organisation even though the tenant is not named locally. Removal requires that organisation to deregister it." \
+      'offline registry SOFTWARE\Microsoft\Provisioning\AutopilotPolicyCache ProfileAvailable' high
+    return
+  fi
+
+  # ProfileAvailable present and zero. This is the one genuinely positive
+  # answer available offline: Windows asked Microsoft's Autopilot service about
+  # this hardware hash and was told there is no profile for it. It is evidence,
+  # not proof - hence medium confidence and an explicit statement of what it
+  # does not cover.
+  if [ -n "$avail" ]; then
+    lock_add autopilot "Windows Autopilot" UNKNOWN \
+      "The Autopilot service was contacted${when:+ on $when} and returned no profile, and no tenant is assigned locally - which is what an unregistered device looks like. It is not proof: a blank profile is also cached when the organisation has not assigned one yet, and registration lives in Microsoft's cloud against the hardware hash and survives a wipe. Confirm with a network-connected OOBE, or ask the seller for proof of deregistration." \
+      'offline registry AutopilotPolicyCache ProfileAvailable=0 (no tenant)' high
+    return
+  fi
+
+  # Traces but no verdict. Note what these are NOT: every Windows install
+  # carries Provisioning\AutopilotSettings (service URLs and timeouts shipped
+  # in the image) and any machine that reached OOBE with a network carries
+  # correlation ids from asking the service. Treating either as a positive
+  # flagged clean consumer hardware as enrolled.
+  if [ -n "$json" ]; then
+    lock_add autopilot "Windows Autopilot" UNKNOWN \
+      "Autopilot policy cache present but it records no tenant and no profile result, so enrolment could not be decided either way." \
+      'offline registry AutopilotPolicyCache (no usable result)' medium
+    return
+  fi
+
+  lock_add autopilot "Windows Autopilot" UNKNOWN \
+    "No local Autopilot traces. This does NOT mean the device is unregistered: registration is held in Microsoft's cloud against the hardware hash and survives a wipe. Confirm with a network-connected OOBE, or ask the seller for proof of deregistration." \
+    'offline registry (no traces) - cloud state not checkable from here' high
+}
+
 check_autopilot() {
   lock_win_blocked autopilot "Windows Autopilot" && return
 
-  local tenant domain csid cached=""
-  tenant=$(lock_hive_get "$WIN_SOFTWARE" 'Microsoft\Provisioning\Diagnostics\AutoPilot' CloudAssignedTenantId 2>/dev/null)
-  domain=$(lock_hive_get "$WIN_SOFTWARE" 'Microsoft\Provisioning\Diagnostics\AutoPilot' CloudAssignedTenantDomain 2>/dev/null)
-  csid=$(lock_hive_get "$WIN_SOFTWARE" 'Microsoft\Provisioning\Diagnostics\AutoPilot' AutopilotServiceCorrelationId 2>/dev/null)
-  lock_hive_haskey "$WIN_SOFTWARE" 'Microsoft\Provisioning\AutopilotPolicyCache' && cached=1
+  local ap='Microsoft\Provisioning\Diagnostics\AutoPilot'
+  local pc='Microsoft\Provisioning\AutopilotPolicyCache'
+  local dom tid json avail
+  dom=$(lock_hive_get "$WIN_SOFTWARE" "$ap" CloudAssignedTenantDomain 2>/dev/null)
+  tid=$(lock_hive_get "$WIN_SOFTWARE" "$ap" CloudAssignedTenantId 2>/dev/null)
+  json=$(lock_hive_get "$WIN_SOFTWARE" "$pc" PolicyJsonCache 2>/dev/null)
+  avail=$(lock_hive_get "$WIN_SOFTWARE" "$pc" ProfileAvailable 2>/dev/null)
 
-  if [ -n "$domain" ] || [ -n "$tenant" ]; then
-    lock_add autopilot "Windows Autopilot" LOCKED \
-      "Registered to an organisation${domain:+ — tenant $domain}${tenant:+ (id $tenant)}. Removal requires the owning organisation to deregister the device." \
-      'offline registry SOFTWARE\Microsoft\Provisioning\Diagnostics\AutoPilot' high
-    return
-  fi
-  if [ -n "$csid" ] || [ -n "$cached" ]; then
-    lock_add autopilot "Windows Autopilot" DETECTED \
-      "Autopilot provisioning traces present without a tenant name — the device has been through Autopilot at some point" \
-      'offline registry SOFTWARE\Microsoft\Provisioning' medium
-    return
-  fi
-
-  # Read the hives fine, found nothing — and that still is not a clean bill of
-  # health, for the reason set out above.
-  lock_add autopilot "Windows Autopilot" UNKNOWN \
-    "No local Autopilot traces. This does NOT mean the device is unregistered: registration is held in Microsoft's cloud against the hardware hash and survives a wipe. Confirm with a network-connected OOBE, or ask the seller for proof of deregistration." \
-    'offline registry (no traces) — cloud state not checkable from here' high
+  _autopilot_verdict "$dom" "$tid" "$json" "$avail"
 }
 
 # --- Intune / MDM enrolment --------------------------------------------------
@@ -616,30 +681,77 @@ check_autopilot() {
 # ORGANISATION is recorded — the provider and the tenant domain. That is all
 # that is needed to prove the lock and to chase deregistration, and a former
 # employee's address is nobody's business here. Do not add UPN capture.
+# An enrolment subkey counts only if it names a management SERVER. Windows
+# ships around thirty GUID subkeys under Enrollments on a stock install, and
+# three of them carry a ProviderID - "Local Authority", "Cloud Authority" and
+# "Deploy Authority" - which are built-in CSP authorities, not enrolments.
+# Treating any ProviderID as an enrolment reports LOCKED on every Windows
+# machine ever made. A real MDM has a DiscoveryServiceFullURL pointing at the
+# server that manages the device; Intune's is manage.microsoft.com.
+_mdm_provider() {
+  local id="$1" url="$2"
+  [ -n "$url" ] || return 0
+  case "$url" in
+    *manage.microsoft.com*) printf 'Microsoft Intune' ;;
+    *) printf '%s' "${id:-unidentified MDM}" ;;
+  esac
+}
+
+_mdm_verdict() {
+  local provider="$1" org="$2"
+  if [ -n "$provider" ]; then
+    lock_add mdm "Intune / MDM enrolment" LOCKED \
+      "Enrolled in mobile device management (provider: $provider${org:+, organisation $org}). The device is under an organisation's control, and only that organisation can release it." \
+      'offline registry SOFTWARE\Microsoft\Enrollments (enrolment with a management server URL)' high
+    return
+  fi
+  lock_add mdm "Intune / MDM enrolment" PASS \
+    "No enrolment names a management server. The built-in Local/Cloud/Deploy Authority entries that every Windows install carries are present but are not enrolments." \
+    'offline registry SOFTWARE\Microsoft\Enrollments (no DiscoveryServiceFullURL)' high
+}
+
 check_mdm() {
   # Needs hivexsh: enrolments are GUID SUBKEYS, which only hivexsh can list.
   lock_win_blocked mdm "Intune / MDM enrolment" hivexsh && return
 
-  local enrolments provider=""
-  # Each enrolment is a GUID-named subkey; the provider tells us whose MDM it is.
-  enrolments=$(printf 'cd Microsoft\Enrollments\nls\n' | hivexsh "$WIN_SOFTWARE" 2>/dev/null | grep -Ei '^[0-9a-f]{8}-' | head -20)
-
-  local g p url
-  for g in $enrolments; do
-    p=$(lock_hive_get "$WIN_SOFTWARE" "Microsoft\Enrollments\$g" ProviderID 2>/dev/null)
-    url=$(lock_hive_get "$WIN_SOFTWARE" "Microsoft\Enrollments\$g" DiscoveryServiceFullURL 2>/dev/null)
-    [ -n "$p" ] && provider="$provider $p"
-    case "$url" in *manage.microsoft.com*) provider="$provider Intune" ;; esac
-  done
-
-  provider=$(printf '%s' "$provider" | tr ' ' '\n' | grep -v '^$' | sort -u | paste -sd', ' -)
-  if [ -n "$provider" ]; then
-    lock_add mdm "Intune / MDM enrolment" LOCKED \
-      "Enrolled in mobile device management (provider: $provider). The device is under an organisation's control." \
-      'offline registry SOFTWARE\Microsoft\Enrollments' high
+  # The key name goes in as an ARGUMENT, never inside the format string.
+  # 'cd Microsoft\Enrollments\n' looks harmless and is not: printf reads \E as
+  # ESC, so the command became "cd Microsoft<0x1b>nrollments", the cd failed
+  # silently, and the check then reported "no MDM enrolment" on every machine
+  # it was ever run against.
+  local hivesh_ls='cd %s\nls\n'
+  if ! printf "$hivesh_ls" 'Microsoft' | hivexsh "$WIN_SOFTWARE" >/dev/null 2>&1; then
+    lock_add mdm "Intune / MDM enrolment" UNKNOWN \
+      "The SOFTWARE hive could not be walked, so enrolment state is unknown" \
+      'offline registry (hivexsh could not read the hive)' low
     return
   fi
-  lock_add mdm "Intune / MDM enrolment" PASS "No MDM enrolment found in the installed Windows" 'offline registry SOFTWARE\Microsoft\Enrollments' medium
+
+  local enrolments
+  enrolments=$(printf "$hivesh_ls" 'Microsoft\Enrollments' 2>/dev/null \
+    | hivexsh "$WIN_SOFTWARE" 2>/dev/null \
+    | grep -Ei '^[0-9a-f]{8}-' | head -40)
+
+  local g p url upn org="" provider="" name
+  for g in $enrolments; do
+    # Single-quote the literal half and double-quote the variable: inside one
+    # pair of double quotes "...\$g" is an escaped dollar, which substitutes
+    # nothing and swallows the separator.
+    local key='Microsoft\Enrollments\'"$g"
+    p=$(lock_hive_get "$WIN_SOFTWARE" "$key" ProviderID 2>/dev/null)
+    url=$(lock_hive_get "$WIN_SOFTWARE" "$key" DiscoveryServiceFullURL 2>/dev/null)
+    name=$(_mdm_provider "$p" "$url")
+    [ -n "$name" ] || continue
+    provider="$provider
+$name"
+    # The organisation is worth recording; the individual who used to own the
+    # account is not. Keep the domain, drop the local part.
+    upn=$(lock_hive_get "$WIN_SOFTWARE" "$key" UPN 2>/dev/null)
+    case "$upn" in *@*) org="${upn##*@}" ;; esac
+  done
+
+  provider=$(printf '%s' "$provider" | grep -v '^$' | sort -u | paste -sd', ' -)
+  _mdm_verdict "$provider" "$org"
 }
 
 # --- Entra ID / Azure AD join and domain join --------------------------------
@@ -661,7 +773,11 @@ check_entra() {
   # CloudDomainJoin\JoinInfo holds one subkey per Entra-joined identity.
   if lock_hive_haskey "$WIN_SYSTEM" 'ControlSet001\Control\CloudDomainJoin\JoinInfo'; then
     local sub
-    sub=$(printf 'cd ControlSet001\Control\CloudDomainJoin\JoinInfo\nls\n' | hivexsh "$WIN_SYSTEM" 2>/dev/null | grep -Ei '^[0-9a-f]{8}-' | head -1)
+    # Key name as an argument, never inside the format string - see check_mdm.
+    # This particular path survives, but only by luck: \C and \J are not printf
+    # escapes. A segment starting with a b e f n r t v u x or a digit would be
+    # mangled the same way \Enrollments was, and \c would truncate the command.
+    sub=$(printf 'cd %s\nls\n' 'ControlSet001\Control\CloudDomainJoin\JoinInfo' | hivexsh "$WIN_SYSTEM" 2>/dev/null | grep -Ei '^[0-9a-f]{8}-' | head -1)
     [ -n "$sub" ] && joined="Entra ID (Azure AD) joined"
   fi
 

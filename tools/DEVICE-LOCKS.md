@@ -66,6 +66,28 @@ sitting in WPBT means the firmware is *actively planting it* — that is
 `LOCKED`. A BIOS that merely exposes an Absolute setting which is switched off
 is not.
 
+Nor is a BIOS setting that is switched **on**. Dell's Absolute states are
+Disable / Enable / Permanently Disable, and Dell says plainly that *"Enabled
+does not mean that the feature is active"* — it only makes the interface ready
+for activation by Absolute's server, which additionally needs the agent
+installed in Windows and an authenticated activation packet. **Enable is the
+factory default** on modern Dell business machines, so reading it as a lock
+flags almost every Dell that comes through the door. Legacy Computrace is a
+different vocabulary in which `Activate` *is* a genuine, permanent activation;
+with no WPBT alongside it that is reported as `DETECTED`, not `LOCKED`, because
+nothing is being planted at boot.
+
+### MDM: an enrolment needs a server
+
+A stock Windows 11 install carries roughly thirty GUID subkeys under
+`SOFTWARE\Microsoft\Enrollments`, and three of them have a `ProviderID` —
+`Local Authority`, `Cloud Authority` and `Deploy Authority`. These are built-in
+CSP authorities, present on every machine, and they are **not** enrolments.
+What makes an enrolment real is a `DiscoveryServiceFullURL`: the address of the
+server that manages the device. Intune's contains `manage.microsoft.com`.
+Where a UPN is present only its domain is recorded — the organisation is what
+matters, and the previous user's identity is not ours to keep.
+
 ---
 
 ## Limits you must know

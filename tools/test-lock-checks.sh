@@ -379,7 +379,7 @@ echo
 echo "== legacy Computrace vocabulary: Activate IS a lock, Deactivate is not =="
 
 abs_state Computrace "Activate"
-check "Computrace 'Activate' -> LOCKED"        LOCKED "$(row_status absolute)"
+check "Computrace 'Activate' -> DETECTED"      DETECTED "$(row_status absolute)"
 
 abs_state Computrace "Deactivate"
 check "Computrace 'Deactivate' -> not locked"  PASS "$(row_status absolute)"
@@ -400,6 +400,132 @@ printf 'Enabled' > "$LOCK_SYSROOT/sys/class/firmware-attributes/dell-wmi-sysman/
 build_wpbt "$LOCK_SYSROOT/sys/firmware/acpi/tables/WPBT" 22 'r\000p\000c\000n\000e\000t\000p\000.\000e\000x\000e\000'
 check_absolute
 check "WPBT agent beats a benign BIOS value"   LOCKED "$(row_status absolute)"
+
+
+# ---------------------------------------------------------------------------
+# Windows Autopilot.
+#
+# The first hardware run reported DETECTED on a machine with no tenant, because
+# the code treated the mere existence of Provisioning\AutopilotPolicyCache as a
+# trace of enrolment. It is not. The JSON below was read out of the live
+# registry of a personal Windows 11 machine that has never been near Intune:
+# every Windows install that reaches OOBE with a network gets one, along with
+# correlation ids and the static Provisioning\AutopilotSettings key. Flagging
+# those meant flagging clean consumer hardware.
+#
+# Read properly, the same key holds the one positive answer available offline:
+# ProfileAvailable records what Microsoft's service said about this hardware.
+
+CLEAN_JSON='{"AutopilotCreationDate":"2025-09-18T19:55:09Z","AutopilotUpdateTimeout":1800000,"AutopilotCorrelationVector":"V0JTVGdFa0aLYNJr.0","CloudAssignedAadServerData":"{\"ZeroTouchConfig\":{\"CloudAssignedTenantDomain\":\"\",\"CloudAssignedTenantUpn\":\"\",\"ForcedEnrollment\":0}}"}'
+ORG_JSON='{"AutopilotCreationDate":"2026-02-11T08:14:00Z","CloudAssignedAadServerData":"{\"ZeroTouchConfig\":{\"CloudAssignedTenantDomain\":\"contoso.onmicrosoft.com\",\"ForcedEnrollment\":1}}"}'
+
+verdict() { LOCK_ROWS=""; _autopilot_verdict "$1" "$2" "$3" "$4"; }
+
+echo
+echo "== Autopilot: an unenrolled machine's own policy cache is not evidence =="
+
+verdict "" "" "$CLEAN_JSON" "0"
+check "real clean-machine cache -> UNKNOWN"     UNKNOWN "$(row_status autopilot)"
+case "$(row_detail autopilot)" in
+  *Upn*) bad "empty domain not misread as the next key" "no CloudAssignedTenantUpn" "$(row_detail autopilot)" ;;
+  *) ok "empty domain not misread as the next key" ;;
+esac
+case "$(row_detail autopilot)" in
+  *2025-09-18T19:55:09Z*) ok "reports when the service answered" ;;
+  *) bad "reports when the service answered" "the cache date" "$(row_detail autopilot)" ;;
+esac
+
+verdict "" "" "$CLEAN_JSON" "0x0"
+check "hex zero reads as zero too"              UNKNOWN "$(row_status autopilot)"
+
+echo
+echo "== Autopilot: a real registration =="
+
+verdict "" "" "$CLEAN_JSON" "1"
+check "profile assigned -> LOCKED"              LOCKED "$(row_status autopilot)"
+
+verdict "" "" "$ORG_JSON" "1"
+check "tenant in the cached policy -> LOCKED"   LOCKED "$(row_status autopilot)"
+case "$(row_detail autopilot)" in
+  *contoso.onmicrosoft.com*) ok "names the owning tenant" ;;
+  *) bad "names the owning tenant" "contoso.onmicrosoft.com" "$(row_detail autopilot)" ;;
+esac
+
+verdict "fabrikam.com" "" "" ""
+check "tenant in the registry -> LOCKED"        LOCKED "$(row_status autopilot)"
+verdict "" "6babcaad-1111-2222-3333-444455556666" "" ""
+check "bare tenant id -> LOCKED"                LOCKED "$(row_status autopilot)"
+
+echo
+echo "== Autopilot: no answer is UNKNOWN, never DETECTED =="
+
+verdict "" "" '{"AutopilotUpdateTimeout":1800000}' ""
+check "cache with no result -> UNKNOWN"         UNKNOWN "$(row_status autopilot)"
+
+verdict "" "" "" ""
+check "nothing at all -> UNKNOWN"               UNKNOWN "$(row_status autopilot)"
+case "$(row_detail autopilot)" in
+  *"does NOT mean the device is unregistered"*) ok "says silence is not a clean bill of health" ;;
+  *) bad "says silence is not a clean bill of health" "the cloud-state caveat" "$(row_detail autopilot)" ;;
+esac
+
+
+# ---------------------------------------------------------------------------
+# Intune / MDM enrolment.
+#
+# This check was reporting "No MDM enrolment found" on every machine it had
+# ever run against, and the cause was one character. The subkey listing was
+# built as printf 'cd Microsoft\Enrollments\nls\n' - and printf reads \E as
+# ESC, so hivexsh was asked to cd to "Microsoft<0x1b>nrollments", which fails
+# silently. A second bug behind it: "Microsoft\Enrollments\$g" inside double
+# quotes is an ESCAPED dollar, so the GUID never substituted either.
+#
+# Fixing that alone would have been worse than the bug. A stock Windows 11
+# install carries around thirty GUID subkeys under Enrollments, and three of
+# them have a ProviderID - the names below are read from a real personal
+# machine that has never been managed. Counting any ProviderID as an enrolment
+# would report LOCKED on every Windows device in existence. Only a
+# DiscoveryServiceFullURL - an actual management server - makes it real.
+
+echo
+echo "== MDM: built-in authorities are not enrolments =="
+
+for a in "Local Authority" "Cloud Authority" "Deploy Authority"; do
+  got=$(_mdm_provider "$a" "")
+  if [ -z "$got" ]; then ok "'$a' with no server URL is ignored"
+  else bad "'$a' with no server URL is ignored" "" "$got"; fi
+done
+
+check "Intune is named from its URL" "Microsoft Intune" \
+  "$(_mdm_provider 'MS DM Server' 'https://enrollment.manage.microsoft.com/enrollmentserver/discovery.svc')"
+check "a third-party MDM keeps its provider id" "AirWatch" \
+  "$(_mdm_provider 'AirWatch' 'https://ds1.awmdm.com/deviceservices/discovery.aws')"
+check "an unnamed provider still counts" "unidentified MDM" \
+  "$(_mdm_provider '' 'https://mdm.example.org/discovery.svc')"
+
+echo
+echo "== MDM verdicts =="
+
+LOCK_ROWS=""; _mdm_verdict "" ""
+check "no management server -> PASS"      PASS   "$(row_status mdm)"
+case "$(row_detail mdm)" in
+  *"not enrolments"*) ok "says why the built-in entries were ignored" ;;
+  *) bad "says why the built-in entries were ignored" "an explanation" "$(row_detail mdm)" ;;
+esac
+
+LOCK_ROWS=""; _mdm_verdict "Microsoft Intune" "contoso.com"
+check "a real enrolment -> LOCKED"        LOCKED "$(row_status mdm)"
+case "$(row_detail mdm)" in
+  *contoso.com*) ok "records the owning organisation" ;;
+  *) bad "records the owning organisation" "contoso.com" "$(row_detail mdm)" ;;
+esac
+
+# The organisation is recorded, the individual is not.
+LOCK_ROWS=""; upn='jane.doe@contoso.com'; _mdm_verdict "Microsoft Intune" "${upn##*@}"
+case "$(row_detail mdm)" in
+  *jane.doe*) bad "never records the previous user" "no local part" "$(row_detail mdm)" ;;
+  *) ok "never records the previous user" ;;
+esac
 
 echo
 printf '%d passed, %d failed\n' "$PASSED" "$FAILED"
