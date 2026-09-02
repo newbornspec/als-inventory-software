@@ -56,7 +56,12 @@ fit_display() {
 if [ "${1:-}" = "--fit-display" ]; then fit_display; exit 0; fi
 
 DIR=""
-for d in /run/archiso/bootmnt/gui /cdrom/gui /mnt/usb/gui "$(cd "$(dirname "$0")" && pwd)"; do
+# The media may be an archiso stick (tools at the boot mount) or an Ubuntu stick
+# (tools on a separate labelled partition) — ask the helper rather than guess.
+_ALS_HELPER="$(cd "$(dirname "$0")/.." 2>/dev/null && pwd)/find-media.sh"
+_ALS_MEDIA=""
+[ -r "$_ALS_HELPER" ] && { . "$_ALS_HELPER"; _ALS_MEDIA=$(als_find_media 2>/dev/null); }
+for d in "${_ALS_MEDIA:-/nonexistent}/gui" /run/archiso/bootmnt/gui /cdrom/gui /mnt/usb/gui          "$(cd "$(dirname "$0")" && pwd)"; do
   [ -f "$d/server.py" ] && DIR="$d" && break
 done
 [ -n "$DIR" ] || { echo "server.py not found on the boot media."; exit 1; }
@@ -222,7 +227,11 @@ else
   if [ -n "$CAGE" ]; then
     echo "   cage (kiosk) ..... available (preferred full-screen path)"
   else
-    echo "   cage (kiosk) ..... not installed  →  pacman -Sy --noconfirm cage"
+    if command -v apt-get >/dev/null 2>&1; then
+      echo "   cage (kiosk) ..... not installed  →  apt-get install -y cage"
+    else
+      echo "   cage (kiosk) ..... not installed  →  pacman -Sy --noconfirm cage"
+    fi
   fi
   if [ -n "$DISPLAY" ] || [ -n "$WAYLAND_DISPLAY" ]; then
     echo "   session .......... already running"
@@ -234,7 +243,11 @@ else
   echo
   if [ -z "$BROWSER" ]; then
     echo " To install Firefox (needs internet — the audit Wi-Fi works):"
-    echo "     pacman -Sy --noconfirm firefox"
+    if command -v apt-get >/dev/null 2>&1; then
+      echo "     apt-get install -y firefox"
+    else
+      echo "     pacman -Sy --noconfirm firefox"
+    fi
     echo " then run this script again."
     echo
   fi

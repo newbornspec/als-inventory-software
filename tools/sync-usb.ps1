@@ -31,6 +31,9 @@ $files = [ordered]@{
     # looks like it simply found nothing — exactly the partial-sync failure
     # described above. The two must travel together.
     'lock-checks.sh'         = 'lock-checks.sh'
+    # Locates the tools partition by label on an Ubuntu stick, where the boot
+    # medium is read-only ISO9660 and the tools live on a second partition.
+    'find-media.sh'          = 'find-media.sh'
     'autorun'                = 'autorun\autorun'
     'hardware-audit.desktop' = 'hardware-audit.desktop'
     'gui\index.html'         = 'gui\index.html'

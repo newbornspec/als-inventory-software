@@ -29,21 +29,32 @@ if command -v cage >/dev/null 2>&1; then
   exit 0
 fi
 
-if ! command -v pacman >/dev/null 2>&1; then
-  echo "This installer expects an Arch-based live system (SystemRescue) with pacman."
-  echo "On other systems, install the 'cage' package with your package manager."
+# Works on either live base: SystemRescue (pacman) or Ubuntu (apt). The Ubuntu
+# stick is the one that boots with Secure Boot enabled — see DEVICE-LOCKS.md.
+if command -v pacman >/dev/null 2>&1; then
+  ALS_PKG=pacman
+elif command -v apt-get >/dev/null 2>&1; then
+  ALS_PKG=apt
+else
+  echo "No supported package manager found (expected pacman on SystemRescue or"
+  echo "apt-get on Ubuntu). Install the 'cage' package by hand and re-run the GUI."
   exit 1
 fi
 
-# Confirm we actually have a route to the internet before hammering pacman.
-if ! ping -c1 -W2 archlinux.org >/dev/null 2>&1 && ! ping -c1 -W2 8.8.8.8 >/dev/null 2>&1; then
+# Confirm we actually have a route to the internet before hammering a mirror.
+if ! ping -c1 -W2 8.8.8.8 >/dev/null 2>&1 && ! ping -c1 -W2 1.1.1.1 >/dev/null 2>&1; then
   echo "No internet detected. Connect to Wi-Fi/Ethernet first (the audit Wi-Fi works),"
   echo "then run this again:  bash gui/install-cage.sh"
   exit 1
 fi
 
 echo "Installing Cage (Wayland kiosk compositor) and its dependencies …"
-pacman -Sy --noconfirm cage
+if [ "$ALS_PKG" = pacman ]; then
+  pacman -Sy --noconfirm cage
+else
+  apt-get update -qq
+  apt-get install -y -qq cage
+fi
 
 echo
 echo "Installed:  $(command -v cage)"

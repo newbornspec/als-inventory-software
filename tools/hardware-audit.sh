@@ -24,7 +24,12 @@ API_DEFAULT="https://als-inventory-software-production.up.railway.app"
 
 # --- load preconfigured settings ---
 SELF_DIR=$(cd "$(dirname "$0")" 2>/dev/null && pwd)
-for conf in "$SELF_DIR/audit.conf" /cdrom/audit.conf /run/archiso/bootmnt/audit.conf ./audit.conf; do
+# On Ubuntu the tools live on a second, writable partition that the live system
+# mounts wherever it likes, so the media is found by label rather than by a
+# hardcoded archiso path. Falls back silently when the helper is absent.
+ALS_MEDIA=""
+[ -r "$SELF_DIR/find-media.sh" ] && { . "$SELF_DIR/find-media.sh"; ALS_MEDIA=$(als_find_media 2>/dev/null); }
+for conf in "$SELF_DIR/audit.conf" "${ALS_MEDIA:-/nonexistent}/audit.conf"             /cdrom/audit.conf /run/archiso/bootmnt/audit.conf ./audit.conf; do
   [ -f "$conf" ] || continue
   # Strip any Windows CRLF endings before sourcing — audit.conf is usually edited
   # on Windows, and a stray carriage return would otherwise end up inside the

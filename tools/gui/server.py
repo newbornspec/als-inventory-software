@@ -21,6 +21,7 @@ by polling /api/job.
 Run:  python3 server.py   then open http://127.0.0.1:8800
 """
 import json
+import glob
 import os
 import re
 import shutil
@@ -37,7 +38,14 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 PORT = int(os.environ.get("ALS_GUI_PORT", "8800"))
 
 # Where the engine + config + images live (USB root first, then dev checkout).
-SEARCH_DIRS = ["/run/archiso/bootmnt", "/cdrom", "/mnt/usb", os.path.dirname(HERE), HERE]
+# archiso keeps the tools at the boot mount; an Ubuntu stick keeps them on a
+# separate writable partition, which the live system mounts under /media (or,
+# in a bare shell, not at all — start-gui.sh mounts it by label first).
+SEARCH_DIRS = (
+    ["/run/archiso/bootmnt", "/cdrom", "/isodevice", "/mnt/usb", "/mnt/als-media"]
+    + sorted(glob.glob("/media/*/*")) + sorted(glob.glob("/media/*"))
+    + [os.path.dirname(HERE), HERE]
+)
 
 
 def _find(name):
