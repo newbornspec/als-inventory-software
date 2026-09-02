@@ -154,59 +154,89 @@ connect_wired() {
 # Say what is actually wrong instead of always blaming Wi-Fi. The GUI shows the
 # last two lines, so the summary goes last.
 net_diagnose() {
+  # Diagnose by LAYER, in order, and stop guessing. The previous version checked
+  # an address and a name and then said "unreachable", which is the least useful
+  # true statement available: it sent us hunting a network fault on a machine
+  # whose network was fine.
+  #
+  # In particular DNS succeeding proves almost nothing. Resolving a name only
+  # needs to reach the router on the local subnet, which is on-link — it works
+  # perfectly with NO DEFAULT ROUTE AT ALL. "DNS: ok" alongside "unreachable"
+  # is exactly the signature of a missing or broken default route.
   eth_state="no cable detected"
   for i in $(wired_ifaces); do
     if [ "$(cat "/sys/class/net/$i/carrier" 2>/dev/null)" = "1" ]; then
       ipa=$(iface_ip "$i")
-      if [ -n "$ipa" ]; then eth_state="$i has IP $ipa but the server is unreachable"
+      if [ -n "$ipa" ]; then eth_state="$i has IP $ipa"
       else eth_state="$i cable is in, but no IP address (DHCP gave none)"; fi
       break
     fi
   done
+  echo "Network check:"
+  echo "  1. link/address : $eth_state"
+
+  # 2. Is there a way OUT of this subnet, and through which interface? A failed
+  #    Wi-Fi attempt can leave the default route on a dead wireless interface
+  #    while Ethernet sits there working.
+  gw=$(ip route show default 2>/dev/null | head -n1)
+  if [ -n "$gw" ]; then
+    echo "  2. default route: $gw"
+  else
+    echo "  2. default route: NONE — this machine has an address but no way out"
+    echo "     of its own subnet. DNS may still work (the router is on-link),"
+    echo "     which is why this looks like a server problem and is not one."
+  fi
+
+  # 3. Raw IP reachability, no DNS and no TLS involved. This separates routing
+  #    from name resolution from certificates.
+  if has_cmd ping && ping -c1 -W3 1.1.1.1 >/dev/null 2>&1; then
+    echo "  3. internet     : reachable (ping 1.1.1.1 ok)"
+  else
+    echo "  3. internet     : NOT reachable by IP — routing or upstream is down"
+  fi
+
   host=$(printf '%s' "$API" | sed -e 's#^https\?://##' -e 's#/.*##')
   if has_cmd getent; then
-    dns="ok"; getent hosts "$host" >/dev/null 2>&1 || dns="FAILED to resolve $host"
+    if getent hosts "$host" >/dev/null 2>&1; then
+      echo "  4. DNS          : resolves $host (note: proves only that the local resolver answered)"
+    else
+      echo "  4. DNS          : FAILED to resolve $host"
+    fi
   else
-    dns="not checked"
+    echo "  4. DNS          : not checked"
   fi
-  echo "Network check — Ethernet: $eth_state. DNS: $dns."
 
-  # WHY curl failed, not just that it did. "Unreachable" with working DNS sent
-  # us hunting the network when the cause was on this machine.
+  # 5. The actual request, with curl's own reason rather than a shrug.
   curl_err=$(curl -sS --max-time 10 -o /dev/null "$API" 2>&1)
   curl_rc=$?
   case "$curl_rc" in
-    0)  echo "  curl now succeeds — the earlier failure was a timing problem; just Retry." ;;
-    6)  echo "  curl: cannot resolve $host (DNS)." ;;
-    7)  echo "  curl: connection refused or no route to $host." ;;
-    28) echo "  curl: timed out. The network has an address but no route out." ;;
+    0)  echo "  5. server       : reachable now — the earlier failure was timing. Retry." ;;
+    6)  echo "  5. server       : cannot resolve $host" ;;
+    7)  echo "  5. server       : no route / connection refused" ;;
+    28) echo "  5. server       : timed out — an address, but no working route out" ;;
     35|51|58|59|60|77|83)
-        # THE COMMON ONE ON SECOND-HAND HARDWARE. A live USB on a machine with a
-        # flat CMOS battery boots with a clock years out, every certificate then
-        # looks "not yet valid", and HTTPS fails while DNS works perfectly. It
-        # looks exactly like a network fault and is not one.
-        echo "  curl: TLS/certificate failure (code $curl_rc)."
-        echo "  $curl_err"
-        echo "  CHECK THE CLOCK — this machine says: $(date)"
-        echo "  A wrong clock breaks every HTTPS connection. Fix it with:"
-        echo "      sudo timedatectl set-ntp true      # if anything else can reach the internet"
-        echo "      sudo date -s 'YYYY-MM-DD HH:MM:SS' # otherwise set it by hand, then Retry"
+        # Common on second-hand hardware: a flat CMOS battery leaves the clock
+        # years out, every certificate reads "not yet valid", and HTTPS fails
+        # while DNS keeps working.
+        echo "  5. server       : TLS/certificate failure (curl $curl_rc)"
+        echo "     $curl_err"
+        echo "     CHECK THE CLOCK — this machine says: $(date)"
+        echo "     Fix:  sudo timedatectl set-ntp true"
+        echo "           sudo date -s 'YYYY-MM-DD HH:MM:SS'"
         ;;
-    *)  echo "  curl exit $curl_rc: $curl_err" ;;
+    *)  echo "  5. server       : curl exit $curl_rc — $curl_err" ;;
   esac
 
-  # A clock far from the build date is worth flagging even when curl failed for
-  # another reason, because it will bite the upload later.
   yr=$(date +%Y 2>/dev/null)
   case "$yr" in
     ''|*[!0-9]*) : ;;
     *) if [ "$yr" -lt 2025 ] || [ "$yr" -gt 2100 ]; then
-         echo "  WARNING: the system clock reads $(date). That is almost certainly wrong"
-         echo "  (flat CMOS battery), and it breaks HTTPS on its own."
+         echo "  !  the clock reads $(date) — almost certainly wrong, and that alone breaks HTTPS."
        fi ;;
   esac
 
-  echo "Could not reach $API. Plug in a working Ethernet cable, or set this site's Wi-Fi in Settings, then Retry."
+  echo "Could not reach $API."
+  [ -z "$gw" ] && echo "Most likely: no default route. Try  sudo dhclient -v $i  or reconnect Ethernet in Settings."
 }
 
 # Bring up whatever is available: already-online → Ethernet → Wi-Fi.
