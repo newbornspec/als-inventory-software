@@ -26,6 +26,11 @@ $toolsDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 # Source under tools\  ->  destination relative to the stick root.
 $files = [ordered]@{
     'hardware-audit.sh'      = 'hardware-audit.sh'
+    # hardware-audit.sh SOURCES this. It is guarded, so a stick with the new
+    # audit script but without this file skips every lock check in silence and
+    # looks like it simply found nothing — exactly the partial-sync failure
+    # described above. The two must travel together.
+    'lock-checks.sh'         = 'lock-checks.sh'
     'autorun'                = 'autorun\autorun'
     'hardware-audit.desktop' = 'hardware-audit.desktop'
     'gui\index.html'         = 'gui\index.html'
