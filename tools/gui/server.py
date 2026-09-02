@@ -509,11 +509,31 @@ def ensure_token():
 
 
 # --------------------------------------------------------------- capture ----
+def audit_cmd(*args):
+    """The audit command, elevated when this backend is not already root.
+
+    The GUI has to run as the DESKTOP user, because that is the only account
+    whose display the browser can attach to. But nearly everything the audit
+    reads needs root: the ACPI tables are mode 0400, efivars is root-only,
+    mounting the machine's Windows partition needs root, and so does blkid.
+
+    SystemRescue hid this by logging in as root. Ubuntu's live session does
+    not, so without elevating here every device-lock check would report UNKNOWN
+    and the GUI would look broken while behaving exactly as designed. sudo is
+    passwordless on the live image; -n keeps it from ever blocking on a prompt
+    the kiosk has no way to answer.
+    """
+    base = ["bash", SCRIPT, *args]
+    if os.geteuid() != 0 and shutil.which("sudo"):
+        return ["sudo", "-n", *base]
+    return base
+
+
 def capture():
     if not SCRIPT:
         raise RuntimeError("hardware-audit.sh not found on the boot media.")
     env = dict(os.environ, AUDIT_DEBUG="1")
-    proc = subprocess.run(["bash", SCRIPT], env=env, capture_output=True, text=True, timeout=300)
+    proc = subprocess.run(audit_cmd(), env=env, capture_output=True, text=True, timeout=300)
     out = proc.stdout or ""
     profile, summary = None, []
     for line in out.splitlines():
@@ -541,7 +561,7 @@ def connect_network():
         # Generous timeout: the engine tries Ethernet (fast) and then Wi-Fi
         # (association + DHCP + retries). Cutting it short would throw away the
         # diagnostic message that tells the operator what is actually wrong.
-        proc = subprocess.run(["bash", SCRIPT, "--connect-wifi"],
+        proc = subprocess.run(audit_cmd("--connect-wifi"),
                               capture_output=True, text=True, timeout=90)
         lines = [l for l in (proc.stdout or "").splitlines() if l.strip()]
         return " ".join(lines[-2:]) if lines else ""
@@ -1868,7 +1888,7 @@ class Handler(BaseHTTPRequestHandler):
 
             started, busy = [], []
             for d in devices:
-                ok = start_job(wipe_kind(d), ["bash", SCRIPT, "--wipe-drive", d, method],
+                ok = start_job(wipe_kind(d), audit_cmd("--wipe-drive", d, method),
                                "WIPE_RESULT ", d, on_done=record_wipe, noun="wipe",
                                hint="The drive may be failing or was disconnected.")
                 (started if ok else busy).append(d)
