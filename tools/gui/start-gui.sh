@@ -96,7 +96,14 @@ XFILL="$DIR/fullscreen-x.py"
 kiosk_args() {   # per-browser full-screen flags
   case "$1" in
     firefox|firefox-esr)
-      PROFILE="/tmp/als-ff-profile"
+      # NOT /tmp. On Ubuntu, Firefox is a snap, and a snap gets its OWN PRIVATE
+      # /tmp - a fresh tmpfs inside its mount namespace. A profile path under
+      # /tmp is written here, on the host, and is simply absent from the browser's
+      # point of view, so the user.js below never applied and Firefox started on
+      # a blank profile it had to invent. $HOME is reachable through the snap
+      # home interface. No leading dot: the home interface does not reliably
+      # cover hidden directories.
+      PROFILE="${HOME:-/tmp}/als-ff-profile"
       mkdir -p "$PROFILE"
       # Suppress the first-run tour / import wizard on a fresh profile.
       cat > "$PROFILE/user.js" <<'PREFS'
@@ -109,15 +116,33 @@ PREFS
       printf '%s' "--profile $PROFILE --kiosk"
       ;;
     chromium|chromium-browser|google-chrome-stable)
-      printf '%s' "--kiosk --start-fullscreen --window-position=0,0 --no-first-run --no-sandbox --user-data-dir=/tmp/als-cr-profile"
+      # Same private-/tmp trap as Firefox above - Chromium ships as a snap too.
+      printf '%s' "--kiosk --start-fullscreen --window-position=0,0 --no-first-run --no-sandbox --user-data-dir=${HOME:-/tmp}/als-cr-profile"
       ;;
     *) printf '%s' "" ;;
   esac
 }
 
 start_browser() {  # runs in the foreground of whatever X we are in
+  # Snap Firefox writes a page of GTK/canberra module warnings to stderr on
+  # every start. None of it is fatal, all of it looks alarming, and it is the
+  # last thing on screen while the operator waits for a window to appear - so
+  # it goes to a log and the operator gets one line they can act on instead.
+  local log="${HOME:-/tmp}/als-browser.log"
+  echo
+  echo "  Opening the interface … (first start can take up to a minute)"
+  echo "  If no window appears, open a browser and go to:  $URL"
+  echo "  Browser messages: $log"
+  echo
   # shellcheck disable=SC2046
-  "$BROWSER" $(kiosk_args "$BROWSER") "$URL"
+  "$BROWSER" $(kiosk_args "$BROWSER") "$URL" >"$log" 2>&1
+  local rc=$?
+  # It exited. Say why, and leave the operator somewhere to go.
+  echo
+  echo "  The kiosk browser exited (status $rc)."
+  echo "  The backend is STILL RUNNING - open $URL in any browser."
+  [ -s "$log" ] && { echo "  Last lines of $log:"; tail -5 "$log" | sed 's/^/    /'; }
+  return $rc
 }
 
 launch_cage() {  # PRIMARY path: Cage owns the display and full-screens us on any monitor
