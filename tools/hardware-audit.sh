@@ -83,8 +83,39 @@ o_end() { printf '{%s}' "${OB#,}"; }
 # So: a longer budget, a separate connect timeout, and an explicit IPv4 retry
 # rather than waiting for a fallback that never gets the time to happen.
 online() {
-  curl -s --connect-timeout 5 --max-time 12 -o /dev/null "$API" 2>/dev/null && return 0
-  curl -s -4 --connect-timeout 5 --max-time 12 -o /dev/null "$API" 2>/dev/null
+  # Reachability WITHOUT depending on any one binary being installed.
+  #
+  # This used to be a single curl. SystemRescue ships curl, so it always worked;
+  # Ubuntu Desktop's live image does NOT, and every run reported "server
+  # unreachable" on a machine whose network was provably fine — right address,
+  # right default route, ping to 1.1.1.1 fine, DNS resolving. The failure was
+  # `curl: command not found`, exit 127, and the check reported it as the server
+  # being down. Two rounds of diagnosis went into the network as a result.
+  #
+  # Ordering matters too: the tool that INSTALLS curl runs after this check, so
+  # a curl-only probe can never bootstrap itself on an image without it.
+  #
+  # So: curl if present, else wget, else bash's own /dev/tcp, which is a shell
+  # builtin and needs nothing installed at all.
+  local host port
+  if command -v curl >/dev/null 2>&1; then
+    curl -s --connect-timeout 5 --max-time 12 -o /dev/null "$API" 2>/dev/null && return 0
+    # Some networks advertise IPv6 that does not work; curl spends the whole
+    # budget on it before it would fall back. Ask for v4 explicitly.
+    curl -s -4 --connect-timeout 5 --max-time 12 -o /dev/null "$API" 2>/dev/null && return 0
+    return 1
+  fi
+  if command -v wget >/dev/null 2>&1; then
+    wget -q -T 12 -t 1 --spider "$API" 2>/dev/null && return 0
+    return 1
+  fi
+  # Last resort: a raw TCP connect using the shell itself. This proves the
+  # server is reachable, which is all this function is asked to decide.
+  host=$(printf '%s' "$API" | sed -e 's#^https\?://##' -e 's#/.*##' -e 's#:.*##')
+  case "$API" in https://*) port=443 ;; *) port=80 ;; esac
+  [ -n "$host" ] || return 1
+  (exec 3<>"/dev/tcp/$host/$port") >/dev/null 2>&1 && return 0
+  return 1
 }
 
 # --- connect Wi-Fi automatically (iwd on SystemRescue, nmcli on Ubuntu) ---
@@ -263,18 +294,30 @@ connect_network() {
 
 # --- ensure the read tools exist (SystemRescue/Ubuntu ship most already) ---
 ensure_tools() {
+  # Called TWICE on purpose — see the call sites. Once before the network is
+  # brought up, in case this image already has connectivity (Ubuntu's live
+  # session gets DHCP on its own), and once after, to fetch whatever is still
+  # missing. Neither call is allowed to be fatal.
+  #
+  # curl is the one that matters most: the upload uses it, and Ubuntu Desktop's
+  # live image does not ship it. It used to be installed only AFTER the network
+  # check that needed it, which is a deadlock on any image without it.
   command -v curl >/dev/null 2>&1 && command -v dmidecode >/dev/null 2>&1 \
     && command -v lsblk >/dev/null 2>&1 && command -v smartctl >/dev/null 2>&1 \
     && command -v lspci >/dev/null 2>&1 && return 0
+
   # hivex and ntfs-3g are for the device-lock checks: Autopilot, Intune and
   # Entra state live in the Windows registry, so without them those three
   # checks can only ever report UNKNOWN. tpm2-tools reads TPM ownership.
   if command -v pacman >/dev/null 2>&1; then
-    pacman -Sy --noconfirm curl dmidecode util-linux smartmontools pciutils usbutils mokutil       hivex ntfs-3g tpm2-tools >/dev/null 2>&1
+    pacman -Sy --noconfirm curl dmidecode util-linux smartmontools pciutils usbutils mokutil \
+      hivex ntfs-3g tpm2-tools >/dev/null 2>&1
   elif command -v apt-get >/dev/null 2>&1; then
     apt-get update -qq >/dev/null 2>&1
-    apt-get install -y -qq curl dmidecode util-linux smartmontools pciutils usbutils mokutil       libhivex-bin ntfs-3g tpm2-tools >/dev/null 2>&1
+    apt-get install -y -qq curl dmidecode util-linux smartmontools pciutils usbutils mokutil \
+      libhivex-bin ntfs-3g tpm2-tools >/dev/null 2>&1
   fi
+  return 0
 }
 
 # --- OPTIONAL, DESTRUCTIVE: securely erase the machine's INTERNAL drives ---
@@ -628,6 +671,11 @@ if [ "${1:-}" = "--connect-wifi" ] || [ "${1:-}" = "--connect-net" ]; then
   connect_network
   exit $?
 fi
+
+# Bootstrap BEFORE the network check, then again after. Ubuntu live already
+# has DHCP by the time this runs, so this first pass can fetch curl — which
+# the network check itself needs, and which that image does not ship.
+ensure_tools
 
 if [ "${AUDIT_DEBUG:-0}" != "1" ]; then
   connect_network || exit 1
