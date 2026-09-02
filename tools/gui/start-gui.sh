@@ -210,10 +210,31 @@ if [ -n "$BROWSER" ] && { [ -n "$DISPLAY" ] || [ -n "$WAYLAND_DISPLAY" ]; }; the
   fit_display
   start_browser
 
+  # The kiosk browser exiting must NOT take the backend down with it.
+  #
+  # This branch used to fall straight off the end of the script, which fired
+  # the EXIT trap above and killed the server. On Ubuntu that happens within
+  # seconds: Firefox is a snap and a single-instance application, so when one
+  # is already running our invocation hands the URL over and returns
+  # immediately. The operator was left with browser tabs open and nothing
+  # listening on the port - "Unable to connect" to a server that had been
+  # killed by its own launcher.
+  #
+  # The backend is the actual product here; the kiosk is only a window onto it.
+  # So outlive the browser and let the operator close this deliberately.
+  echo
+  echo "  The interface is still running at $URL"
+  echo "  Leave this terminal open. Press Ctrl+C to stop the backend."
+  wait "$SRV"
+
 elif [ -n "$BROWSER" ] && [ -n "$CAGE" ]; then
   # PRIMARY: no session yet — Cage brings up the display itself at native
   # resolution and runs us full-screen. No xrandr guessing, no border, any panel.
   launch_cage
+  echo
+  echo "  The interface is still running at $URL"
+  echo "  Leave this terminal open. Press Ctrl+C to stop the backend."
+  wait "$SRV"
 
 elif [ -n "$BROWSER" ] && [ -n "$XSTART" ]; then
   # No session yet — start a bare X session (no window manager, so the kiosk
@@ -235,6 +256,10 @@ RCEOF
   else
     xinit "$RC" -- :0 vt1
   fi
+  echo
+  echo "  The interface is still running at $URL"
+  echo "  Leave this terminal open. Press Ctrl+C to stop the backend."
+  wait "$SRV"
 
 else
   # Nothing to display with — say precisely what is missing so it can be fixed.
