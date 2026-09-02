@@ -68,7 +68,10 @@ No network setup needed — the script connects to the Wi-Fi in `audit.conf` its
    ```bash
    bash /run/archiso/bootmnt/hardware-audit.sh
    ```
-   (On Ubuntu: `sudo bash /media/*/*/hardware-audit.sh`.)
+   (On Ubuntu: `sudo bash /cdrom/hardware-audit.sh` — casper mounts the boot
+   medium at `/cdrom`, and udisks does not re-mount an already-mounted boot
+   device under `/media`, so the old `/media/*/*` glob here never expanded and
+   left the operator with "No such file or directory" and no hint where to look.)
 2. It brings up Wi-Fi (**"Connecting to Wi-Fi …"** → **"Wi-Fi connected."**) and reads
    the specs, then lists your lots:
    ```

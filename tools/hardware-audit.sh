@@ -396,6 +396,11 @@ ensure_tools() {
   # hivex and ntfs-3g are for the device-lock checks: Autopilot, Intune and
   # Entra state live in the Windows registry, so without them those three
   # checks can only ever report UNKNOWN. tpm2-tools reads TPM ownership.
+  # Say something first. This installs ten packages with all output suppressed,
+  # and on a fresh live image over warehouse Wi-Fi it can sit here for minutes
+  # immediately after the banner with nothing on screen. An operator watching a
+  # dead terminal reasonably concludes it has hung and presses Ctrl-C.
+  echo "Installing tools this live image is missing (first run only, needs internet)…"
   if command -v pacman >/dev/null 2>&1; then
     pacman -Sy --noconfirm curl dmidecode util-linux smartmontools pciutils usbutils mokutil \
       hivex ntfs-3g tpm2-tools >/dev/null 2>&1
@@ -1157,6 +1162,22 @@ if [ -r "$SELF_DIR/lock-checks.sh" ]; then
   LOCKS_JSON=$(lock_json)
   LOCKS_STATUS=$(lock_status)
   BIOS_LOCKED=$(lock_bios_locked)
+else
+  # Never skip this quietly. Without the detectors there is no Autopilot, MDM,
+  # Entra, BIOS-password, Absolute or BitLocker check at all - and the run would
+  # otherwise finish, print a full hardware table and upload a record with no
+  # security section, which reads exactly like a device that was checked and
+  # found clean. UNVERIFIED is the honest value and it is what the rest of the
+  # pipeline already understands.
+  LOCKS_STATUS="UNVERIFIED"
+  echo
+  echo "  !!  DEVICE LOCK CHECKS DID NOT RUN"
+  echo "      lock-checks.sh was not found next to this script"
+  echo "      (looked in: $SELF_DIR)."
+  echo "      Nothing below says anything about Autopilot, Intune, Entra, a BIOS"
+  echo "      password, Absolute or BitLocker. Do NOT read this run as a device"
+  echo "      that came back clear. Re-sync the stick and run it again."
+  echo
 fi
 
 o_begin

@@ -559,8 +559,13 @@ def capture():
     # AUDIT_DEBUG=1 makes the engine print the profile as JSON and exit rather
     # than running the interactive upload flow. It has to survive sudo - see
     # audit_cmd - so it goes in the command, not the environment.
+    # 900, not 300. The engine installs its missing packages inside this budget
+    # on a first run, and ten packages over warehouse Wi-Fi can exceed five
+    # minutes on their own - at which point the operator got "Could not read the
+    # hardware profile from the engine", which describes a parsing problem and
+    # not the download that actually ran out of time.
     proc = subprocess.run(audit_cmd(env_vars={"AUDIT_DEBUG": "1"}),
-                          capture_output=True, text=True, timeout=300)
+                          capture_output=True, text=True, timeout=900)
     out = proc.stdout or ""
     profile, summary = None, []
     for line in out.splitlines():
