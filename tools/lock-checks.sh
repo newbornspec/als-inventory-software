@@ -314,51 +314,149 @@ check_bios_password() {
 # table through which firmware injects an agent into Windows at every boot, so
 # an Absolute payload sitting in WPBT means the firmware is actively planting
 # it — not that the option exists in a menu.
+# --- WPBT parsing ------------------------------------------------------------
+#
+# The Windows Platform Binary Table is how firmware injects an executable into
+# Windows at every boot. It is the mechanism behind Absolute Persistence, and
+# the thing that separates "the BIOS offers Absolute" from "Absolute is running".
+#
+# THE TABLE DOES NOT CONTAIN THE BINARY. Per Microsoft's spec it is a 52-byte
+# structure holding a 64-bit PHYSICAL ADDRESS pointing at a PE image elsewhere
+# in memory:
+#
+#   0   ACPI header (36 bytes) - OEM ID @10, OEM Table ID @16, Creator ID @28
+#   36  Handoff Memory Size        u32
+#   40  Handoff Memory Location    u64   <- physical address of the payload
+#   48  Content Layout             u8
+#   49  Content Type               u8
+#   50  Command-line Args Length   u16
+#   52  Command-line Args          UTF-16LE, optional
+#
+# An earlier version of this file grepped the raw table for the ASCII string
+# "rpcnetp". There is nothing in the table for that to match - not in ASCII, and
+# not in UTF-16 either, because the payload name is not stored here at all. It
+# could never have fired on real hardware, and the fixture that "proved" it
+# worked was a 36-byte blob Windows itself would reject on the length check.
+# Parse the fields; do not sift the bytes.
+
+_wpbt_u16() { od -An -tu2 -j"$2" -N2 -v "$1" 2>/dev/null | tr -d ' \n'; }
+_wpbt_u32() { od -An -tu4 -j"$2" -N4 -v "$1" 2>/dev/null | tr -d ' \n'; }
+_wpbt_str() { dd if="$1" bs=1 skip="$2" count="$3" 2>/dev/null | tr -cd '[:print:]'; }
+
+# The command-line arguments field, decoded from UTF-16LE. Absent on most
+# machines - ArgumentsLength=0 is normal and explicitly legal - so an empty
+# result here is not evidence either way.
+_wpbt_args() {
+  local f="$1" al
+  al=$(_wpbt_u16 "$f" 50)
+  case "$al" in ''|0|*[!0-9]*) return 1 ;; esac
+  dd if="$f" bs=1 skip=52 count="$al" 2>/dev/null |
+    { iconv -f UTF-16LE -t UTF-8 2>/dev/null || LC_ALL=C tr -d '\000'; }
+}
+
+# The injected payload itself, read from physical memory. The spec requires the
+# buffer to be EfiACPIReclaimMemory, which is not System RAM, so a kernel with
+# CONFIG_STRICT_DEVMEM will usually still allow the read. When it refuses we say
+# so rather than concluding anything.
+_wpbt_payload() {
+  local f="$1" addr sz
+  [ -r /dev/mem ] || return 1
+  addr=$(od -An -tx8 -j40 -N8 -v "$f" 2>/dev/null | tr -d ' \n')
+  sz=$(_wpbt_u32 "$f" 36)
+  case "$addr" in ''|*[!0-9a-fA-F]*) return 1 ;; esac
+  case "$sz" in ''|0|*[!0-9]*) return 1 ;; esac
+  [ "$sz" -gt 8388608 ] && return 1
+  dd if=/dev/mem bs=1 skip=$((16#$addr)) count="$sz" 2>/dev/null
+}
+
+_ABS_PAT='rpcnetp|rpcnet|absolute|computrace|namequery'
+
 check_absolute() {
   lock_need_root absolute "Absolute / Computrace" && return
-  local wpbt="$LOCK_SYSROOT/sys/firmware/acpi/tables/WPBT" hits=""
 
-  # No ACPI table directory at all: we cannot see whether firmware publishes a
-  # WPBT, so we cannot conclude anything about Persistence.
-  if [ ! -d "$LOCK_SYSROOT/sys/firmware/acpi/tables" ]; then
-    lock_add absolute "Absolute / Computrace" UNKNOWN       "ACPI tables are not readable from this boot, so firmware-injected agents could not be checked"       "/sys/firmware/acpi/tables absent" low
+  # Split deliberately: in this shell a `local a=X b="$a/Y"` does NOT see the
+  # a it just assigned, so wpbt silently became "/WPBT" and every machine
+  # reported "no WPBT injection table". Verified: local a=X b=$a/Y -> b=/Y.
+  local tables="$LOCK_SYSROOT/sys/firmware/acpi/tables"
+  local wpbt="$tables/WPBT"
+
+  if [ ! -d "$tables" ]; then
+    lock_add absolute "Absolute / Computrace" UNKNOWN \
+      "ACPI tables are not readable from this boot, so firmware-injected agents could not be checked" \
+      "/sys/firmware/acpi/tables absent" low
     return
   fi
+  # Mode 0400: present but unreadable is a different answer from absent.
+  if [ -e "$wpbt" ] && [ ! -r "$wpbt" ]; then
+    lock_add absolute "Absolute / Computrace" UNKNOWN \
+      "A WPBT table exists but could not be read, so the injected agent could not be identified" \
+      "ACPI WPBT (unreadable)" low
+    return
+  fi
+
   if [ -r "$wpbt" ]; then
-    # grep -a rather than `strings`: strings lives in binutils and is missing
-    # from minimal live images, and its absence silently emptied this match —
-    # turning an ACTIVE Absolute agent into a mere "table present" note.
-    # tr -d NUL FIRST. WPBT stores its payload identity as a UTF-16LE string,
-    # so the bytes are r NUL p NUL c NUL … and an ASCII grep for "rpcnetp"
-    # matches nothing at all. Verified: the same grep finds the name in an ASCII
-    # fixture and misses it entirely in a UTF-16 one, which would have quietly
-    # downgraded an ACTIVE Absolute agent to "table present, agent unidentified".
-    hits=$(LC_ALL=C tr -d '\000' < "$wpbt" 2>/dev/null | grep -aoiE 'rpcnetp|rpcnet|absolute|computrace' | tr '[:upper:]' '[:lower:]' | sort -u | paste -sd', ' -)
-    if [ -n "$hits" ]; then
-      lock_add absolute "Absolute / Computrace" LOCKED \
-        "Persistence ACTIVE — firmware injects an agent at boot (WPBT payload: $hits)" \
-        "ACPI WPBT table" high
+    local len oem args hits payload
+    len=$(_wpbt_u32 "$wpbt" 4)
+    case "$len" in ''|*[!0-9]*) len=0 ;; esac
+    if [ "$len" -lt 52 ]; then
+      lock_add absolute "Absolute / Computrace" UNKNOWN \
+        "The WPBT table is malformed (length $len, minimum 52), so its payload could not be identified" \
+        "ACPI WPBT (bad length)" low
       return
     fi
-    lock_add absolute "Absolute / Computrace" DETECTED \
-      "Firmware publishes a WPBT injection table, but no Absolute agent identified in it" \
-      "ACPI WPBT table" medium
+
+    oem=$(_wpbt_str "$wpbt" 10 6)
+    args=$(_wpbt_args "$wpbt")
+    hits=$(printf '%s' "$args" | grep -aoiE "$_ABS_PAT" | tr '[:upper:]' '[:lower:]' | sort -u | paste -sd', ' -)
+    if [ -n "$hits" ]; then
+      lock_add absolute "Absolute / Computrace" LOCKED \
+        "Persistence ACTIVE - firmware injects an agent at boot (WPBT arguments name: $hits)" \
+        "ACPI WPBT command-line arguments" high
+      return
+    fi
+
+    # Nothing in the arguments: follow the pointer to the payload itself.
+    if payload=$(_wpbt_payload "$wpbt") && [ -n "$payload" ]; then
+      hits=$(printf '%s' "$payload" | LC_ALL=C tr -d '\000' | grep -aoiE "$_ABS_PAT" | tr '[:upper:]' '[:lower:]' | sort -u | paste -sd', ' -)
+      if [ -n "$hits" ]; then
+        lock_add absolute "Absolute / Computrace" LOCKED \
+          "Persistence ACTIVE - the binary this firmware injects identifies as: $hits" \
+          "ACPI WPBT payload read from physical memory" high
+        return
+      fi
+      lock_add absolute "Absolute / Computrace" DETECTED \
+        "Firmware injects a binary at every boot${oem:+ (published by $oem)}, but it does not identify as Absolute" \
+        "ACPI WPBT payload read from physical memory" medium
+      return
+    fi
+
+    # The payload could not be read, but the arguments DID decode to something.
+    # That is identification: firmware is injecting a named binary and the name
+    # is not Absolute. Reporting UNKNOWN here would throw away a real answer.
+    if [ -n "$args" ]; then
+      lock_add absolute "Absolute / Computrace" DETECTED \
+        "Firmware injects a binary at every boot${oem:+ (published by $oem)}, named: $args. It does not identify as Absolute." \
+        "ACPI WPBT command-line arguments" medium
+      return
+    fi
+    # A WPBT exists and we could not see what it injects. Emphatically NOT a
+    # clean bill: this is the exact shape of an active Absolute install.
+    lock_add absolute "Absolute / Computrace" UNKNOWN \
+      "Firmware injects a binary at boot${oem:+ (published by $oem)} but it could not be read, so it may or may not be Absolute. Boot with iomem=relaxed to identify it." \
+      "ACPI WPBT present, payload unreadable" low
     return
   fi
 
-  # No WPBT. Check whether the firmware still exposes the Absolute switch, which
-  # is a weaker signal — available but not activated.
+  # No WPBT. Corroborate with the vendor's own setting before saying anything.
   local f state
   for f in "$LOCK_SYSROOT"/sys/class/firmware-attributes/*/attributes/*bsolute*/current_value \
            "$LOCK_SYSROOT"/sys/class/firmware-attributes/*/attributes/*omputrace*/current_value; do
     [ -r "$f" ] || continue
     state=$(cat "$f" 2>/dev/null)
-    # ORDER MATTERS. "Deactivate" contains the substring "activate", so the
-    # negative states must be matched FIRST — otherwise a machine with Absolute
-    # explicitly switched off is reported as locked.
+    # ORDER MATTERS: "Deactivate" contains "activate", so negatives first.
     case "$(printf '%s' "$state" | tr '[:upper:]' '[:lower:]')" in
       *deactivate*|*disable*|*off*)
-        lock_add absolute "Absolute / Computrace" PASS "BIOS reports Absolute not activated ($state)" "firmware-attributes" high; return ;;
+        lock_add absolute "Absolute / Computrace" PASS "No firmware injection, and the BIOS reports Absolute not activated ($state)" "ACPI WPBT absent + firmware-attributes" high; return ;;
       *activate*|*enable*|*on*)
         lock_add absolute "Absolute / Computrace" LOCKED "BIOS reports Absolute ACTIVATED ($state)" "firmware-attributes" high; return ;;
       *)
@@ -366,9 +464,12 @@ check_absolute() {
     esac
   done
 
+  # No WPBT and no vendor setting to read. Absence of the injection table is
+  # real evidence - that is how Persistence works - but it is not proof on its
+  # own, so this is deliberately not a confident PASS.
   lock_add absolute "Absolute / Computrace" PASS \
-    "No WPBT injection table and no Absolute agent planted by firmware" \
-    "ACPI tables (WPBT absent)" medium
+    "No WPBT injection table published by firmware, so nothing is being planted at boot. No vendor Absolute setting was readable to confirm it independently." \
+    "ACPI WPBT absent (no vendor setting to corroborate)" medium
 }
 
 # =============================================================================

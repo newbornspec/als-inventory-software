@@ -23,6 +23,47 @@ row_detail() { printf '%s' "$LOCK_ROWS" | grep "^$1|" | cut -d'|' -f4; }
 FIX=$(mktemp -d)
 trap 'rm -rf "$FIX"' EXIT
 
+
+# ---------------------------------------------------------------------------
+# WPBT — built to the real spec, not to whatever the code happened to accept.
+#
+# The previous fixture was a 36-byte ASCII blob containing "rpcnetp.exe". No
+# such table can exist: Microsoft's spec requires at least 52 bytes, and the
+# payload name is not stored in the table at all — the table holds a POINTER to
+# a PE image in memory. The old detector passed its test and could not have
+# fired on a single real machine. These fixtures are laid out field by field so
+# that never happens again.
+#
+#   0  signature "WPBT" | 4 length u32 | 8 rev | 9 cksum | 10 OEM ID (6)
+#   16 OEM Table ID (8) | 24 OEM rev u32 | 28 Creator ID (4) | 32 Creator rev
+#   36 HandoffSize u32  | 40 HandoffAddress u64 | 48 layout | 49 type
+#   50 ArgsLength u16   | 52 Args (UTF-16LE)
+
+# build_wpbt <file> <argslen> [utf16-args-printf-string]
+build_wpbt() {
+  local out="$1" al="$2" args="$3"
+  # Separate statement: see the note in check_absolute — a sibling in the
+  # same `local` is not visible, and this silently wrote a 52-byte length
+  # into a 74-byte table.
+  local total=$((52 + al))
+  {
+    printf 'WPBT'
+    printf "$(printf '\\%03o\\%03o\\%03o\\%03o' $((total & 255)) $(((total >> 8) & 255)) 0 0)"
+    printf '\001\000'                 # revision, checksum
+    printf 'DELL  '                   # OEM ID (6)
+    printf 'WPBT    '                 # OEM Table ID (8)
+    printf '\001\000\000\000'         # OEM revision
+    printf 'DELL'                     # Creator ID (4)
+    printf '\001\000\000\000'         # Creator revision
+    printf '\000\020\000\000'         # HandoffSize = 4096
+    printf '\000\000\000\000\000\000\000\000'   # HandoffAddress = 0 (unreadable here)
+    printf '\001\001'                 # layout, type
+    printf "$(printf '\\%03o\\%03o' $((al & 255)) $(((al >> 8) & 255)))"
+  } > "$out"
+  [ -n "$args" ] && printf "$args" >> "$out"
+  return 0
+}
+
 # ---------------------------------------------------------------------------
 echo "== a machine with NOTHING probeable: every answer must be UNKNOWN =="
 export LOCK_SYSROOT="$FIX/empty"; mkdir -p "$LOCK_SYSROOT"
@@ -54,7 +95,10 @@ mkdir -p "$LOCK_SYSROOT/sys/firmware/efi/efivars" \
 printf '\006\000\000\000\001' > "$LOCK_SYSROOT/sys/firmware/efi/efivars/SecureBoot-$GUID"
 printf '\006\000\000\000\000' > "$LOCK_SYSROOT/sys/firmware/efi/efivars/SetupMode-$GUID"
 # A WPBT carrying the Absolute agent — firmware actively injecting it.
-printf 'WPBT\000\000rpcnetp.exe\000Absolute Software\000' > "$LOCK_SYSROOT/sys/firmware/acpi/tables/WPBT"
+# A spec-shaped table whose UTF-16 arguments name the agent. What stood here was
+# a 36-byte ASCII blob no firmware could emit, and it was the ONLY input on
+# which the old detector's LOCKED branch could fire.
+build_wpbt "$LOCK_SYSROOT/sys/firmware/acpi/tables/WPBT" 22 'r\000p\000c\000n\000e\000t\000p\000.\000e\000x\000e\000'
 echo 1 > "$LOCK_SYSROOT/sys/class/firmware-attributes/dell-wmi-sysman/authentication/Admin/is_enabled"
 echo 0 > "$LOCK_SYSROOT/sys/class/firmware-attributes/dell-wmi-sysman/authentication/System/is_enabled"
 echo 2 > "$LOCK_SYSROOT/sys/class/tpm/tpm0/tpm_version_major"
@@ -120,8 +164,7 @@ LOCK_ROWS=""
 export LOCK_SYSROOT="$FIX/wpbt16"
 mkdir -p "$LOCK_SYSROOT/sys/firmware/acpi/tables"
 W="$LOCK_SYSROOT/sys/firmware/acpi/tables/WPBT"
-printf 'WPBT4\000\000\000\001' > "$W"
-printf 'r\000p\000c\000n\000e\000t\000p\000.\000e\000x\000e\000\000\000' >> "$W"
+build_wpbt "$W" 22 'r\000p\000c\000n\000e\000t\000p\000.\000e\000x\000e\000'
 check_absolute
 check "UTF-16 Absolute payload detected"   LOCKED "$(row_status absolute)"
 
@@ -131,8 +174,7 @@ LOCK_ROWS=""
 export LOCK_SYSROOT="$FIX/wpbt-other"
 mkdir -p "$LOCK_SYSROOT/sys/firmware/acpi/tables"
 W="$LOCK_SYSROOT/sys/firmware/acpi/tables/WPBT"
-printf 'WPBT4\000\000\000\001' > "$W"
-printf 'H\000P\000S\000u\000r\000e\000S\000t\000a\000r\000t\000\000\000' >> "$W"
+build_wpbt "$W" 22 'H\000P\000S\000u\000r\000e\000S\000t\000a\000r\000t\000'
 check_absolute
 check "non-Absolute WPBT is not LOCKED"    DETECTED "$(row_status absolute)"
 
@@ -148,7 +190,10 @@ check "non-Absolute WPBT is not LOCKED"    DETECTED "$(row_status absolute)"
 # fail in ways that look like logic bugs.
 echo
 echo "== the shipped files must be clean text =="
-for f in lock-checks.sh find-media.sh hardware-audit.sh; do
+# test-lock-checks.sh checks ITSELF. It was left off this list, and a patch
+# then wrote two literal NUL bytes into its own fixtures — so the fixtures
+# silently stopped meaning what they said while the suite stayed green.
+for f in lock-checks.sh find-media.sh hardware-audit.sh test-lock-checks.sh; do
   nuls=$(LC_ALL=C tr -cd '\000' < "$f" | wc -c | tr -d ' ')
   check "$f has no NUL bytes"      0 "$nuls"
   crs=$(LC_ALL=C tr -cd '\r' < "$f" | wc -c | tr -d ' ')
@@ -224,6 +269,62 @@ case "$(row_detail tpm)" in
   *) ok "failed query does not assert ownership";;
 esac
 unset -f tpm2_getcap
+
+echo
+echo "== WPBT naming Absolute in its UTF-16 arguments -> LOCKED =="
+LOCK_ROWS=""
+export LOCK_SYSROOT="$FIX/wpbt-abs"
+mkdir -p "$LOCK_SYSROOT/sys/firmware/acpi/tables"
+# "rpcnetp.exe" UTF-16LE = 22 bytes
+build_wpbt "$LOCK_SYSROOT/sys/firmware/acpi/tables/WPBT" 22 \
+  'r\000p\000c\000n\000e\000t\000p\000.\000e\000x\000e\000'
+check_absolute
+check "Absolute named in WPBT args -> LOCKED" LOCKED "$(row_status absolute)"
+check "table is a legal size" 1 "$([ "$(wc -c < "$LOCK_SYSROOT/sys/firmware/acpi/tables/WPBT")" -ge 52 ] && echo 1 || echo 0)"
+
+echo
+echo "== a valid WPBT with NO arguments and an unreadable payload -> UNKNOWN =="
+echo "   (the shape of a real Absolute install; must never read as clear)"
+LOCK_ROWS=""
+export LOCK_SYSROOT="$FIX/wpbt-noargs"
+mkdir -p "$LOCK_SYSROOT/sys/firmware/acpi/tables"
+build_wpbt "$LOCK_SYSROOT/sys/firmware/acpi/tables/WPBT" 0 ''
+check_absolute
+check "argument-free WPBT -> UNKNOWN"   UNKNOWN "$(row_status absolute)"
+case "$(row_detail absolute)" in
+  *"could not be read"*|*"could not be identified"*) ok "says what it could not do" ;;
+  *) bad "says what it could not do" "an explanation" "$(row_detail absolute)" ;;
+esac
+
+echo
+echo "== a WPBT from another vendor must not be called Absolute =="
+LOCK_ROWS=""
+export LOCK_SYSROOT="$FIX/wpbt-hp"
+mkdir -p "$LOCK_SYSROOT/sys/firmware/acpi/tables"
+build_wpbt "$LOCK_SYSROOT/sys/firmware/acpi/tables/WPBT" 20 \
+  'H\000P\000S\000u\000r\000e\000S\000t\000a\000rt\000'
+check_absolute
+case "$(row_status absolute)" in
+  LOCKED) bad "other vendor is not Absolute" "not LOCKED" "LOCKED" ;;
+  *) ok "other vendor is not Absolute" ;;
+esac
+
+echo
+echo "== a malformed (too short) WPBT -> UNKNOWN, never a verdict =="
+LOCK_ROWS=""
+export LOCK_SYSROOT="$FIX/wpbt-short"
+mkdir -p "$LOCK_SYSROOT/sys/firmware/acpi/tables"
+printf 'WPBT\044\000\000\000rpcnetp.exe' > "$LOCK_SYSROOT/sys/firmware/acpi/tables/WPBT"
+check_absolute
+check "short table -> UNKNOWN"          UNKNOWN "$(row_status absolute)"
+
+echo
+echo "== WPBT present but unreadable (mode 0400, non-root) -> UNKNOWN =="
+LOCK_ROWS=""
+export LOCK_SYSROOT="$FIX/wpbt-unread"
+mkdir -p "$LOCK_SYSROOT/sys/firmware/acpi/tables/WPBT"   # a dir: exists, cannot be read as a file
+check_absolute
+check "unreadable WPBT -> not PASS" 0 "$([ "$(row_status absolute)" = "PASS" ] && echo 1 || echo 0)"
 
 echo
 printf '%d passed, %d failed\n' "$PASSED" "$FAILED"
