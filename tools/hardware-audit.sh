@@ -118,6 +118,74 @@ online() {
   return 1
 }
 
+# One HTTP client, whichever binary this image happens to have.
+#
+# online() already falls back curl -> wget -> /dev/tcp, but it only has to
+# decide whether the server ANSWERS. The five calls below need the response
+# BODY, and /dev/tcp cannot speak TLS, so the ladder here is curl -> wget and
+# then an honest failure.
+#
+# Without this, an image with no curl reported "Sign-in failed - check
+# audit.conf (email/password/URL)": curl exited 127, $LOGIN was empty, no token
+# came out, and the operator was sent to re-check a password that was never the
+# problem. Same shape as the "server unreachable" bug that online() was
+# hardened for, and it survives in the one place that actually files the audit.
+#
+# Request bodies go through a 0600 temp FILE, never the command line.
+# /proc/<pid>/cmdline is world-readable and the login body carries the account
+# password, so passing it as an argument publishes it to every process on the
+# machine for as long as the request runs.
+HTTP_CLIENT=""
+http_client() {
+  if [ -z "$HTTP_CLIENT" ]; then
+    if command -v curl >/dev/null 2>&1; then HTTP_CLIENT=curl
+    elif command -v wget >/dev/null 2>&1; then HTTP_CLIENT=wget
+    else HTTP_CLIENT=none
+    fi
+  fi
+  printf '%s' "$HTTP_CLIENT"
+}
+
+http_missing() {
+  echo "  Neither curl nor wget is installed, so the server cannot be contacted."
+  echo "  This is NOT a credentials or network problem."
+  echo "  Re-run with sudo so the audit can install them, or install by hand:"
+  echo "      sudo apt-get install -y curl"
+}
+
+# http_get URL [header ...]
+http_get() {
+  local url="$1"; shift
+  local h; local args=()
+  case "$(http_client)" in
+    curl) for h in "$@"; do args+=(-H "$h"); done
+          curl -sS --max-time 30 "${args[@]}" "$url" ;;
+    wget) for h in "$@"; do args+=(--header="$h"); done
+          wget -q -O - --content-on-error --timeout=30 --tries=1 "${args[@]}" "$url" ;;
+    *)    return 127 ;;
+  esac
+}
+
+# http_post URL BODY [header ...]
+http_post() {
+  local url="$1" body="$2"; shift 2
+  local h f rc; local args=()
+  [ "$(http_client)" = none ] && return 127
+  f=$(mktemp 2>/dev/null) || return 127
+  chmod 600 "$f" 2>/dev/null
+  printf '%s' "$body" > "$f"
+  case "$(http_client)" in
+    curl) for h in "$@"; do args+=(-H "$h"); done
+          curl -sS --max-time 60 -X POST "${args[@]}" --data-binary "@$f" "$url" ;;
+    wget) for h in "$@"; do args+=(--header="$h"); done
+          wget -q -O - --content-on-error --timeout=60 --tries=1 \
+               --post-file="$f" "${args[@]}" "$url" ;;
+  esac
+  rc=$?
+  rm -f "$f"
+  return $rc
+}
+
 # --- connect Wi-Fi automatically (iwd on SystemRescue, nmcli on Ubuntu) ---
 connect_wifi() {
   online && return 0
@@ -251,6 +319,24 @@ net_diagnose() {
   fi
 
   # 5. The actual request, with curl's own reason rather than a shrug.
+  #
+  # This step is built on curl's exit codes, so it needs curl to exist. On an
+  # image without it the case below fell through to "server: curl exit 127",
+  # which reads as a server fault and is the opposite of the truth. Say it
+  # plainly instead, and still answer the actual question with wget.
+  if ! command -v curl >/dev/null 2>&1; then
+    echo "  5. server       : not tested - curl is not installed on this image."
+    echo "                    This is a MISSING TOOL, not a server or network fault."
+    if command -v wget >/dev/null 2>&1; then
+      if wget -q -T 10 -t 1 --spider "$API" 2>/dev/null; then
+        echo "                    wget does reach $API - the server is up."
+      else
+        echo "                    wget cannot reach $API either."
+      fi
+    fi
+    echo "                    Install it with:  sudo apt-get install -y curl"
+    curl_rc=""
+  else
   curl_err=$(curl -sS --max-time 10 -o /dev/null "$API" 2>&1)
   curl_rc=$?
   case "$curl_rc" in
@@ -270,6 +356,7 @@ net_diagnose() {
         ;;
     *)  echo "  5. server       : curl exit $curl_rc — $curl_err" ;;
   esac
+  fi
 
   yr=$(date +%Y 2>/dev/null)
   case "$yr" in
@@ -1127,22 +1214,33 @@ fi
 [ -z "${AUDIT_PASSWORD:-}" ] && { read -rsp "Password: " AUDIT_PASSWORD; echo; }
 
 echo "Signing in…"
-LOGIN=$(curl -sS -X POST "$API/auth/login" -H 'Content-Type: application/json' \
-  -d "{\"email\":\"$(esc "$AUDIT_EMAIL")\",\"password\":\"$(esc "$AUDIT_PASSWORD")\"}")
+LOGIN=$(http_post "$API/auth/login" \
+  "{\"email\":\"$(esc "$AUDIT_EMAIL")\",\"password\":\"$(esc "$AUDIT_PASSWORD")\"}" \
+  'Content-Type: application/json')
 TOKEN=$(jstr "$LOGIN" accessToken)
-[ -z "$TOKEN" ] && { echo "Sign-in failed — check audit.conf (email/password/URL)."; exit 1; }
+if [ -z "$TOKEN" ]; then
+  # Say which of the two it was. Blaming the credentials for a missing binary
+  # is what sent two diagnoses down the wrong path.
+  if [ "$(http_client)" = none ]; then
+    echo "Sign-in could not even be attempted."
+    http_missing
+  else
+    echo "Sign-in failed — check audit.conf (email/password/URL)."
+  fi
+  exit 1
+fi
 
 # Which lot to file this device into? Pick from the pre-created lots on the
 # server. Defaults to the web-set audit target, so a run of machines into one lot
 # is just Enter each time — and you can switch lot per machine here without
 # touching the web app.
-TARGET=$(curl -sS "$API/devices/audit-target" -H "Authorization: Bearer $TOKEN")
+TARGET=$(http_get "$API/devices/audit-target" "Authorization: Bearer $TOKEN")
 DEFAULT_ID=$(jstr "$TARGET" batchId); DEFAULT_NUM=$(jstr "$TARGET" batchNumber)
 
 # Parse the compact [{id,batchNumber}] list. Each object has exactly one "id" and
 # one "batchNumber", in that order, so pulling each field in document order gives
 # two index-aligned arrays (portable — no reliance on sed \n in the replacement).
-LOTS=$(curl -sS "$API/devices/lots" -H "Authorization: Bearer $TOKEN")
+LOTS=$(http_get "$API/devices/lots" "Authorization: Bearer $TOKEN")
 mapfile -t LOT_IDS  < <(printf '%s' "$LOTS" | grep -oE '"id":"[^"]*"'          | sed 's/"id":"//; s/"$//')
 mapfile -t LOT_NUMS < <(printf '%s' "$LOTS" | grep -oE '"batchNumber":"[^"]*"' | sed 's/"batchNumber":"//; s/"$//')
 
@@ -1168,7 +1266,7 @@ fi
 
 # Optional: drop it into a sub-lot (spec bucket) within the chosen lot.
 CHOSEN_SUB_ID=""; CHOSEN_SUB_NUM=""
-SUBS=$(curl -sS "$API/lots?batchId=$CHOSEN_ID" -H "Authorization: Bearer $TOKEN")
+SUBS=$(http_get "$API/lots?batchId=$CHOSEN_ID" "Authorization: Bearer $TOKEN")
 mapfile -t SUB_IDS  < <(printf '%s' "$SUBS" | grep -oE '"id":"[^"]*"'        | sed 's/"id":"//; s/"$//')
 mapfile -t SUB_NUMS < <(printf '%s' "$SUBS" | grep -oE '"lotNumber":"[^"]*"' | sed 's/"lotNumber":"//; s/"$//')
 if [ "${#SUB_IDS[@]}" -gt 0 ]; then
@@ -1200,9 +1298,8 @@ BODY="$BODY,\"auditKind\":\"goods_in\""
 [ -n "${BIOS_LOCKED:-}" ] && BODY="$BODY,\"biosLocked\":$BIOS_LOCKED"
 BODY="$BODY,\"profile\":$PROFILE}"
 
-RESP=$(curl -sS -X POST "$API/devices/hardware-audit" \
-  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d "$BODY")
+RESP=$(http_post "$API/devices/hardware-audit" "$BODY" \
+  "Authorization: Bearer $TOKEN" 'Content-Type: application/json')
 
 if [ -n "$(jstr "$RESP" assetId)" ]; then
   VERB=$([ "$(jraw "$RESP" created)" = "true" ] && echo "added to" || echo "re-audited in")
