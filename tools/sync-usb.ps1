@@ -34,6 +34,10 @@ $files = [ordered]@{
     # Locates the tools partition by label on an Ubuntu stick, where the boot
     # medium is read-only ISO9660 and the tools live on a second partition.
     'find-media.sh'          = 'find-media.sh'
+    # Builds the overlay layer that makes the stick boot into the kiosk and
+    # carries nvme-cli/smartmontools. Has to run FROM the live session, so it
+    # only helps if it is actually on the stick.
+    'make-als-layer.sh'      = 'make-als-layer.sh'
     'autorun'                = 'autorun\autorun'
     'hardware-audit.desktop' = 'hardware-audit.desktop'
     'gui\index.html'         = 'gui\index.html'
