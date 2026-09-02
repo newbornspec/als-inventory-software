@@ -165,11 +165,14 @@ ensure_tools() {
   command -v curl >/dev/null 2>&1 && command -v dmidecode >/dev/null 2>&1 \
     && command -v lsblk >/dev/null 2>&1 && command -v smartctl >/dev/null 2>&1 \
     && command -v lspci >/dev/null 2>&1 && return 0
+  # hivex and ntfs-3g are for the device-lock checks: Autopilot, Intune and
+  # Entra state live in the Windows registry, so without them those three
+  # checks can only ever report UNKNOWN. tpm2-tools reads TPM ownership.
   if command -v pacman >/dev/null 2>&1; then
-    pacman -Sy --noconfirm curl dmidecode util-linux smartmontools pciutils usbutils mokutil >/dev/null 2>&1
+    pacman -Sy --noconfirm curl dmidecode util-linux smartmontools pciutils usbutils mokutil       hivex ntfs-3g tpm2-tools >/dev/null 2>&1
   elif command -v apt-get >/dev/null 2>&1; then
     apt-get update -qq >/dev/null 2>&1
-    apt-get install -y -qq curl dmidecode util-linux smartmontools pciutils usbutils mokutil >/dev/null 2>&1
+    apt-get install -y -qq curl dmidecode util-linux smartmontools pciutils usbutils mokutil       libhivex-bin ntfs-3g tpm2-tools >/dev/null 2>&1
   fi
 }
 

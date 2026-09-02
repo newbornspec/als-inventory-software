@@ -137,7 +137,12 @@ export function HardwareSection({ profile }: { profile: Record<string, unknown> 
   if (!profile || Object.keys(profile).length === 0) return null;
 
   const known = CATEGORY_ORDER.filter((k) => k in profile);
-  const extra = Object.keys(profile).filter((k) => !CATEGORY_ORDER.includes(k));
+  // `locks` has its own section above. The generic walker would render it as a
+  // nested blob of arrays, burying the one part of the profile someone makes a
+  // buying decision on.
+  const extra = Object.keys(profile).filter(
+    (k) => !CATEGORY_ORDER.includes(k) && k !== 'locks',
+  );
   const ordered = [...known, ...extra];
 
   return (

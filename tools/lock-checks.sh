@@ -53,6 +53,20 @@ lock_has() { command -v "$1" >/dev/null 2>&1; }
 # reports UNKNOWN when it is empty.
 WIN_MNT=""
 WIN_MOUNTED_BY_US=""
+# Set when a Windows volume was found but is encrypted — the difference between
+# "no Windows here" and "Windows here that we cannot read".
+WIN_ENCRYPTED=""
+
+# Is this block device BitLocker-encrypted? Checked BEFORE any mount attempt:
+# an encrypted volume cannot have its registry read at all, so the Microsoft
+# checks must report UNKNOWN rather than "nothing found". blkid knows the type
+# on newer util-linux; the FVE signature in the first sector is the fallback.
+lock_is_bitlocker() {
+  case "$(blkid -o value -s TYPE "$1" 2>/dev/null)" in
+    *BitLocker*|*bitlocker*) return 0 ;;
+  esac
+  dd if="$1" bs=512 count=1 2>/dev/null | grep -aq -- '-FVE-FS-'
+}
 
 lock_mount_windows() {
   [ -n "$WIN_MNT" ] && return 0
@@ -68,6 +82,9 @@ lock_mount_windows() {
 
   local dev
   for dev in $(lsblk -pnro NAME,FSTYPE 2>/dev/null | awk '$2=="ntfs"||$2=="ntfs3"{print $1}'); do
+    # Encrypted: skip it and remember why, so the caller can say so instead of
+    # reporting a clean registry it never actually read.
+    if lock_is_bitlocker "$dev"; then WIN_ENCRYPTED=1; continue; fi
     mkdir -p /mnt/als-win 2>/dev/null || return 1
     # READ-ONLY, always. This tool never writes to the machine's own disk.
     if mount -o ro,noexec,nodev "$dev" /mnt/als-win 2>/dev/null ||
@@ -314,7 +331,11 @@ lock_win_blocked() {
     return 0
   fi
   if ! lock_locate_hives; then
-    lock_add "$key" "$label" UNKNOWN "No readable Windows installation found on the internal disks" "offline registry (no Windows partition)" low
+    if [ -n "$WIN_ENCRYPTED" ]; then
+      lock_add "$key" "$label" UNKNOWN "A BitLocker-encrypted Windows volume is present but cannot be read without the recovery key" "offline registry (volume encrypted)" low
+    else
+      lock_add "$key" "$label" UNKNOWN "No readable Windows installation found on the internal disks" "offline registry (no Windows partition)" low
+    fi
     return 0
   fi
   return 1
@@ -363,6 +384,12 @@ check_autopilot() {
 }
 
 # --- Intune / MDM enrolment --------------------------------------------------
+#
+# PRIVACY: these keys also hold the previous user's UPN and email. This audit
+# ends up in an inventory database that gets exported and emailed, so only the
+# ORGANISATION is recorded — the provider and the tenant domain. That is all
+# that is needed to prove the lock and to chase deregistration, and a former
+# employee's address is nobody's business here. Do not add UPN capture.
 check_mdm() {
   lock_win_blocked mdm "Intune / MDM enrolment" && return
 

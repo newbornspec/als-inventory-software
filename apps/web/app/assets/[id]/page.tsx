@@ -15,6 +15,7 @@ import { DeleteAssetButton } from './delete-asset-button';
 import { AuditSection, type AssetAuditRecord } from './audit-section';
 import { PhotosSection } from './photos-section';
 import { HardwareSection } from './hardware-section';
+import { DeviceLocksSection, type DeviceLocks } from './device-locks-section';
 
 interface AssetHistoryEntry {
   id: string;
@@ -292,6 +293,11 @@ export default async function AssetDetailPage({
 
           <AuditSection assetId={asset.id} audits={audits} />
 
+          {/* Above the hardware profile deliberately: whether the machine can
+              be resold at all outranks how much RAM it has. */}
+          <DeviceLocksSection
+            locks={(asset.hardwareProfile as { locks?: DeviceLocks } | null)?.locks}
+          />
           <HardwareSection profile={asset.hardwareProfile} />
 
           <div className="md:col-span-2">
