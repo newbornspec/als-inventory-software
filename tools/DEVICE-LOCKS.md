@@ -94,15 +94,41 @@ cannot be ruled out.
 
 ## Secure Boot is ON and the USB will not boot
 
-Do **not** just switch Secure Boot off — that changes the machine you are
-assessing, and may not be possible if the BIOS is password-protected.
+**CONFIRMED ON HARDWARE (Dell OptiPlex 5080, Secure Boot ON):**
 
-1. **Boot a Secure Boot signed live image.** Ubuntu/Debian/Fedora ship a shim
-   signed by the Microsoft UEFI CA and boot unmodified with Secure Boot on.
-2. **If USB boot is blocked in firmware**, the machine's boot menu may still
-   offer PXE (the Dell menu shows Onboard NIC IPV4/IPV6).
-3. **If the BIOS is password-locked**, that is itself the finding — record it
-   and treat the device accordingly. Do not attempt to clear it.
+```
+Operating System Loader failed signature verification.
+WARNING: The file may have been tampered with!
+All bootable devices failed Secure Boot verification.
+```
+
+**The SystemRescue stick cannot boot with Secure Boot enabled.** It is an
+archiso image whose only loader is `EFI/boot/bootx64.efi` — there is no
+`shimx64.efi` on it, so nothing in the chain carries a Microsoft-trusted
+signature. This is not a misconfiguration to fix on the stick: SystemRescue
+does not support Secure Boot, its own forum tells users to disable it, and the
+feature request for support is still open upstream.
+
+Do **not** just switch Secure Boot off. It changes the machine you are
+assessing, and it may not even be possible — a BIOS admin password is one of
+the things this tool exists to detect, and it would block you.
+
+The fixes, in order of preference:
+
+1. **Use a Secure Boot signed live base.** Ubuntu ships `shimx64.efi` signed by
+   the Microsoft UEFI CA and GRUB signed by Canonical, and boots unmodified with
+   Secure Boot on. `hardware-audit.sh` already installs its dependencies through
+   either `pacman` or `apt-get`, so the audit and lock checks port cleanly; the
+   `gui/` kiosk is the part that is Arch-coupled (`install-cage.sh` requires
+   pacman, and several paths assume `/run/archiso/bootmnt`).
+2. **A Windows-side collector**, for machines that boot Windows. Autopilot,
+   Intune and Entra state is native to Windows — `dsregcmd /status` and the live
+   registry beat reading hives offline — and it sidesteps the boot problem
+   entirely. It cannot audit a machine that will not boot, or wipe one.
+3. **If USB boot is blocked in firmware**, the boot menu may still offer PXE
+   (the Dell menu shows Onboard NIC IPV4/IPV6).
+4. **If the BIOS is password-locked**, that is itself the finding — record it
+   and price the device accordingly. Do not attempt to clear it.
 
 ## Adding a detector
 
