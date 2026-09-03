@@ -1,0 +1,15 @@
+# /var/lib/AccountsService/users/ubuntu
+#
+# THIS is what actually selects the session GDM autologins into. Nothing
+# competes for it: a grep across every casper script finds zero references to
+# AccountsService, and /var/lib/AccountsService/users/ is an EMPTY directory in
+# the stock image. It is the same mechanism Ubuntu's own installer uses.
+#
+# All three keys are set because different accountsservice versions read
+# different ones, and getting this wrong means a silent fall back to the stock
+# session - which is survivable, but confusing to debug.
+[User]
+Session=als-kiosk
+SessionType=x11
+XSession=als-kiosk
+SystemAccount=false

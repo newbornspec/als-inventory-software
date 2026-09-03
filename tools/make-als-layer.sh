@@ -136,7 +136,9 @@
 # not exist on Windows, and the packages have to be fetched for this release.
 #
 #   bash /cdrom/make-als-layer.sh build     # packages only - the safe half
-#   bash /cdrom/make-als-layer.sh build --with-autostart   # + kiosk autostart
+#   bash /cdrom/make-als-layer.sh build --with-autostart   # + app autostart
+#   bash /cdrom/make-als-layer.sh build --with-session     # + kiosk SESSION,
+#                                                         #   GNOME never draws
 #   bash /cdrom/make-als-layer.sh arm       # edits grub.cfg - reboots into the kiosk
 #   bash /cdrom/make-als-layer.sh undo      # removes both
 #   bash /cdrom/make-als-layer.sh status
@@ -271,6 +273,43 @@ do_build() {
   say "  /etc/xdg/autostart/als-audit-station.desktop"
   say "  /usr/local/bin/als-autostart (0755)"
   say "  behaviour lives on the stick at gui/als-autostart.sh - edit it from Windows"
+
+  if [ "$WANT_SESSION" = "1" ]; then
+    step "Staging the kiosk session"
+    # Four files, and each one was checked against the real image rather than
+    # against a desktop-install guide:
+    #
+    #   gdm3/custom.conf   every key UNCOMMENTED, so casper's 15autologin sed -
+    #                      which is anchored to a leading '#' on all four of its
+    #                      expressions - becomes a no-op and our file survives.
+    #   AccountsService    uncontested: casper never references it and the stock
+    #                      users/ directory is empty. This is what actually
+    #                      picks the session for autologin.
+    #   xsessions/         NOT wayland-sessions/. casper uncomments
+    #                      WaylandEnable=false every live boot, so GDM runs X11
+    #                      and a Wayland session file would never be offered.
+    #   als-session        the launcher. Off unless gui/kiosk.mode says "on",
+    #                      and every failure path ends in the stock desktop.
+    for f in gdm3-custom.conf accountsservice-ubuntu als-kiosk.desktop als-session.sh; do
+      [ -r "$SELF_DIR/gui/layer/$f" ] || die "$SELF_DIR/gui/layer/$f is missing - re-sync the stick."
+    done
+    mkdir -p "$STAGE/etc/gdm3" "$STAGE/var/lib/AccountsService/users" \
+             "$STAGE/usr/share/xsessions" "$STAGE/usr/local/bin"
+    cp "$SELF_DIR/gui/layer/gdm3-custom.conf"       "$STAGE/etc/gdm3/custom.conf"
+    cp "$SELF_DIR/gui/layer/accountsservice-ubuntu" "$STAGE/var/lib/AccountsService/users/ubuntu"
+    cp "$SELF_DIR/gui/layer/als-kiosk.desktop"      "$STAGE/usr/share/xsessions/als-kiosk.desktop"
+    cp "$SELF_DIR/gui/layer/als-session.sh"         "$STAGE/usr/local/bin/als-session"
+    chmod 0644 "$STAGE/etc/gdm3/custom.conf" "$STAGE/var/lib/AccountsService/users/ubuntu" \
+               "$STAGE/usr/share/xsessions/als-kiosk.desktop"
+    chmod 0755 "$STAGE/usr/local/bin/als-session"
+    say "  /etc/gdm3/custom.conf"
+    say "  /var/lib/AccountsService/users/ubuntu   (Session=als-kiosk)"
+    say "  /usr/share/xsessions/als-kiosk.desktop"
+    say "  /usr/local/bin/als-session (0755)"
+    say ""
+    say "  INERT until you switch it on. Put the word  on  in gui/kiosk.mode"
+    say "  on the stick, from Windows. Anything else means the normal desktop."
+  fi
   fi
 
   # Gate: every package must be a NEW install. Our layer outranks the base, so
@@ -549,10 +588,22 @@ do_status() {
 # So they are separable, and the safe half is the default. Ask for the other
 # half explicitly, knowing it is the part with a history.
 WANT_AUTOSTART=0
+WANT_SESSION=0
 case "${2:-}" in
   --with-autostart) WANT_AUTOSTART=1 ;;
+  # The kiosk SESSION: GDM stops launching gnome-session and launches ours
+  # instead, so GNOME never draws at all - no shell, no top bar, no dock, no
+  # wallpaper. Implies --with-autostart, because the session runs als-autostart.
+  #
+  # Installing it is deliberately INERT: als-session reads gui/kiosk.mode from
+  # the stick and, with anything other than "on" there, hands straight over to
+  # the stock Ubuntu session. So this can be built, armed and booted with no
+  # change in behaviour at all, and switched on afterwards by editing one word
+  # from Windows. That ordering exists because a session that has to work first
+  # time on a machine nobody can test is how a whole evening disappears.
+  --with-session) WANT_AUTOSTART=1; WANT_SESSION=1 ;;
   '') : ;;
-  *) die "Unknown option: $2 (only --with-autostart)" ;;
+  *) die "Unknown option: $2 (--with-autostart or --with-session)" ;;
 esac
 
 case "${1:-status}" in

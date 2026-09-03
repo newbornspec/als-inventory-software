@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Name=ALS Audit Station
+Comment=Single-application kiosk session - no GNOME shell, no desktop
+Exec=/usr/local/bin/als-session
+TryExec=/usr/local/bin/als-session
+
+# X-GDM-SessionRegisters is deliberately ABSENT. The stock ubuntu.desktop sets
+# it true because gnome-session registers itself on the bus; our launcher does
+# not, and claiming otherwise makes GDM wait for a registration that never
+# arrives - which looks exactly like a hung boot.
+#
+# It must live in /usr/share/xsessions/, NOT wayland-sessions/: casper
+# uncomments WaylandEnable=false on every live boot, so GDM runs X11 and a
+# Wayland session file would never be offered.

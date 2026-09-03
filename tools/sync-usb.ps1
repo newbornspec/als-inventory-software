@@ -57,6 +57,13 @@ $files = [ordered]@{
     # Installs the autostart into the live user's home so it can be tried
     # with a logout instead of a boot. One command, no tildes to mistype.
     'gui\als-autostart-test.sh'     = 'gui\als-autostart-test.sh'
+    # Sources for the kiosk SESSION, baked into the layer by
+    # make-als-layer.sh --with-session. They have to be ON the stick because
+    # that script runs from the live session, not from Windows.
+    'gui\layer\gdm3-custom.conf'       = 'gui\layer\gdm3-custom.conf'
+    'gui\layer\accountsservice-ubuntu' = 'gui\layer\accountsservice-ubuntu'
+    'gui\layer\als-kiosk.desktop'      = 'gui\layer\als-kiosk.desktop'
+    'gui\layer\als-session.sh'         = 'gui\layer\als-session.sh'
 }
 
 # Set by Sync-Stick instead of returned. In PowerShell a function's Write-Output
