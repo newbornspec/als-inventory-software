@@ -44,37 +44,73 @@
 #   `arm` is the only step that changes how the machine boots. They are
 #   deliberately separate.
 #
-# --with-autostart DOES NOT WORK. Three attempts on a Dell, three machines that
-# never reached a usable desktop. Read this before trying a fourth.
+# --with-autostart: THE HISTORY, because it cost three boots and the notes are
+# worth more than the code.
 #
 #   attempt 1  text console after plymouth-quit.
-#              CAUSE FOUND AND FIXED: mktemp -d made the staging directory 0700,
-#              mksquashfs preserved that as the layer's root, and overlayfs takes
-#              a merged directory's mode from the topmost layer - so "/" became
-#              drwx------ and no non-root process could traverse it. The build
-#              and arm steps now both refuse a layer with any directory that is
-#              not world-traversable.
+#              CAUSE, FOUND AND FIXED: mktemp -d made the staging directory
+#              0700 and mksquashfs preserved that as the layer's ROOT. Overlayfs
+#              takes a merged directory's mode from the topmost layer, so "/"
+#              became drwx------ and no non-root process could traverse it.
+#              Build and arm both refuse such a layer now, and every directory
+#              is normalised to 0755 before packing - not just "/", which is
+#              what made this failure move rather than disappear.
 #
-#   attempt 2  blank lit panel. Different failure, so attempt 1's fix was real.
-#              HYPOTHESIS: start-gui.sh forces the display mode with xrandr, and
-#              at session start that races GNOME's own display setup.
+#   attempt 2  blank lit panel. A DIFFERENT failure, which is how we know
+#              attempt 1's fix was real.
+#              HYPOTHESIS: start-gui.sh forces the display mode with xrandr.
 #
-#   attempt 3  blank lit panel again, with ALS_NO_FIT=1 and a 10s delay.
-#              HYPOTHESIS DISPROVED. The mode-setting was not the cause.
+#   attempt 3  blank lit panel again, with ALS_NO_FIT=1. HYPOTHESIS DEAD.
 #
-# STILL UNTESTED, if anyone picks this up: the layer masks
-# ubuntu-desktop-installer.service with a symlink to /dev/null. That was never
-# isolated from the autostart entry - both arrive in the same layer - so either
-# could be responsible. The next experiment is one variable at a time: ship the
-# autostart entry WITHOUT the mask, and separately the mask without the entry.
-# Each costs a boot, so do it on a spare stick.
+# WHAT THE INVESTIGATION THEN ESTABLISHED, by parsing the stick's own squashfs
+# layers rather than reading documentation:
 #
-# WHAT IT IS WORTH. The autostart saves one command per boot:
+#   THE SESSION WAS PROBABLY NEVER DYING. On GNOME exactly one thing hides the
+#   top bar AND the dock: a fullscreen window. start-gui.sh's session branch
+#   runs Firefox --kiosk, which is precisely that, and a kiosk that maps but
+#   never paints looks identical to a dead machine. It also explains attempt 3:
+#   the kiosk still opened. Moderate confidence only - index.html's background
+#   is near-white and the panel was grey-blue, and nobody could reconcile that.
+#
+#   THE INSTALLER MASK IS EXONERATED. The unit's PartOf and After point OUTWARD,
+#   it is Type=oneshot Restart=no, and a grep of every unit, symlink target and
+#   session file across all three layers finds exactly ONE reference to it.
+#   Masking it cannot take a session down. It is no longer shipped - not because
+#   it was guilty, but because an unexplained variable is not worth carrying for
+#   a cosmetic win.
+#
+#   A THIRD VARIABLE NOBODY HAD LISTED. server.py's main() starts a boot thread
+#   that sets the system clock with `date -u -s` and mounts the image server.
+#   The working packages-only boot never ran server.py; all three failures did.
+#   "Autostart versus mask" was the wrong framing from the start.
+#
+#   Terminal=true WOULD NOT HAVE HELPED. String-scanning gnome-session-binary
+#   out of the image shows it honours X-GNOME-Autostart-enabled/-Phase/-Delay
+#   and TryExec, and does NOT honour Terminal. Any design resting on it fails
+#   silently.
+#
+# SO THE CURRENT DESIGN DOES NOT DEPEND ON THE DIAGNOSIS BEING RIGHT. Nothing it
+# starts can go fullscreen. Three files:
+#
+#   /etc/xdg/autostart/als-audit-station.desktop   in the layer, never changes
+#   /usr/local/bin/als-autostart                   in the layer, never changes
+#   gui/als-autostart.sh                           ON THE STICK, edit from Windows
+#
+# Everything tunable is on the FAT32 partition, so changing behaviour costs a
+# file copy, not a mksquashfs rebuild and a reboot. Three boots went into that
+# loop; it should never have been the unit of iteration.
+#
+# Default mode is `probe`: fire, log, notify that autostart works, start nothing
+# else. Then `backend`, then `full` - a NORMAL browser window, never a kiosk.
+# One word in gui/autostart.mode selects it; that file is deliberately not
+# synced, so a sync cannot overwrite the operator's choice.
+#
+# WHAT EACH HALF IS WORTH. The autostart saves one command per boot:
 #     bash /cdrom/gui/start-gui.sh
 # The packages half - nvme-cli, smartmontools, partclone, pigz - saves a
 # download on every boot and is what makes an offline NVMe erase possible at
-# all. That half works, is the default, and has never been implicated in any of
-# these failures. Do not risk it to chase the other.
+# all. That half has never been implicated in any failure, and it is the
+# default. Do not risk it to chase the other.
 #
 # RUN THIS FROM THE UBUNTU LIVE SESSION on the audit machine. mksquashfs does
 # not exist on Windows, and the packages have to be fetched for this release.
