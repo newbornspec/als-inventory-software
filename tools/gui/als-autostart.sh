@@ -27,6 +27,8 @@
 #     backend             Also start gui/server.py and wait for it to answer.
 #                         No browser is opened.
 #     full                Also open the UI in a NORMAL browser window.
+#     kiosk               Full screen, no browser chrome, desktop hidden behind
+#                         it. What an appliance should look like. Alt+F4 leaves.
 #
 # Log:  ~/als-autostart.log   and   journalctl -b -t als-autostart
 
@@ -95,7 +97,7 @@ for f in "${HOME:-/root}/als-autostart.mode" "$MEDIA/gui/autostart.mode"; do
     fi
 done
 case "$MODE" in
-    probe|backend|full) : ;;
+    probe|backend|full|kiosk) : ;;
     *) log "unrecognised mode '$MODE' in $MODE_SRC - falling back to probe"; MODE="probe" ;;
 esac
 log "mode=$MODE   (from $MODE_SRC)"
@@ -168,6 +170,55 @@ fi
 # A NORMAL window. No --kiosk, no --profile, no fullscreen, no xrandr. A normal
 # window cannot hide the top bar or the dock, so if anything about the browser
 # misbehaves the operator still has a usable desktop to work from.
+# kiosk: one fullscreen window, no browser chrome, no desktop behind it.
+#
+# This was avoided for a while on the theory that a fullscreen window was what
+# produced the blank screens. It was not - those were the /lib symlink bug in
+# the overlay layer, which dangled display-manager.service so gdm never
+# started. That is fixed and proven: the machine now boots, shows the ALS
+# splash and reaches a desktop. The theory that kiosk mode hides failures died
+# with it, so fullscreen is back.
+#
+# The safety that made a normal window attractive is kept anyway, and it costs
+# nothing: this only runs AFTER the backend has answered on the port. A kiosk
+# window is opened onto a URL already known to respond, never onto a hope.
+if [ "$MODE" = "kiosk" ]; then
+    BROWSER=""
+    for b in ${ALS_BROWSER:-} firefox firefox-esr chromium chromium-browser google-chrome-stable epiphany-browser; do
+        [ -n "$b" ] && command -v "$b" >/dev/null 2>&1 && { BROWSER="$b"; break; }
+    done
+    if [ -z "$BROWSER" ]; then
+        log "kiosk: no browser found - falling back to a normal window"
+        note "ALS Audit Station" "No browser found for kiosk mode. Opening normally."
+    else
+        case "$BROWSER" in
+            firefox|firefox-esr)
+                # $HOME, never /tmp: Firefox on Ubuntu is a snap and a snap has
+                # its own private /tmp, so a --profile under /tmp is invisible
+                # to it. No leading dot - the snap home interface does not
+                # reliably cover hidden directories.
+                PROFILE="${HOME:-/tmp}/als-kiosk-profile"
+                mkdir -p "$PROFILE"
+                cat > "$PROFILE/user.js" <<'PREFS'
+user_pref("browser.startup.homepage_override.mstone", "ignore");
+user_pref("browser.shell.checkDefaultBrowser", false);
+user_pref("datareporting.policy.dataSubmissionEnabled", false);
+user_pref("browser.aboutwelcome.enabled", false);
+user_pref("toolkit.telemetry.reportingpolicy.firstRun", false);
+PREFS
+                ARGS="--profile $PROFILE --kiosk"
+                ;;
+            *)  ARGS="--kiosk --start-fullscreen --no-first-run --window-position=0,0 --user-data-dir=${HOME:-/tmp}/als-kiosk-profile" ;;
+        esac
+        log "kiosk: $BROWSER $ARGS $URL"
+        note "ALS Audit Station" "Starting full screen. Press Alt+F4 to leave it."
+        # shellcheck disable=SC2086
+        setsid "$BROWSER" $ARGS "$URL" >>"${HOME:-/tmp}/als-browser.log" 2>&1 &
+        log "kiosk pid $! - done"
+        exit 0
+    fi
+fi
+
 log "opening a normal (non-kiosk) browser window at $URL"
 note "ALS Audit Station is ready" "Opening $URL in a normal window."
 setsid xdg-open "$URL" >>"${HOME:-/tmp}/als-browser.log" 2>&1 &
