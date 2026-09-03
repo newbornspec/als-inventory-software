@@ -44,6 +44,38 @@
 #   `arm` is the only step that changes how the machine boots. They are
 #   deliberately separate.
 #
+# --with-autostart DOES NOT WORK. Three attempts on a Dell, three machines that
+# never reached a usable desktop. Read this before trying a fourth.
+#
+#   attempt 1  text console after plymouth-quit.
+#              CAUSE FOUND AND FIXED: mktemp -d made the staging directory 0700,
+#              mksquashfs preserved that as the layer's root, and overlayfs takes
+#              a merged directory's mode from the topmost layer - so "/" became
+#              drwx------ and no non-root process could traverse it. The build
+#              and arm steps now both refuse a layer with any directory that is
+#              not world-traversable.
+#
+#   attempt 2  blank lit panel. Different failure, so attempt 1's fix was real.
+#              HYPOTHESIS: start-gui.sh forces the display mode with xrandr, and
+#              at session start that races GNOME's own display setup.
+#
+#   attempt 3  blank lit panel again, with ALS_NO_FIT=1 and a 10s delay.
+#              HYPOTHESIS DISPROVED. The mode-setting was not the cause.
+#
+# STILL UNTESTED, if anyone picks this up: the layer masks
+# ubuntu-desktop-installer.service with a symlink to /dev/null. That was never
+# isolated from the autostart entry - both arrive in the same layer - so either
+# could be responsible. The next experiment is one variable at a time: ship the
+# autostart entry WITHOUT the mask, and separately the mask without the entry.
+# Each costs a boot, so do it on a spare stick.
+#
+# WHAT IT IS WORTH. The autostart saves one command per boot:
+#     bash /cdrom/gui/start-gui.sh
+# The packages half - nvme-cli, smartmontools, partclone, pigz - saves a
+# download on every boot and is what makes an offline NVMe erase possible at
+# all. That half works, is the default, and has never been implicated in any of
+# these failures. Do not risk it to chase the other.
+#
 # RUN THIS FROM THE UBUNTU LIVE SESSION on the audit machine. mksquashfs does
 # not exist on Windows, and the packages have to be fetched for this release.
 #
