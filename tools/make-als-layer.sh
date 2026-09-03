@@ -112,6 +112,15 @@ do_build() {
   STAGE=$(mktemp -d) || die "mktemp failed"
   trap 'rm -rf "$STAGE"; media_ro' EXIT
 
+  # 0755, and this is not cosmetic. mktemp -d creates the directory 0700, and
+  # mksquashfs faithfully preserves that as the ROOT directory of the layer.
+  # Overlayfs takes a merged directory's ownership and mode from the TOPMOST
+  # layer - which is ours - so "/" on the booted system became drwx------ root
+  # root. No non-root user could traverse it, GDM never started, and the
+  # machine stopped at a text console right after plymouth quit, with nothing
+  # anywhere saying why.
+  chmod 0755 "$STAGE" || die "could not chmod the staging directory"
+
   step "Staging the autostart entry"
   mkdir -p "$STAGE/etc/xdg/autostart"
   cat > "$STAGE/etc/xdg/autostart/als-audit-station.desktop" <<'DESKTOP'
@@ -189,9 +198,22 @@ DESKTOP
   step "Verifying the layer mounts"
   MP=$(mktemp -d)
   mount -t squashfs -o loop,ro "$OUT" "$MP" 2>/dev/null || { rmdir "$MP"; die "The layer does not mount - refusing to install it."; }
-  [ -f "$MP/etc/xdg/autostart/als-audit-station.desktop" ] || { umount "$MP"; rmdir "$MP"; die "The layer mounted but the autostart entry is missing."; }
+  fail=""
+  [ -f "$MP/etc/xdg/autostart/als-audit-station.desktop" ] || fail="the autostart entry is missing"
+
+  # Check the MODE of every directory we ship, not just that our files exist.
+  # A directory here shadows the real one on the booted system, so one that is
+  # not world-traversable locks every non-root process out of that path - and
+  # at "/" that means the desktop never starts. This is the check that would
+  # have caught the 0700 staging root before it reached a machine.
+  if [ -z "$fail" ]; then
+    bad=$(find "$MP" -type d ! -perm -0005 2>/dev/null | head -5)
+    [ -n "$bad" ] && fail="these directories are not world-traversable and would lock the system out of them:
+$(printf '%s' "$bad" | sed "s|^$MP|  |")"
+  fi
   umount "$MP"; rmdir "$MP"
-  say "  mounts clean, autostart entry present"
+  [ -n "$fail" ] && die "The layer mounted but $fail"
+  say "  mounts clean, autostart present, every directory traversable"
 
   step "Copying onto the stick"
   media_rw
@@ -215,6 +237,27 @@ do_arm() {
   [ -f "$CASPER/$LAYER_FILE" ] || die "$LAYER_FILE is not on the stick yet. Run 'build' first."
   [ -f "$GRUB" ] || die "$GRUB not found."
   grep -q 'layerfs-path=' "$GRUB" && { say "Already armed."; return 0; }
+
+  # Re-check the layer here, not just at build time. A layer built by an older
+  # copy of this script can be sitting on the stick already - and the first one
+  # that shipped had a 0700 root, which made "/" untraversable for every
+  # non-root process and stopped the machine at a text console just after
+  # plymouth, with no error pointing anywhere near here. Arming is the step that
+  # can cost a boot, so it verifies rather than assumes.
+  step "Re-checking the layer before arming"
+  MP=$(mktemp -d)
+  mount -t squashfs -o loop,ro "$CASPER/$LAYER_FILE" "$MP" 2>/dev/null \
+    || { rmdir "$MP"; die "The layer on the stick does not mount. Rebuild it: $0 build"; }
+  bad=$(find "$MP" -type d ! -perm -0005 2>/dev/null | head -5)
+  umount "$MP"; rmdir "$MP"
+  if [ -n "$bad" ]; then
+    die "This layer has directories that are not world-traversable:
+$(printf '%s' "$bad" | sed "s|^$MP|  |")
+      Booting it would leave the machine at a text console with no desktop.
+      It was built by an older version of this script. Rebuild it:
+          $0 build"
+  fi
+  say "  mounts clean, every directory traversable"
 
   media_rw
   [ -f "$MEDIA/boot/grub/grub.cfg.als-orig" ] || cp "$GRUB" "$MEDIA/boot/grub/grub.cfg.als-orig"
