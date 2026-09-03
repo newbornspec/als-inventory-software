@@ -89,6 +89,26 @@
 #   and TryExec, and does NOT honour Terminal. Any design resting on it fails
 #   silently.
 #
+#   THE TEXT-CONSOLE FAILURES WERE /lib, AND HAD NOTHING TO DO WITH AUTOSTART.
+#   nvme-cli ships five units at literal /lib/systemd/system paths. /lib is a
+#   SYMLINK to usr/lib on this image, and a directory in our layer replaces a
+#   symlink below rather than merging with it - so /lib became five nvme files
+#   and nothing else, and
+#   /etc/systemd/system/display-manager.service -> /lib/systemd/system/gdm3.service
+#   went dangling. No gdm, no desktop, text console. See the fold step in
+#   do_build. The timing identifies it: a text console right after plymouth-quit
+#   is a SYSTEM failure, before gnome-session exists to read any autostart entry.
+#
+#   AND THE COMPARISON THAT DROVE THREE ATTEMPTS WAS FALSE. "packages only
+#   works, packages plus autostart fails" was never established, because
+#   apt-get download is allowed to fetch nothing and the build continues. An
+#   empty layer boots perfectly. That reconciles the whole history:
+#       blank lit panel (attempts 2, 3)  = GNOME started = no /lib = nothing
+#                                          downloaded = the Firefox kiosk
+#       text console    (attempts 1,4,5) = /lib present = packages downloaded
+#   The build now writes a manifest of exactly what went in, so the next
+#   comparison is between two known things instead of two assumptions.
+#
 # SO THE CURRENT DESIGN DOES NOT DEPEND ON THE DIAGNOSIS BEING RIGHT. Nothing it
 # starts can go fullscreen. Three files:
 #
@@ -279,13 +299,90 @@ do_build() {
   # kernel config, and xz is the only one PROVEN present here, since the running
   # system is mounted from it. A layer the kernel cannot decompress does not
   # degrade, it panics the boot.
-  # Every directory 0755 root:root, matching the stock layers exactly. Files are
-  # left alone - dpkg -x already set them correctly for the packages.
+  # MERGED-/usr: fold /lib back into /usr/lib, and refuse any other alias dir.
+  #
+  # THIS IS THE ONE THAT COST FIVE BOOTS, and it is invisible unless you look.
+  #
+  # On this image /bin, /lib, /lib64 and /sbin are SYMLINKS into /usr - in
+  # minimal.squashfs, /lib is literally `symlink 0777 -> usr/lib`. Of the four
+  # packages we bake in, nvme-cli ALONE still ships five units at literal
+  # /lib/systemd/system paths, so `dpkg -x` creates a REAL DIRECTORY at
+  # $STAGE/lib.
+  #
+  # Overlayfs merges a directory with a DIRECTORY. Where the higher layer has a
+  # directory and the lower has a NON-directory, there is no merge: the higher
+  # wins outright and the symlink underneath is hidden. Our layer is the topmost
+  # lowerdir - attempt 1 proved that, when our 0700 root won at "/" - so the
+  # booted system gets a /lib containing five nvme unit files AND NOTHING ELSE.
+  # /lib stops pointing at /usr/lib.
+  #
+  # Two things then break, and the second is the one that was actually seen:
+  #   - /etc/ld.so.cache names 833 libraries, every one under
+  #     /lib/x86_64-linux-gnu and none under /usr/lib. They survive only via
+  #     ld.so's built-in fallback path.
+  #   - /etc/systemd/system/display-manager.service is a symlink to the ABSOLUTE
+  #     path /lib/systemd/system/gdm3.service. That target ceases to exist, the
+  #     unit will not load, gdm never starts, nothing displaces
+  #     plymouth-quit.service, and the machine stops at a TEXT CONSOLE with no
+  #     desktop and nothing in the journal pointing anywhere near this script.
+  #
+  # The timing is what identifies it. A text console right after plymouth-quit
+  # is a SYSTEM-level failure - it happens before gnome-session exists to read
+  # /etc/xdg/autostart and before anything could exec /usr/local/bin/als-autostart.
+  # Neither of those files can run at the point of failure, so neither was ever
+  # the cause, and three attempts were spent blaming them.
+  #
+  # Folding the files into /usr/lib puts them exactly where the symlink would
+  # have landed them, and leaves the stock symlink free to merge normally.
+  step "Folding merged-/usr alias directories into /usr"
+  for d in lib bin sbin lib64; do
+    if [ -e "$STAGE/$d" ] && [ ! -L "$STAGE/$d" ]; then
+      say "  /$d was unpacked as a real directory - folding into /usr/$d"
+      mkdir -p "$STAGE/usr/$d"             || die "mkdir /usr/$d failed"
+      cp -a "$STAGE/$d/." "$STAGE/usr/$d/" || die "could not fold /$d into /usr/$d"
+      rm -rf "$STAGE/$d"                   || die "could not remove the staged /$d"
+    fi
+  done
+  alias_left=""
+  for d in lib bin sbin lib64; do
+    [ -e "$STAGE/$d" ] && alias_left="$alias_left /$d"
+  done
+  [ -z "$alias_left" ] || die "these are still real paths in the layer:$alias_left
+      They are symlinks into /usr on this image. A directory here REPLACES that
+      symlink on the booted system, which breaks /etc/ld.so.cache and leaves
+      /etc/systemd/system/display-manager.service dangling - no gdm, no desktop,
+      a text console after plymouth-quit. Refusing to build."
+  say "  no real /lib /bin /sbin /lib64 in the layer"
+
+  # Every directory 0755 root:root, matching the stock layers - EXCEPT the ones
+  # that are deliberately NOT 0755 in stock. /tmp is 1777 and /root is 0700 in
+  # minimal.squashfs, and forcing either to 0755 would be a fresh version of the
+  # attempt-1 failure: a world-unwritable /tmp takes the desktop down on its own.
+  # No package in the current list ships them, so this prunes nothing today - it
+  # is here so that adding one to ALS_PACKAGES cannot quietly reintroduce it.
   step "Normalising directory permissions"
-  find "$STAGE" -type d -exec chmod 0755 {} + || die "chmod failed"
-  n=$(find "$STAGE" -type d ! -perm 0755 | wc -l)
+  find "$STAGE" -type d \( -path "$STAGE/tmp" -o -path "$STAGE/root" \
+       -o -path "$STAGE/var/tmp" \) -prune -o -type d -exec chmod 0755 {} + \
+       || die "chmod failed"
+  n=$(find "$STAGE" -type d ! -perm 0755 \
+       ! -path "$STAGE/tmp" ! -path "$STAGE/root" ! -path "$STAGE/var/tmp" | wc -l)
   [ "$n" = "0" ] || die "$n directories are still not 0755"
-  say "  every directory 0755"
+  say "  every directory 0755 (except stock-special /tmp /root /var/tmp)"
+
+  # Record exactly what went in, next to the layer on the stick.
+  #
+  # The two builds that were compared - "packages only, works" and "packages
+  # plus autostart, fails" - were never PROVEN to differ by only the autostart,
+  # because apt-get download is allowed to fetch nothing and the build carries
+  # on regardless. An empty layer boots perfectly, and that is not evidence that
+  # a populated one does. Three attempts were reasoned on that false comparison.
+  # Write the list down so the next one is between two known things.
+  MANIFEST="$STAGE.manifest"
+  ( cd "$STAGE" && find . -mindepth 1 \
+      \( -type d -printf 'd %04m %p\n' \
+      -o -type l -printf 'l ---- %p -> %l\n' \
+      -o -printf 'f %04m %p\n' \) | LC_ALL=C sort ) > "$MANIFEST" 2>/dev/null
+  say "  manifest: $(wc -l < "$MANIFEST" 2>/dev/null || echo 0) entries"
 
   step "Building $LAYER_FILE (xz, 128K blocks, matching the stock layers)"
   OUT="$STAGE.squashfs"
@@ -318,6 +415,7 @@ $(printf '%s' "$bad" | sed "s|^$MP|  |")"
   step "Copying onto the stick"
   media_rw
   cp "$OUT" "$CASPER/$LAYER_FILE" || die "copy failed"
+  [ -f "$MANIFEST" ] && cp "$MANIFEST" "$CASPER/$LAYER_NAME.manifest" 2>/dev/null
   sync
   media_ro
   say "  $CASPER/$LAYER_FILE  ($(du -h "$CASPER/$LAYER_FILE" 2>/dev/null | cut -f1))"
