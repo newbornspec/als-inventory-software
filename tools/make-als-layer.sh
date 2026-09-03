@@ -286,10 +286,21 @@ EOF
 do_undo() {
   media_rw
   [ -f "$CASPER/$LAYER_FILE" ] && { rm -f "$CASPER/$LAYER_FILE"; say "removed $LAYER_FILE"; }
-  if [ -f "$MEDIA/boot/grub/grub.cfg.als-orig" ]; then
-    cp "$MEDIA/boot/grub/grub.cfg.als-orig" "$GRUB"; say "restored grub.cfg from backup"
+  # Take out exactly what arm put in, and nothing else.
+  #
+  # This used to copy grub.cfg.als-orig over the top instead. That backup is of
+  # the file as it was before ANY ALS edit, so a single undo also silently
+  # reverted the menu timeout from 3 seconds back to 30 - an unrelated change
+  # that had nothing to do with the layer, and which came back without a word
+  # about it. A backup taken for one purpose is not a general undo.
+  #
+  # grub.cfg.als-orig stays on the stick as the manual escape hatch for a
+  # machine that will not boot at all; it is just no longer used routinely.
+  if grep -q "layerfs-path=$LAYER_FILE" "$GRUB" 2>/dev/null; then
+    sed -i "s| layerfs-path=$LAYER_FILE||g" "$GRUB"
+    say "removed layerfs-path from grub.cfg (every other setting left alone)"
   else
-    sed -i "s| layerfs-path=$LAYER_FILE||g" "$GRUB"; say "stripped layerfs-path from grub.cfg"
+    say "grub.cfg was not armed"
   fi
   sync; media_ro
   say "Undone. The stick boots exactly as it did before."
