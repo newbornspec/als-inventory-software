@@ -2,8 +2,17 @@
 #
 # Try the autostart in RAM, without touching the stick or rebuilding anything.
 #
-#   bash /cdrom/gui/als-autostart-test.sh          install it for this user
+#   bash /cdrom/gui/als-autostart-test.sh          install, mode probe
+#   bash /cdrom/gui/als-autostart-test.sh full     install and set mode full
+#   bash /cdrom/gui/als-autostart-test.sh backend  install and set mode backend
 #   bash /cdrom/gui/als-autostart-test.sh remove   take it back out
+#
+# A REBOOT WIPES THIS. The live session's home directory is a RAM overlay, so a
+# reboot takes the shim, the autostart entry and the mode file with it and
+# nothing fires. That is not a fault, it is the amnesia this whole exercise
+# exists to work around - but it has already cost one "it stopped working".
+# After any reboot, run this again. Between logouts it persists fine, and a
+# logout is all that is needed to test.
 #
 # WHY THIS EXISTS
 # The setup was originally five lines to type by hand, containing tildes and
@@ -29,11 +38,24 @@ ENTRY="$AUTO/als-audit-station.desktop"
 
 say() { printf '%s\n' "$*"; }
 
-if [ "${1:-install}" = "remove" ]; then
-  rm -f "$ENTRY" "$SHIM"
+ARG="${1:-}"
+MODEFILE="$HOME/als-autostart.mode"
+
+if [ "$ARG" = "remove" ]; then
+  rm -f "$ENTRY" "$SHIM" "$MODEFILE"
   say "Removed. Log out and back in and nothing of ours will run."
   exit 0
 fi
+
+case "$ARG" in
+  ''|install) WANT_MODE="" ;;
+  probe|backend|full) WANT_MODE="$ARG" ;;
+  *) say ""
+     say "  !!  Unknown argument: $ARG"
+     say "      Use one of: probe | backend | full | remove"
+     say ""
+     exit 1 ;;
+esac
 
 if [ "$(id -u)" = "0" ]; then
   say ""
@@ -84,8 +106,16 @@ else
   say "valid: desktop-file-validate not installed, skipped"
 fi
 
+if [ -n "$WANT_MODE" ]; then
+  printf '%s\n' "$WANT_MODE" > "$MODEFILE" || exit 1
+  say "mode:  $WANT_MODE   ->  $MODEFILE"
+fi
+
+# Same precedence als-autostart.sh uses: home first, then the stick.
 MODE="probe"
-[ -f "$MEDIA/gui/autostart.mode" ] && MODE=$(tr -d '\r\n\t ' < "$MEDIA/gui/autostart.mode")
+for f in "$MODEFILE" "$MEDIA/gui/autostart.mode"; do
+  [ -r "$f" ] && { MODE=$(tr -d '\r\n\t ' < "$f"); break; }
+done
 
 cat <<EOF
 
@@ -94,8 +124,9 @@ cat <<EOF
   mode: ${MODE:-probe}
         (one word in $MEDIA/gui/autostart.mode - edit it from Windows)
 
-  NOW: log out and log back in.  Do NOT reboot - a logout is enough, and it
-  exercises exactly the path a boot would.
+  NOW: log out and log back in.  Do NOT reboot.
+       A logout exercises exactly the path a boot would - and a reboot would
+       erase all of this, because the live session's home is held in RAM.
 
   In probe mode you should see a notification saying the autostart is working,
   and nothing else should start. If no notification appears, read the log:
