@@ -154,6 +154,13 @@ do_build() {
   # anywhere saying why.
   chmod 0755 "$STAGE" || die "could not chmod the staging directory"
 
+  # ... and every directory underneath it, at the end of staging. Overlayfs
+  # takes a merged directory's mode from the TOPMOST layer, which is ours - so
+  # /etc, /etc/xdg, /etc/xdg/autostart and /usr/local/bin all inherit whatever
+  # WE give them, overriding the stock 0755. The earlier fix corrected only "/",
+  # which is why that failure moved from a text console to something shallower
+  # rather than going away. See stage_perms below.
+
   if [ "$WANT_AUTOSTART" = "0" ]; then
     say ""
     say "  Packages only: no autostart entry, no installer mask."
@@ -166,35 +173,37 @@ do_build() {
   # leaves a lit panel showing nothing while the desktop runs fine underneath.
   # That is the second failure this layer produced on real hardware.
   step "Staging the autostart entry"
-  mkdir -p "$STAGE/etc/xdg/autostart"
-  cat > "$STAGE/etc/xdg/autostart/als-audit-station.desktop" <<'DESKTOP'
-[Desktop Entry]
-Type=Application
-Name=ALS Audit Station
-Comment=Starts the audit kiosk automatically on the live desktop
-Exec=/bin/bash -lc 'export ALS_NO_FIT=1; for d in /cdrom /isodevice /run/archiso/bootmnt /media/*/*; do [ -f "$d/gui/start-gui.sh" ] && exec bash "$d/gui/start-gui.sh"; done'
-Terminal=false
-X-GNOME-Autostart-enabled=true
-X-GNOME-Autostart-Delay=10
-NoDisplay=false
-DESKTOP
+  # Three files, and the split between them is the whole point.
+  #
+  #   /etc/xdg/autostart/als-audit-station.desktop   in the layer, never changes
+  #   /usr/local/bin/als-autostart                   in the layer, never changes
+  #   gui/als-autostart.sh                           ON THE STICK, edit from Windows
+  #
+  # Everything you might want to tune lives on the FAT32 partition, so changing
+  # behaviour costs a file copy instead of a mksquashfs rebuild and a reboot.
+  # Three boots were spent on that loop already.
+  #
+  # The .desktop Exec is ONE absolute path with no reserved characters. The old
+  # one was a bash -lc one-liner containing ; $ * ' " and [ - all reserved by
+  # the desktop-entry spec, unescaped, and read back through two layers of
+  # unescaping. It may have survived; it had no business being relied on.
+  #
+  # NOT shipped any more: the ubuntu-desktop-installer mask. Reading the unit
+  # out of the live layer settles it - PartOf and After point outward, it is
+  # Type=oneshot Restart=no, and exactly one thing in the whole image references
+  # it. Masking it cannot take a session down. It was never the cause, so it is
+  # not worth carrying as an unexplained variable.
+  for f in als-audit-station.desktop als-autostart-shim.sh; do
+    [ -r "$SELF_DIR/gui/$f" ] || die "$SELF_DIR/gui/$f is missing - re-sync the stick."
+  done
+  mkdir -p "$STAGE/etc/xdg/autostart" "$STAGE/usr/local/bin"
+  cp "$SELF_DIR/gui/als-audit-station.desktop" "$STAGE/etc/xdg/autostart/als-audit-station.desktop"
+  cp "$SELF_DIR/gui/als-autostart-shim.sh"     "$STAGE/usr/local/bin/als-autostart"
+  chmod 0755 "$STAGE/usr/local/bin/als-autostart"
+  chmod 0644 "$STAGE/etc/xdg/autostart/als-audit-station.desktop"
   say "  /etc/xdg/autostart/als-audit-station.desktop"
-
-  # Ubuntu launches "Try or Install Ubuntu" as a systemd USER unit every
-  # graphical session:
-  #     /etc/systemd/user/graphical-session.target.wants/ubuntu-desktop-installer.service
-  #       -> /lib/systemd/user/ubuntu-desktop-installer.service
-  #       ExecStart=/snap/bin/ubuntu-desktop-bootstrap --try-or-install
-  # An autostart entry on its own therefore gives you the kiosk AND the
-  # installer fighting for focus. A symlink to /dev/null at the /etc path is
-  # systemd's own mask idiom and outranks the /lib unit. /etc/systemd/user/ in
-  # the live layer holds nothing but graphical-session.target.wants, so there is
-  # nothing here to collide with. If the mask somehow fails the installer simply
-  # appears, which is today's behaviour - no new risk.
-  step "Masking the Ubuntu installer window"
-  mkdir -p "$STAGE/etc/systemd/user"
-  ln -sf /dev/null "$STAGE/etc/systemd/user/ubuntu-desktop-installer.service"
-  say "  ubuntu-desktop-installer.service -> /dev/null (masked)"
+  say "  /usr/local/bin/als-autostart (0755)"
+  say "  behaviour lives on the stick at gui/als-autostart.sh - edit it from Windows"
   fi
 
   # Gate: every package must be a NEW install. Our layer outranks the base, so
@@ -234,6 +243,14 @@ DESKTOP
   # kernel config, and xz is the only one PROVEN present here, since the running
   # system is mounted from it. A layer the kernel cannot decompress does not
   # degrade, it panics the boot.
+  # Every directory 0755 root:root, matching the stock layers exactly. Files are
+  # left alone - dpkg -x already set them correctly for the packages.
+  step "Normalising directory permissions"
+  find "$STAGE" -type d -exec chmod 0755 {} + || die "chmod failed"
+  n=$(find "$STAGE" -type d ! -perm 0755 | wc -l)
+  [ "$n" = "0" ] || die "$n directories are still not 0755"
+  say "  every directory 0755"
+
   step "Building $LAYER_FILE (xz, 128K blocks, matching the stock layers)"
   OUT="$STAGE.squashfs"
   mksquashfs "$STAGE" "$OUT" -noappend -no-progress -comp xz -b 131072 >/dev/null 2>&1 \

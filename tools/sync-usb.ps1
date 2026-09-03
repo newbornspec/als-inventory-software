@@ -46,6 +46,14 @@ $files = [ordered]@{
     'gui\fullscreen-x.py'    = 'gui\fullscreen-x.py'
     'gui\install-os.sh'      = 'gui\install-os.sh'
     'gui\install-cage.sh'    = 'gui\install-cage.sh'
+    # The autostart trio. The .desktop and the shim are SOURCES that
+    # make-als-layer.sh bakes into the overlay layer; als-autostart.sh is read
+    # from the stick at every boot, so it can be edited from Windows without
+    # rebuilding anything. gui\autostart.mode is deliberately NOT synced - it is
+    # the operator's setting and a sync would overwrite their choice.
+    'gui\als-audit-station.desktop' = 'gui\als-audit-station.desktop'
+    'gui\als-autostart-shim.sh'     = 'gui\als-autostart-shim.sh'
+    'gui\als-autostart.sh'          = 'gui\als-autostart.sh'
 }
 
 # Set by Sync-Stick instead of returned. In PowerShell a function's Write-Output

@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=ALS Audit Station
+Comment=Starts the ALS audit backend and opens the interface in a normal window
+Exec=/usr/local/bin/als-autostart
+TryExec=/usr/local/bin/als-autostart
+Icon=utilities-system-monitor
+Terminal=false
+NoDisplay=true
+X-GNOME-Autostart-enabled=true
