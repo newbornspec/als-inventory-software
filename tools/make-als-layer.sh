@@ -127,6 +127,12 @@ do_build() {
     say "  Packages only: no autostart entry, no installer mask."
     say "  Nothing in this layer touches how the desktop session starts."
   else
+  # ALS_NO_FIT=1 and a 10-second delay, both for the same reason. start-gui.sh
+  # normally forces the display to its highest mode with xrandr, which is
+  # correct for a person running it on a settled desktop and wrong here: at
+  # session start it races GNOME's own display setup, and losing that race
+  # leaves a lit panel showing nothing while the desktop runs fine underneath.
+  # That is the second failure this layer produced on real hardware.
   step "Staging the autostart entry"
   mkdir -p "$STAGE/etc/xdg/autostart"
   cat > "$STAGE/etc/xdg/autostart/als-audit-station.desktop" <<'DESKTOP'
@@ -134,10 +140,10 @@ do_build() {
 Type=Application
 Name=ALS Audit Station
 Comment=Starts the audit kiosk automatically on the live desktop
-Exec=/bin/bash -lc 'for d in /cdrom /isodevice /run/archiso/bootmnt /media/*/*; do [ -f "$d/gui/start-gui.sh" ] && exec bash "$d/gui/start-gui.sh"; done'
+Exec=/bin/bash -lc 'export ALS_NO_FIT=1; for d in /cdrom /isodevice /run/archiso/bootmnt /media/*/*; do [ -f "$d/gui/start-gui.sh" ] && exec bash "$d/gui/start-gui.sh"; done'
 Terminal=false
 X-GNOME-Autostart-enabled=true
-X-GNOME-Autostart-Delay=3
+X-GNOME-Autostart-Delay=10
 NoDisplay=false
 DESKTOP
   say "  /etc/xdg/autostart/als-audit-station.desktop"

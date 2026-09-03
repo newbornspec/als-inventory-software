@@ -37,6 +37,15 @@ URL="http://127.0.0.1:${PORT}"
 # `xrandr --auto` only picks the "preferred" mode, which some panels report
 # smaller than native — so we choose the largest mode by pixel area explicitly.
 fit_display() {
+  # ALS_NO_FIT=1 skips this entirely.
+  #
+  # Forcing a mode is right when a person runs this on a desktop that has
+  # already settled. It is NOT right when the script is launched by an XDG
+  # autostart entry at session start, because it then races GNOME's own display
+  # configuration - and losing that race blanks the screen, with the desktop
+  # otherwise running fine underneath. That is what an autostarted kiosk looked
+  # like on a Dell here: no text, no error, just a lit panel showing nothing.
+  [ "${ALS_NO_FIT:-0}" = "1" ] && { echo "fit_display: skipped (ALS_NO_FIT=1)"; return 0; }
   command -v xrandr >/dev/null 2>&1 || { echo "fit_display: xrandr not present — skipping"; return 0; }
   out=$(xrandr 2>/dev/null | awk '/ connected/{print $1; exit}')
   [ -n "$out" ] || { echo "fit_display: no connected output"; return 0; }
