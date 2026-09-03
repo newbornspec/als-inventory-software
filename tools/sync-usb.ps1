@@ -54,6 +54,9 @@ $files = [ordered]@{
     'gui\als-audit-station.desktop' = 'gui\als-audit-station.desktop'
     'gui\als-autostart-shim.sh'     = 'gui\als-autostart-shim.sh'
     'gui\als-autostart.sh'          = 'gui\als-autostart.sh'
+    # Installs the autostart into the live user's home so it can be tried
+    # with a logout instead of a boot. One command, no tildes to mistype.
+    'gui\als-autostart-test.sh'     = 'gui\als-autostart-test.sh'
 }
 
 # Set by Sync-Stick instead of returned. In PowerShell a function's Write-Output
