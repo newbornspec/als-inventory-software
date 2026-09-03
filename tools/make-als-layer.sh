@@ -47,7 +47,8 @@
 # RUN THIS FROM THE UBUNTU LIVE SESSION on the audit machine. mksquashfs does
 # not exist on Windows, and the packages have to be fetched for this release.
 #
-#   bash /cdrom/make-als-layer.sh build     # inert: builds + copies
+#   bash /cdrom/make-als-layer.sh build     # packages only - the safe half
+#   bash /cdrom/make-als-layer.sh build --with-autostart   # + kiosk autostart
 #   bash /cdrom/make-als-layer.sh arm       # edits grub.cfg - reboots into the kiosk
 #   bash /cdrom/make-als-layer.sh undo      # removes both
 #   bash /cdrom/make-als-layer.sh status
@@ -121,6 +122,11 @@ do_build() {
   # anywhere saying why.
   chmod 0755 "$STAGE" || die "could not chmod the staging directory"
 
+  if [ "$WANT_AUTOSTART" = "0" ]; then
+    say ""
+    say "  Packages only: no autostart entry, no installer mask."
+    say "  Nothing in this layer touches how the desktop session starts."
+  else
   step "Staging the autostart entry"
   mkdir -p "$STAGE/etc/xdg/autostart"
   cat > "$STAGE/etc/xdg/autostart/als-audit-station.desktop" <<'DESKTOP'
@@ -151,6 +157,7 @@ DESKTOP
   mkdir -p "$STAGE/etc/systemd/user"
   ln -sf /dev/null "$STAGE/etc/systemd/user/ubuntu-desktop-installer.service"
   say "  ubuntu-desktop-installer.service -> /dev/null (masked)"
+  fi
 
   # Gate: every package must be a NEW install. Our layer outranks the base, so
   # an "upgraded" package would silently shadow a library the running system is
@@ -199,7 +206,9 @@ DESKTOP
   MP=$(mktemp -d)
   mount -t squashfs -o loop,ro "$OUT" "$MP" 2>/dev/null || { rmdir "$MP"; die "The layer does not mount - refusing to install it."; }
   fail=""
-  [ -f "$MP/etc/xdg/autostart/als-audit-station.desktop" ] || fail="the autostart entry is missing"
+  if [ "$WANT_AUTOSTART" != "0" ]; then
+    [ -f "$MP/etc/xdg/autostart/als-audit-station.desktop" ] || fail="the autostart entry is missing"
+  fi
 
   # Check the MODE of every directory we ship, not just that our files exist.
   # A directory here shadows the real one on the booted system, so one that is
@@ -313,6 +322,26 @@ do_status() {
   say "armed        : $(grep -q "layerfs-path=$LAYER_FILE" "$GRUB" 2>/dev/null && echo yes || echo no)"
   say "grub backup  : $([ -f "$MEDIA/boot/grub/grub.cfg.als-orig" ] && echo present || echo none)"
 }
+
+# The layer has two halves and they carry very different risk.
+#
+#   packages          pure file additions. /usr/bin/nvme and friends appear in
+#                     the filesystem. Nothing reads them at boot; nothing about
+#                     the session changes.
+#
+#   autostart + mask  writes /etc/xdg/autostart and masks a systemd USER unit,
+#                     i.e. it changes how the graphical session starts. Two
+#                     attempts at this ended in a machine that reached no
+#                     desktop - first a text console, then a blank screen.
+#
+# So they are separable, and the safe half is the default. Ask for the other
+# half explicitly, knowing it is the part with a history.
+WANT_AUTOSTART=0
+case "${2:-}" in
+  --with-autostart) WANT_AUTOSTART=1 ;;
+  '') : ;;
+  *) die "Unknown option: $2 (only --with-autostart)" ;;
+esac
 
 case "${1:-status}" in
   build)  do_build ;;
