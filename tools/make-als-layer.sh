@@ -156,7 +156,18 @@ PARENT="minimal.standard.live.squashfs"
 # down the wire on every boot. cage is deliberately NOT here: start-gui.sh only
 # reaches the cage path when there is no graphical session, and an XDG autostart
 # entry guarantees there is one, so it would be dead weight pulling wlroots.
-PACKAGES="${ALS_PACKAGES:-nvme-cli smartmontools partclone pigz}"
+# libhivex-bin, ntfs-3g and tpm2-tools are NOT optional extras. Without them
+# lock_win_blocked() returns UNKNOWN for Autopilot, Intune/MDM and Entra - the
+# three checks the business actually sells on - and hardware-audit.sh only
+# apt-installs them at runtime, which needs internet.
+#
+# So on an offline bench the commercially critical feature silently reported
+# nothing, while the wipe tools were baked in and worked fine. That is exactly
+# backwards: a machine can be re-wiped tomorrow, but a lock missed today is a
+# device sold that bricks at the buyer's first OOBE.
+#
+# This is what the layer is FOR. The autostart was always the smaller prize.
+PACKAGES="${ALS_PACKAGES:-nvme-cli smartmontools partclone pigz libhivex-bin ntfs-3g tpm2-tools}"
 
 say()  { printf '%s\n' "$*"; }
 die()  { printf '\n  !!  %s\n\n' "$*" >&2; exit 1; }
@@ -368,6 +379,18 @@ do_build() {
        ! -path "$STAGE/tmp" ! -path "$STAGE/root" ! -path "$STAGE/var/tmp" | wc -l)
   [ "$n" = "0" ] || die "$n directories are still not 0755"
   say "  every directory 0755 (except stock-special /tmp /root /var/tmp)"
+
+  # State it explicitly, because a silent UNKNOWN on these three is the failure
+  # this whole layer exists to prevent, and it is invisible until a locked
+  # machine has already been sold.
+  step "Offline lock detection"
+  for b in hivexget hivexsh tpm2_getcap; do
+    if [ -x "$STAGE/usr/bin/$b" ] || [ -x "$STAGE/usr/sbin/$b" ]; then
+      say "  $b baked in"
+    else
+      say "  $b NOT in the layer - Autopilot/Intune/Entra will report UNKNOWN offline"
+    fi
+  done
 
   # Record exactly what went in, next to the layer on the stick.
   #
