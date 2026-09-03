@@ -75,15 +75,33 @@ SETTLE="${ALS_SETTLE:-12}"
 log "waiting ${SETTLE}s for the desktop to settle"
 sleep "$SETTLE"
 
+# Two places, home FIRST.
+#
+# The mode lives on the stick so it survives reboots, but /cdrom is mounted
+# read-only, so changing it there means carrying the stick to a Windows machine
+# and back. That is a slow loop for a one-word setting, and the point of this
+# whole design was to stop paying for experiments in trips and reboots.
+#
+# So $HOME/als-autostart.mode wins when present. It is RAM on a live session, so
+# it lasts exactly as long as the session - which is what you want while you are
+# trying modes out. Once you know which one you want, put it on the stick.
 MODE="probe"
-if [ -r "$MEDIA/gui/autostart.mode" ]; then
-    MODE=$(tr -d '\r\n\t ' <"$MEDIA/gui/autostart.mode" | tr 'A-Z' 'a-z')
-fi
+MODE_SRC="default"
+for f in "${HOME:-/root}/als-autostart.mode" "$MEDIA/gui/autostart.mode"; do
+    if [ -r "$f" ]; then
+        MODE=$(tr -d '\r\n\t ' <"$f" | tr 'A-Z' 'a-z')
+        MODE_SRC="$f"
+        break
+    fi
+done
 case "$MODE" in
     probe|backend|full) : ;;
-    *) log "unrecognised mode '$MODE' - falling back to probe"; MODE="probe" ;;
+    *) log "unrecognised mode '$MODE' in $MODE_SRC - falling back to probe"; MODE="probe" ;;
 esac
-log "mode=$MODE   (set one word in $MEDIA/gui/autostart.mode: probe | backend | full)"
+log "mode=$MODE   (from $MODE_SRC)"
+log "  to change it for THIS SESSION ONLY, no stick trip needed:"
+log "      echo full > ${HOME:-/root}/als-autostart.mode   then log out and back in"
+log "  to make it permanent, put the same word in $MEDIA/gui/autostart.mode from Windows"
 
 # ---------------------------------------------------------------- probe -----
 if [ "$MODE" = "probe" ]; then
