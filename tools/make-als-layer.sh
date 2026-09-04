@@ -312,6 +312,36 @@ do_build() {
     say "  /var/lib/AccountsService/users/ubuntu   (Session=als-kiosk)"
     say "  /usr/share/xsessions/als-kiosk.desktop"
     say "  /usr/local/bin/als-session (0755)"
+
+    # The SHUTDOWN splash is a separate problem and is easy to miss.
+    #
+    # On the way up, plymouthd runs from /casper/initrd and reads its theme from
+    # inside that initramfs - which is why the splash is delivered as a second
+    # cpio archive appended on the GRUB initrd line. On the way DOWN, the
+    # plymouth-reboot and plymouth-poweroff services run in the REAL root, and
+    # by then plymouthd has chroot()ed into it. It reads the theme from there,
+    # not from the initramfs. So a theme that exists only in the cpio gives the
+    # ALS splash at boot and Ubuntu's logo at shutdown.
+    #
+    # Same theme, two places, one source: boot/dist/theme/ is written by
+    # make-splash.py alongside the cpio.
+    THEME_SRC="$SELF_DIR/boot/theme"
+    [ -d "$THEME_SRC" ] || THEME_SRC="$SELF_DIR/boot/dist/theme"
+    if [ -d "$THEME_SRC/usr/share/plymouth/themes/als" ]; then
+      mkdir -p "$STAGE/usr/share/plymouth/themes"
+      cp -a "$THEME_SRC/usr/share/plymouth/themes/als" "$STAGE/usr/share/plymouth/themes/"
+      # bgrt is what plymouthd falls back to, so override it here as well - the
+      # same belt-and-braces the boot archive uses.
+      if [ -d "$THEME_SRC/usr/share/plymouth/themes/bgrt" ]; then
+        cp -a "$THEME_SRC/usr/share/plymouth/themes/bgrt" "$STAGE/usr/share/plymouth/themes/"
+      fi
+      mkdir -p "$STAGE/etc/plymouth"
+      printf '[Daemon]\nTheme=als\nShowDelay=0\n' > "$STAGE/etc/plymouth/plymouthd.conf"
+      say "  /usr/share/plymouth/themes/als  (shutdown splash)"
+    else
+      say "  no theme at $THEME_SRC - shutdown will show Ubuntu's splash"
+      say "  (run tools/boot/make-splash.py on Windows and re-sync to fix)"
+    fi
     say ""
     say "  INERT until you switch it on. Put the word  on  in gui/kiosk.mode"
     say "  on the stick, from Windows. Anything else means the normal desktop."
