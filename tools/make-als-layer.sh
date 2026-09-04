@@ -169,7 +169,13 @@ PARENT="minimal.standard.live.squashfs"
 # device sold that bricks at the buyer's first OOBE.
 #
 # This is what the layer is FOR. The autostart was always the smaller prize.
-PACKAGES="${ALS_PACKAGES:-nvme-cli smartmontools partclone pigz libhivex-bin ntfs-3g tpm2-tools}"
+# ntfs-3g is NOT here, and that is deliberate. It is ALREADY on the Ubuntu
+# live image, so downloading it is an UPGRADE rather than an addition -
+# baking it in would drop an older copy of ntfs-3g and libntfs-3g89t64 on
+# top of the one the running system is already using. It was on this list
+# only because ensure_tools() names it, and nobody had checked whether the
+# image already had it. The lock checks mount NTFS with the stock copy.
+PACKAGES="${ALS_PACKAGES:-nvme-cli smartmontools partclone pigz libhivex-bin tpm2-tools}"
 
 say()  { printf '%s\n' "$*"; }
 die()  { printf '\n  !!  %s\n\n' "$*" >&2; exit 1; }
