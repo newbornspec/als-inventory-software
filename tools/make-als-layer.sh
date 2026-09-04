@@ -316,16 +316,49 @@ do_build() {
   # an "upgraded" package would silently shadow a library the running system is
   # already using - a way to break the desktop that would look nothing like this
   # script when it surfaced.
-  step "Checking the packages only ADD (nothing upgraded)"
-  plan=$(apt-get install -s --no-install-recommends $PACKAGES 2>/dev/null | grep -E '^[0-9]+ upgraded')
-  say "  $plan"
-  case "$plan" in
-    0\ upgraded*) : ;;
-    '') say "  (could not simulate - no package lists? continuing without the gate)" ;;
-    *) die "Some package would be UPGRADED, not added: $plan
-      Baking it in would shadow a library the live system already uses.
-      Drop it from ALS_PACKAGES and re-run." ;;
-  esac
+  # The gate: refuse to bake in a package that would SHADOW a newer library the
+  # live system is already using.
+  #
+  # But be precise about what we actually do. The build runs `apt-get download`
+  # on the NAMED packages only - it never installs their dependencies. So an
+  # `apt-get install -s` simulation reporting "2 upgraded" is usually reporting
+  # dependency upgrades that will never happen here, and refusing on that count
+  # blocks a build for a reason that does not apply.
+  #
+  # What genuinely matters is whether one of OUR packages is itself an upgrade
+  # of something already installed. That is the case where our copy lands on top
+  # of a newer one and something breaks in a way nobody will connect to this
+  # script. Anything else is reported and allowed.
+  #
+  # apt marks an upgrade in its simulation as:  Inst pkg [old-ver] (new-ver ...)
+  # and a fresh install as:                     Inst pkg (new-ver ...)
+  # The bracketed old version is the discriminator.
+  step "Checking the packages only ADD (nothing of ours upgraded)"
+  sim=$(apt-get install -s --no-install-recommends $PACKAGES 2>/dev/null)
+  if [ -z "$sim" ]; then
+    say "  (could not simulate - no package lists? continuing without the gate)"
+  else
+    say "  $(printf '%s' "$sim" | grep -E '^[0-9]+ upgraded' | head -1)"
+
+    upgrades=$(printf '%s' "$sim" | grep -E '^Inst [^ ]+ \[' | awk '{print $2}')
+    if [ -n "$upgrades" ]; then
+      say "  would upgrade (dependencies, NOT downloaded by this build):"
+      for u in $upgrades; do say "      $u"; done
+    fi
+
+    # Only OUR named packages appearing in that list is a problem.
+    bad=""
+    for want in $PACKAGES; do
+      for u in $upgrades; do
+        [ "$want" = "$u" ] && bad="$bad $want"
+      done
+    done
+    [ -z "$bad" ] || die "these are UPGRADES of packages already on the live image:$bad
+      Baking one in puts an older or duplicate copy on top of what the running
+      system is already using. Drop it and re-run:
+          sudo env ALS_PACKAGES=\"$(echo $PACKAGES | sed "s/$(echo $bad | tr -d ' ')//")\" bash $0 build --with-session"
+    say "  none of ours is an upgrade - safe to bake in"
+  fi
 
   step "Fetching packages: $PACKAGES"
   DEBS="$STAGE/.debs"; mkdir -p "$DEBS"
