@@ -6,6 +6,7 @@ import { UsersService } from './users.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { SetUserDisabledDto } from './dto/set-user-disabled.dto';
+import { ResetPasswordDto } from './dto/reset-password.dto';
 
 // The 'users' module permission gates all of user management — seeing
 // accounts, creating them, and editing what they're allowed to do. Only
@@ -35,6 +36,17 @@ export class UsersController {
   // Separate route rather than a field on PATCH :id, because update() resets
   // permissions to the role baseline whenever a role arrives without explicit
   // grants — disabling must never be able to trigger that as a side effect.
+  // Its own route, like :id/disabled — UpdateUserDto deliberately has no
+  // password field, and update() resets permissions to the role baseline when a
+  // role arrives without grants. Neither should ever be reachable by a reset.
+  //
+  // Deliberately allowed on your OWN account: this is also the only way to
+  // change your own password, and unlike disabling yourself it locks nobody out.
+  @Patch(':id/password')
+  resetPassword(@Param('id') id: string, @Body() dto: ResetPasswordDto) {
+    return this.users.resetPassword(id, dto.password);
+  }
+
   @Patch(':id/disabled')
   setDisabled(
     @Param('id') id: string,

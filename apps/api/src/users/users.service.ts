@@ -64,6 +64,26 @@ export class UsersService {
     return this.findOne(id);
   }
 
+  // Set a new password for someone else. There is no "old password" step: an
+  // admin cannot know it (it is a bcrypt hash) and the point of this is the
+  // case where the user cannot get in at all.
+  //
+  // Stamping passwordChangedAt is what makes it a real reset rather than just a
+  // new password — the guard rejects any token minted before it, so a session
+  // an attacker already holds dies on their next request instead of surviving
+  // the token's remaining 12 hours.
+  async resetPassword(id: string, newPassword: string): Promise<SafeUser> {
+    await this.findEntity(id);
+    await this.users.update(id, {
+      passwordHash: await bcrypt.hash(newPassword, 10), // same cost as create()
+      passwordChangedAt: new Date(),
+    });
+    // Bust the cache or the new timestamp is invisible for up to 30s, which is
+    // exactly the window the reset is meant to close.
+    this.permissionsCache.invalidate(id);
+    return this.findOne(id);
+  }
+
   // Disable (or re-enable) an account. The alternative to remove(): deletion
   // SET NULLs this user off every audit, wipe and sale they touched, which
   // destroys the trail an ITAD client may later ask about. This keeps the

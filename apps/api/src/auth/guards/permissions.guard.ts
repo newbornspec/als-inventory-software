@@ -2,7 +2,7 @@ import { CanActivate, ExecutionContext, ForbiddenException, Injectable } from '@
 import { Reflector } from '@nestjs/core';
 import { UserRole } from '../../users/user.entity';
 import { Permission } from '../permissions';
-import { PermissionsService } from '../permissions.service';
+import { isTokenStale, PermissionsService } from '../permissions.service';
 import { ANY_AUTHENTICATED_KEY, PERMISSIONS_KEY } from './permissions.decorator';
 
 // Replaces RolesGuard, with the default inverted. RolesGuard returned TRUE for
@@ -55,6 +55,12 @@ export class PermissionsGuard implements CanActivate {
     const authz = await this.permissions.getAuthz(user.userId);
     if (!authz) throw new ForbiddenException('This account no longer exists.');
     if (authz.disabled) throw new ForbiddenException('This account has been disabled.');
+    // A password reset ends the old sessions. Tokens are unrevocable and live
+    // 12h, so without this an admin resetting a compromised account's password
+    // would leave the attacker signed in until tonight.
+    if (isTokenStale(user.issuedAt, authz.passwordChangedAt)) {
+      throw new ForbiddenException('Your password was changed. Please sign in again.');
+    }
 
     if (anyAuthenticated) return true; // identity established and still valid
 

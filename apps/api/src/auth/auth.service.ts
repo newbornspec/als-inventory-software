@@ -5,6 +5,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import * as bcrypt from 'bcrypt';
 import { Repository } from 'typeorm';
 import { User } from '../users/user.entity';
+import { isTokenStale } from './permissions.service';
 
 @Injectable()
 export class AuthService {
@@ -46,6 +47,12 @@ export class AuthService {
       // protected navigation, so a disabled user with a tab open would renew
       // their own session indefinitely and the access expiry would never bite.
       if (user.disabledAt) throw new UnauthorizedException('Account disabled');
+      // Same reasoning: a refresh token minted before a password reset must not
+      // be exchangeable for a fresh access token, or the reset only holds for
+      // 12h instead of ending the session.
+      if (isTokenStale(payload.iat, user.passwordChangedAt?.getTime() ?? null)) {
+        throw new UnauthorizedException('Password changed');
+      }
       return this.issueTokens(user);
     } catch {
       throw new UnauthorizedException('Invalid or expired refresh token');

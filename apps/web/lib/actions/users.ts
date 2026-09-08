@@ -87,6 +87,20 @@ export async function setUserDisabled(id: string, disabled: boolean): Promise<vo
   revalidatePath('/users');
 }
 
+// Set someone's password for them. Also the only way to change your OWN, which
+// is why the API allows it on your own account: unlike disabling yourself it
+// locks nobody out, it just ends your current session.
+//
+// Deliberately no revalidatePath: nothing about the page's rendered content
+// changes, and after resetting your own password this request's cookie is
+// already stale, so revalidating would render the page as signed-out.
+export async function resetUserPassword(id: string, password: string): Promise<void> {
+  await apiFetch(`/users/${id}/password`, {
+    method: 'PATCH',
+    body: JSON.stringify({ password }),
+  });
+}
+
 export async function deleteUser(id: string): Promise<void> {
   try {
     await apiFetch(`/users/${id}`, { method: 'DELETE' });

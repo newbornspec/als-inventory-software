@@ -11,6 +11,21 @@ export interface AuthzSnapshot {
   // a disabled account would keep working until tonight. This snapshot is read
   // from Postgres and busted on write, so a disable lands within seconds.
   disabled: boolean;
+  // Epoch MILLISECONDS of the last password change, or null if never. Any token
+  // issued before this is stale — see isTokenStale() below.
+  passwordChangedAt: number | null;
+}
+
+// A token minted BEFORE the account's password changed is no longer valid.
+// JWT `iat` is in seconds and always floors, so a token issued in the same
+// second as the reset would compare as older by up to 999ms and be rejected
+// for no good reason. Comparing at second granularity avoids that; the cost is
+// that a token minted in the same second as a reset survives, which is a window
+// no attacker can aim at.
+export function isTokenStale(issuedAtSeconds: number | null | undefined, changedAtMs: number | null): boolean {
+  if (!changedAtMs) return false;
+  if (!issuedAtSeconds) return true; // no iat: cannot prove it is fresh
+  return issuedAtSeconds < Math.floor(changedAtMs / 1000);
 }
 
 // How long a permissions lookup may be served from memory. The trade-off this
@@ -34,7 +49,13 @@ export class PermissionsService {
 
     const user = await this.users.findOne({
       where: { id: userId },
-      select: { id: true, role: true, permissions: true, disabledAt: true },
+      select: {
+        id: true,
+        role: true,
+        permissions: true,
+        disabledAt: true,
+        passwordChangedAt: true,
+      },
     });
     if (!user) {
       this.cache.delete(userId);
@@ -44,6 +65,7 @@ export class PermissionsService {
       role: user.role,
       permissions: user.permissions ?? [],
       disabled: user.disabledAt !== null,
+      passwordChangedAt: user.passwordChangedAt ? user.passwordChangedAt.getTime() : null,
     };
     this.cache.set(userId, { snapshot, expiresAt: Date.now() + AUTHZ_CACHE_TTL_MS });
     return snapshot;

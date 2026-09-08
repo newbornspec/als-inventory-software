@@ -7,6 +7,7 @@ import { formatLabel } from '@/lib/asset-options';
 import { Nav } from '@/app/components/nav';
 import { DeleteUserButton } from './delete-user-button';
 import { DisableUserButton } from './disable-user-button';
+import { ResetPasswordButton } from './reset-password-button';
 
 const ROLES = ['admin', 'manager', 'technician'];
 
@@ -133,6 +134,12 @@ export default async function UsersPage() {
                       >
                         Access
                       </Link>
+                      <ResetPasswordButton
+                        id={user.id}
+                        name={user.name}
+                        email={user.email}
+                        isSelf={user.id === session.userId}
+                      />
                       {user.id !== session.userId && (
                         <DisableUserButton
                           id={user.id}
@@ -164,6 +171,7 @@ export default async function UsersPage() {
           {users.length === 1 ? 'account' : 'accounts'} · You cannot change your own role, or
           disable or delete your own account. Disable is usually the right choice for someone who
           has left — deleting removes their name from the audits, wipes and sales they recorded.
+          Resetting a password signs that person out everywhere immediately.
         </p>
         </div>
       </main>

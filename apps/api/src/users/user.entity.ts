@@ -59,6 +59,13 @@ export class User {
   @Column({ name: 'disabled_by_id', type: 'uuid', nullable: true })
   disabledById: string | null;
 
+  // Set whenever the password changes. Any access token issued BEFORE this is
+  // treated as stale and rejected, which is what makes an admin's password
+  // reset actually end the old sessions — tokens themselves cannot be revoked
+  // and live 12h. NULL = never reset, so no existing token is affected.
+  @Column({ name: 'password_changed_at', type: 'timestamp', nullable: true })
+  passwordChangedAt: Date | null;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 

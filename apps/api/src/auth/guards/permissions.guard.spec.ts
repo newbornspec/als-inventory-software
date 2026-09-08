@@ -22,7 +22,7 @@ function makeGuard(metadata: MetadataTable, snapshot: AuthzSnapshot | null) {
   return { guard, getAuthz };
 }
 
-function makeContext(user: { userId: string; role?: string } | null) {
+function makeContext(user: { userId: string; role?: string; issuedAt?: number } | null) {
   return {
     getHandler: () => ({}),
     getClass: () => ({}),
@@ -34,6 +34,7 @@ const TECH: AuthzSnapshot = {
   role: UserRole.TECHNICIAN,
   permissions: ['goods_in', 'perform_goods_in_audit'],
   disabled: false,
+  passwordChangedAt: null,
 };
 
 const DISABLED_TECH: AuthzSnapshot = { ...TECH, disabled: true };
@@ -66,7 +67,7 @@ describe('PermissionsGuard', () => {
     // array, or a bad grant edit could lock out the account that fixes grants.
     const { guard } = makeGuard(
       { [PERMISSIONS_KEY]: ['users'] },
-      { role: UserRole.ADMIN, permissions: [], disabled: false },
+      { role: UserRole.ADMIN, permissions: [], disabled: false, passwordChangedAt: null },
     );
     await expect(guard.canActivate(makeContext({ userId: 'u1' }))).resolves.toBe(true);
   });
@@ -110,10 +111,60 @@ describe('PermissionsGuard', () => {
     );
   });
 
+  // --- password reset ends existing sessions --------------------------------
+  // Tokens are unrevocable and live 12h, so without these an admin resetting a
+  // compromised account's password would leave the attacker signed in.
+  const RESET_AT = new Date('2026-09-08T12:00:00Z').getTime();
+  const secondsAt = (iso: string) => Math.floor(new Date(iso).getTime() / 1000);
+
+  it('rejects a token minted BEFORE the password was reset', async () => {
+    const { guard } = makeGuard({ [PERMISSIONS_KEY]: ['goods_in'] }, {
+      ...TECH,
+      passwordChangedAt: RESET_AT,
+    });
+    await expect(
+      guard.canActivate(
+        makeContext({ userId: 'u1', issuedAt: secondsAt('2026-09-08T11:59:00Z') }),
+      ),
+    ).rejects.toThrow(ForbiddenException);
+  });
+
+  it('accepts a token minted AFTER the password was reset', async () => {
+    const { guard } = makeGuard({ [PERMISSIONS_KEY]: ['goods_in'] }, {
+      ...TECH,
+      passwordChangedAt: RESET_AT,
+    });
+    await expect(
+      guard.canActivate(
+        makeContext({ userId: 'u1', issuedAt: secondsAt('2026-09-08T12:00:30Z') }),
+      ),
+    ).resolves.toBe(true);
+  });
+
+  it('leaves every token alone when the password has never been reset', async () => {
+    // The deploy case: passwordChangedAt is NULL on every existing row, and
+    // nobody should be signed out by shipping this.
+    const { guard } = makeGuard({ [PERMISSIONS_KEY]: ['goods_in'] }, TECH);
+    await expect(
+      guard.canActivate(makeContext({ userId: 'u1', issuedAt: 1 })),
+    ).resolves.toBe(true);
+  });
+
+  it('rejects a token with no iat once a reset has happened', async () => {
+    // Cannot prove freshness, so it is not treated as fresh.
+    const { guard } = makeGuard({ [PERMISSIONS_KEY]: ['goods_in'] }, {
+      ...TECH,
+      passwordChangedAt: RESET_AT,
+    });
+    await expect(guard.canActivate(makeContext({ userId: 'u1' }))).rejects.toThrow(
+      ForbiddenException,
+    );
+  });
+
   it('rejects a DISABLED admin — the bypass must not outrank being switched off', async () => {
     const { guard } = makeGuard(
       { [PERMISSIONS_KEY]: ['users'] },
-      { role: UserRole.ADMIN, permissions: [], disabled: true },
+      { role: UserRole.ADMIN, permissions: [], disabled: true, passwordChangedAt: null },
     );
     await expect(guard.canActivate(makeContext({ userId: 'u1' }))).rejects.toThrow(
       ForbiddenException,
