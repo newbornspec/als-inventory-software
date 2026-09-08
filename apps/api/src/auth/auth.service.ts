@@ -19,6 +19,15 @@ export class AuthService {
     if (!user || !(await bcrypt.compare(password, user.passwordHash))) {
       throw new UnauthorizedException('Invalid credentials');
     }
+    // Checked AFTER the password compare on purpose. Saying "disabled" to
+    // someone who has already proved the password leaks nothing an attacker
+    // could use, and it tells the actual person why they cannot get in instead
+    // of leaving them retyping a password that is correct.
+    if (user.disabledAt) {
+      throw new UnauthorizedException(
+        'This account has been disabled. Contact an administrator.',
+      );
+    }
     return user;
   }
 
@@ -32,6 +41,11 @@ export class AuthService {
         secret: this.config.get<string>('jwt.secret'),
       });
       const user = await this.users.findOneOrFail({ where: { id: payload.sub } });
+      // Without this the exposure is not the 12h access token but the 7-day
+      // refresh window: the web middleware silently refreshes on every
+      // protected navigation, so a disabled user with a tab open would renew
+      // their own session indefinitely and the access expiry would never bite.
+      if (user.disabledAt) throw new UnauthorizedException('Account disabled');
       return this.issueTokens(user);
     } catch {
       throw new UnauthorizedException('Invalid or expired refresh token');
@@ -80,6 +94,11 @@ export class AuthService {
   async me(userId: string) {
     const user = await this.users.findOne({ where: { id: userId } });
     if (!user) throw new UnauthorizedException('This account no longer exists');
+    // AuthController carries only JwtAuthGuard — PermissionsGuard never runs on
+    // this route, so the disabled check cannot be inherited from there. The web
+    // reads /auth/me to decide nav and landing page; without this it would
+    // render a fully signed-in shell for a disabled account.
+    if (user.disabledAt) throw new UnauthorizedException('This account has been disabled');
     return {
       userId: user.id,
       name: user.name,

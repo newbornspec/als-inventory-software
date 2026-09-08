@@ -26,14 +26,10 @@ export class PermissionsGuard implements CanActivate {
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
-    if (
-      this.reflector.getAllAndOverride<boolean>(ANY_AUTHENTICATED_KEY, [
-        context.getHandler(),
-        context.getClass(),
-      ])
-    ) {
-      return true; // JwtAuthGuard has already established who they are.
-    }
+    const anyAuthenticated = this.reflector.getAllAndOverride<boolean>(ANY_AUTHENTICATED_KEY, [
+      context.getHandler(),
+      context.getClass(),
+    ]);
 
     const required = this.reflector.getAllAndOverride<Permission[]>(PERMISSIONS_KEY, [
       context.getHandler(),
@@ -43,14 +39,24 @@ export class PermissionsGuard implements CanActivate {
     const { user } = context.switchToHttp().getRequest();
     if (!user?.userId) throw new ForbiddenException('Not authenticated.');
 
-    if (!required || required.length === 0) {
+    if (!anyAuthenticated && (!required || required.length === 0)) {
       // Fail closed. Reaching this means a handler shipped without an access
       // declaration AND without its spec coverage — refuse rather than guess.
       throw new ForbiddenException('This endpoint declares no access rule.');
     }
 
+    // Read BEFORE the @AnyAuthenticated() short-circuit, deliberately. This
+    // used to return true without touching the database, which was fine while
+    // the only question was "which permission?" — but a disabled account must
+    // be shut out of every authenticated endpoint, and @AnyAuthenticated()
+    // covers POST /powersync/upload. Skipping the lookup there would let a
+    // disabled technician's phone keep pushing queued audits into Postgres.
+    // The cost is one cache hit, not one query (30s TTL, busted on write).
     const authz = await this.permissions.getAuthz(user.userId);
     if (!authz) throw new ForbiddenException('This account no longer exists.');
+    if (authz.disabled) throw new ForbiddenException('This account has been disabled.');
+
+    if (anyAuthenticated) return true; // identity established and still valid
 
     if (authz.role === UserRole.ADMIN) return true;
     if (required.some((p) => authz.permissions.includes(p))) return true;

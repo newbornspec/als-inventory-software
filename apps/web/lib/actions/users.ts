@@ -10,6 +10,10 @@ export interface AppUser {
   email: string;
   role: 'admin' | 'manager' | 'technician';
   permissions: string[];
+  // NULL/absent = enabled. A timestamp rather than a flag so the list can say
+  // WHEN someone was switched off, which matters when the question is whether
+  // an audit was filed before or after they left.
+  disabledAt?: string | null;
 }
 
 export interface ActionState {
@@ -69,6 +73,18 @@ export async function updateUserAccess(
   }
   revalidatePath('/users');
   redirect('/users');
+}
+
+// Switch an account off (or back on) without deleting it. Preferred over
+// deleteUser for anyone who has done work: every foreign key to users is
+// ON DELETE SET NULL, so deleting strips their name off every audit, wipe,
+// sale and photo. Disabling stops the access and keeps the record.
+export async function setUserDisabled(id: string, disabled: boolean): Promise<void> {
+  await apiFetch(`/users/${id}/disabled`, {
+    method: 'PATCH',
+    body: JSON.stringify({ disabled }),
+  });
+  revalidatePath('/users');
 }
 
 export async function deleteUser(id: string): Promise<void> {

@@ -6,6 +6,11 @@ import { User, UserRole } from '../users/user.entity';
 export interface AuthzSnapshot {
   role: UserRole;
   permissions: string[];
+  // Derived from users.disabled_at. Rides here rather than in the JWT for the
+  // same reason permissions do: the token cannot be revoked and lives 12h, so
+  // a disabled account would keep working until tonight. This snapshot is read
+  // from Postgres and busted on write, so a disable lands within seconds.
+  disabled: boolean;
 }
 
 // How long a permissions lookup may be served from memory. The trade-off this
@@ -29,13 +34,17 @@ export class PermissionsService {
 
     const user = await this.users.findOne({
       where: { id: userId },
-      select: { id: true, role: true, permissions: true },
+      select: { id: true, role: true, permissions: true, disabledAt: true },
     });
     if (!user) {
       this.cache.delete(userId);
       return null;
     }
-    const snapshot: AuthzSnapshot = { role: user.role, permissions: user.permissions ?? [] };
+    const snapshot: AuthzSnapshot = {
+      role: user.role,
+      permissions: user.permissions ?? [],
+      disabled: user.disabledAt !== null,
+    };
     this.cache.set(userId, { snapshot, expiresAt: Date.now() + AUTHZ_CACHE_TTL_MS });
     return snapshot;
   }

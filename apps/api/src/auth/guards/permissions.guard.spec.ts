@@ -8,8 +8,8 @@ import type { AuthzSnapshot } from '../permissions.service';
 // The authorization rewrite shipped with zero role/permission test coverage
 // anywhere in the API — this spec is the regression net for the guard's five
 // load-bearing behaviours: fail-closed, OR semantics, admin bypass on the
-// FRESH role (not the token's), AnyAuthenticated opt-out, and deleted-user
-// rejection.
+// FRESH role (not the token's), AnyAuthenticated opt-out, deleted-user
+// rejection, and disabled-account rejection.
 
 type MetadataTable = Partial<Record<string, unknown>>;
 
@@ -33,7 +33,10 @@ function makeContext(user: { userId: string; role?: string } | null) {
 const TECH: AuthzSnapshot = {
   role: UserRole.TECHNICIAN,
   permissions: ['goods_in', 'perform_goods_in_audit'],
+  disabled: false,
 };
+
+const DISABLED_TECH: AuthzSnapshot = { ...TECH, disabled: true };
 
 describe('PermissionsGuard', () => {
   it('fails CLOSED: an endpoint with no declaration is denied, not allowed', async () => {
@@ -63,7 +66,7 @@ describe('PermissionsGuard', () => {
     // array, or a bad grant edit could lock out the account that fixes grants.
     const { guard } = makeGuard(
       { [PERMISSIONS_KEY]: ['users'] },
-      { role: UserRole.ADMIN, permissions: [] },
+      { role: UserRole.ADMIN, permissions: [], disabled: false },
     );
     await expect(guard.canActivate(makeContext({ userId: 'u1' }))).resolves.toBe(true);
   });
@@ -77,10 +80,44 @@ describe('PermissionsGuard', () => {
     ).rejects.toThrow(ForbiddenException);
   });
 
-  it('lets @AnyAuthenticated() through without touching the database', async () => {
-    const { guard, getAuthz } = makeGuard({ [ANY_AUTHENTICATED_KEY]: true }, null);
+  // CONTRACT CHANGE, deliberate. This used to assert that @AnyAuthenticated()
+  // returned true WITHOUT touching the database. That held while the only
+  // question was "which permission?", but a disabled account must be shut out
+  // of every authenticated endpoint — and @AnyAuthenticated() covers
+  // POST /powersync/upload, the offline write channel. Skipping the lookup
+  // there let a disabled technician's phone keep pushing queued audits into
+  // Postgres. The lookup is cached (30s TTL), so the cost is a cache hit.
+  it('lets @AnyAuthenticated() through, but still checks the account is usable', async () => {
+    const { guard, getAuthz } = makeGuard({ [ANY_AUTHENTICATED_KEY]: true }, TECH);
     await expect(guard.canActivate(makeContext({ userId: 'u1' }))).resolves.toBe(true);
-    expect(getAuthz).not.toHaveBeenCalled();
+    expect(getAuthz).toHaveBeenCalledWith('u1');
+  });
+
+  it('rejects a DISABLED account on an @AnyAuthenticated() endpoint', async () => {
+    // The powersync-upload case: identity valid, token unexpired, account
+    // switched off. This is what stops a departed technician's phone still
+    // writing into the database.
+    const { guard } = makeGuard({ [ANY_AUTHENTICATED_KEY]: true }, DISABLED_TECH);
+    await expect(guard.canActivate(makeContext({ userId: 'u1' }))).rejects.toThrow(
+      ForbiddenException,
+    );
+  });
+
+  it('rejects a DISABLED account that holds the required permission', async () => {
+    const { guard } = makeGuard({ [PERMISSIONS_KEY]: ['goods_in'] }, DISABLED_TECH);
+    await expect(guard.canActivate(makeContext({ userId: 'u1' }))).rejects.toThrow(
+      ForbiddenException,
+    );
+  });
+
+  it('rejects a DISABLED admin — the bypass must not outrank being switched off', async () => {
+    const { guard } = makeGuard(
+      { [PERMISSIONS_KEY]: ['users'] },
+      { role: UserRole.ADMIN, permissions: [], disabled: true },
+    );
+    await expect(guard.canActivate(makeContext({ userId: 'u1' }))).rejects.toThrow(
+      ForbiddenException,
+    );
   });
 
   it('rejects a valid token whose user has since been deleted', async () => {

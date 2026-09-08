@@ -6,6 +6,7 @@ import { updateUserRole, type AppUser } from '@/lib/actions/users';
 import { formatLabel } from '@/lib/asset-options';
 import { Nav } from '@/app/components/nav';
 import { DeleteUserButton } from './delete-user-button';
+import { DisableUserButton } from './disable-user-button';
 
 const ROLES = ['admin', 'manager', 'technician'];
 
@@ -86,6 +87,15 @@ export default async function UsersPage() {
                         You
                       </span>
                     )}
+                    {user.disabledAt && ' '}
+                    {user.disabledAt && (
+                      <span
+                        title={`Disabled on ${new Date(user.disabledAt).toLocaleString('en-GB')}`}
+                        className="ml-2 rounded bg-amber-100 px-1.5 py-0.5 text-[11px] font-medium uppercase tracking-wide text-amber-800"
+                      >
+                        Disabled
+                      </span>
+                    )}
                   </th>
                   <td className={`${TD} text-neutral-600`}>{user.email}</td>
                   <td className={TD}>
@@ -94,7 +104,7 @@ export default async function UsersPage() {
                         name="role"
                         aria-label={`Role for ${user.name}`}
                         defaultValue={user.role}
-                        disabled={user.id === session.userId}
+                        disabled={user.id === session.userId || !!user.disabledAt}
                         className="field-inline px-2 py-1 text-sm disabled:opacity-50"
                       >
                         {ROLES.map((r) => (
@@ -103,7 +113,7 @@ export default async function UsersPage() {
                           </option>
                         ))}
                       </select>
-                      {user.id !== session.userId && (
+                      {user.id !== session.userId && !user.disabledAt && (
                         <button
                           type="submit"
                           aria-label={`Save the role for ${user.name}`}
@@ -124,6 +134,14 @@ export default async function UsersPage() {
                         Access
                       </Link>
                       {user.id !== session.userId && (
+                        <DisableUserButton
+                          id={user.id}
+                          name={user.name}
+                          email={user.email}
+                          disabled={!!user.disabledAt}
+                        />
+                      )}
+                      {user.id !== session.userId && (
                         <DeleteUserButton id={user.id} name={user.name} email={user.email} />
                       )}
                     </div>
@@ -143,8 +161,9 @@ export default async function UsersPage() {
 
         <p className="mt-3 text-xs text-neutral-600">
           <span className="font-medium text-neutral-900 tabular-nums">{users.length}</span>{' '}
-          {users.length === 1 ? 'account' : 'accounts'} · You cannot change your own role or delete
-          your own account.
+          {users.length === 1 ? 'account' : 'accounts'} · You cannot change your own role, or
+          disable or delete your own account. Disable is usually the right choice for someone who
+          has left — deleting removes their name from the audits, wipes and sales they recorded.
         </p>
         </div>
       </main>

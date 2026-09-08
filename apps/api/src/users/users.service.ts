@@ -1,8 +1,8 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import * as bcrypt from 'bcrypt';
-import { Repository } from 'typeorm';
-import { User } from './user.entity';
+import { IsNull, Not, Repository } from 'typeorm';
+import { User, UserRole } from './user.entity';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { sanitizeUser, type SafeUser } from './sanitize-user';
@@ -60,6 +60,44 @@ export class UsersService {
     await this.users.update(id, patch);
     // Bust the guard's cache so the edit lands on the next request, not after
     // the 30s TTL.
+    this.permissionsCache.invalidate(id);
+    return this.findOne(id);
+  }
+
+  // Disable (or re-enable) an account. The alternative to remove(): deletion
+  // SET NULLs this user off every audit, wipe and sale they touched, which
+  // destroys the trail an ITAD client may later ask about. This keeps the
+  // record and stops the access.
+  //
+  // Enforcement lives in PermissionsGuard and AuthService, NOT the JWT — the
+  // token cannot be revoked and lives 12h. Busting the authz cache here is
+  // what makes a disable land within seconds rather than at the 30s TTL.
+  async setDisabled(id: string, disabled: boolean, requestingUserId: string): Promise<SafeUser> {
+    if (id === requestingUserId) {
+      // Symmetric with remove(). Locking yourself out of the only account that
+      // can unlock accounts is not recoverable from the UI.
+      throw new BadRequestException('You cannot disable your own account');
+    }
+    const user = await this.findEntity(id);
+
+    if (disabled && user.role === UserRole.ADMIN) {
+      // Disabling the last usable admin leaves nobody who can re-enable
+      // anyone. Counts only admins who are currently enabled, so two admins
+      // where one is already disabled still trips this.
+      const otherEnabledAdmins = await this.users.count({
+        where: { role: UserRole.ADMIN, disabledAt: IsNull(), id: Not(id) },
+      });
+      if (otherEnabledAdmins === 0) {
+        throw new BadRequestException(
+          'This is the only active admin. Promote another admin first, or nobody will be able to re-enable accounts.',
+        );
+      }
+    }
+
+    await this.users.update(id, {
+      disabledAt: disabled ? new Date() : null,
+      disabledById: disabled ? requestingUserId : null,
+    });
     this.permissionsCache.invalidate(id);
     return this.findOne(id);
   }

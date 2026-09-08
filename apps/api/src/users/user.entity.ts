@@ -44,6 +44,21 @@ export class User {
   @Column({ name: 'active_audit_lot_id', type: 'uuid', nullable: true })
   activeAuditLotId: string | null;
 
+  // NULL = enabled. A timestamp rather than a boolean because this app records
+  // every human state change as when-and-by-whom (assets.sold_at/sold_by_id,
+  // moved_to_pallet_at/by_id), and "was this audit filed before or after they
+  // left?" is a question an ITAD client can reasonably ask.
+  //
+  // Disabling is the alternative to deleting: deletion SET NULLs the user off
+  // every audit, wipe and sale they touched, destroying the trail. The account
+  // stays, the access stops. Enforced in PermissionsGuard and AuthService —
+  // NOT in the JWT, which cannot be revoked (see auth/strategies/jwt.strategy.ts).
+  @Column({ name: 'disabled_at', type: 'timestamp', nullable: true })
+  disabledAt: Date | null;
+
+  @Column({ name: 'disabled_by_id', type: 'uuid', nullable: true })
+  disabledById: string | null;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 

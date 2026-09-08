@@ -12,6 +12,12 @@ import { deleteUser } from '@/lib/actions/users';
 //
 // The message names the person and the address, because the rows differ only
 // by those and the whole risk here is hitting the wrong line.
+//
+// It used to say "Work already recorded against them keeps their name", which
+// was the opposite of the truth: all 18 foreign keys to users are ON DELETE SET
+// NULL, so deleting an account blanks them off every audit, wipe, sale and
+// photo. In an ITAD business that trail is the evidence — which is why Disable
+// exists and why this dialog now points at it.
 export function DeleteUserButton({ id, name, email }: { id: string; name: string; email: string }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -21,7 +27,9 @@ export function DeleteUserButton({ id, name, email }: { id: string; name: string
     const message =
       `Delete the account for ${name} (${email})?\n\n` +
       '• They lose access immediately\n' +
-      '• Work already recorded against them keeps their name\n\n' +
+      '• Their name is REMOVED from every audit, wipe, sale and photo they\n' +
+      '  recorded — those become "(nobody)"\n\n' +
+      'Use Disable instead to stop access but keep the record.\n\n' +
       'This cannot be undone.';
     if (!window.confirm(message)) return;
 
