@@ -143,15 +143,18 @@ def build():
 
     s.append(Spacer(1, 6))
     s.append(callout(
-        "Before you start: the stick cannot restore these images yet",
-        "The restore path needs Clonezilla's <font face='Courier'>ocs-sr</font>, "
-        "and the overlay layer currently bakes in "
-        "<font face='Courier'>partclone</font> but not "
-        "<font face='Courier'>clonezilla</font>. You can create images now, but "
-        "restoring will stop with <i>\u201cClonezilla (ocs-sr) is not installed on "
-        "this boot media\u201d</i> unless that bench has internet. Ask for "
-        "clonezilla to be added to the layer before relying on this in "
-        "production."))
+        "Before you start: rebuild the audit stick's layer once",
+        "Restoring an image runs Clonezilla's <font face='Courier'>ocs-sr</font>, "
+        "and the audit stick can only run programs that are inside it. "
+        "<font face='Courier'>clonezilla</font> is now in the package list, but "
+        "a stick built before that still lacks it and will stop at "
+        "<i>\u201cClonezilla (ocs-sr) is not installed on this boot media\u201d</i>. "
+        "Run this once on the audit machine, then reboot:<br/><br/>"
+        "<font face='Courier'>sudo bash /cdrom/make-als-layer.sh build --with-session</font>"
+        "<br/><br/>The build prints <i>\u201cocs-sr baked in\u201d</i> when it has "
+        "worked. The separate Clonezilla USB used to CAPTURE images does not "
+        "cover this \u2014 during a restore the machine is booted from the audit "
+        "stick, and only one stick boots at a time."))
 
     # ---------------------------------------------------------------- step 1
     s.append(step(1, "Build the reference machine", [

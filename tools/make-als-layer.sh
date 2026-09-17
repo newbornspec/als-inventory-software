@@ -175,7 +175,26 @@ PARENT="minimal.standard.live.squashfs"
 # top of the one the running system is already using. It was on this list
 # only because ensure_tools() names it, and nobody had checked whether the
 # image already had it. The lock checks mount NTFS with the stock copy.
-PACKAGES="${ALS_PACKAGES:-nvme-cli smartmontools partclone pigz libhivex-bin tpm2-tools}"
+# clonezilla is here for one reason: gui/install-os.sh runs `ocs-sr`, and the
+# audit stick can only run programs that are inside it. Without clonezilla in
+# the layer, Load OS Image stops at "Clonezilla (ocs-sr) is not installed on
+# this boot media" and no image can ever be restored - on a bench with no
+# internet, permanently.
+#
+# partclone alone is not a substitute, and it is an easy mistake to make. A
+# Clonezilla image is a FOLDER - partition table, boot record, one partclone
+# file per partition, and a clonezilla-img descriptor. partclone restores one
+# partition from one file and knows nothing about the rest. ocs-sr writes the
+# partition table, restores each partition, recovers the hidden data before
+# the first partition (-j2), resizes the last partition to fill the target
+# disk (-r), fixes NTFS geometry so Windows boots on different hardware (-e2)
+# and reinstalls the bootloader. partclone is the engine; ocs-sr is the
+# conductor, and we shipped only the engine.
+#
+# The separate Clonezilla USB used to CAPTURE images does not help: when a
+# customer machine is being restored it is booted from THIS stick, and only
+# one stick boots at a time.
+PACKAGES="${ALS_PACKAGES:-nvme-cli smartmontools partclone pigz libhivex-bin tpm2-tools clonezilla}"
 
 say()  { printf '%s\n' "$*"; }
 die()  { printf '\n  !!  %s\n\n' "$*" >&2; exit 1; }
@@ -499,6 +518,21 @@ do_build() {
       say "  $b NOT in the layer - Autopilot/Intune/Entra will report UNKNOWN offline"
     fi
   done
+
+  # Same treatment for the restore tool, for the same reason: without it the
+  # Load OS Image button fails on a bench with no internet, and it fails at the
+  # point an operator has already chosen an image and a target disk.
+  step "Offline OS restore"
+  found_ocs=""
+  for d in usr/sbin usr/bin usr/share/drbl/sbin; do
+    [ -x "$STAGE/$d/ocs-sr" ] && found_ocs="/$d/ocs-sr"
+  done
+  if [ -n "$found_ocs" ]; then
+    say "  ocs-sr baked in ($found_ocs)"
+  else
+    say "  ocs-sr NOT in the layer - Load OS Image will refuse to restore offline"
+    say "  (install-os.sh checks for it first and stops with a clear message)"
+  fi
 
   # Record exactly what went in, next to the layer on the stick.
   #
