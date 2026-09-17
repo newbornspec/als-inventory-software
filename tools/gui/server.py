@@ -161,6 +161,30 @@ def mount_point(path):
     return p
 
 
+# One place that decides how this backend becomes root, used by the remount
+# below, by the boot-media write, and by the audit engine. Returns the command
+# untouched when we already ARE root, so nothing here changes if the backend is
+# ever started with sudo.
+def elevate(cmd):
+    if os.geteuid() != 0 and shutil.which("sudo"):
+        return ["sudo", "-n", *cmd]
+    return list(cmd)
+
+
+def is_readonly(mp):
+    """Whether mp is mounted read-only right now. None if we cannot tell.
+
+    Asked BEFORE touching the mount, so a stick that arrived writable is left
+    writable. The old code remounted read-only unconditionally in a finally:,
+    which meant one failed save turned a perfectly writable USB drive into a
+    read-only one for the rest of the session - and made the next person to
+    look at it diagnose the wrong problem."""
+    try:
+        return bool(os.statvfs(mp).f_flag & os.ST_RDONLY)
+    except (OSError, AttributeError, ValueError):
+        return None
+
+
 def remount(mp, mode):
     """Remount a mountpoint rw or ro, elevating when we are not root.
 
@@ -172,9 +196,7 @@ def remount(mp, mode):
     has to attach to the desktop user's display. sudo is passwordless on the
     live image, and -n keeps it from blocking on a prompt no kiosk can answer.
     """
-    cmd = ["mount", "-o", "remount," + mode, mp]
-    if os.geteuid() != 0 and shutil.which("sudo"):
-        cmd = ["sudo", "-n"] + cmd
+    cmd = elevate(["mount", "-o", "remount," + mode, mp])
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=25)
         return r.returncode == 0
@@ -182,17 +204,89 @@ def remount(mp, mode):
         return False
 
 
+# Only one thread at a time may run the remount/write/remount sequence. Until
+# now this did not matter, because on Ubuntu the sequence always FAILED. With
+# it working, save_conf() (no lock) and the background queue writer (QUEUE_LOCK)
+# can both reach it, and one caller's "put it back read-only" would close the
+# mount under the other's open().
+MEDIA_LOCK = threading.Lock()
+
+
+def atomic_write(path, text):
+    """Write via a temp file and a rename, so a failure cannot leave a stub.
+
+    The medium is a USB stick an operator may pull, and the write is followed
+    immediately by a remount. open(path, "w") truncates before it knows whether
+    the write will succeed: half a write to audit-queue.jsonl destroys audits
+    that have not been uploaded, and half a write to audit.conf leaves a file
+    load_conf() parses quite happily - it skips lines it cannot read - silently
+    dropping AUDIT_URL and the stored credentials with no error at all."""
+    tmp = path + ".new"
+    with open(tmp, "w") as fh:
+        fh.write(text)
+        fh.flush()
+        try:
+            os.fsync(fh.fileno())
+        except OSError:
+            pass
+    os.replace(tmp, path)
+
+
+def write_as_root(path, text):
+    """Write a boot-media file through a short-lived root helper.
+
+    Remounting read-write is NECESSARY but NOT SUFFICIENT, which is the whole
+    bug this exists to fix. FAT stores no owner and no permissions; Linux
+    invents them when the filesystem is mounted, from whoever did the mounting
+    - casper, as root, in the initramfs, before any desktop user exists. So
+    every file on /cdrom presents as root-owned and not writable by anyone
+    else. This backend runs as the DESKTOP user on purpose, because the browser
+    can only attach to that user's display, so its open() is refused with
+    EACCES (errno 13) even on a read-write mount.
+
+    Nothing about the mount can fix that. vfat's remount handler only syncs and
+    flips the read-only flag - it does not re-read uid=/gid=/umask=, so
+    `mount -o remount,rw,uid=1000` exits 0 and changes nothing at all. chown and
+    chmod are refused outright by the driver. Only a root writer gets through.
+
+    sudo elevates the WRITE here, where the old code elevated only the mount -
+    a root helper that flipped a flag and exited, leaving the caller exactly as
+    unprivileged as before. Returns None on success, or a short reason."""
+    base = os.path.dirname(CONF_PATH) if CONF_PATH else None
+    if not base or os.path.dirname(os.path.abspath(path)) != base:
+        # This process answers HTTP. It hands root a path, so the path is
+        # pinned to the stick root rather than trusted.
+        return "refusing to write outside the boot media"
+    tmp = path + ".new"
+    cmd = elevate(["sh", "-c", 'cat > "$1" && mv -f "$1" "$2" && sync',
+                   "sh", tmp, path])
+    try:
+        r = subprocess.run(cmd, input=text, capture_output=True,
+                           text=True, timeout=25)
+    except Exception as exc:  # noqa: BLE001
+        return str(exc)
+    if r.returncode == 0:
+        return None
+    # sudo's own refusal comes back here, so a locked-down sudoers fails loudly
+    # instead of looking like a filesystem problem.
+    return (r.stderr or "").strip() or "exit %d" % r.returncode
+
+
 def write_boot_file(path, text):
     """Write a file that lives on the boot media.
 
-    SystemRescue mounts the USB read-only, which used to make the Settings
-    screen useless: an operator could type the Wi-Fi details but never save
-    them without dropping to a terminal. So if the plain write fails, remount
-    the stick read-write, write, flush, and put it back read-only.
+    The stick is mounted read-only, which used to make the Settings screen
+    useless: an operator could type the Wi-Fi details but never save them
+    without dropping to a terminal. So if the plain write fails, remount the
+    stick read-write, write, flush, and put it back as we found it.
+
+    There are TWO separate gates on that write, and for years this handled only
+    the first. "The filesystem is read-only" (EROFS) is lifted by the remount.
+    "You may not write this file" (EACCES) is not, and on a FAT boot medium it
+    always applies to a non-root process - see write_as_root.
     Returns None on success or a human-readable error."""
     try:
-        with open(path, "w") as fh:
-            fh.write(text)
+        atomic_write(path, text)
         try:
             os.sync()
         except AttributeError:
@@ -200,23 +294,40 @@ def write_boot_file(path, text):
         return None
     except OSError as first:
         mp = mount_point(path)
-        if not remount(mp, "rw"):
-            return ("Could not save: %s is mounted read-only and could not be "
-                    "remounted read-write (%s). Restart the backend with "
-                    "'sudo python3 <media>/gui/server.py', or edit audit.conf "
-                    "on the stick from another machine." % (mp, first))
-        try:
-            with open(path, "w") as fh:
-                fh.write(text)
+        with MEDIA_LOCK:
+            was_ro = is_readonly(mp)
+            remounted = False
+            # Never touch the mount flags of "/" - mount_point() falls back to
+            # it when nothing above the path is a mountpoint (a dev checkout,
+            # or a stick whose tools are not on their own mount). The finally:
+            # below would then remount the running system's root filesystem
+            # read-only under a live desktop session.
+            if mp != "/" and was_ro is not False:
+                if not remount(mp, "rw"):
+                    return ("Could not save: %s is mounted read-only and could "
+                            "not be remounted read-write (%s). Edit the file on "
+                            "the stick from another machine." % (mp, first))
+                remounted = True
             try:
-                os.sync()
-            except AttributeError:
-                pass
-            return None
-        except OSError as exc:
-            return "Could not save even after remounting %s read-write: %s" % (mp, exc)
-        finally:
-            remount(mp, "ro")     # always leave the stick as we found it
+                atomic_write(path, text)
+                try:
+                    os.sync()
+                except AttributeError:
+                    pass
+                return None
+            except OSError as exc:
+                # The media is writable now, so this is not "read-only
+                # filesystem" - it is the permission check. Elevate the write
+                # itself, down the same sudo channel the remount just used.
+                why = write_as_root(path, text)
+                if why is None:
+                    return None
+                return ("Could not save %s. The media is writable, but this "
+                        "account may not write that file (%s), and the "
+                        "elevated write failed too: %s" % (path, exc, why))
+            finally:
+                if remounted:
+                    remount(mp, "ro")   # leave the stick as we found it
 
 
 # ------------------------------------------------------------ image names ----
@@ -324,8 +435,10 @@ def _queue_write_unlocked(items):
     path = queue_path()
     err = None
     try:
-        with open(path, "w") as fh:
-            fh.write(text)
+        # Atomic, like every other write to the stick: these are audits that
+        # have not reached the server yet, and a half-written queue file loses
+        # the ones that were already in it.
+        atomic_write(path, text)
         try:
             os.sync()
         except AttributeError:
@@ -548,9 +661,7 @@ def audit_cmd(*args, env_vars=None):
         # It only worked before because SystemRescue ran everything as root and
         # never went through sudo at all.
         base = ["env"] + ["%s=%s" % (k, v) for k, v in env_vars.items()] + base
-    if os.geteuid() != 0 and shutil.which("sudo"):
-        return ["sudo", "-n", *base]
-    return base
+    return elevate(base)
 
 
 def capture():
@@ -1273,7 +1384,16 @@ def tool_check():
 
     space = ""
     try:
-        target = "/run/archiso/bootmnt" if os.path.isdir("/run/archiso/bootmnt") else "/"
+        # Whichever medium the tools actually came off. This was pinned to
+        # archiso's mountpoint, so on an Ubuntu stick it fell through to "/" and
+        # reported the live RAM overlay - "4 GB free of 4 GB" - under the
+        # heading "Boot media", while the 28 GB stick went unmentioned.
+        if CONF_PATH:
+            target = mount_point(CONF_PATH)
+        elif os.path.isdir("/run/archiso/bootmnt"):
+            target = "/run/archiso/bootmnt"
+        else:
+            target = "/"
         st = os.statvfs(target)
         free = st.f_bavail * st.f_frsize
         total = st.f_blocks * st.f_frsize
