@@ -7,6 +7,9 @@ import { PrintButton } from './print-button';
 // Spec fields live on the audit rows (the USB tool writes them there).
 interface AuditSpec {
   cpu?: string | null;
+  cosmeticGrade?: string | null;
+  screenGrade?: string | null;
+  notes?: string | null;
   ramGb?: number | null;
   storageCapacity?: string | null;
   screenSize?: string | null;
@@ -102,14 +105,55 @@ export default async function AssetLabelPage({ params }: { params: Promise<{ id:
   // and anything longer is a data-entry problem, not a layout one.
   const titlePt = title.length <= 46 ? 9 : title.length <= 52 ? 8 : title.length <= 60 ? 7 : 6.5;
 
-  // Line 2 — the specs line: "Disk 256 GB SSD , RAM 8 GB"
-  const specLine =
-    [
-      spec?.storageCapacity ? `Disk ${spec.storageCapacity}` : null,
-      spec?.ramGb ? `RAM ${spec.ramGb} GB` : null,
-    ]
-      .filter(Boolean)
-      .join(' , ') || asset.category;
+  // "grade_b" -> "B". The word "Grade" is dropped because the label says
+  // "Cosmetic"/"Screen" right before it, and every character costs width on a
+  // line that has to survive truncation. for_parts/scrap have no letter, so
+  // they print as their last word: "for_parts" -> "PARTS", "scrap" -> "SCRAP".
+  // Measured at 8pt in Geist, spelling "FOR PARTS" out costs 100.6mm on an 83mm
+  // line and truncates the screen grade away; "PARTS" brings it to 87.8mm, which
+  // only overflows when the disk and RAM strings are also at their longest. The
+  // audit station offers A-D only, so this path is the web form's alone.
+  const gradeLetter = (g: string | null | undefined): string | null => {
+    if (!g) return null;
+    const m = /^grade_([a-z])$/.exec(g);
+    return m ? m[1].toUpperCase() : (g.split('_').pop() ?? g).toUpperCase();
+  };
+  const cosmetic = gradeLetter(spec?.cosmeticGrade);
+  const screen = gradeLetter(spec?.screenGrade);
+
+  // The auditor's comment, headed for the tail of the identifier line. Capped
+  // here as well as truncated in CSS: CSS truncation is a backstop that cuts at
+  // whatever pixel runs out, whereas this cuts at a word so the fragment that
+  // does print still reads as English. 40 characters is roughly the slack left
+  // on that line once a batch, lot, serial and service tag have taken their
+  // share; anything past it was never going to be readable at 6.5pt anyway.
+  const rawNote = (spec?.notes ?? '').replace(/\s+/g, ' ').trim();
+  const note =
+    rawNote.length <= 40
+      ? rawNote
+      : rawNote.slice(0, 40).replace(/\s+\S*$/, '').trimEnd() + '\u2026';
+
+  // Line 2 — the specs line: "Disk 256 GB SSD , RAM 8 GB , Cosmetic B , Screen C"
+  //
+  // The grades ride here rather than on a line of their own because the label
+  // has 0.98mm of spare height and another 6.5pt row needs 3.32mm. This line
+  // typically runs to about half the width, so there is room across but none
+  // down. It also belongs: disk, RAM and condition are all descriptions of the
+  // physical thing, which is what someone reads this line for.
+  const hardware = [
+    spec?.storageCapacity ? `Disk ${spec.storageCapacity}` : null,
+    spec?.ramGb ? `RAM ${spec.ramGb} GB` : null,
+  ].filter(Boolean);
+  const specLine = [
+    // Keep the category fallback tied to the hardware half. Folding the grades
+    // into the same array would let a graded machine with no disk or RAM on
+    // file print its grades and silently lose the category.
+    ...(hardware.length ? hardware : [asset.category]),
+    cosmetic ? `Cosmetic ${cosmetic}` : null,
+    screen ? `Screen ${screen}` : null,
+  ]
+    .filter(Boolean)
+    .join(' , ');
 
   const unit = asset.unitId ?? asset.tag;
 
@@ -162,13 +206,20 @@ export default async function AssetLabelPage({ params }: { params: Promise<{ id:
           />
         </div>
 
-        {/* Full width, so the service tag is never cut off. */}
+        {/* Full width, so the service tag is never cut off.
+
+            The comment goes LAST on purpose. This line truncates, and ordering
+            decides what a long line sacrifices: identifiers first, note last
+            means a wordy comment loses its own tail and never eats the service
+            tag. Quoted so it reads as somebody's remark rather than as one more
+            code in a row of codes. */}
         <div className="mt-[0.8mm] truncate text-[6.5pt] leading-[1.1] text-black">
           {[
             batch?.batchNumber,
             lot?.lotNumber,
             asset.serialNumber ? `S/N ${asset.serialNumber}` : null,
             asset.expressServiceCode ? `ST ${asset.expressServiceCode}` : null,
+            note ? `“${note}”` : null,
           ]
             .filter(Boolean)
             .join('  ·  ')}

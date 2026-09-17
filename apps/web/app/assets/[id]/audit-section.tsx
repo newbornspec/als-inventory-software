@@ -8,6 +8,9 @@ export interface AssetAuditRecord {
   id: string;
   auditStatus: string | null;
   cosmeticGrade: string | null;
+  // Graded separately from the casing: resale price follows the screen far more
+  // closely, and a cracked panel on a clean chassis is a different product.
+  screenGrade: string | null;
   finalDisposition: string | null;
   dataWipeStatus: string | null;
   // 'amazon' | 'goods_in' | null (Unclassified). The detail page uses it to

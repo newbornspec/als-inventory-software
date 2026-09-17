@@ -65,6 +65,9 @@ export default async function AssetDetailPage({
   const user = await getSessionUser();
 
   const [asset, history, audits, photos] = await loadAsset(id);
+  // findAudits() orders by createdAt DESC, so [0] is the most recent
+  // capture. Already fetched for the Lifecycle stream - no extra request.
+  const latestAudit = audits[0] ?? null;
   const locations = await getLocations();
 
   const isSold = asset.stockStatus === 'sold';
@@ -236,6 +239,71 @@ export default async function AssetDetailPage({
                 </div>
               </dl>
             )}
+
+            {/* What the auditor actually recorded, shown to EVERYONE.
+                Deliberately outside the canEdit branch above: that branch swaps
+                the read-only list for the edit form, so anything added to the
+                list is invisible to exactly the people who use this page most.
+
+                Kept separate from the editable fields rather than mixed in,
+                because these are captured at audit time and cannot be changed
+                here - putting them among inputs would imply otherwise. It also
+                makes a real distinction visible: Condition grade above is the
+                CURRENT working grade and can be edited, while this is what was
+                judged with the machine in front of someone. If they differ, a
+                unit was regraded, and that is worth being able to see. */}
+            <div className="mt-4 border-t border-neutral-200 pt-3">
+              <h3 className="text-[11px] font-semibold uppercase tracking-wide text-neutral-500">
+                From the latest audit
+              </h3>
+              {latestAudit ? (
+                <dl className="mt-2 space-y-2 text-sm">
+                  <div className="flex justify-between gap-4 max-w-sm">
+                    <dt className="text-neutral-500">Cosmetic grade</dt>
+                    <dd>
+                      {latestAudit.cosmeticGrade
+                        ? formatLabel(latestAudit.cosmeticGrade)
+                        : 'Not graded'}
+                    </dd>
+                  </div>
+                  <div className="flex justify-between gap-4 max-w-sm">
+                    <dt className="text-neutral-500">Screen grade</dt>
+                    <dd>
+                      {latestAudit.screenGrade
+                        ? formatLabel(latestAudit.screenGrade)
+                        : 'Not graded'}
+                    </dd>
+                  </div>
+                  {latestAudit.notes ? (
+                    <div className="max-w-sm">
+                      <dt className="text-neutral-500">Comment</dt>
+                      {/* Clamped: the field accepts 2000 characters and an
+                          operator using all of them would otherwise push every
+                          panel below it off the screen. title= keeps the whole
+                          thing reachable without a component or a click. */}
+                      <dd
+                        className="mt-1 line-clamp-3 whitespace-pre-line text-neutral-800"
+                        title={latestAudit.notes}
+                      >
+                        {latestAudit.notes}
+                      </dd>
+                    </div>
+                  ) : null}
+                  <div className="flex justify-between gap-4 max-w-sm">
+                    <dt className="text-neutral-500">Audited</dt>
+                    <dd>
+                      {new Date(latestAudit.createdAt).toLocaleDateString('en-GB', {
+                        day: '2-digit',
+                        month: 'short',
+                        year: 'numeric',
+                      })}
+                    </dd>
+                  </div>
+                </dl>
+              ) : (
+                <p className="mt-2 text-sm text-neutral-500">Not audited yet.</p>
+              )}
+            </div>
           </section>
 
           <section className="rounded-xl border border-neutral-200 bg-white p-4">
