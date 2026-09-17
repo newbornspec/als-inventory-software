@@ -94,6 +94,22 @@ export class AssetAudit {
   })
   cosmeticGrade: AssetConditionGrade | null;
 
+  // The screen, graded separately from the casing. A scratched lid with a
+  // perfect panel is a different product from a pristine lid with a cracked
+  // one, and resale price follows the screen much more closely - grading them
+  // together threw that away at the one moment it is cheap to record.
+  //
+  // Same enum as cosmetic_grade so the two are directly comparable. NULL means
+  // not graded, which covers desktops with no screen and any operator who
+  // simply did not judge it; neither is an error.
+  @Column({
+    name: 'screen_grade',
+    type: 'enum',
+    enum: AssetConditionGrade,
+    nullable: true,
+  })
+  screenGrade: AssetConditionGrade | null;
+
   @Column({ name: 'functional_tests', type: 'jsonb', nullable: true })
   functionalTests: FunctionalTestResults | null;
 

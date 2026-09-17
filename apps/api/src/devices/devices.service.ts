@@ -305,6 +305,10 @@ export class DevicesService {
         // records the grade judged at this moment (or null). This is what the
         // erasure certificate's "Cosmetic grade" line reads.
         cosmeticGrade: dto.cosmeticGrade ?? null,
+        // Unconditional for the same reason as cosmeticGrade above: this row is
+        // the append-only trail, so it records what was judged at this moment,
+        // including "not judged".
+        screenGrade: dto.screenGrade ?? null,
         notes: dto.notes ?? null,
         auditedById: userId,
       }),

@@ -61,6 +61,7 @@ export class IngestAuditDto {
   // would reach the driver and 500 AFTER the asset row was already written, since
   // ingest() is not wrapped in a transaction.
   @IsOptional() @IsEnum(AssetConditionGrade) cosmeticGrade?: AssetConditionGrade;
+  @IsOptional() @IsEnum(AssetConditionGrade) screenGrade?: AssetConditionGrade;
 
   // True when a human entered this via the "Add asset" form rather than the
   // capture tool — only affects the history-note wording (provenance).

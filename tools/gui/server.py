@@ -1832,6 +1832,13 @@ class Handler(BaseHTTPRequestHandler):
             grade = (body.get("cosmeticGrade") or "").strip()
             if grade in GRADES:
                 payload["cosmeticGrade"] = grade
+            # Screen grade, same treatment and for the same reason: validated
+            # against the enum here and DROPPED if it is anything else, because a
+            # 400 cannot be told apart from a network outage by the retry queue
+            # and one bad value would wedge every later upload behind it.
+            screen = (body.get("screenGrade") or "").strip()
+            if screen in GRADES:
+                payload["screenGrade"] = screen
             stamp_provenance(payload)
             out, queued, err = upload_audit(payload)
             PRIOR_CACHE["key"] = None       # this device's history just changed
