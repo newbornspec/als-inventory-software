@@ -177,8 +177,16 @@ $toSave = @(
     @('boot\grub\grub.cfg', 'grub.cfg'),
     @('als-splash.img',     'als-splash.img')
 )
-foreach ($l in $layers) { $toSave += ,@("casper\$($l.Name)", $l.Name) }
-foreach ($m in @(Get-ChildItem (Join-Path $Drive 'casper') -Filter '*.manifest' -ErrorAction SilentlyContinue)) {
+# ONLY the ALS layer, not all 44. The first run of this copied 3.92 GB to the
+# desktop, and 3.9 GB of that was Ubuntu's own layers - byte-identical to the
+# ISO, never written by anything here, and recoverable by re-imaging a stick.
+# The layer we build is the only one we can break, so it is the only one worth
+# carrying. Backing up everything is not thoroughness; it is 4 GB of noise that
+# makes the one file that matters harder to find.
+foreach ($l in $layers) {
+    if ($l.Name -like '*.als.squashfs') { $toSave += ,@("casper\$($l.Name)", $l.Name) }
+}
+foreach ($m in @(Get-ChildItem (Join-Path $Drive 'casper') -Filter '*.als.manifest' -ErrorAction SilentlyContinue)) {
     $toSave += ,@("casper\$($m.Name)", $m.Name)
 }
 
