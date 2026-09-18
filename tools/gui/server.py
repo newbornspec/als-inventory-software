@@ -1586,6 +1586,30 @@ def boot_timing():
 
 APP_READY = {"uptime": None}
 
+# The report used to be written only once systemd declared the boot finished,
+# with a ten-minute ceiling. That is minutes on a live system, and the normal
+# workflow is: app appears, audit, wipe, power off. So on the very boots it was
+# built to measure it would never have been written - silently. It now writes
+# TWICE: an early report the moment the app is first served, carrying the
+# numbers that matter most and exist already (app-ready time, USB link, whether
+# the self-check is running), and a final one if the machine stays up long
+# enough for systemd's own accounting. Whichever the operator allows, something
+# is on the stick. The history gets exactly one row per boot, from the early one.
+REPORT_LOCK = threading.Lock()
+REPORT_STATE = {"history_written": False}
+
+# Where a boot report may be written. Only onto the medium this station booted
+# from - never into a repository checkout because someone ran the backend on a
+# development machine and opened the page.
+BOOT_MEDIA_MOUNTS = ("/cdrom", "/run/archiso/bootmnt", "/isodevice", "/mnt/als-media")
+
+
+def on_boot_media():
+    if not CONF_PATH or not os.path.exists("/proc/uptime"):
+        return False
+    mp = mount_point(CONF_PATH)
+    return mp in BOOT_MEDIA_MOUNTS or mp.startswith("/media/")
+
 
 def mark_app_ready():
     """First time the UI is served. That is the operator's "it's up"."""
@@ -1596,6 +1620,9 @@ def mark_app_ready():
             APP_READY["uptime"] = float(fh.read().split()[0])
     except (OSError, ValueError, IndexError):
         APP_READY["uptime"] = -1.0
+    # Straight away, in the background - never on the request that serves the
+    # page. The browser must not wait on a remount and a write to the stick.
+    threading.Thread(target=report_now, args=(False,), daemon=True).start()
 
 
 def _machine_name():
@@ -1611,90 +1638,130 @@ def _machine_name():
     return " ".join(parts) or "unknown machine"
 
 
-def _md5check_seconds(blame):
+def md5check_state():
+    """Whether Ubuntu's 5.9 GB disc self-check ran, is running, or was skipped.
+
+    Asked of systemd directly rather than read from `systemd-analyze blame`,
+    because blame refuses to answer until the boot has finished - and the early
+    report is written before that. ConditionResult=no is the proof that
+    fsck.mode=skip worked: the unit was considered and declined to start."""
+    try:
+        r = subprocess.run(
+            ["systemctl", "show", "casper-md5check.service",
+             "-p", "LoadState", "-p", "ActiveState", "-p", "SubState",
+             "-p", "ConditionResult", "-p", "Result"],
+            capture_output=True, text=True, timeout=5)
+    except Exception as exc:  # noqa: BLE001
+        return "unknown (%s)" % exc
+    kv = dict(l.split("=", 1) for l in r.stdout.splitlines() if "=" in l)
+    if kv.get("LoadState") == "not-found":
+        return "no such unit on this image"
+    if kv.get("ConditionResult") == "no":
+        return "SKIPPED (fsck.mode=skip honoured)"
+    act = kv.get("ActiveState", "?")
+    if act in ("active", "activating"):
+        return "RUNNING - re-reading 5.9 GB of the stick right now"
+    return "%s/%s result=%s" % (act, kv.get("SubState", "?"), kv.get("Result", "?"))
+
+
+def _md5check_blame(blame):
     for line in blame:
         if "casper-md5check" in line:
             return line.split()[0]
-    # Not "did not run": blame is cut to the slowest ten, so absence proves
-    # only that it was not slow. After fsck.mode=skip it should not run at all,
-    # and the cmdline line of the report is what shows the switch was present.
-    return "not among the slowest units"
+    return ""
+
+
+def report_now(final):
+    """Write boot-report.txt now. final=False is the early report."""
+    if not on_boot_media():
+        return
+    with REPORT_LOCK:
+        b = boot_timing()
+        ready = APP_READY["uptime"]
+        ready_txt = ("%.0fs after the kernel started" % ready) if ready and ready > 0 \
+            else "not reached (the page was never served)"
+        try:
+            with open("/proc/cmdline") as fh:
+                cmdline = fh.read().strip()
+        except OSError:
+            cmdline = "unknown"
+        stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        machine = _machine_name()
+        md5 = md5check_state()
+        took = _md5check_blame(b.get("blame") or [])
+        if took:
+            md5 = "%s (took %s)" % (md5, took)
+        ply = b.get("plymouth") or {}
+        stage = ("final - systemd has finished the boot" if final else
+                 "EARLY - written the moment the app appeared; systemd may "
+                 "still be finishing, so its numbers below can be incomplete")
+
+        lines = [
+            "ALS Audit Station - boot report",
+            "written   : %s" % stamp,
+            "stage     : %s" % stage,
+            "machine   : %s" % machine,
+            "",
+            "APP READY : %s" % ready_txt,
+            "systemd   : %s" % b.get("total", "?"),
+            "USB link  : %s  (%s)" % (b.get("usb", "?"), b.get("device", "?")),
+            "self-check: %s" % md5,
+            "cmdline   : %s" % cmdline,
+            "",
+            "--- slowest units ---",
+        ] + ["  " + l for l in (b.get("blame") or ["(not available until the boot finishes)"])] + [
+            "",
+            "--- what the boot waited on ---",
+        ] + ["  " + l for l in (b.get("chain") or ["(not available until the boot finishes)"])] + [
+            "",
+            "--- layers ---",
+        ] + ["  " + l for l in (b.get("layers") or [])] + [
+            "",
+            "--- shutdown splash ---",
+        ] + ["  %s: %s" % (k, ply.get(k)) for k in
+             ("conf", "theme", "module", "default_alt", "initramfs") if ply.get(k)] + [""]
+
+        base = os.path.dirname(CONF_PATH)
+        err = write_boot_file(os.path.join(base, "boot-report.txt"), "\n".join(lines))
+        print("boot report (%s): %s" % ("final" if final else "early", err or "written"))
+
+        # One history row per boot. Written with the early report, because the
+        # early one is the one that is guaranteed to happen.
+        if REPORT_STATE["history_written"]:
+            return
+        hist = os.path.join(base, "boot-history.csv")
+        try:
+            with open(hist, errors="replace") as fh:
+                old = fh.read()
+        except OSError:
+            old = ""
+        if not old.startswith("when,"):
+            old = "when,machine,app_ready_s,usb_link,self_check,systemd\n" + old
+        row = '%s,"%s",%s,"%s","%s","%s"\n' % (
+            stamp, machine.replace('"', "'"),
+            ("%.0f" % ready) if ready and ready > 0 else "",
+            (b.get("usb") or "").replace('"', "'"),
+            md5.replace('"', "'"),
+            (b.get("total") or "").replace('"', "'"))
+        keep = (old + row).splitlines(True)
+        if len(keep) > 501:                     # the last 500 boots
+            keep = keep[:1] + keep[-500:]
+        if write_boot_file(hist, "".join(keep)) is None:
+            REPORT_STATE["history_written"] = True
 
 
 def write_boot_report():
-    """Wait for the boot to finish, then leave its numbers on the stick."""
-    # systemd-analyze refuses until the startup transaction completes, and
-    # the app is usually up well before that. Poll, gently, for up to 10 min.
+    """The FINAL report, if the machine stays up long enough for systemd."""
     for _ in range(120):
         t = _analyze(["time"])
         if t.startswith("Startup finished"):
             break
         if t.startswith("systemd-analyze unavailable"):
-            # Not a live system - a dev checkout on Windows, say. Without this
-            # it would wait ten minutes and then write a report into the repo.
-            return
+            return          # not a live system - write nothing
         time.sleep(5)
-    b = boot_timing()
-    ready = APP_READY["uptime"]
-    ready_txt = ("%.0fs after the kernel started" % ready) if ready and ready > 0 \
-        else "not reached (the page was never served)"
-    try:
-        with open("/proc/cmdline") as fh:
-            cmdline = fh.read().strip()
-    except OSError:
-        cmdline = "unknown"
-    stamp = time.strftime("%Y-%m-%d %H:%M:%S")
-    machine = _machine_name()
-    ply = b.get("plymouth") or {}
-
-    lines = [
-        "ALS Audit Station - boot report",
-        "written   : %s" % stamp,
-        "machine   : %s" % machine,
-        "",
-        "APP READY : %s" % ready_txt,
-        "systemd   : %s" % b.get("total", "?"),
-        "USB link  : %s  (%s)" % (b.get("usb", "?"), b.get("device", "?")),
-        "md5check  : %s" % _md5check_seconds(b.get("blame") or []),
-        "cmdline   : %s" % cmdline,
-        "",
-        "--- slowest units ---",
-    ] + ["  " + l for l in (b.get("blame") or [])] + [
-        "",
-        "--- what the boot waited on ---",
-    ] + ["  " + l for l in (b.get("chain") or [])] + [
-        "",
-        "--- layers ---",
-    ] + ["  " + l for l in (b.get("layers") or [])] + [
-        "",
-        "--- shutdown splash ---",
-    ] + ["  %s: %s" % (k, ply.get(k)) for k in
-         ("conf", "theme", "module", "default_alt", "initramfs") if ply.get(k)] + [""]
-
-    err = write_boot_file(os.path.join(os.path.dirname(CONF_PATH), "boot-report.txt"),
-                          "\n".join(lines)) if CONF_PATH else "no boot media"
-    print("boot report: %s" % (err or "written"))
-
-    # One line per boot. Read-modify-write through the same safe path; there
-    # is no appending through a remount, and the file stays small.
-    if CONF_PATH:
-        hist = os.path.join(os.path.dirname(CONF_PATH), "boot-history.csv")
-        try:
-            with open(hist, errors="replace") as fh:
-                old = fh.read()
-        except OSError:
-            old = "when,machine,app_ready_s,usb_link,md5check,systemd\n"
-        row = '%s,"%s",%s,"%s","%s","%s"\n' % (
-            stamp, machine.replace('"', "'"),
-            ("%.0f" % ready) if ready and ready > 0 else "",
-            (b.get("usb") or "").replace('"', "'"),
-            _md5check_seconds(b.get("blame") or []),
-            (b.get("total") or "").replace('"', "'"))
-        # Keep the last 500 boots; a stick lives a long time.
-        keep = (old + row).splitlines(True)
-        if len(keep) > 501:
-            keep = keep[:1] + keep[-500:]
-        write_boot_file(hist, "".join(keep))
+    else:
+        return              # never finished in 10 min; the early report stands
+    report_now(True)
 
 
 def tool_check():

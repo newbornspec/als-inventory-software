@@ -1,18 +1,22 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Every boot leaves its timing on the stick - check what it writes, and when
+"""Every boot leaves its timing on the stick - what it writes, when, and when
 it must write nothing.
 
-The report exists because the feedback loop was photographs of a screen: the
-wrong screen, text too small to read, a round trip per question. The stick
-comes back to Windows to be synced anyway, so it carries the numbers instead.
+The report exists because the feedback loop was photographs of a screen. The
+first version only wrote once systemd declared the boot finished, which on a
+live system can be minutes - and the normal workflow is app up, audit, wipe,
+power off. On a real boot it would never have been written, silently. These
+tests pin the fix: an EARLY report the moment the app appears, a FINAL one only
+if systemd finishes, and exactly one history row per boot either way.
 
-Stubs only the edges - systemd-analyze, the timing collector and the stick
-write - and runs the real write_boot_report().
+Stubs only the edges (systemd, the timing collector, the stick write) and runs
+the real report code.
 
     python3 tools/test-boot-report.py
 """
 import importlib.util
+import io
 import os
 import sys
 import tempfile
@@ -34,127 +38,146 @@ def check(name, cond, detail=""):
         print("  FAIL %s   %s" % (name, detail))
 
 
-TIMING = {
-    "total": "Startup finished in 8.1s (kernel) + 41.6s (userspace) = 49.7s",
+EARLY_TIMING = {    # before systemd finishes: no blame, no chain yet
+    "total": "Bootup is not yet finished. Please try again later.",
     "usb": "USB 2.0 (480 Mbps) - SLOW, try a socket on the BACK",
-    "device": "/dev/sdb1",
-    "blame": ["177.004s casper-md5check.service", "12.1s snapd.seeded.service"],
-    "chain": ["graphical.target @41.6s"],
+    "device": "/dev/sdb1", "blame": [], "chain": [],
     "layers": ["minimal.squashfs - xz, 128 KB blocks, 1.65 GB"],
-    "plymouth": {"conf": "Theme=als", "theme": "present",
-                 "module": "two-step.so present",
-                 "initramfs": "/run/initramfs does not exist"},
+    "plymouth": {"conf": "Theme=als", "theme": "present"},
 }
+FINAL_TIMING = dict(EARLY_TIMING,
+                    total="Startup finished in 8.1s (kernel) + 41.6s (userspace) = 49.7s",
+                    blame=["12.1s snapd.seeded.service"], chain=["graphical.target @41.6s"])
 
 
-def run(analyze_reply, ready):
-    tmp = tempfile.mkdtemp()
-    written = {}
+class Stick:
+    """A temp dir standing in for /cdrom, recording every write."""
 
-    def fake_write(path, text):
-        written[os.path.basename(path)] = text
+    def __init__(self):
+        self.dir = tempfile.mkdtemp()
+        self.writes = []
+
+    def write(self, path, text):
+        self.writes.append(os.path.basename(path))
         with open(path, "w") as fh:
             fh.write(text)
         return None
 
-    saved = (srv._analyze, srv.boot_timing, srv.write_boot_file, srv.CONF_PATH,
-             srv.time.sleep, dict(srv.APP_READY))
-    try:
-        srv._analyze = lambda args, timeout=8: analyze_reply
-        srv.boot_timing = lambda: TIMING
-        srv.write_boot_file = fake_write
-        srv.CONF_PATH = os.path.join(tmp, "audit.conf")
-        srv.time.sleep = lambda s: None
-        srv.APP_READY["uptime"] = ready
-        srv.write_boot_report()
-        return written, tmp
-    finally:
-        (srv._analyze, srv.boot_timing, srv.write_boot_file, srv.CONF_PATH,
-         srv.time.sleep, apr) = saved
-        srv.APP_READY.clear()
-        srv.APP_READY.update(apr)
+    def read(self, name):
+        try:
+            with open(os.path.join(self.dir, name)) as fh:
+                return fh.read()
+        except OSError:
+            return ""
 
 
-print("boot report")
+def setup(stick, timing, md5="SKIPPED (fsck.mode=skip honoured)", on_media=True):
+    srv.CONF_PATH = os.path.join(stick.dir, "audit.conf")
+    srv.write_boot_file = stick.write
+    srv.boot_timing = lambda: timing
+    srv.md5check_state = lambda: md5
+    srv.on_boot_media = lambda: on_media
+    srv.time.sleep = lambda s: None
+    srv.REPORT_STATE["history_written"] = False
+    srv.APP_READY["uptime"] = 58.4
 
-w, tmp = run("Startup finished in 8.1s (kernel) + 41.6s (userspace) = 49.7s", 58.4)
-rep = w.get("boot-report.txt", "")
-check("writes boot-report.txt", bool(rep))
-check("leads with APP READY in seconds", "APP READY : 58s after the kernel started" in rep, rep[:300])
+
+ORIG = (srv.CONF_PATH, srv.write_boot_file, srv.boot_timing, srv.md5check_state,
+        srv.on_boot_media, srv.time.sleep, srv._analyze)
+
+print("early report - the one that must always happen")
+st = Stick()
+setup(st, EARLY_TIMING)
+srv.report_now(False)
+rep = st.read("boot-report.txt")
+check("written at app-ready, before systemd finishes", bool(rep))
+check("says it is the EARLY report", "stage     : EARLY" in rep, rep[:400])
+check("leads with APP READY", "APP READY : 58s after the kernel started" in rep)
 check("carries the USB link", "USB 2.0 (480 Mbps)" in rep)
-check("names the self-check and its cost", "md5check  : 177.004s" in rep, rep)
-check("includes the slowest units", "snapd.seeded.service" in rep)
-check("includes the splash diagnosis", "Theme=als" in rep)
+check("says whether the self-check was skipped", "self-check: SKIPPED (fsck.mode=skip honoured)" in rep)
+check("is honest that blame is not available yet", "(not available until the boot finishes)" in rep)
 check("never contains credentials", "PASSWORD" not in rep.upper() and "TOKEN" not in rep.upper())
+hist = [r for r in st.read("boot-history.csv").splitlines() if r.strip()]
+check("history: header plus one row", len(hist) == 2 and hist[0].startswith("when,machine"), hist)
+check("history row has app-ready seconds", len(hist) == 2 and ",58," in hist[1], hist)
 
-hist = w.get("boot-history.csv", "")
-rows = [r for r in hist.splitlines() if r.strip()]
-check("history gets a header and one row", len(rows) == 2 and rows[0].startswith("when,machine"), rows)
-check("history row carries app-ready seconds", len(rows) == 2 and ",58," in rows[1], rows)
+print("final report - only if the machine stays up")
+srv.boot_timing = lambda: FINAL_TIMING
+srv.report_now(True)
+rep = st.read("boot-report.txt")
+check("replaces the early report", "stage     : final" in rep, rep[:300])
+check("now carries systemd's accounting", "snapd.seeded.service" in rep and "Startup finished" in rep)
+hist2 = [r for r in st.read("boot-history.csv").splitlines() if r.strip()]
+check("history NOT duplicated by the final report", len(hist2) == 2, hist2)
 
-# A second boot appends; it does not overwrite the history.
-with open(os.path.join(tmp, "boot-history.csv"), "w") as fh:
-    fh.write(hist)
-saved_conf = srv.CONF_PATH
+print("the case this rewrite exists for")
+# Powered off before systemd finished: write_boot_report() polls, never sees
+# "Startup finished", and must NOT overwrite the early report with a partial
+# one - nor append a second history row.
+st2 = Stick()
+setup(st2, EARLY_TIMING)
+srv.report_now(False)                    # the early report, from mark_app_ready
+before = st2.read("boot-report.txt")
+st2.writes.clear()
+srv._analyze = lambda args, timeout=8: "Bootup is not yet finished."
+srv.write_boot_report()                  # ten minutes of polling, stubbed
+check("never finished: the early report still stands", st2.read("boot-report.txt") == before and "EARLY" in before)
+check("never finished: nothing further written", st2.writes == [], st2.writes)
+
+print("where it must write nothing")
+st3 = Stick()
+setup(st3, EARLY_TIMING, on_media=False)
+srv.report_now(False)
+srv.report_now(True)
+check("not on boot media (a dev checkout): nothing written", st3.writes == [], st3.writes)
+srv._analyze = lambda args, timeout=8: "systemd-analyze unavailable: [WinError 2]"
+srv.on_boot_media = lambda: True
+srv.write_boot_report()
+check("no systemd at all: the final path writes nothing", st3.writes == [], st3.writes)
+
+print("the self-check line tells the story")
+st4 = Stick()
+setup(st4, EARLY_TIMING, md5="RUNNING - re-reading 5.9 GB of the stick right now")
+srv.report_now(False)
+check("a running self-check is called out", "RUNNING - re-reading 5.9 GB" in st4.read("boot-report.txt"))
+
+print("app-ready is the FIRST serve, and fires one early report")
+spawned = []
+real_thread = srv.threading.Thread
 
 
-def second():
-    written = {}
+class FakeThread:
+    def __init__(self, target=None, args=(), daemon=None):
+        spawned.append((target, args))
 
-    def fake_write(path, text):
-        written[os.path.basename(path)] = text
-        return None
-    old = (srv._analyze, srv.boot_timing, srv.write_boot_file, srv.CONF_PATH, srv.time.sleep)
-    try:
-        srv._analyze = lambda args, timeout=8: "Startup finished in 1s"
-        srv.boot_timing = lambda: TIMING
-        srv.write_boot_file = fake_write
-        srv.CONF_PATH = os.path.join(tmp, "audit.conf")
-        srv.time.sleep = lambda s: None
-        srv.APP_READY["uptime"] = 31.0
-        srv.write_boot_report()
-    finally:
-        (srv._analyze, srv.boot_timing, srv.write_boot_file, srv.CONF_PATH, srv.time.sleep) = old
-    return written
+    def start(self):
+        pass
 
 
-w2 = second()
-rows2 = [r for r in w2.get("boot-history.csv", "").splitlines() if r.strip()]
-check("second boot appends a row, keeps the first", len(rows2) == 3 and ",58," in rows2[1] and ",31," in rows2[2], rows2)
-
-# Not a live system (a dev checkout on Windows): write NOTHING. Without the
-# guard it waited ten minutes, then wrote a report into the repository.
-w, _ = run("systemd-analyze unavailable: [WinError 2]", 10.0)
-check("dev machine: writes nothing at all", w == {}, list(w))
-
-# The page never loaded - report it plainly rather than as a zero.
-w, _ = run("Startup finished in 1s", None)
-check("app never served: says so, not 0s",
-      "not reached (the page was never served)" in w.get("boot-report.txt", ""), w.get("boot-report.txt", "")[:200])
-
-# mark_app_ready keeps the FIRST time the page was served. Every later reload
-# must not move it, or a browser refresh would rewrite the boot time.
-srv.APP_READY["uptime"] = None
+srv.threading.Thread = FakeThread
 orig_open = open
 
 
-def fake_uptime(path, *a, **k):
+def fake_open(path, *a, **k):
     if path == "/proc/uptime":
-        import io
         return io.StringIO("42.5 100.0")
     return orig_open(path, *a, **k)
 
 
-srv.open = fake_uptime
+srv.open = fake_open
 try:
+    srv.APP_READY["uptime"] = None
     srv.mark_app_ready()
-    first = srv.APP_READY["uptime"]
-    srv.mark_app_ready()
-    srv.mark_app_ready()
+    srv.mark_app_ready()        # a reload
+    srv.mark_app_ready()        # another
 finally:
     del srv.open
-check("app-ready records the first serve only", first == 42.5 and srv.APP_READY["uptime"] == 42.5,
-      srv.APP_READY)
+    srv.threading.Thread = real_thread
+check("records the first serve only", srv.APP_READY["uptime"] == 42.5, srv.APP_READY)
+check("fires exactly one early report", len(spawned) == 1 and spawned[0][1] == (False,), spawned)
+
+(srv.CONF_PATH, srv.write_boot_file, srv.boot_timing, srv.md5check_state,
+ srv.on_boot_media, srv.time.sleep, srv._analyze) = ORIG
 
 print("")
 print("%d passed, %d failed" % (PASS[0], len(FAIL)))
