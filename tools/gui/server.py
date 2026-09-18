@@ -1568,6 +1568,135 @@ def boot_timing():
     return out
 
 
+# --------------------------------------------------------------- boot report --
+# Every boot writes its own timing onto the stick.
+#
+# The loop until now was: boot, photograph a screen, send the photo, read tiny
+# text off it, guess. Photos of the wrong screen, numbers too small to read, and
+# every answer costing a round trip. The stick comes back to Windows to be synced
+# anyway, so it can carry the answer: boot-report.txt is the last boot in full,
+# boot-history.csv is one line per boot across every machine it has been in.
+# That second file is what answers "how many of our machines are USB 2?" -
+# which decides whether a faster drive is worth buying at all.
+#
+# APP READY is the number that matters to the operator: seconds from the kernel
+# starting to the moment the app page was actually served to the browser.
+# Firmware and the boot menu happen before the kernel and cannot be seen from
+# here - add roughly the pause between power-on and the splash.
+
+APP_READY = {"uptime": None}
+
+
+def mark_app_ready():
+    """First time the UI is served. That is the operator's "it's up"."""
+    if APP_READY["uptime"] is not None:
+        return
+    try:
+        with open("/proc/uptime") as fh:
+            APP_READY["uptime"] = float(fh.read().split()[0])
+    except (OSError, ValueError, IndexError):
+        APP_READY["uptime"] = -1.0
+
+
+def _machine_name():
+    parts = []
+    for f in ("sys_vendor", "product_name"):
+        try:
+            with open("/sys/class/dmi/id/" + f, errors="replace") as fh:
+                v = fh.read().strip()
+            if v and v not in parts:
+                parts.append(v)
+        except OSError:
+            pass
+    return " ".join(parts) or "unknown machine"
+
+
+def _md5check_seconds(blame):
+    for line in blame:
+        if "casper-md5check" in line:
+            return line.split()[0]
+    # Not "did not run": blame is cut to the slowest ten, so absence proves
+    # only that it was not slow. After fsck.mode=skip it should not run at all,
+    # and the cmdline line of the report is what shows the switch was present.
+    return "not among the slowest units"
+
+
+def write_boot_report():
+    """Wait for the boot to finish, then leave its numbers on the stick."""
+    # systemd-analyze refuses until the startup transaction completes, and
+    # the app is usually up well before that. Poll, gently, for up to 10 min.
+    for _ in range(120):
+        t = _analyze(["time"])
+        if t.startswith("Startup finished"):
+            break
+        if t.startswith("systemd-analyze unavailable"):
+            # Not a live system - a dev checkout on Windows, say. Without this
+            # it would wait ten minutes and then write a report into the repo.
+            return
+        time.sleep(5)
+    b = boot_timing()
+    ready = APP_READY["uptime"]
+    ready_txt = ("%.0fs after the kernel started" % ready) if ready and ready > 0 \
+        else "not reached (the page was never served)"
+    try:
+        with open("/proc/cmdline") as fh:
+            cmdline = fh.read().strip()
+    except OSError:
+        cmdline = "unknown"
+    stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    machine = _machine_name()
+    ply = b.get("plymouth") or {}
+
+    lines = [
+        "ALS Audit Station - boot report",
+        "written   : %s" % stamp,
+        "machine   : %s" % machine,
+        "",
+        "APP READY : %s" % ready_txt,
+        "systemd   : %s" % b.get("total", "?"),
+        "USB link  : %s  (%s)" % (b.get("usb", "?"), b.get("device", "?")),
+        "md5check  : %s" % _md5check_seconds(b.get("blame") or []),
+        "cmdline   : %s" % cmdline,
+        "",
+        "--- slowest units ---",
+    ] + ["  " + l for l in (b.get("blame") or [])] + [
+        "",
+        "--- what the boot waited on ---",
+    ] + ["  " + l for l in (b.get("chain") or [])] + [
+        "",
+        "--- layers ---",
+    ] + ["  " + l for l in (b.get("layers") or [])] + [
+        "",
+        "--- shutdown splash ---",
+    ] + ["  %s: %s" % (k, ply.get(k)) for k in
+         ("conf", "theme", "module", "default_alt", "initramfs") if ply.get(k)] + [""]
+
+    err = write_boot_file(os.path.join(os.path.dirname(CONF_PATH), "boot-report.txt"),
+                          "\n".join(lines)) if CONF_PATH else "no boot media"
+    print("boot report: %s" % (err or "written"))
+
+    # One line per boot. Read-modify-write through the same safe path; there
+    # is no appending through a remount, and the file stays small.
+    if CONF_PATH:
+        hist = os.path.join(os.path.dirname(CONF_PATH), "boot-history.csv")
+        try:
+            with open(hist, errors="replace") as fh:
+                old = fh.read()
+        except OSError:
+            old = "when,machine,app_ready_s,usb_link,md5check,systemd\n"
+        row = '%s,"%s",%s,"%s","%s","%s"\n' % (
+            stamp, machine.replace('"', "'"),
+            ("%.0f" % ready) if ready and ready > 0 else "",
+            (b.get("usb") or "").replace('"', "'"),
+            _md5check_seconds(b.get("blame") or []),
+            (b.get("total") or "").replace('"', "'"))
+        # Keep the last 500 boots; a stick lives a long time.
+        keep = (old + row).splitlines(True)
+        if len(keep) > 501:
+            keep = keep[:1] + keep[-500:]
+        write_boot_file(hist, "".join(keep))
+
+
 def tool_check():
     """Which imaging/erase tools this boot media actually has.
 
@@ -2007,6 +2136,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):  # noqa: N802
         u = urlparse(self.path)
         if u.path in ("/", "/index.html"):
+            mark_app_ready()
             try:
                 with open(os.path.join(HERE, "index.html"), "rb") as fh:
                     return self._send(200, fh.read(), "text/html; charset=utf-8")
@@ -2404,6 +2534,7 @@ def main():
             pass
         refresh()
     threading.Thread(target=boot, daemon=True).start()
+    threading.Thread(target=write_boot_report, daemon=True).start()
     threading.Thread(target=queue_worker, daemon=True).start()
     srv = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     print("ALS Audit Station GUI on http://127.0.0.1:%d  (engine: %s)" % (PORT, SCRIPT))

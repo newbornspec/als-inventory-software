@@ -176,6 +176,26 @@ if (Test-Path $stampFile) {
     Get-Content $stampFile | ForEach-Object { Write-Output "  $_" }
 }
 
+# The station writes these itself at the end of every boot (server.py
+# write_boot_report). Showing them here means plugging the stick in to sync is
+# also reading the result of the last boot - no photograph of a screen needed.
+$report = Join-Path $Drive 'boot-report.txt'
+if (Test-Path $report) {
+    Write-Output ''
+    Write-Output '--- LAST BOOT (written by the station) --------------------------'
+    Get-Content $report | Select-Object -First 9 | ForEach-Object { Write-Output "  $_" }
+    Write-Output "  (full report: $report)"
+}
+$history = Join-Path $Drive 'boot-history.csv'
+if (Test-Path $history) {
+    $rows = @(Get-Content $history | Select-Object -Skip 1 | Where-Object { $_.Trim() })
+    if ($rows.Count) {
+        Write-Output ''
+        Write-Output ("--- BOOT HISTORY ({0} boots recorded, most recent last) ------" -f $rows.Count)
+        $rows | Select-Object -Last 8 | ForEach-Object { Write-Output "  $_" }
+    }
+}
+
 if ($Benchmark) {
     Write-Output ''
     Write-Output '--- READ SPEED --------------------------------------------------'

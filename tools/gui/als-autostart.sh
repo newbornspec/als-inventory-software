@@ -218,7 +218,14 @@ PREFS
             *)  ARGS="--kiosk --start-fullscreen --no-first-run --window-position=0,0 --user-data-dir=${HOME:-/tmp}/als-kiosk-profile" ;;
         esac
         log "kiosk: $BROWSER $ARGS $URL"
-        note "ALS Audit Station" "Starting full screen. Press Alt+F4 to leave it."
+        # No "Starting full screen" popup. It was the ONE note this script
+        # raised on a successful kiosk boot, and it was wrong twice over: the
+        # kiosk session has no notification service, so note() fell back to a
+        # zenity dialog with an OK button that sat on screen until someone
+        # clicked it; and "Press Alt+F4 to leave it" is false here - Alt+F4 is
+        # a window-manager shortcut and this session has no window manager.
+        # An appliance does not announce itself. The error notes above stay:
+        # when something is BROKEN the operator needs telling.
         # shellcheck disable=SC2086
         setsid "$BROWSER" $ARGS "$URL" >>"${HOME:-/tmp}/als-browser.log" 2>&1 &
         log "kiosk pid $! - done"
