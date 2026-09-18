@@ -99,6 +99,28 @@ function Find-AuditStick {
         ForEach-Object { "$($_.DriveLetter):" }
 }
 
+# "commit X, synced <when>" on the stick, so "is this stick current?" can be
+# answered by looking rather than by hashing 47 files by hand.
+#
+# Called on EVERY -Apply, including the run where nothing differed. It used to
+# be written only after a file was copied, which meant a stick that was already
+# perfectly up to date kept an older commit on it - and the one question the
+# stamp exists to answer got a misleading answer. It records the commit this
+# stick was VERIFIED against, not the last commit that happened to change a file.
+function Write-Stamp {
+    param([string] $Target, [string] $ToolsDir)
+    try {
+        $commit = & git -C $ToolsDir rev-parse --short HEAD 2>$null
+        if ($LASTEXITCODE -ne 0) { $commit = 'unknown' }
+    } catch { $commit = 'unknown' }
+    $stampPath = Join-Path $Target 'gui\.stick-version'
+    $parent = Split-Path -Parent $stampPath
+    if (-not (Test-Path $parent)) { New-Item -ItemType Directory -Force -Path $parent | Out-Null }
+    "commit $commit"                         | Out-File -FilePath $stampPath -Encoding utf8
+    ("synced {0}" -f (Get-Date -Format 's')) | Out-File -FilePath $stampPath -Encoding utf8 -Append
+    Write-Output ("  stamped gui\.stick-version   commit {0}" -f $commit)
+}
+
 function Sync-Stick {
     param([string] $Target, [switch] $DoApply)
 
@@ -169,7 +191,16 @@ function Sync-Stick {
     Write-Output ("Up to date: {0}   Differs: {1}   Missing: {2}" -f $same, $diff.Count, $missing.Count)
 
     if ($todo.Count -eq 0) {
-        Write-Output 'Stick matches the repo. Nothing to do.'
+        Write-Output 'Stick matches the repo. Nothing to copy.'
+        if ($DoApply) {
+            # Still stamp it. The stick IS current; recording that is the whole
+            # point, and refusing to say so because no bytes moved is how a
+            # good stick ends up looking stale.
+            Write-Stamp -Target $Target -ToolsDir $toolsDir
+            if ($Target -match '^[A-Za-z]:$') {
+                try { Write-VolumeCache -DriveLetter $Target[0] -ErrorAction Stop } catch {}
+            }
+        }
         return
     }
     if (-not $DoApply) {
@@ -195,14 +226,7 @@ function Sync-Stick {
     # Stamp which commit this stick is carrying. "Is this stick current?" was
     # previously unanswerable without hashing every file by hand, and a stale
     # stick looks exactly like a working one until it misbehaves on a bench.
-    try {
-        $commit = & git -C $toolsDir rev-parse --short HEAD 2>$null
-        if ($LASTEXITCODE -ne 0) { $commit = 'unknown' }
-    } catch { $commit = 'unknown' }
-    $stampPath = Join-Path $Target 'gui\.stick-version'
-    "commit $commit"                              | Out-File -FilePath $stampPath -Encoding utf8
-    ("synced {0}" -f (Get-Date -Format 's'))      | Out-File -FilePath $stampPath -Encoding utf8 -Append
-    Write-Output ("  stamped gui\.stick-version   commit {0}" -f $commit)
+    Write-Stamp -Target $Target -ToolsDir $toolsDir
 
     # Get-FileHash above can be served from the OS cache, so "verified=True" does
     # NOT by itself prove the bytes reached the flash. Force the volume's write
