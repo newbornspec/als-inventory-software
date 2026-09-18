@@ -1218,6 +1218,38 @@ async function loadToolCheck(){
          (x.present?'✓':'✗')+' '+x.name+'</span>').join(' &nbsp; ')+'</div>';
   }
   if(t.space) h+='<div style="margin-top:8px;color:var(--mut2)">Boot media: '+t.space+'</div>';
+
+  // Boot timing. Shown here because this is the panel an operator can be asked
+  // to photograph - there is no terminal on this machine, and the person who
+  // needs the numbers cannot see the screen.
+  const b=t.boot;
+  if(b && !b.error){
+    h+='<div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--line)">';
+    h+='<div style="color:var(--mut2);margin-bottom:6px"><b>BOOT TIMING</b></div>';
+    if(b.uptime!=null){
+      h+='<div>Running for <b>'+Math.round(b.uptime)+'s</b> since the kernel started.'+
+         '<div style="color:var(--mut2);font-size:12px">Time before that — firmware, USB detection, '+
+         'the boot menu — is invisible from here. Subtract this from a stopwatch to get it.</div></div>';
+    }
+    if(b.total) h+='<div style="margin-top:6px">'+esc(b.total)+'</div>';
+    h+='<div style="margin-top:6px">USB link: <b>'+esc(b.usb||'unknown')+'</b>'+
+       '<span style="color:var(--mut2)"> ('+esc(b.device||'?')+')</span></div>';
+    if(b.layers&&b.layers.length){
+      h+='<div style="margin-top:6px;color:var(--mut2)">Layers:</div>';
+      for(const l of b.layers) h+='<div style="font-size:12px">'+esc(l)+'</div>';
+    }
+    if(b.chain&&b.chain.length){
+      h+='<div style="margin-top:6px;color:var(--mut2)">What the boot waited on:</div>';
+      for(const l of b.chain) h+='<div style="font-size:12px;white-space:pre">'+esc(l)+'</div>';
+    }
+    if(b.blame&&b.blame.length){
+      h+='<div style="margin-top:6px;color:var(--mut2)">Slowest units:</div>';
+      for(const l of b.blame) h+='<div style="font-size:12px">'+esc(l)+'</div>';
+    }
+    h+='</div>';
+  } else if(b && b.error){
+    h+='<div style="margin-top:12px;color:var(--mut2)">Boot timing unavailable: '+esc(b.error)+'</div>';
+  }
   el.innerHTML=h;
 }
 

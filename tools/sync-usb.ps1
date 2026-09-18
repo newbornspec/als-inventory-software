@@ -66,6 +66,23 @@ $files = [ordered]@{
     'gui\layer\als-session.sh'         = 'gui\layer\als-session.sh'
 }
 
+# Whole directories, same rules: compare by hash, copy what differs.
+#
+# This exists because of a bug that hid for months. make-als-layer.sh installs
+# the plymouth theme into the layer so the SHUTDOWN splash is ours - but it
+# looks for that theme at <stick>\boot\theme, and the file list above has never
+# carried a single boot\ entry. So the theme was never on the stick, the build
+# printed "no theme - shutdown will show Ubuntu's splash", and then exited
+# SUCCESSFULLY. A warning nobody was watching for, followed by a green tick.
+#
+# als-splash.img is deliberately NOT here. It is the BOOT splash, it is already
+# working on hardware, and the copy on the stick is the one that was proven.
+# prep-stick.ps1 compares it and reports rather than overwriting, so a
+# regenerated archive can never silently replace a known-good one.
+$trees = [ordered]@{
+    'boot\dist\theme' = 'boot\theme'
+}
+
 # Set by Sync-Stick instead of returned. In PowerShell a function's Write-Output
 # goes to the pipeline, so assigning its result would capture the whole report
 # into the caller's variable and print nothing at all.
@@ -102,6 +119,29 @@ function Sync-Stick {
 
     $same = 0; $diff = @(); $missing = @()
 
+    # Directories first, so a missing tree is the first thing reported rather
+    # than the last thing scrolled past.
+    foreach ($tsrc in $trees.Keys) {
+        $treeRoot = Join-Path $toolsDir $tsrc
+        if (-not (Test-Path $treeRoot)) { Write-Output ("  ?  {0,-24} not in the repo - skipped" -f $tsrc); continue }
+        $n = 0; $nDiff = 0; $nMiss = 0
+        foreach ($f in Get-ChildItem $treeRoot -Recurse -File) {
+            $rel = $f.FullName.Substring($treeRoot.Length).TrimStart('\')
+            $dst = Join-Path (Join-Path $Target $trees[$tsrc]) $rel
+            $a = Get-Sha $f.FullName
+            $b = Get-Sha $dst
+            $n++
+            if ($null -eq $b) { $nMiss++; $missing += ,@($f.FullName, $dst) }
+            elseif ($a -ne $b) { $nDiff++; $diff += ,@($f.FullName, $dst) }
+            else { $same++ }
+        }
+        if ($nMiss -eq 0 -and $nDiff -eq 0) {
+            Write-Output ("  =  {0,-24} up to date ({1} files)" -f $tsrc, $n)
+        } else {
+            Write-Output ("  ~  {0,-24} {1} missing, {2} differing of {3} files" -f $tsrc, $nMiss, $nDiff, $n)
+        }
+    }
+
     foreach ($src in $files.Keys) {
         $srcPath = Join-Path $toolsDir $src
         $dstPath = Join-Path $Target $files[$src]
@@ -109,8 +149,8 @@ function Sync-Stick {
 
         $a = Get-Sha $srcPath
         $b = Get-Sha $dstPath
-        if ($null -eq $b)   { $missing += $src; Write-Output ("  +  {0,-24} MISSING on the stick" -f $src) }
-        elseif ($a -ne $b)  { $diff    += $src; Write-Output ("  ~  {0,-24} DIFFERS" -f $src) }
+        if ($null -eq $b)   { $missing += ,@($srcPath, $dstPath); Write-Output ("  +  {0,-24} MISSING on the stick" -f $src) }
+        elseif ($a -ne $b)  { $diff    += ,@($srcPath, $dstPath); Write-Output ("  ~  {0,-24} DIFFERS" -f $src) }
         else                { $same++;          Write-Output ("  =  {0,-24} up to date" -f $src) }
     }
 
@@ -140,14 +180,15 @@ function Sync-Stick {
 
     Write-Output ''
     $bad = 0
-    foreach ($src in $todo) {
-        $srcPath = Join-Path $toolsDir $src
-        $dstPath = Join-Path $Target $files[$src]
+    foreach ($pair in $todo) {
+        $srcPath = $pair[0]
+        $dstPath = $pair[1]
+        $label   = $srcPath.Substring($toolsDir.Length).TrimStart('\')
         $parent  = Split-Path -Parent $dstPath
         if (-not (Test-Path $parent)) { New-Item -ItemType Directory -Force -Path $parent | Out-Null }
         Copy-Item -Path $srcPath -Destination $dstPath -Force
         $ok = (Get-Sha $srcPath) -eq (Get-Sha $dstPath)
-        Write-Output ("  copied {0,-24} verified={1}" -f $src, $ok)
+        Write-Output ("  copied {0,-40} verified={1}" -f $label, $ok)
         if (-not $ok) { $bad++; Write-Output '     ^ HASH MISMATCH after copy - the stick may be full or write-protected.' }
     }
 

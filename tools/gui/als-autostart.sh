@@ -73,7 +73,14 @@ fi
 # in our own script where it is logged and under our control, rather than with
 # the .desktop key X-GNOME-Autostart-Delay - no stock entry on this image uses
 # that key, and an unexercised code path is not what this stick needs.
-SETTLE="${ALS_SETTLE:-12}"
+# 3, not 12. The original number was a guess made while chasing a boot that
+# would not start the app at all, and it was never revisited once it did. It is
+# dead time on every single boot: the screen is up, the desktop is drawn, and
+# this is sitting still. 3s still covers a slow GNOME finishing its own startup,
+# and if a machine ever needs more, ALS_SETTLE overrides it without an edit.
+# The kiosk session does not use this path at all - it waits on the backend
+# answering, which is the right way round.
+SETTLE="${ALS_SETTLE:-3}"
 log "waiting ${SETTLE}s for the desktop to settle"
 sleep "$SETTLE"
 

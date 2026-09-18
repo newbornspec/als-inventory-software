@@ -1362,6 +1362,146 @@ def prior_audit(lot_id):
     return data
 
 
+# --------------------------------------------------------------- boot timing --
+# Nobody has ever measured this stick's boot. Every opinion about why it is slow
+# - including mine - has been a guess, because the operator has no terminal and
+# the one person who could read a number cannot see the screen. So the numbers
+# come to the screen the operator already photographs.
+#
+# What this DOES tell us: where the time goes after the kernel starts, how fast
+# the USB link negotiated, and how the layers are compressed.
+# What it CANNOT tell us: the black-screen phase before the kernel - firmware
+# POST, USB enumeration, and GRUB reading the kernel through firmware drivers.
+# No software running on this machine can see time that passed before it existed.
+# That gap is (wall-clock from pressing power) minus (uptime shown here), which
+# is why the instruction is to film one boot on a phone.
+
+SQUASH_COMP = {1: "gzip", 2: "lzma", 3: "lzo", 4: "xz", 5: "lz4", 6: "zstd"}
+
+
+def squashfs_info(path):
+    """Compressor and block size, read straight from the superblock.
+
+    Deliberately not `unsquashfs -s`: squashfs-tools is not guaranteed to be on
+    a live image, and the superblock is a fixed little-endian layout - magic
+    'hsqs', block size at 12, compression id at 20. Reading 24 bytes cannot fail
+    in a way that matters, and needs nothing installed."""
+    try:
+        with open(path, "rb") as fh:
+            head = fh.read(24)
+        if len(head) < 24 or head[:4] != b"hsqs":
+            return None
+        import struct
+        block = struct.unpack_from("<I", head, 12)[0]
+        comp = struct.unpack_from("<H", head, 20)[0]
+        return {"comp": SQUASH_COMP.get(comp, "id %d" % comp),
+                "block": block,
+                "size": os.path.getsize(path)}
+    except OSError:
+        return None
+
+
+def mount_device(mp):
+    """The block device behind a mountpoint, from /proc/mounts."""
+    try:
+        with open("/proc/mounts") as fh:
+            for line in fh:
+                parts = line.split()
+                if len(parts) >= 2 and parts[1] == mp.replace(" ", "\\040"):
+                    return parts[0]
+    except OSError:
+        pass
+    return None
+
+
+def usb_link_speed(dev):
+    """The negotiated USB speed of the device backing the boot medium.
+
+    This is the single most valuable number here. A USB 3 stick in a USB 2
+    socket runs at roughly a quarter speed and says nothing about it - and
+    front-panel sockets on second-hand desktops are very often USB 2. Free to
+    fix if that is what this reports, which is why it is worth showing."""
+    if not dev:
+        return "unknown"
+    name = os.path.basename(dev).rstrip("0123456789")   # sdb1 -> sdb
+    try:
+        # /sys/class/block/sdb -> ../../devices/.../usb1/1-1/1-1:1.0/host4/...
+        node = os.path.realpath("/sys/class/block/%s" % name)
+    except OSError:
+        return "unknown"
+    # Walk up to the USB device node, which is the one carrying "speed".
+    for _ in range(12):
+        spd = os.path.join(node, "speed")
+        if os.path.isfile(spd):
+            try:
+                with open(spd) as fh:
+                    mbps = float(fh.read().strip())
+            except (OSError, ValueError):
+                break
+            if mbps >= 10000:
+                return "USB 3.1 Gen2 (%g Mbps)" % mbps
+            if mbps >= 5000:
+                return "USB 3.0 (%g Mbps)" % mbps
+            if mbps >= 480:
+                return "USB 2.0 (%g Mbps) - SLOW, try a socket on the BACK" % mbps
+            return "USB 1.x (%g Mbps) - very slow" % mbps
+        parent = os.path.dirname(node)
+        if parent == node or parent == "/sys":
+            break
+        node = parent
+    return "not a USB device (or speed not reported)"
+
+
+def _analyze(args, timeout=8):
+    try:
+        r = subprocess.run(["systemd-analyze"] + args, capture_output=True,
+                           text=True, timeout=timeout)
+    except Exception as exc:  # noqa: BLE001
+        return "systemd-analyze unavailable: %s" % exc
+    if r.returncode != 0:
+        # The usual reason is a boot that has not finished - systemd-analyze
+        # refuses until the startup transaction completes. Say so rather than
+        # printing an empty box.
+        return (r.stderr or r.stdout or "").strip() or "no output"
+    return (r.stdout or "").strip()
+
+
+def boot_timing():
+    out = {}
+
+    try:
+        with open("/proc/uptime") as fh:
+            out["uptime"] = float(fh.read().split()[0])
+    except (OSError, ValueError, IndexError):
+        out["uptime"] = None
+
+    out["total"] = _analyze(["time"])
+    blame = _analyze(["blame"])
+    out["blame"] = [l.strip() for l in blame.splitlines() if l.strip()][:10] \
+        if not blame.startswith("systemd-analyze unavailable") else []
+    chain = _analyze(["critical-chain"])
+    out["chain"] = [l.rstrip() for l in chain.splitlines() if l.strip()][:12] \
+        if not chain.startswith("systemd-analyze unavailable") else []
+
+    mp = mount_point(CONF_PATH) if CONF_PATH else None
+    dev = mount_device(mp) if mp else None
+    out["device"] = dev or "unknown"
+    out["usb"] = usb_link_speed(dev)
+
+    # How the layers are packed. xz is the slowest to decompress by a wide
+    # margin, and every byte the machine reads off the stick goes through it.
+    layers = []
+    if mp:
+        for f in sorted(glob.glob(os.path.join(mp, "casper", "*.squashfs"))):
+            info = squashfs_info(f)
+            if info:
+                layers.append("%s - %s, %s blocks, %s"
+                              % (os.path.basename(f), info["comp"],
+                                 human_size(info["block"]), human_size(info["size"])))
+    out["layers"] = layers
+    return out
+
+
 def tool_check():
     """Which imaging/erase tools this boot media actually has.
 
@@ -1411,8 +1551,16 @@ def tool_check():
     else:
         verdict = ("Neither Clonezilla nor partclone is on this media — OS install "
                    "needs software added to the stick.")
+    boot = {}
+    try:
+        boot = boot_timing()
+    except Exception as exc:  # noqa: BLE001
+        # Diagnostics must never take the panel down with them.
+        boot = {"error": str(exc)}
+
     return {"groups": out, "space": space, "verdict": verdict,
-            "clonezilla": can_clonezilla, "partclone": can_partclone}
+            "clonezilla": can_clonezilla, "partclone": can_partclone,
+            "boot": boot}
 
 
 def has_optical():
