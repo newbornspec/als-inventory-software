@@ -2220,6 +2220,19 @@ class Handler(BaseHTTPRequestHandler):
             for d in devices:
                 if not re.match(r"^/dev/[A-Za-z0-9]+$", d or ""):
                     return self._send(400, {"message": "invalid device: %s" % d})
+            # The regex above is an injection guard, nothing more - "/dev/sdb"
+            # satisfies it whether sdb is the machine's disk or the stick this
+            # station booted from. The install handler learned this already and
+            # checks against the enumerated disks; the wipe handler never did.
+            # list_drives() excludes USB and removable devices, so this makes the
+            # offered list the gate rather than just the dropdown. Device names
+            # also shift when something is plugged or unplugged, so a name the
+            # screen showed a minute ago is not proof of anything now.
+            offered = {x.get("device") for x in (list_drives() or [])}
+            for d in devices:
+                if d not in offered:
+                    return self._send(400, {"message": "%s is not an internal disk this "
+                                                       "station can wipe" % d})
 
             # After the erase, record it against the device/batch: upload the
             # captured profile + the wipe status/method, the same shape the

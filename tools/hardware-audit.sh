@@ -613,7 +613,10 @@ WIPEEOF
 # helpers as the batch flow (firmware_erase / TRIM / shred + verify_zero).
 # Emits human-readable progress on stdout and a final machine-readable line:
 #   WIPE_RESULT {"status":"wiped|failed","method":"…","device":"/dev/sdX"}
-# Refuses removable/USB devices so the boot stick can never be selected.
+# Refuses removable devices, USB-attached devices, and the disk the system
+# booted from - three separate checks, so the boot drive is never selected even
+# when it is a fixed-reporting SSD. (This comment used to claim USB was refused
+# when only the removable flag was checked.)
 # --- overwrite with LIVE progress and a captured reason on failure -----------
 # A 250GB spinning disk takes hours to overwrite. Running shred silently made the
 # GUI look frozen for that whole time, and discarding its output threw away the
@@ -654,6 +657,55 @@ run_overwrite() {
   return "$rc"
 }
 
+# --- the boot drive is never a target, whatever it reports itself as -------
+#
+# gui_wipe_one's comment has always said it "refuses removable/USB devices", and
+# the code only ever checked the removable flag. That held because every stick
+# this station has booted from reports removable=1. It stops holding the moment
+# the boot drive is a portable SSD, an SSD-class stick, or one of the SanDisk
+# models the vendor has since switched to report as a FIXED disk - all of which
+# are exactly what someone buys to make the boot faster. Then removable=0, the
+# check passes, and nothing between the operator and shred knew the difference.
+#
+# So two independent questions, each enough on its own:
+#   als_disk_is_usb  - is it attached over USB? (transport, not the flag)
+#   als_boot_disk    - is it the disk the running system came off?
+#
+# Defined HERE, not in find-media.sh. That file is loaded behind an [ -r ] guard;
+# if it were ever missing, a check living in it would be "command not found",
+# which an `if` reads as false - so the refusal would silently PASS. A safety
+# check has to fail closed, which means it lives in the file that does the wiping.
+
+# 0 if the disk is attached over USB. $1 = kernel name, e.g. sdb.
+als_disk_is_usb() {
+  local tran
+  tran=$(lsblk -dno TRAN "/dev/$1" 2>/dev/null | tr -d '[:space:]')
+  [ "$tran" = "usb" ] && return 0
+  # Belt and braces: lsblk can report TRAN empty for some bridges. The sysfs
+  # path of a USB-attached disk always runs through the USB controller.
+  case "$(readlink -f "/sys/block/$1" 2>/dev/null)" in
+    */usb[0-9]*) return 0 ;;
+  esac
+  return 1
+}
+
+# Prints the kernel name of the disk the running system booted from (e.g. sdb),
+# or nothing if it cannot be determined.
+als_boot_disk() {
+  local mp src pk
+  for mp in "${ALS_MEDIA:-}" /cdrom /run/archiso/bootmnt /isodevice; do
+    [ -n "$mp" ] || continue
+    src=$(findmnt -no SOURCE "$mp" 2>/dev/null) || continue
+    [ -b "$src" ] || continue
+    pk=$(lsblk -no PKNAME "$src" 2>/dev/null | head -n1 | tr -d '[:space:]')
+    # A whole-disk mount has no parent; the source IS the disk.
+    [ -n "$pk" ] && { printf '%s' "$pk"; return 0; }
+    printf '%s' "$(basename "$src")"
+    return 0
+  done
+  return 1
+}
+
 gui_wipe_one() {
   local dev="$1" want="${2:-auto}" d rota m verified fw
   if [ -z "$dev" ] || [ ! -b "$dev" ]; then
@@ -664,6 +716,19 @@ gui_wipe_one() {
   if [ "$(cat "/sys/block/$d/removable" 2>/dev/null)" = "1" ]; then
     echo "Refusing: $dev is removable — the boot media is never wiped."
     echo "WIPE_RESULT {\"status\":\"failed\",\"method\":\"removable device refused\",\"device\":\"$dev\"}"
+    return 1
+  fi
+  if als_disk_is_usb "$d"; then
+    echo "Refusing: $dev is attached over USB - external drives, including the one"
+    echo "this station booted from, are never wiped here."
+    echo "WIPE_RESULT {\"status\":\"failed\",\"method\":\"usb device refused\",\"device\":\"$dev\"}"
+    return 1
+  fi
+  local boot
+  boot=$(als_boot_disk)
+  if [ -n "$boot" ] && [ "$d" = "$boot" ]; then
+    echo "Refusing: $dev is the disk this system is running from."
+    echo "WIPE_RESULT {\"status\":\"failed\",\"method\":\"boot disk refused\",\"device\":\"$dev\"}"
     return 1
   fi
   # Pseudo-devices are not real disks: /dev/loop* is the boot media's own

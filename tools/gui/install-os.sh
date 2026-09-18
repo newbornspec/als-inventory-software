@@ -45,6 +45,54 @@ fi
 [ -n "$IMAGES_ROOT" ] && [ -d "$IMAGES_ROOT/$IMG" ] || result_fail "image not found: $IMG"
 [ -n "$DEV" ] && [ -b "$DEV" ] || result_fail "no such target device: $DEV"
 
+# --- the boot drive is never a target, whatever it reports itself as -------
+#
+# This restore only ever checked the removable flag. That held because every stick
+# this station has booted from reports removable=1. It stops holding the moment
+# the boot drive is a portable SSD, an SSD-class stick, or one of the SanDisk
+# models the vendor has since switched to report as a FIXED disk - all of which
+# are exactly what someone buys to make the boot faster. Then removable=0, the
+# check passes, and nothing between the operator and shred knew the difference.
+#
+# So two independent questions, each enough on its own:
+#   als_disk_is_usb  - is it attached over USB? (transport, not the flag)
+#   als_boot_disk    - is it the disk the running system came off?
+#
+# Defined HERE, not in find-media.sh. That file is loaded behind an [ -r ] guard;
+# if it were ever missing, a check living in it would be "command not found",
+# which an `if` reads as false - so the refusal would silently PASS. A safety
+# check has to fail closed, which means it lives in the file that does the wiping.
+
+# 0 if the disk is attached over USB. $1 = kernel name, e.g. sdb.
+als_disk_is_usb() {
+  local tran
+  tran=$(lsblk -dno TRAN "/dev/$1" 2>/dev/null | tr -d '[:space:]')
+  [ "$tran" = "usb" ] && return 0
+  # Belt and braces: lsblk can report TRAN empty for some bridges. The sysfs
+  # path of a USB-attached disk always runs through the USB controller.
+  case "$(readlink -f "/sys/block/$1" 2>/dev/null)" in
+    */usb[0-9]*) return 0 ;;
+  esac
+  return 1
+}
+
+# Prints the kernel name of the disk the running system booted from (e.g. sdb),
+# or nothing if it cannot be determined.
+als_boot_disk() {
+  local mp src pk
+  for mp in "${ALS_MEDIA:-}" /cdrom /run/archiso/bootmnt /isodevice; do
+    [ -n "$mp" ] || continue
+    src=$(findmnt -no SOURCE "$mp" 2>/dev/null) || continue
+    [ -b "$src" ] || continue
+    pk=$(lsblk -no PKNAME "$src" 2>/dev/null | head -n1 | tr -d '[:space:]')
+    # A whole-disk mount has no parent; the source IS the disk.
+    [ -n "$pk" ] && { printf '%s' "$pk"; return 0; }
+    printf '%s' "$(basename "$src")"
+    return 0
+  done
+  return 1
+}
+
 # Safety: never write to the boot media / any removable disk.
 kname="${DEV#/dev/}"
 if [ "$(cat "/sys/block/$kname/removable" 2>/dev/null)" = "1" ]; then
@@ -54,6 +102,12 @@ fi
 # /sys/block/nvme0n1p3), and restoring a whole-disk image onto one partition
 # produces a machine that will not boot. Insist on a whole disk.
 [ -d "/sys/block/$kname" ] || result_fail "$DEV is not a whole disk"
+# The removable flag is not enough - see the helpers above. A restore lays an
+# entire OS image over the target, so hitting the boot drive is not recoverable.
+als_disk_is_usb "$kname" && result_fail "refusing $DEV - it is attached over USB"
+_boot=$(als_boot_disk)
+[ -n "$_boot" ] && [ "$kname" = "$_boot" ] && \
+  result_fail "refusing $DEV - it is the disk this system is running from"
 
 command -v ocs-sr >/dev/null 2>&1 || \
   result_fail "Clonezilla (ocs-sr) is not installed on this boot media"
