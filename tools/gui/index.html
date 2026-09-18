@@ -1246,6 +1246,14 @@ async function loadToolCheck(){
       h+='<div style="margin-top:6px;color:var(--mut2)">Slowest units:</div>';
       for(const l of b.blame) h+='<div style="font-size:12px">'+esc(l)+'</div>';
     }
+    // Why the shutdown splash is still Ubuntu's. Four facts, because four
+    // different causes produce the same screen and they need different fixes.
+    if(b.plymouth){
+      h+='<div style="margin-top:8px;color:var(--mut2)">Shutdown splash:</div>';
+      for(const k of ['conf','theme','module','default_alt','initramfs']){
+        if(b.plymouth[k]) h+='<div style="font-size:12px">'+esc(k)+': '+esc(b.plymouth[k])+'</div>';
+      }
+    }
     h+='</div>';
   } else if(b && b.error){
     h+='<div style="margin-top:12px;color:var(--mut2)">Boot timing unavailable: '+esc(b.error)+'</div>';

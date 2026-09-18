@@ -1466,6 +1466,67 @@ def _analyze(args, timeout=8):
     return (r.stdout or "").strip()
 
 
+def plymouth_state():
+    """Why the shutdown splash is Ubuntu's and not ours.
+
+    Our theme sets UseFirmwareBackground=false - a flat navy fill, no firmware
+    logo. The operator's photograph of the shutdown screen shows the Dell logo
+    AS the background with the Ubuntu wordmark under it, which is bgrt. So our
+    theme is not drawing; plymouthd is falling back. als.plymouth's own comment
+    predicted this exact failure mode: "the failure mode of this file is a
+    visible Ubuntu logo, never a black screen."
+
+    Four things could cause it and they need different fixes, so this reports
+    all four rather than betting on one:
+      conf      - is OUR plymouthd.conf the one in the running root?
+      theme     - is the als theme actually there, in the running root?
+      module    - is two-step.so present? als names it, and a theme whose
+                  module is missing loads nothing and falls back.
+      initramfs - does /run/initramfs exist? systemd pivots there to shut down
+                  a live system, and a plymouthd re-executed from there reads
+                  ITS theme, not the real root's. If this exists and has no als
+                  theme in it, that is the answer.
+    """
+    out = {}
+
+    conf = "/etc/plymouth/plymouthd.conf"
+    try:
+        with open(conf, errors="replace") as fh:
+            body = fh.read()
+        theme = ""
+        for line in body.splitlines():
+            if line.strip().lower().startswith("theme="):
+                theme = line.split("=", 1)[1].strip()
+        out["conf"] = "Theme=%s" % (theme or "(not set)")
+    except OSError as exc:
+        out["conf"] = "unreadable: %s" % exc
+
+    out["theme"] = ("present" if os.path.isfile(
+        "/usr/share/plymouth/themes/als/als.plymouth") else "MISSING from the running root")
+
+    mods = sorted(os.path.basename(m) for m in
+                  glob.glob("/usr/lib/*/plymouth/*.so") + glob.glob("/lib/*/plymouth/*.so"))
+    out["module"] = ("two-step.so present" if "two-step.so" in mods
+                     else "two-step.so MISSING - als cannot load")
+    out["modules"] = ", ".join(mods) or "none found"
+
+    try:
+        alt = os.path.realpath("/etc/alternatives/default.plymouth")
+        out["default_alt"] = alt if os.path.exists(alt) else "%s (dangling)" % alt
+    except OSError:
+        out["default_alt"] = "unknown"
+
+    if os.path.isdir("/run/initramfs"):
+        has = os.path.isdir("/run/initramfs/usr/share/plymouth/themes/als")
+        out["initramfs"] = ("/run/initramfs EXISTS and %s the als theme - this is "
+                            "where shutdown draws from"
+                            % ("HAS" if has else "DOES NOT HAVE"))
+    else:
+        out["initramfs"] = "/run/initramfs does not exist (shutdown uses the real root)"
+
+    return out
+
+
 def boot_timing():
     out = {}
 
@@ -1499,6 +1560,11 @@ def boot_timing():
                               % (os.path.basename(f), info["comp"],
                                  human_size(info["block"]), human_size(info["size"])))
     out["layers"] = layers
+
+    try:
+        out["plymouth"] = plymouth_state()
+    except Exception as exc:  # noqa: BLE001
+        out["plymouth"] = {"conf": "check failed: %s" % exc}
     return out
 
 
