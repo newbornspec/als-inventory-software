@@ -7,6 +7,7 @@
 # start, and the two should never travel on the same command by accident.
 #
 #   .\tools\prep-stick.ps1              # report only, changes nothing
+#   .\tools\prep-stick.ps1 -Benchmark  # + measure how fast this PC reads it
 #   .\tools\prep-stick.ps1 -Apply       # back up first, then apply
 #   .\tools\prep-stick.ps1 -Apply -Drive E:
 #
@@ -28,6 +29,7 @@
 param(
     [string] $Drive,
     [switch] $Apply,
+    [switch] $Benchmark,
     [string] $BackupTo,
     [string] $NewLabel = 'ALSAUDIT'
 )
@@ -40,6 +42,22 @@ function HumanSize { param([double]$b)
     if ($b -ge 1GB) { return ('{0:N2} GB' -f ($b / 1GB)) }
     if ($b -ge 1MB) { return ('{0:N1} MB' -f ($b / 1MB)) }
     return ('{0:N0} KB' -f ($b / 1KB))
+}
+
+# ---------------------------------------------------------------- benchmark
+# Delegates to disk-read-test.ps1 rather than reading the file here.
+#
+# This function used to do the read itself with a plain FileStream, and it lied.
+# Cold it reported 34 MB/s; run again on the same file it reported 110, because
+# Windows had cached the file and the second run was reading RAM. The decision
+# resting on that number is whether to buy a drive or just move it to another
+# socket, so a threefold swing is not a rounding error - it is the wrong answer.
+# disk-read-test.ps1 bypasses the cache outright. One implementation, correct.
+function Invoke-ReadBenchmark {
+    param([string] $Target)
+    $t = Join-Path $toolsDir 'disk-read-test.ps1'
+    if (-not (Test-Path $t)) { Write-Output '  disk-read-test.ps1 is missing from tools'; return }
+    & $t -Drive $Target | ForEach-Object { Write-Output "  $_" }
 }
 
 function Find-AuditStick {
@@ -158,8 +176,15 @@ if (Test-Path $stampFile) {
     Get-Content $stampFile | ForEach-Object { Write-Output "  $_" }
 }
 
+if ($Benchmark) {
+    Write-Output ''
+    Write-Output '--- READ SPEED --------------------------------------------------'
+    Invoke-ReadBenchmark -Target $Drive
+}
+
 if (-not $Apply) {
     Write-Output ''
+    if (-not $Benchmark) { Write-Output 'Add -Benchmark to measure how fast this machine reads the drive.' }
     Write-Output 'Re-run with -Apply to back the stick up and install the boot changes.'
     exit 0
 }
