@@ -423,16 +423,28 @@ WIPE_STATUS=""; WIPE_METHOD=""
 # Verification pass: sampled read-back confirming the device now reads as zeros
 # at the start, middle and near the end. Returns 0 (verified) or 1 (not clean).
 verify_zero() {
-  local dev="$1" sz mb offs o n
+  local dev="$1" sz mb offs o want
   sz=$(blockdev --getsize64 "$dev" 2>/dev/null)
   case "$sz" in ''|*[!0-9]*) return 1;; esac
   [ "$sz" -gt 0 ] || return 1
+  # Read the DRIVE, not the page cache: flush it, then read with O_DIRECT. A
+  # cached copy of what was just written would otherwise answer for the disk.
+  blockdev --flushbufs "$dev" >/dev/null 2>&1
   mb=$(( sz / 1048576 ))
   offs="0"
   [ "$mb" -gt 128 ] && offs="0 $(( mb / 2 )) $(( mb - 32 ))"
+  want=33554432
+  [ "$sz" -lt "$want" ] && want="$sz"
   for o in $offs; do
-    n=$(dd if="$dev" bs=1M count=32 skip="$o" 2>/dev/null | tr -d '\0' | wc -c | tr -d ' ')
-    [ "${n:-1}" = "0" ] || return 1
+    # The whole window must come back, and every byte of it must be zero.
+    #
+    # This used to count the NON-zero bytes in whatever dd returned. A read
+    # that failed returned nothing - zero non-zero bytes - so a drive that
+    # could not be read at all "verified (reads as zeros)". cmp settles both
+    # questions in one pass: it compares exactly $want bytes against zeros,
+    # and a short or empty read hits EOF first and fails.
+    dd if="$dev" bs=1M count=32 skip="$o" iflag=direct 2>/dev/null \
+      | cmp -s -n "$want" - /dev/zero || return 1
   done
   return 0
 }
@@ -517,6 +529,23 @@ firmware_erase() {
   esac
 }
 
+# The honest name for an OVERWRITE, by medium.
+#
+# On a hard disk an overwrite reaches every sector the operating system can
+# address: NIST SP 800-88r2 "Clear". On flash it reaches only the
+# user-addressable blocks - over-provisioned and retired blocks sit behind the
+# controller, and no host write touches them. r2 still calls that Clear (its
+# 3.1.1 defines Clear by user-addressable locations), but a certificate must
+# say what the method cannot reach. The owner's decision (19 Sep 2026): keep
+# such drives sellable, labelled honestly, rather than destroy every SSD whose
+# firmware erase is unavailable - which on second-hand SATA SSDs is usually a
+# BIOS freeze. Anything not KNOWN to be rotational is treated as flash:
+# understating a hard disk costs nothing; overstating an SSD is the defect this
+# replaced.
+clear_label() {
+  if [ "${1:-}" = "1" ]; then echo "NIST Clear"; else echo "NIST Clear; flash: user-addressable blocks only"; fi
+}
+
 wipe_internal_drives() {
   [ "${AUDIT_WIPE:-0}" = "1" ] || return 0
 
@@ -557,17 +586,19 @@ WIPEEOF
     # 1) Firmware crypto/secure erase where the drive supports it (NIST Purge).
     local fw=0
     if firmware_erase "$dev" "$d"; then m="$M"; fw=1; fi
-    # 2) SSD TRIM discard.
-    if [ -z "$m" ] && [ "$rota" = "0" ] && command -v blkdiscard >/dev/null 2>&1 \
-       && blkdiscard -f "$dev" >/dev/null 2>&1; then
-      m="Block discard / TRIM (SSD)"
-    fi
+    # 2) NOT TRIM. blkdiscard used to sit here and be recorded as the wipe.
+    #    TRIM is a hint to the controller, not an erase: it may defer the work
+    #    or never do it, and the data stays in NAND until garbage collection.
+    #    A TRIMmed drive then reads back zeros BY DESIGN (DRAT/RZAT), so
+    #    verify_zero passed it and the certificate said "unrecoverable" about
+    #    data that could still be there. Neither NIST 800-88 nor IEEE 2883
+    #    counts discard as a sanitisation. See gui_wipe_one for the same fix.
     # 3) Overwrite fallback (NIST Clear). Streams progress — a full pass on a
     #    spinning disk takes hours and must not look like a hang.
     if [ -z "$m" ]; then
       echo "  overwriting (this can take hours on a large disk) …"
       if run_overwrite "$dev"; then
-        m="Overwrite — shred 1 pass + zero (NIST Clear)"
+        m="Overwrite — shred 1 pass + zero ($(clear_label "$rota"))"
       else
         echo "  overwrite failed: ${OVR_ERR:-unknown error}"
       fi
@@ -584,7 +615,7 @@ WIPEEOF
       else
         echo "  verify failed — falling back to a full overwrite pass …"
         if run_overwrite "$dev" && verify_zero "$dev"; then
-          m="Overwrite — shred 1 pass + zero (NIST Clear) — verified (reads as zeros)"; verified=1
+          m="Overwrite — shred 1 pass + zero ($(clear_label "$rota")) — verified (reads as zeros)"; verified=1
         fi
       fi
     fi
@@ -754,20 +785,19 @@ gui_wipe_one() {
 
   if firmware_erase "$dev" "$d"; then m="$M"; fw=1; fi
 
-  if [ -z "$m" ] && [ "$rota" = "0" ] && command -v blkdiscard >/dev/null 2>&1; then
-    local bderr
-    if bderr=$(blkdiscard -f "$dev" 2>&1); then
-      m="Block discard / TRIM (SSD)"
-    else
-      [ -n "$bderr" ] && reason="blkdiscard: $(printf '%s' "$bderr" | head -n1)"
-    fi
-  fi
+  # No TRIM here, on purpose. This used to run blkdiscard when the firmware
+  # erase failed on an SSD and record it as the wipe - then verify_zero passed
+  # it, because a TRIMmed drive reads back zeros by design whether or not the
+  # NAND was erased. It produced a certificate saying "unrecoverable" about data
+  # that could still be there, for every SSD whose firmware erase failed -
+  # including when the operator had explicitly chosen "overwrite". An SSD now
+  # falls through to a real overwrite, labelled for what it reaches.
 
   if [ -z "$m" ]; then
     if [ "$want" = "zero" ]; then
       echo "  Overwriting — single zero pass (NIST 800-88 Clear) …"
       if run_overwrite "$dev" 1; then
-        m="Overwrite — single zero pass (NIST Clear)"
+        m="Overwrite — single zero pass ($(clear_label "$rota"))"
       else
         reason="${OVR_ERR:-overwrite failed}"
         echo "  Overwrite failed: $reason"
@@ -775,7 +805,7 @@ gui_wipe_one() {
     else
       echo "  Overwriting (this is the slow path) …"
       if run_overwrite "$dev"; then
-        m="Overwrite — shred 1 pass + zero (NIST Clear)"
+        m="Overwrite — shred 1 pass + zero ($(clear_label "$rota"))"
       else
         reason="${OVR_ERR:-overwrite failed}"
         echo "  Overwrite failed: $reason"
@@ -790,12 +820,12 @@ gui_wipe_one() {
     elif [ "$fw" = "1" ]; then
       verified=1; m="$m — controller-confirmed"
     else
-      # Firmware/TRIM claimed success but the disk does not read back as zeros.
+      # The firmware claimed success but the disk does not read back as zeros.
       # Fall back to a full overwrite — announced, because it takes hours.
       echo "  Verify failed — falling back to a full overwrite pass …"
       if [ "$want" = "zero" ]; then p=1; else p=2; fi
       if run_overwrite "$dev" "$p" && verify_zero "$dev"; then
-        m="Overwrite — $([ "$p" = "1" ] && echo "single zero pass" || echo "shred 1 pass + zero") (NIST Clear) — verified (reads as zeros)"
+        m="Overwrite — $([ "$p" = "1" ] && echo "single zero pass" || echo "shred 1 pass + zero") ($(clear_label "$rota")) — verified (reads as zeros)"
         verified=1
       else
         reason="${OVR_ERR:-verification failed: device does not read back as zeros}"
