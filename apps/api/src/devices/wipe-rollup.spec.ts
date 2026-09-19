@@ -289,7 +289,11 @@ describe('rollupWipe - manual records ("allow, but labelled")', () => {
     };
     // Typed an hour after a legacy station failure: refused, as in wave 1.
     const r = rollupWipe([legacyFailed, manual('wiped', 60)]);
-    expect(r).toMatchObject({ verdict: 'failed', reason: 'mixed', basis: 'legacy' });
+    expect(r).toMatchObject({
+      verdict: 'failed',
+      reason: 'mixed',
+      basis: 'legacy',
+    });
     // Two days later: the failure is history, the manual wipe stands.
     expect(rollupWipe([legacyFailed, manual('wiped', 48 * 60)]).verdict).toBe(
       'wiped',
