@@ -157,6 +157,8 @@ san 4 "$L/stale2"; [ "$POLLS" -eq 62 ] && ok "the deadline actually used is the 
 # read-only wrappers. sysfs is a fixture tree under ALS_SYS_ROOT, plain files
 # and directories only (no symlink has to work, so Git Bash runs it too).
 FE="$(extract "$SRC" als_nvme_ctrl)
+$(extract "$SRC" fw_why)
+$(extract "$SRC" fw_tried)
 $(extract "$SRC" firmware_erase)"
 case "$FE" in *'als_nvme_ctrl() {'*'firmware_erase() {'*) ;; *) echo "could not extract firmware_erase - refusing to run"; exit 1 ;; esac
 for t in sed head; do
@@ -332,7 +334,9 @@ echo "ATA secure erase: the sanitisation level comes from the erase actually run
 # writes only the user area). Every other test stubs firmware_erase and injects
 # the level, so this runs the real ata_secure_erase with `hdparm` a shell
 # FUNCTION that logs and answers -I from $INFO - never a device.
-ATA="$(extract "$SRC" ata_secure_erase)"
+ATA="$(extract "$SRC" fw_why)
+$(extract "$SRC" fw_tried)
+$(extract "$SRC" ata_secure_erase)"
 case "$ATA" in *'ata_secure_erase() {'*) ;; *) echo "could not extract ata_secure_erase - refusing to run"; exit 1 ;; esac
 for t in tr; do
   real=$(command -v "$t") || { echo "missing $t"; exit 1; }

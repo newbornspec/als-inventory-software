@@ -745,15 +745,39 @@ verify_erased() {
   return 0
 }
 
+# Why a firmware method was not used, and which ones were (plan step 38).
+#
+# A requested Purge could quietly become an overwrite - most often on a SATA
+# SSD the BIOS left frozen - and the record said only what was achieved, never
+# that something stronger had been asked for, nor why it did not happen.
+# firmware_erase and ata_secure_erase now set, at every way out:
+#   FW_TRIED  comma list, in order, of the firmware methods actually ISSUED to
+#             the drive (nvme-sanitize-crypto, nvme-sanitize-block,
+#             nvme-format-crypto, nvme-format-secure, ata-secure-erase-enhanced,
+#             ata-secure-erase)
+#   FW_WHY    the reason the FIRST (strongest) choice was not the result:
+#             tool_missing | unsupported | frozen | failed | controller_ambiguous
+#             | namespaces (a format would not cover every namespace);
+#             gui_wipe_one adds verify_failed (the drive said done, the read-back
+#             found the old data). The first reason wins: that is the answer to
+#             "why was the stronger method not used".
+# Both empty when the operator asked for an overwrite: nothing fell back.
+fw_why() {
+  [ -n "${FW_WHY:-}" ] || FW_WHY="$1"
+}
+fw_tried() {
+  FW_TRIED="${FW_TRIED:+$FW_TRIED,}$1"
+}
+
 # ATA Secure Erase for one SATA/ATA drive via hdparm, honouring the wanted method
 # ("crypto" needs enhanced/SED support). Sets M. Returns 0 on success. Handles the
 # BIOS "frozen" state (optional suspend/resume) and clears the temporary password
 # if the erase fails so the drive is never left locked.
 ata_secure_erase() {
-  local dev="$1" want="$2" info enh="" eraseflag="--security-erase" pass="ALSwipe1" label="ATA secure erase"
-  command -v hdparm >/dev/null 2>&1 || return 1
+  local dev="$1" want="$2" info enh="" eraseflag="--security-erase" pass="ALSwipe1" label="ATA secure erase" tried
+  command -v hdparm >/dev/null 2>&1 || { fw_why tool_missing; return 1; }
   info=$(hdparm -I "$dev" 2>/dev/null | tr '\t' ' ' | tr -s ' ')
-  printf '%s\n' "$info" | grep -qi 'Security:' || return 1
+  printf '%s\n' "$info" | grep -qi 'Security:' || { fw_why unsupported; echo "    $dev does not offer the ATA security feature set."; return 1; }
   printf '%s\n' "$info" | grep -qi 'supported: enhanced erase' && enh="yes"
 
   if ! printf '%s\n' "$info" | grep -qi 'not frozen'; then
@@ -762,17 +786,19 @@ ata_secure_erase() {
       rtcwake -m mem -s 6 >/dev/null 2>&1; sleep 2
       info=$(hdparm -I "$dev" 2>/dev/null | tr '\t' ' ' | tr -s ' ')
     fi
-    printf '%s\n' "$info" | grep -qi 'not frozen' || { echo "    $dev still frozen — will overwrite instead."; return 1; }
+    printf '%s\n' "$info" | grep -qi 'not frozen' || { fw_why frozen; echo "    $dev still frozen — will overwrite instead."; return 1; }
   fi
 
   if [ "$want" = "crypto" ]; then
-    [ -n "$enh" ] || return 1
+    [ -n "$enh" ] || { fw_why unsupported; echo "    $dev does not support the enhanced erase that 'crypto' needs."; return 1; }
     eraseflag="--security-erase-enhanced"; label="ATA enhanced secure erase (crypto on self-encrypting drives)"
   elif [ -n "$enh" ]; then
     eraseflag="--security-erase-enhanced"; label="ATA enhanced secure erase"
   fi
+  if [ "$eraseflag" = "--security-erase-enhanced" ]; then tried=ata-secure-erase-enhanced; else tried=ata-secure-erase; fi
+  fw_tried "$tried"
 
-  hdparm --user-master u --security-set-pass "$pass" "$dev" >/dev/null 2>&1 || return 1
+  hdparm --user-master u --security-set-pass "$pass" "$dev" >/dev/null 2>&1 || { fw_why failed; echo "    the drive refused the temporary security password."; return 1; }
   if hdparm --user-master u $eraseflag "$pass" "$dev" >/dev/null 2>&1; then
     # NIST SP 800-88: the ENHANCED erase (which also reaches reallocated and
     # vendor-reserved areas) is a Purge; the normal one writes only the user
@@ -782,6 +808,7 @@ ata_secure_erase() {
     return 0
   fi
   hdparm --user-master u --security-disable "$pass" "$dev" >/dev/null 2>&1
+  fw_why failed
   echo "    ATA secure erase failed on $dev — will overwrite instead."
   return 1
 }
@@ -1091,14 +1118,15 @@ als_nvme_ctrl() {
 
 # Firmware crypto / secure erase for ONE drive per AUDIT_WIPE_METHOD
 # (auto|crypto|secure|overwrite). Sets M, returns 0 on success (else the caller
-# falls back to an overwrite - never TRIM, which is not an erase).
+# falls back to an overwrite - never TRIM, which is not an erase). Sets FW_TRIED
+# and FW_WHY (see fw_why) on every path.
 firmware_erase() {
   local dev="$1" d="$2" want="${AUDIT_WIPE_METHOD:-auto}"
-  M=""
+  M=""; FW_WHY=""; FW_TRIED=""
   case "$want" in overwrite|zero) return 1 ;; esac
   case "$d" in
     nvme*)
-      command -v nvme >/dev/null 2>&1 || return 1
+      command -v nvme >/dev/null 2>&1 || { fw_why tool_missing; echo "    nvme-cli is not installed."; return 1; }
       # NVMe (plan step 36). What used to happen: `nvme format` on the
       # namespace FIRST, the sanitize only if format failed, the sanitize sent
       # to a controller guessed from the name, and nobody asked how many
@@ -1122,6 +1150,7 @@ firmware_erase() {
       local err="" idc sanicap="" fna=0 nsl h own="" nsids="" others="" n=0 fmt_ok=0 onedrive
       if ! als_nvme_ctrl "$d"; then
         echo "    $NV_WHY — no NVMe firmware command is sent to a guessed controller."
+        fw_why controller_ambiguous
         return 1
       fi
       local ctrl="$NV_CTRL"
@@ -1173,30 +1202,43 @@ firmware_erase() {
       fi
       if [ "$want" = "crypto" ] || [ "$want" = "auto" ]; then
         if [ "$can4" = 1 ]; then
+          fw_tried nvme-sanitize-crypto
           nvme_sanitize "$ctrl" 4 && { M="NVMe cryptographic erase (sanitize)"; FW_LEVEL=purge; return 0; }
+          fw_why failed
         else
+          fw_why unsupported
           echo "    the controller does not support a sanitize crypto erase (SANICAP $sanicap)"
         fi
       fi
       if [ "$want" = "secure" ] || [ "$want" = "auto" ]; then
         if [ "$can2" = 1 ]; then
+          fw_tried nvme-sanitize-block
           nvme_sanitize "$ctrl" 2 && { M="NVMe block-erase sanitize"; FW_LEVEL=purge; return 0; }
+          fw_why failed
         else
+          fw_why unsupported
           echo "    the controller does not support a sanitize block erase (SANICAP $sanicap)"
         fi
       fi
       if [ "$fmt_ok" = 1 ]; then
         if [ "$want" != "secure" ] && [ $(( fna & 4 )) -ne 0 ]; then
+          fw_tried nvme-format-crypto
           err=$(nvme format "$dev" -s 2 --force 2>&1) && { M="NVMe cryptographic erase (nvme format -s2)"; FW_LEVEL=purge; return 0; }
+          fw_why failed
         fi
         if [ "$want" != "crypto" ]; then
+          fw_tried nvme-format-secure
           err=$(nvme format "$dev" -s 1 --force 2>&1) && { M="NVMe secure erase (nvme format -s1)"; FW_LEVEL=purge; return 0; }
+          fw_why failed
         fi
       elif [ -n "$others" ]; then
+        fw_why namespaces
         echo "    nvme format not used: it would erase only $d, not the drive's other namespace(s) $others (FNA $fna)."
       else
+        fw_why namespaces
         echo "    nvme format not used: the drive's namespaces could not be listed, so it is not known to cover the whole drive."
       fi
+      fw_why unsupported
       echo "    NVMe firmware erase unavailable${err:+ — $(printf '%s' "$err" | head -n1)}"
       return 1
       ;;
@@ -1221,6 +1263,81 @@ firmware_erase() {
 # replaced.
 clear_label() {
   if [ "${1:-}" = "1" ]; then echo "NIST Clear"; else echo "NIST Clear; flash: user-addressable blocks only"; fi
+}
+
+# The drive's own count of bad sectors (plan step 38): SMART attribute 5
+# (Reallocated_Sector_Ct) and 197 (Current_Pending_Sector). A reallocated
+# sector is one the drive retired and replaced from its spares; the OLD sector
+# still holds whatever was on it, and no overwrite - nor a NORMAL ATA secure
+# erase, which writes only the user area - can address it again. So these
+# counts decide what an overwrite or a normal secure erase can honestly claim.
+#
+# Read with a time limit (a sick drive can hang a SMART read for minutes), and
+# never able to fail the wipe: whatever goes wrong, the counts are just empty.
+# Sets SC_REALLOC and SC_PENDING (a number, or empty = could not be read).
+# Only the RAW_VALUE's leading digits are taken ("0", "8 (0 2)").
+smart_counts() {
+  local out
+  SC_REALLOC=""; SC_PENDING=""
+  command -v smartctl >/dev/null 2>&1 || return 0
+  if command -v timeout >/dev/null 2>&1; then
+    out=$(timeout 30 smartctl -A "$1" 2>/dev/null)
+  else
+    out=$(smartctl -A "$1" 2>/dev/null)
+  fi
+  SC_REALLOC=$(printf '%s\n' "$out" | awk '$1 == "5" && NF >= 10 { print $10; exit }' | sed 's/[^0-9].*//')
+  SC_PENDING=$(printf '%s\n' "$out" | awk '$1 == "197" && NF >= 10 { print $10; exit }' | sed 's/[^0-9].*//')
+  return 0
+}
+
+# What a wipe that WORKED and was read back may claim (plan step 38). Pure: no
+# I/O, so the rules below are tested on their own.
+#   $1 kind      purge      - ENHANCED ATA secure erase, NVMe sanitize / format
+#                ata-normal - a NORMAL ATA secure erase (user area only)
+#                overwrite  - shred / zero pass
+#   $2 rotational (1 = hard disk; anything else is treated as flash)
+#   $3..$6 reallocated before, pending before, reallocated after, pending after
+#          (empty = not read)
+#   $7 smart     1 (default) = the counts apply to this drive; 0 = they do not
+#                exist on it (NVMe), so there is nothing to have failed to read
+# Prints the NIST SP 800-88 level on the first line, then one limitation per
+# line:
+#   purge                         -> purge; the enhanced erase and a sanitize
+#                                    reach reallocated and spare areas too
+#   ata-normal or overwrite with any reallocated/pending sectors
+#                                 -> clear, with a limitation naming the counts
+#                                    (owner decision D38, reversible: labelled
+#                                    Clear rather than failed or destroyed)
+#   counts that could not be read -> a limitation saying so
+#   overwrite on flash            -> clear, "flash: user-addressable blocks only"
+#   anything else                 -> none
+# NOTHING here ever turns an overwrite or a normal secure erase into purge.
+wipe_assess() {
+  local kind="$1" rota="$2" rb="$3" pb="$4" ra="$5" pa="$6" smart="${7:-1}" r="" p="" v
+  case "$kind" in
+    purge) echo purge; return 0 ;;
+    ata-normal|overwrite) echo clear ;;
+    *) echo none; return 0 ;;
+  esac
+  if [ "$kind" = overwrite ] && [ "$rota" != 1 ]; then
+    echo "flash: user-addressable blocks only - over-provisioned and retired flash blocks are not reached by an overwrite"
+  fi
+  [ "$smart" = 1 ] || return 0
+  # The larger of before and after, per count: a pending sector the overwrite
+  # made the drive reallocate moves from one count to the other.
+  for v in $rb $ra; do case "$v" in *[!0-9]*) ;; *) { [ -z "$r" ] || [ "$v" -gt "$r" ]; } && r="$v" ;; esac; done
+  for v in $pb $pa; do case "$v" in *[!0-9]*) ;; *) { [ -z "$p" ] || [ "$v" -gt "$p" ]; } && p="$v" ;; esac; done
+  if [ -z "$r" ] && [ -z "$p" ]; then
+    echo "SMART reallocated and pending sector counts could not be read, so sectors the drive has retired cannot be ruled out"
+  elif [ -z "$r" ]; then
+    echo "SMART reallocated sector count could not be read, so sectors the drive has retired cannot be ruled out"
+  elif [ -z "$p" ]; then
+    echo "SMART pending sector count could not be read"
+  fi
+  if [ "${r:-0}" -gt 0 ] || [ "${p:-0}" -gt 0 ]; then
+    echo "the drive reports ${r:-unknown} reallocated and ${p:-unknown} pending sectors (SMART 5/197); a retired sector cannot be addressed by $( [ "$kind" = overwrite ] && echo "an overwrite" || echo "a normal ATA secure erase" ), so its old contents may remain"
+  fi
+  return 0
 }
 
 # The text-mode wipe is RETIRED (owner decision D9, 19 Sep 2026; reversible).
@@ -1256,7 +1373,10 @@ wipe_internal_drives() {
 #   WIPE_RESULT {"status":"wiped|failed|refused","device":"/dev/sdX","method":"…",
 #                "reason":"…","toolVersion":…,"startedAt":…,"finishedAt":…,
 #                "drive":{"serialNumber":…},"methodRequested":…,
-#                "sanitisationLevel":"purge|clear|none","verification":"clean|found|unverified"}
+#                "sanitisationLevel":"purge|clear|none","verification":"clean|found|unverified",
+#                "hiddenAreas":…,"limitations":[…],"methodAttempted":"a,b",
+#                "fallbackReason":…,"smart":{"reallocatedBefore":…,…}}
+# (the fields after "verification" only on wiped/failed, and only when known)
 # "wiped" ALWAYS means the drive was read back afterwards and none of its old
 # data was recognisable. There is no status for "the drive said it worked".
 # "refused" means NOTHING was written: not a block device, removable, USB, the
@@ -1433,8 +1553,7 @@ als_drive_identity() {
 # One line of code on purpose: the tests extract functions up to the first line
 # that starts with "}", which a multi-line string would produce.
 wr_limit() {
-  [ -n "$1" ] && WR_LIMITS="${WR_LIMITS}${WR_LIMITS:+$'
-'}$1"
+  [ -n "$1" ] && WR_LIMITS="${WR_LIMITS}${WR_LIMITS:+$'\n'}$1"
   return 0
 }
 
@@ -1457,6 +1576,15 @@ wipe_result() {
   case "$DRV_ROTA" in 1) o_raw rotational true ;; 0) o_raw rotational false ;; esac
   o_s wwn "$DRV_WWN"
   drv=$(o_end)
+  # SMART bad-sector counts before and after (step 38); a count that could not
+  # be read is left out, and the object with it when none could.
+  local sm
+  o_begin
+  o_n reallocatedBefore "${WR_SM_RB:-}"
+  o_n pendingBefore "${WR_SM_PB:-}"
+  o_n reallocatedAfter "${WR_SM_RA:-}"
+  o_n pendingAfter "${WR_SM_PA:-}"
+  sm=$(o_end)
   # What was found in the drive's hidden areas (step 34) is part of the method:
   # "…; hidden areas: none". Only when the check ran (not on a refusal).
   local meth="$2"
@@ -1486,6 +1614,12 @@ wipe_result() {
     wiped|failed)
       o_s hiddenAreas "${WR_HIDDEN:-}"
       o_raw limitations "$(als_json_array "${WR_LIMITS:-}")"
+      # methodAttempted: every method issued, in order ("nvme-sanitize-crypto,
+      # overwrite"); fallbackReason: why the first choice was not the result
+      # (frozen | unsupported | tool_missing | failed | verify_failed | ...).
+      o_s methodAttempted "${WR_TRIED:-}"
+      o_s fallbackReason "${WR_FALLBACK:-}"
+      [ "$sm" = "{}" ] || o_raw smart "$sm"
       ;;
   esac
   echo "WIPE_RESULT $(o_end)"
@@ -1495,6 +1629,7 @@ gui_wipe_one() {
   local dev="$1" want="${2:-auto}" expect="${3:-}" d rota m verified fw
   WR_DEV="$dev"; WR_WANT="$want"; WR_STARTED=$(als_utc_now); WR_VERIFY=""; WR_LEVEL=""
   WR_HIDDEN=""; WR_HIDDEN_TXT=""; WR_LIMITS=""; WR_HPA_REMOVED=0
+  WR_TRIED=""; WR_FALLBACK=""; WR_SM_RB=""; WR_SM_PB=""; WR_SM_RA=""; WR_SM_PA=""
   DRV_SERIAL=""; DRV_MODEL=""; DRV_SIZE=""; DRV_TRAN=""; DRV_ROTA=""; DRV_WWN=""
   if [ -z "$dev" ] || [ ! -b "$dev" ]; then
     echo "Refusing: ${dev:-(no device given)} is not a block device."
@@ -1622,8 +1757,17 @@ gui_wipe_one() {
   local parts vr
   parts=$(als_part_starts "$dev" "$d")
 
-  FW_LEVEL=""
+  # The bad-sector counts BEFORE the erase (plan step 38). Not on NVMe/eMMC,
+  # which have no attributes 5/197; never able to fail the wipe.
+  local smart_ok=1 kind=""
+  case "${d##*/}" in nvme*|mmcblk*) smart_ok=0 ;; esac
+  if [ "$smart_ok" = 1 ]; then
+    smart_counts "$dev"; WR_SM_RB="$SC_REALLOC"; WR_SM_PB="$SC_PENDING"
+  fi
+
+  FW_LEVEL=""; FW_WHY=""; FW_TRIED=""
   if firmware_erase "$dev" "$d"; then m="$M"; fw=1; fi
+  WR_TRIED="$FW_TRIED"; WR_FALLBACK="$FW_WHY"
 
   # No TRIM here, on purpose. This used to run blkdiscard when the firmware
   # erase failed on an SSD and record it as the wipe - then the zeros check
@@ -1645,8 +1789,9 @@ gui_wipe_one() {
     verify_erased "$dev" firmware "$parts"; vr=$?
     case "$vr" in
       0) verified=1; WR_VERIFY=clean; WR_LEVEL="${FW_LEVEL:-clear}"
+         if [ "$WR_LEVEL" = purge ]; then kind=purge; else kind=ata-normal; fi
          m="$m — verified (reads as $VE_LABEL)" ;;
-      1) WR_VERIFY=found
+      1) WR_VERIFY=found; WR_FALLBACK=verify_failed
          echo "  OLD DATA STILL PRESENT after $m: $VE_WHY."
          echo "  The drive reported success but did not erase. Falling back to a full"
          echo "  overwrite — this is the slow path and can take hours …"
@@ -1660,6 +1805,7 @@ gui_wipe_one() {
   if [ -z "$m" ] && [ -z "$reason" ]; then
     if [ "$want" = "zero" ]; then
       echo "  Overwriting — single zero pass (NIST 800-88 Clear) …"
+      WR_TRIED="${WR_TRIED:+$WR_TRIED,}overwrite-zero"
       if run_overwrite "$dev" 1; then
         m="Overwrite — single zero pass ($(clear_label "$rota"))"
       else
@@ -1668,6 +1814,7 @@ gui_wipe_one() {
       fi
     else
       echo "  Overwriting (this is the slow path) …"
+      WR_TRIED="${WR_TRIED:+$WR_TRIED,}overwrite"
       if run_overwrite "$dev"; then
         m="Overwrite — shred 1 pass + zero ($(clear_label "$rota"))"
       else
@@ -1681,7 +1828,7 @@ gui_wipe_one() {
       echo "Verifying: reading the drive back …"
       verify_erased "$dev" overwrite "$parts"; vr=$?
       case "$vr" in
-        0) verified=1; WR_VERIFY=clean; WR_LEVEL=clear
+        0) verified=1; WR_VERIFY=clean; WR_LEVEL=clear; kind=overwrite
            m="$m — verified (reads as zeros)" ;;
         1) WR_VERIFY=found; reason="verification failed: $VE_WHY" ;;
         *) WR_VERIFY=unverified; reason="could not verify the overwrite: $VE_WHY" ;;
@@ -1702,10 +1849,25 @@ gui_wipe_one() {
     fi
   fi
 
+  # The counts AFTER the erase: an overwrite can make a pending sector get
+  # reallocated. Read on success and failure alike - a failed wipe's record
+  # is where a dying drive shows.
+  if [ "$smart_ok" = 1 ]; then
+    smart_counts "$dev"; WR_SM_RA="$SC_REALLOC"; WR_SM_PA="$SC_PENDING"
+  fi
+
   if [ -n "$m" ] && [ "$verified" = "1" ] && [ -z "$reason" ]; then
+    # The level the record may claim, and what it cannot reach (step 38).
+    local assess l first=1
+    assess=$(wipe_assess "$kind" "$rota" "$WR_SM_RB" "$WR_SM_PB" "$WR_SM_RA" "$WR_SM_PA" "$smart_ok")
+    while IFS= read -r l; do
+      if [ "$first" = 1 ]; then first=0; WR_LEVEL="$l"; else wr_limit "$l"; fi
+    done <<< "$assess"
     echo "✓ $m"
     echo "  Read back ${VE_MIB} MiB across the drive: no old data found."
     echo "  Sanitisation level: $WR_LEVEL (NIST SP 800-88)."
+    [ -n "$WR_LIMITS" ] && printf '%s\n' "$WR_LIMITS" | sed 's/^/  Limitation: /'
+    [ -n "$WR_FALLBACK" ] && echo "  Requested '$want'; the stronger method was not used: $WR_FALLBACK."
     wipe_result wiped "$m" ""
     return 0
   fi

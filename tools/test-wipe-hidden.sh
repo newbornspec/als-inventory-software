@@ -168,7 +168,7 @@ $(extract "$SRC" ata_hpa_remove)
 $(extract "$SRC" gui_wipe_one | sed 's/\[ ! -b "\$dev" \]/[ ! -e "$dev" ]/')"
 case "$FUNCS" in *'ata_hidden_areas() {'*'[ ! -e "$dev" ]'*) ;; *) echo "could not extract gui_wipe_one / ata_hidden_areas - refusing to run"; exit 1 ;; esac
 # Every function gui_wipe_one needs that this harness does not stub must be here.
-for f in smart_counts wipe_assess als_wipe_lock; do
+for f in smart_counts wipe_assess als_wipe_lock als_wipe_unlock; do
   if grep -q "^$f() {" "$SRC"; then FUNCS="$FUNCS
 $(extract "$SRC" "$f")"; fi
 done
@@ -192,7 +192,8 @@ blockdev() {
   esac
 }
 sleep() { :; }
-smartctl() { return 1; }
+smartctl() { echo "  5 Reallocated_Sector_Ct   0x0033   100   100   010    Pre-fail  Always       -       0"
+             echo "197 Current_Pending_Sector  0x0012   100   100   000    Old_age   Always       -       0"; }
 cat() { case "$*" in */queue/rotational) echo 1 ;; */removable) echo 0 ;; *) command cat "$@" ;; esac; }
 '
 
@@ -245,8 +246,7 @@ echo "ata_hidden_areas reads the drive's answer"
 ha "976771055 976773168" STUB_REAL=976773168
 [ "$HA" = hpa-present ] && [ "$HAS" = hpa-present ] && ok "'max sectors = 976771055/976773168, HPA is enabled': hpa-present" || bad "'max sectors = 976771055/976773168, HPA is enabled': hpa-present" "$HA / $HAV"
 [ "$HAV" = "present none 976771055 976773168" ] && ok "  ... HPA present, DCO none, current and native counts kept" || bad "  ... HPA present, DCO none, current and native counts kept" "$HAV"
-printf '%s
-' "$CALLS" | grep -qE 'hdparm -N p?[0-9]' && bad "  ... reading never sets anything" "$CALLS" || ok "  ... reading never sets anything"
+printf '%s\n' "$CALLS" | grep -qE 'hdparm -N p?[0-9]' && bad "  ... reading never sets anything" "$CALLS" || ok "  ... reading never sets anything"
 ha "976773168 976773168" STUB_REAL=976773168
 [ "$HA" = none ] && ok "current = native, DCO real max = native: none" || bad "current = native, DCO real max = native: none" "$HA / $HAV"
 ha "976773168 976773168" STUB_REAL=976773167
