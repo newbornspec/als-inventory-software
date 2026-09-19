@@ -97,12 +97,14 @@ def account(role="", permissions=None, workflow=""):
     srv.STATE["workflow"] = workflow
 
 
-def start(lot=None):
+def start(lot=None, workflow=None):
     JOBS.clear()
     UPLOADS.clear()
     body = {"devices": ["/dev/nvme0n1"]}
     if lot:
         body["lotId"] = lot
+    if workflow is not None:
+        body["workflow"] = workflow
     return post("/api/wipe/start", body)
 
 
@@ -159,13 +161,42 @@ try:
     check("switching workflow mid-wipe: still filed as goods_in, lot kept",
           rec.get("auditKind") == "goods_in" and rec.get("lotId") == "lot-1", rec)
 
-    sent = start(lot="lot-1")
+    sent = start()
     check("amazon: wipe starts", sent and sent[0] == 200 and len(JOBS) == 1, (sent, JOBS))
     JOBS[0]["on_done"]({"status": "wiped", "method": "NVMe crypto erase",
                         "device": "/dev/nvme0n1"})
     rec = UPLOADS[-1] if UPLOADS else {}
-    check("amazon record: auditKind amazon, no lot (even though one was sent)",
+    check("amazon record: auditKind amazon, no lot",
           rec.get("auditKind") == "amazon" and "lotId" not in rec, rec)
+
+    print("a page whose view of the workflow is stale: refused before erasing")
+    # The server's workflow is global; the lot comes from the page. A second
+    # tab (or a page that has not re-read the workflow since it was changed
+    # elsewhere) showing Goods In with a batch used to have its wipe filed as
+    # Amazon with the batch silently dropped - a different workflow and lot
+    # than the operator chose on screen.
+    sent = start(lot="lot-GOODSIN-7", workflow="goods_in")
+    msg = (sent or (0, {}))[1].get("message", "")
+    check("page shows goods_in, station is amazon: 409, engine not started",
+          sent and sent[0] == 409 and JOBS == [], (sent, JOBS))
+    check("the reason says the workflow changed and to check it",
+          "Amazon" in msg and "Goods In" in msg and "Nothing was erased" in msg, msg)
+    sent = start(lot="lot-GOODSIN-7")
+    check("a batch sent while the station is amazon (page without a workflow field): 409",
+          sent and sent[0] == 409 and JOBS == [], (sent, JOBS))
+    sent = start(workflow="amazon")
+    check("page and station agree (amazon): starts",
+          sent and sent[0] == 200 and len(JOBS) == 1, (sent, JOBS))
+    post("/api/workflow", {"workflow": "goods_in"})
+    sent = start(workflow="amazon")
+    check("page shows amazon, station is goods_in: 409, engine not started",
+          sent and sent[0] == 409 and JOBS == [], (sent, JOBS))
+    sent = start(lot="lot-1", workflow="goods_in")
+    check("page and station agree (goods_in): starts",
+          sent and sent[0] == 200 and len(JOBS) == 1, (sent, JOBS))
+    sent = start(lot="lot-1", workflow="bogus")
+    check("an unknown workflow from the page: 409, engine not started",
+          sent and sent[0] == 409 and JOBS == [], (sent, JOBS))
 
     # The lot rule is the capture upload's (/api/audit): the API also accepts
     # the account's own active lot, which this station cannot see, so a
@@ -242,6 +273,17 @@ try:
     check("switching workflow mid-restore: an amazon restore stays amazon, no lot",
           rec.get("auditKind") == "amazon" and "lotId" not in rec, rec)
 
+    account(permissions=BOTH, workflow="amazon")
+    sent = restore(lot="lot-GOODSIN-7", workflow="goods_in")
+    check("restore from a stale page (goods_in shown, station amazon): 409, never started",
+          sent and sent[0] == 409 and JOBS == [], (sent, JOBS))
+    sent = restore(lot="lot-GOODSIN-7")
+    check("restore with a batch while the station is amazon: 409, never started",
+          sent and sent[0] == 409 and JOBS == [], (sent, JOBS))
+    sent = restore(workflow="amazon")
+    check("restore, page and station agree: starts",
+          sent and sent[0] == 200 and len(JOBS) == 1, (sent, JOBS))
+
     account(permissions=["perform_goods_in_audit"])
     sent = restore(lot="lot-1")
     check("restore, goods-in-only account: starts without choosing",
@@ -261,6 +303,8 @@ try:
           "function installGate()" in page and 'id="iGateMsg"' in page
           and "$('iStart').disabled=!!why" in page)
     check("confirmInstall refuses on the gate too", "const gate=installGate();" in page)
+    check("the page sends the workflow it showed with a wipe and a restore",
+          page.count("workflow:wf()") >= 2, page.count("workflow:wf()"))
 finally:
     shutil.rmtree(TMP, True)
 

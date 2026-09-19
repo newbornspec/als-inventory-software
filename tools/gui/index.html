@@ -1493,7 +1493,10 @@ function confirmWipe(){
     // silently not run.
     const notStarted=(m)=>openOv('The wipe did not start',
       m+'\n\nNothing was erased.',false,closeOv,'OK');
-    try{ res=await jpost('/api/wipe/start',{devices:devs,
+    // workflow: what THIS screen showed. The station refuses when it has
+    // since been switched on another screen (stale_view_refusal), instead of
+    // filing the wipe under a workflow and lot the operator did not see.
+    try{ res=await jpost('/api/wipe/start',{devices:devs,workflow:wf(),
       lotId:(wf()==='goods_in'?$('batchSel').value:undefined),
                                            method:$('wMethod').value}); }
     catch(e){ notStarted('Could not reach the station service.'); return; }
@@ -1583,10 +1586,13 @@ function confirmInstall(){
     ' and writes the OS image to it. This cannot be undone.', false, async()=>{
     closeOv();
     let res;
-    try{ res=await jpost('/api/os/install',{imageId:img,device:dev,
+    try{ res=await jpost('/api/os/install',{imageId:img,device:dev,workflow:wf(),
       imageName:imgName,lotId:(wf()==='goods_in'?$('batchSel').value:undefined)}); }
     catch(e){ toast('Could not start the install.',false); return; }
-    if(!res.ok){toast(res.data.message||'Could not start install',false);return;}
+    // A refusal stays on screen (like the wipe's): the reasons - no workflow,
+    // a workflow changed on another screen - are too long for a toast.
+    if(!res.ok){openOv('The restore did not start',((res.data&&res.data.message)||
+      'Could not start install'),false,closeOv,'OK');return;}
     $('iActions').classList.add('hidden'); $('iRun').classList.remove('hidden');
     setInstallResult('running',imgName,dev,'');
     $('iStat').textContent='Writing image'; $('iPct').textContent='0%';

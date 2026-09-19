@@ -831,6 +831,38 @@ def workflow_refusal(noun, nothing_done):
             "server cannot accept it. %s" % (noun, nothing_done))
 
 
+WORKFLOW_LABELS = {"amazon": "Amazon / General audit", "goods_in": "Goods In audit"}
+
+
+def stale_view_refusal(body, nothing_done):
+    """Why a wipe/restore request must not start because the PAGE that sent
+    it saw a different workflow than the station has now, or "".
+
+    The workflow is the station's (STATE, one for every screen); the lot comes
+    from the page. A second tab, or a page that has not re-read the workflow
+    since it was switched elsewhere, showed Goods In with a batch while the
+    station was on Amazon: the disk was erased and the record filed as Amazon
+    with the batch silently dropped - a different workflow and lot than the
+    operator chose on screen. So the page says which workflow it showed
+    (`workflow`, optional: a request without it is only checked by its lot),
+    and a batch sent while the station is on Amazon is refused too - the page
+    sends a batch only when it shows Goods In."""
+    workflow = current_workflow()
+    seen = body.get("workflow")
+    if seen is not None and seen != workflow:
+        return ("This screen is out of date: it shows %s, but the station is now set to %s "
+                "(it was changed on another screen). Reload the page, check the workflow "
+                "and batch at the top, then try again. %s"
+                % (WORKFLOW_LABELS.get(seen, "no workflow"),
+                   WORKFLOW_LABELS.get(workflow, "no workflow"), nothing_done))
+    if workflow == "amazon" and (body.get("lotId") or body.get("subLotId")):
+        return ("This screen chose a batch, but the station is set to Amazon / General "
+                "audit, which files no batch (it was changed on another screen). Reload "
+                "the page, check the workflow and batch at the top, then try again. %s"
+                % nothing_done)
+    return ""
+
+
 def stamp_provenance(payload):
     """Phase-5 provenance on every record this station files: the station IS
     the Amazon audit workflow (auditKind), and the operator field names the
@@ -4261,7 +4293,8 @@ class Handler(BaseHTTPRequestHandler):
             # A stricter check here would refuse wipes the API would accept.
             # The page applies the same "pick a batch" rule to Wipe as it does
             # to Start audit (wipeGate in index.html).
-            why = workflow_refusal("wipe", "Nothing was erased.")
+            why = (workflow_refusal("wipe", "Nothing was erased.")
+                   or stale_view_refusal(body, "Nothing was erased."))
             if why:
                 return self._send(409, {"message": why})
             workflow = current_workflow()
@@ -4408,7 +4441,8 @@ class Handler(BaseHTTPRequestHandler):
             # same upload_audit, so a restore started before a dual-permission
             # account chose Amazon or Goods In produced the same kind-less
             # record the API refuses - after the disk was written.
-            why = workflow_refusal("restore", "Nothing was written to the disk.")
+            why = (workflow_refusal("restore", "Nothing was written to the disk.")
+                   or stale_view_refusal(body, "Nothing was written to the disk."))
             if why:
                 return self._send(409, {"message": why})
             # Fixed NOW, like a wipe's: the record used to take the workflow
