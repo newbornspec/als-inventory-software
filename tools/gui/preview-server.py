@@ -25,9 +25,9 @@ Scenario knobs (environment variables, all optional):
                       goods_in.
     PREVIEW_SECONDS   how long each fake wipe "runs" (default 4).
     PREVIEW_NAMESPACES  set to 1 to add a second namespace (nvme0n2) of the
-                      same NVMe drive, to see the "erases ALL namespaces"
-                      warning (owner decision D36). The real server refuses
-                      both namespaces in one request; this preview does not.
+                      same NVMe drive, to see the namespace warning (owner
+                      decision D36) and the second namespace waiting its
+                      turn, as the real server queues it.
 
 Everything here is a stand-in for server.py's answers, shaped like them; when
 server.py's responses change, change the matching stub.
@@ -116,13 +116,21 @@ def job(kind):
         return {"running": False, "log": [], "result": None, "error": None,
                 "elapsed": 0, "idle": 0, "seq": 0, "logFrom": 0}
     el = time.time() - j["start"]
+    # A namespace queued behind another of the same NVMe drive (server.py's
+    # start_job queue_key) waits a whole wipe before it starts.
+    if el < j["wait"]:
+        return {"running": True, "log": [], "logFrom": 0, "seq": 0, "result": None,
+                "error": None, "elapsed": int(el), "idle": 0, "writeBytes": 0,
+                "writeStalled": None, "waiting": j["waitText"]}
+    el -= j["wait"]
     # Staggered by 0.6 s so two drives finish "within a second" of each other.
     end = SECONDS + 0.6 * j["order"]
     running = el < end
     log = ["preview: wiping %s (%d%%)" % (kind[5:], min(100, int(100 * el / end)))]
     return {"running": running, "log": log, "logFrom": 0, "seq": 1,
             "result": None if running else j["result"], "error": None,
-            "elapsed": int(el), "idle": 0, "writeBytes": int(el * 4e8), "writeStalled": False}
+            "elapsed": int(el), "idle": 0, "writeBytes": int(el * 4e8), "writeStalled": False,
+            "waiting": None}
 
 
 def eligibility():
@@ -187,9 +195,17 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/api/wipe/start":
             devs = body.get("devices") or []
             now = time.time()
+            ctrl = {x["device"]: x.get("controller") for x in DRIVES}
+            ahead = {}
             with LOCK:
                 for i, d in enumerate(devs):
-                    JOBS["wipe:" + d] = {"start": now, "order": i, "result": result_for(d, i)}
+                    q = ahead.setdefault(ctrl.get(d), []) if ctrl.get(d) else []
+                    text = ("Waiting for %s to finish - it is on the same NVMe drive (%s), "
+                            "and two erases cannot run on one drive at once. This one starts "
+                            "next." % (", ".join(q), ctrl.get(d))) if q else None
+                    JOBS["wipe:" + d] = {"start": now, "order": i, "result": result_for(d, i),
+                                         "wait": (SECONDS + 0.6) * len(q), "waitText": text}
+                    q.append(d)
             return self._send(200, {"started": devs, "busy": []})
         if u.path == "/api/workflow":
             STATE["workflow"] = body.get("workflow") or STATE["workflow"]

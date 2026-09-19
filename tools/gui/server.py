@@ -93,6 +93,14 @@ STATE = {
 JOBS = {"wipe": None, "install": None}
 PROCS = {}          # kind -> Popen, so a running job can be cancelled
 LOCK = threading.Lock()
+# Jobs that must not run at the same time as each other, in the order they
+# were asked for: key -> [(token, device), ...], head = the one allowed to run.
+# Used for the namespaces of one NVMe drive (plan step 36): each is wiped, but
+# one after the other. Guarded by LOCK through QUEUE_COND, and filled in the
+# SAME critical section that registers the job in JOBS, so two overlapping
+# requests cannot both see an empty queue and both start.
+DRIVE_QUEUES = {}
+QUEUE_COND = threading.Condition(LOCK)
 # Guards job["log"]/job["seq"] as a PAIR. Two threads now append to a running
 # job's log (the engine reader and the disk-write watchdog), and the /api/job
 # incremental protocol derives the client's window from seq - len(log) — so a
@@ -1262,10 +1270,11 @@ def nvme_controller(name):
     expose several namespaces - nvme0n1, nvme0n2 - and each shows up here as its
     own disk. But the engine's sanitize is a command to the CONTROLLER, and it
     erases every namespace on it. Two namespaces of one drive ticked together
-    would start two sanitizes on the same controller at once - the second one
-    fails or aborts the first - and the screen would show two independent wipes
-    that are really one. So /api/wipe/start refuses that, and the confirm dialog
-    says plainly that all namespaces go.
+    would start two erases on the same controller at once - the second one
+    fails or aborts the first. So /api/wipe/start runs them one after the other
+    (each still wiped and recorded on its own: the engine's format and
+    overwrite cover only the namespace they are given), and the confirm dialog
+    says so, and that a sanitize takes every namespace, ticked or not.
 
     Read from sysfs, not guessed from the name: /sys/block/nvme0n1 resolves to
     .../nvme/nvme0/nvme0n1 (or .../nvme-subsystem/nvme-subsys0/nvme0n1 with
@@ -1369,8 +1378,9 @@ def list_drives(force=False):
         })
     # Every namespace of the same NVMe drive, on each of them (a one-element
     # list for the usual single-namespace drive, [] for non-NVMe). The confirm
-    # dialog warns from this when it is longer than one: wiping any of them
-    # erases all of them (D36).
+    # dialog warns from this when it is longer than one (D36): they are wiped
+    # in turn, a sanitize of any of them takes all of them, and a namespace
+    # left unticked is neither wiped by format/overwrite nor recorded.
     for d in drives:
         ctrl = d.get("controller")
         d["namespaces"] = [x["device"] for x in drives
@@ -2748,7 +2758,7 @@ def image_complete(path):
 
 def start_job(kind, argv, result_prefix, device="", on_done=None,
               watch_writes=False, noun="process", hint="",
-              record_on_no_result=False):
+              record_on_no_result=False, queue_key=None, on_start=None):
     """Run a long command in the background, streaming its stdout into a rolling
     log and parsing the final `<PREFIX> {json}` line into `result`. `on_done`
     (given the parsed result) runs after the process ends and before the job is
@@ -2762,24 +2772,84 @@ def start_job(kind, argv, result_prefix, device="", on_done=None,
     result - on_done still runs, with a synthesized status "failed" result.
     Before this a wipe whose job died filed NOTHING: a drive that may be half
     overwritten left no trace on the asset, which kept whatever wipe status it
-    had before. A failed record is the honest one."""
+    had before. A failed record is the honest one.
+
+    `queue_key`: jobs sharing a key run one at a time, in the order they were
+    started (see DRIVE_QUEUES). A job behind another is registered and
+    `running` at once - so the screen can follow it and a second request for
+    the same device is refused as usual - but its command does not start until
+    the one ahead has ended; until then job["waiting"] says what it waits for.
+    Stopped while waiting, it ends "refused": nothing was written.
+
+    `on_start`: called just before the command is launched (after any wait),
+    so a caller can note when the work REALLY began."""
     now = time.time()
+    token = object()
     with LOCK:
         cur = JOBS.get(kind)
         if cur and cur.get("running"):
             return False
+        ahead = []
+        if queue_key:
+            q = DRIVE_QUEUES.setdefault(queue_key, [])
+            ahead = [dev for _t, dev in q]
+            q.append((token, device))
         JOBS[kind] = {"running": True, "log": [], "result": None, "error": None,
                       "device": device, "startedAt": now, "updatedAt": now,
                       "cancelled": False, "seq": 0,
                       # None = not being watched; the UI needs to tell "quiet but
                       # writing" apart from "genuinely stopped".
-                      "writeBytes": 0, "writeStalled": None}
+                      "writeBytes": 0, "writeStalled": None,
+                      "waiting": _waiting_text(ahead, queue_key)}
     job = JOBS[kind]
+    released = [not queue_key]
+
+    def release():
+        """Let the next job with this key go. Idempotent."""
+        if released[0]:
+            return
+        released[0] = True
+        with QUEUE_COND:
+            rest = [e for e in DRIVE_QUEUES.get(queue_key, []) if e[0] is not token]
+            if rest:
+                DRIVE_QUEUES[queue_key] = rest
+            else:
+                DRIVE_QUEUES.pop(queue_key, None)
+            QUEUE_COND.notify_all()
+
+    def wait_turn():
+        """Block until this job is at the head of its queue, or is stopped.
+        Returns True when it may run."""
+        with QUEUE_COND:
+            while True:
+                q = DRIVE_QUEUES.get(queue_key, [])
+                idx = next((i for i, e in enumerate(q) if e[0] is token), 0)
+                if idx == 0 or job.get("cancelled"):
+                    job["waiting"] = None
+                    return not job.get("cancelled")
+                job["waiting"] = _waiting_text([dev for _t, dev in q[:idx]], queue_key)
+                # Waiting is not hanging: keep `idle` low so the screen does
+                # not warn "no new output" about a job that has not begun.
+                job["updatedAt"] = time.time()
+                QUEUE_COND.wait(1.0)
 
     def worker():
         proc = None
         stop_watch = threading.Event()
         try:
+            if queue_key and not wait_turn():
+                # Stopped before its turn came: the command never ran, so
+                # nothing touched the drive. "refused" is exactly that (and a
+                # wipe's on_done does not file it); "failed" would put a
+                # failed wipe on a record for a drive nobody wrote to.
+                job["result"] = {"status": "refused", "method": "none", "device": device,
+                                 "reason": "Stopped before it started, while it was waiting "
+                                           "its turn - nothing was written to the drive."}
+                return
+            if queue_key:
+                job["startedAt"] = job["updatedAt"] = time.time()
+            if on_start:
+                on_start()
             # start_new_session puts the engine in its own process group, so a
             # cancel can take down the whole tree (shred/dd keep running
             # otherwise) instead of orphaning a process writing to a disk.
@@ -2831,6 +2901,10 @@ def start_job(kind, argv, result_prefix, device="", on_done=None,
             job["error"] = str(exc)
         finally:
             stop_watch.set()             # stop the disk-write heartbeat
+            # The command has ended (or never started): the next job with the
+            # same key may begin. Before on_done, so a slow upload of this
+            # record does not hold up the next drive's erase.
+            release()
             if on_done and record_on_no_result and not job.get("result"):
                 job["result"] = {"status": "failed", "method": "none", "device": device,
                                  "reason": job.get("error") or
@@ -2852,10 +2926,28 @@ def start_job(kind, argv, result_prefix, device="", on_done=None,
     return True
 
 
+def _waiting_text(ahead, key):
+    """What a queued job tells the screen while it waits (None = not waiting)."""
+    if not ahead:
+        return None
+    return ("Waiting for %s to finish - it is on the same NVMe drive (%s), and two "
+            "erases cannot run on one drive at once. This one starts next."
+            % (", ".join(ahead), key))
+
+
 def cancel_job(kind):
     """Stop a running job and everything it spawned. Returns a status message."""
     job = JOBS.get(kind)
     proc = PROCS.get(kind)
+    # Still waiting its turn (start_job queue_key): nothing to kill. The worker
+    # wakes, sees `cancelled` and ends without running anything. Decided under
+    # the queue's lock, the same one wait_turn clears `waiting` under, so a
+    # job that has just been let go is never told "stopped before it started".
+    with QUEUE_COND:
+        if job and job.get("running") and job.get("waiting") and not proc:
+            job["cancelled"] = True
+            QUEUE_COND.notify_all()
+            return True, "Stopped before it started - nothing was written to the drive."
     if not job or not job.get("running") or not proc:
         return False, "Nothing is running."
     job["cancelled"] = True
@@ -3162,41 +3254,27 @@ class Handler(BaseHTTPRequestHandler):
                 if d not in offered:
                     return self._send(400, {"message": "%s is not an internal disk this "
                                                        "station can wipe" % d})
-            # One NVMe drive, one wipe (plan step 36, owner decision D36). Two
-            # namespaces of the same controller - nvme0n1 and nvme0n2 - are
-            # listed as two disks, but the engine's sanitize goes to the
-            # controller and erases EVERY namespace on it. Both ticked would
-            # start two sanitizes on one controller at once: the second is
-            # refused or aborts the first, and the screen would report two
-            # independent results for what is one erase. Refused rather than
-            # silently merged, so the operator knows why the list changed; the
-            # message says which one to keep and that it covers the rest.
-            # Checked against running wipes too: a sibling namespace already
-            # being wiped is the same collision, one request later.
-            seen = {}
-            for d in devices:
-                ctrl = offered[d].get("controller")
-                if not ctrl:
-                    continue
-                if ctrl in seen and seen[ctrl] != d:
-                    return self._send(400, {"message": (
-                        "%s and %s are namespaces of the same NVMe drive (%s). One "
-                        "erase of that drive wipes ALL of its namespaces, so tick only "
-                        "one of them - the wipe covers the other as well."
-                        % (seen[ctrl], d, ctrl))})
-                seen[ctrl] = d
-            with LOCK:
-                running = {k[len("wipe:"):] for k, j in JOBS.items()
-                           if k.startswith("wipe:") and j and j.get("running")}
-            for d in devices:
-                ctrl = offered[d].get("controller")
-                for other in running:
-                    if (ctrl and other != d and other in offered
-                            and offered[other].get("controller") == ctrl):
-                        return self._send(409, {"message": (
-                            "%s is on the same NVMe drive (%s) as %s, which is being "
-                            "wiped now - that erase covers %s too. Wait for it to "
-                            "finish." % (d, ctrl, other, d))})
+            # Namespaces of one NVMe drive (plan step 36, owner decision D36):
+            # nvme0n1 and nvme0n2 are listed as two disks but sit on ONE
+            # controller. They are both accepted and each is wiped and filed
+            # on its own, but one after the other - start_job's queue_key
+            # below - never at the same time: a sanitize is a command to the
+            # whole controller, and a second erase started while it runs is
+            # refused by the drive or aborts it.
+            #
+            # Not refused, and not "merged" into one erase: an earlier version
+            # refused both and told the operator the wipe of one "covers the
+            # other as well". Only a SANITIZE does. The engine tries a
+            # per-namespace `nvme format` first, and its overwrite (the
+            # fallback, and AUDIT_WIPE_METHOD=overwrite/zero) shreds only the
+            # namespace it is handed - so the unticked namespace kept its data
+            # while the screen said the machine was clean. Wiping each one is
+            # right whichever method the engine ends up using; when it does
+            # sanitize, the second pass only repeats an erase already done.
+            # The queue also holds across requests: a sibling asked for while
+            # one is running waits behind it, decided in the same critical
+            # section that registers the job, so two overlapping requests
+            # (double tap, two tabs) cannot both start at once.
             # No machine identity, no erase. This check used to live in
             # record_wipe, AFTER the drive was already destroyed - so a wipe
             # with no profile erased the data and then filed nothing, leaving
@@ -3246,7 +3324,7 @@ class Handler(BaseHTTPRequestHandler):
             if sub_lot_id:
                 base["subLotId"] = sub_lot_id
 
-            def make_recorder(dev, drive, started_epoch, pid):
+            def make_recorder(dev, drive, started, pid):
                 def record_wipe(result):
                     # "refused" = the engine wrote nothing to the drive (wrong
                     # serial, USB, boot disk...). Filing it would put a failed
@@ -3254,8 +3332,11 @@ class Handler(BaseHTTPRequestHandler):
                     if result.get("status") not in ("wiped", "failed"):
                         pending_remove(pid)
                         return
+                    # started["epoch"]: when the engine really began - a
+                    # namespace that waited its turn did not start when the
+                    # request came in.
                     payload = build_wipe_payload(base, result, dev, drive, method,
-                                                 started_epoch, clock_at_start)
+                                                 started["epoch"], clock_at_start)
                     stamp_provenance(payload)
                     # On disk before the upload starts: a power cut during the
                     # POST now files this record at the next boot.
@@ -3300,11 +3381,16 @@ class Handler(BaseHTTPRequestHandler):
                                    "startedEpoch": started_epoch,
                                    "clockAtStart": clock_at_start,
                                    "base": stamp_provenance(dict(base))})
+                began = {"epoch": started_epoch}
                 ok = start_job(wipe_kind(d), argv,
                                "WIPE_RESULT ", d,
-                               on_done=make_recorder(d, drive, started_epoch, pid),
+                               on_done=make_recorder(d, drive, began, pid),
                                noun="wipe", record_on_no_result=True,
-                               hint="The drive may be failing or was disconnected.")
+                               hint="The drive may be failing or was disconnected.",
+                               # One NVMe controller, one erase at a time (see
+                               # above). None for SATA/SAS: no queue.
+                               queue_key=offered[d].get("controller"),
+                               on_start=lambda b=began: b.update(epoch=time.time()))
                 if not ok:
                     pending_remove(pid)     # never started: nothing to record
                 (started if ok else busy).append(d)

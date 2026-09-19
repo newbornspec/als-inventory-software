@@ -88,6 +88,7 @@ const flush = () => { while (timers.length) { try { timers.shift()(); } catch (e
 const hidden = (id) => document.getElementById(id).classList.contains('hidden');
 
 (async () => {
+  run(`REAL_POLL=pollJob; REAL_FETCH=fetch;`);
   // Markup state the real page starts in.
   for (const id of ['wRun', 'wSummary', 'wDone']) document.getElementById(id).className = 'hidden';
   document.getElementById('wMethod').value = 'auto';
@@ -160,7 +161,9 @@ const hidden = (id) => document.getElementById(id).classList.contains('hidden');
     drives:[{key:'W2',serialNumber:'W2',model:'WD Blue',status:'missing'}]}])`);
   out.cUnknown = run(`certSummary([${W('x')}],[{known:false}])`);
 
-  // D36: a namespace of a multi-namespace NVMe drive warns that ALL go.
+  // D36: namespaces of one NVMe drive. Only one ticked: the other is named
+  // as NOT ticked (not wiped by format/overwrite, not recorded). Both ticked:
+  // they run in turn. A sanitize takes them all either way.
   run(`closeOv(); RUN=null; DRIVES=[
     {device:'/dev/nvme0n1',size:'512 GB',model:'Samsung',serial:'S1',controller:'nvme0',
      namespaces:['/dev/nvme0n1','/dev/nvme0n2']},
@@ -171,6 +174,28 @@ const hidden = (id) => document.getElementById(id).classList.contains('hidden');
     selectedWipeDrives=()=>['/dev/nvme0n1'];`);
   run(`confirmWipe()`);
   out.confirmMultiNs = document.getElementById('ovMsg').textContent;
+  run(`closeOv(); selectedWipeDrives=()=>['/dev/nvme0n1','/dev/nvme0n2','/dev/nvme1n1'];`);
+  run(`confirmWipe()`);
+  out.confirmBothNs = document.getElementById('ovMsg').textContent;
+
+  // The server refuses to start: the reason stays on screen (a dialog the
+  // operator dismisses), not a toast that vanishes after 4.2 s.
+  run(`OKPOST=jpost; jpost=async()=>({ok:false,status:400,data:{message:'/dev/nvme9n1 is not an internal disk this station can wipe'}});
+       document.getElementById('wRun').className='hidden';`);
+  await run(`ovGo()`);
+  out.refusedTitle = document.getElementById('ovTitle').textContent;
+  out.refusedMsg = document.getElementById('ovMsg').textContent;
+  out.refusedOpen = document.getElementById('ov').style.display;
+  out.refusedRunHidden = hidden('wRun');
+  run(`closeOv(); jpost=OKPOST;`);
+
+  // A namespace waiting its turn says what it waits for, not a running clock.
+  run(`fetch=async()=>({ok:true,json:async()=>({running:true,log:[],seq:0,logFrom:0,elapsed:40,idle:0,
+         waiting:'Waiting for /dev/nvme0n1 to finish - it is on the same NVMe drive (nvme0)'})});`);
+  run(`REAL_POLL('wipe:/dev/nvme0n2',{statId:'stWait',label:'Wiping',onDone(){}})`);
+  for (let i = 0; i < 5; i++) await new Promise(r => setImmediate(r));
+  out.waitStat = document.getElementById('stWait').textContent;
+  run(`fetch=REAL_FETCH`); timers.length = 0;
   run(`closeOv(); selectedWipeDrives=()=>['/dev/nvme1n1'];`);
   run(`confirmWipe()`);
   out.confirmSingleNs = document.getElementById('ovMsg').textContent;
@@ -301,8 +326,23 @@ def main():
     check("cert: server unknown (404) is labelled as unconfirmed",
           "could not confirm" in o["cUnknown"]["text"], o["cUnknown"])
     cm, cs = o["confirmMultiNs"], o["confirmSingleNs"]
-    check("D36: confirm warns that ALL namespaces of the drive are erased",
-          "ALL of them" in cm and "/dev/nvme0n2" in cm and "namespaces" in cm, cm)
+    cb = o["confirmBothNs"]
+    check("D36: confirm says a sanitize erases ALL namespaces, ticked or not",
+          "ALL of its namespaces" in cm and "ticked or not" in cm, cm)
+    check("D36: one namespace ticked - names the unticked one as NOT wiped/recorded",
+          "/dev/nvme0n2 is NOT ticked" in cm and "not recorded" in cm and "untouched" in cm, cm)
+    check("D36: never claims erasing one namespace erases the others",
+          "ALL of them" not in cm and "covers" not in cm, cm)
+    check("D36: both ticked - they are wiped one after the other",
+          "one after the other" in cb and "NOT ticked" not in cb, cb)
+    check("D36: the warning appears once per drive, not once per namespace",
+          cb.count("parts (namespaces)") == 1, cb)
+    check("start refused: the reason stays on screen in a dialog",
+          o["refusedOpen"] == "flex" and "did not start" in o["refusedTitle"]
+          and "not an internal disk" in o["refusedMsg"], (o["refusedTitle"], o["refusedMsg"]))
+    check("start refused: no run panel for a wipe that did not start", o["refusedRunHidden"])
+    check("a namespace waiting its turn says so on its status line",
+          "Waiting for /dev/nvme0n1" in o["waitStat"], o["waitStat"])
     check("D36: no namespace warning for a single-namespace drive",
           "namespace" not in cs.lower(), cs)
     check("D36: the drive list names the sibling namespace",

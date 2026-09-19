@@ -54,8 +54,12 @@ OFFERED = [{"device": "/dev/nvme0n1", "model": "internal"}]
 STARTED = []
 
 
+QUEUES = {}                 # device -> the queue_key start_job was given
+
+
 def fake_start_job(kind, cmd, marker, device, **kw):
     STARTED.append(device)      # record the attempt; wipe nothing
+    QUEUES[device] = kw.get("queue_key")
     return True
 
 
@@ -125,10 +129,13 @@ sent, started = post({"devices": ["/dev/nvme0n1"]})
 check("no disks enumerated: refuses, does not fail open", sent and sent[0] == 400 and started == [], (sent, started))
 
 # --------------------------------------------------------------------------
-# Plan step 36 (kiosk half), owner decision D36: one NVMe drive, one wipe.
-# nvme0n1 and nvme0n2 are two namespaces of ONE drive; the engine's sanitize
-# goes to the controller and erases both. A request naming both must be
-# refused before anything starts, with a message that says why.
+# Plan step 36 (kiosk half), owner decision D36. nvme0n1 and nvme0n2 are two
+# namespaces of ONE drive. Both must be wiped - the engine's format and its
+# overwrite cover only the namespace they are given, so refusing one of them
+# (an earlier version did, saying the other's wipe "covers" it) left data on
+# the drive. They must not be erased AT ONCE, though, so each job is queued on
+# its controller (start_job's queue_key; the real queue is exercised in
+# tools/test-wipe-namespaces.py). Here: what the handler asks start_job for.
 print("")
 print("nvme namespaces of one controller")
 
@@ -142,42 +149,35 @@ NS = [{"device": "/dev/nvme0n1", "model": "Samsung", "serial": "", "controller":
        "namespaces": []}]
 srv.list_drives = lambda *a, **k: NS
 
+QUEUES.clear()
 sent, started = post({"devices": ["/dev/nvme0n1", "/dev/nvme0n2"]})
-check("two namespaces of one controller: refused", sent and sent[0] == 400, sent)
-check("two namespaces of one controller: nothing started", started == [], started)
-msg = (sent and sent[1].get("message")) or ""
-check("the message names both namespaces and the drive",
-      "/dev/nvme0n1" in msg and "/dev/nvme0n2" in msg and "nvme0" in msg, msg)
-check("the message says one erase covers all namespaces",
-      "ALL of its namespaces" in msg, msg)
+check("two namespaces of one controller: accepted, NOT refused",
+      sent and sent[0] == 200 and started == ["/dev/nvme0n1", "/dev/nvme0n2"], (sent, started))
+check("... each queued on the controller, so they run one after the other",
+      QUEUES.get("/dev/nvme0n1") == QUEUES.get("/dev/nvme0n2") == "nvme0", QUEUES)
 
+QUEUES.clear()
 sent, started = post({"devices": ["/dev/sda", "/dev/nvme0n2", "/dev/nvme1n1", "/dev/nvme0n1"]})
-check("refused whole even among other drives", sent and sent[0] == 400 and started == [],
-      (sent, started))
-
-sent, started = post({"devices": ["/dev/nvme0n1", "/dev/nvme1n1", "/dev/sda"]})
-check("namespaces of DIFFERENT controllers (and a SATA disk) still start together",
-      sent and sent[0] == 200 and started == ["/dev/nvme0n1", "/dev/nvme1n1", "/dev/sda"],
-      (sent, started))
+check("mixed with other drives: every drive starts",
+      sent and sent[0] == 200 and sorted(started) == ["/dev/nvme0n1", "/dev/nvme0n2",
+                                                      "/dev/nvme1n1", "/dev/sda"], (sent, started))
+check("... a different controller gets its own queue, a SATA disk none",
+      QUEUES.get("/dev/nvme1n1") == "nvme1" and QUEUES.get("/dev/sda") is None, QUEUES)
 
 sent, started = post({"devices": ["/dev/nvme0n2"]})
 check("one namespace alone starts", sent and sent[0] == 200 and started == ["/dev/nvme0n2"],
       (sent, started))
 
-# The same collision one request later: nvme0n1 is already being wiped when a
-# second request asks for nvme0n2.
+# A sibling already being wiped: the new request is not refused with "that
+# erase covers it too" (it may not) - it queues behind it.
 srv.JOBS["wipe:/dev/nvme0n1"] = {"running": True}
+QUEUES.clear()
 sent, started = post({"devices": ["/dev/nvme0n2"]})
-check("sibling namespace already being wiped: refused (409)",
-      sent and sent[0] == 409 and started == [], (sent, started))
-check("... and says which wipe covers it", "/dev/nvme0n1" in (sent[1].get("message") or ""), sent)
-sent, started = post({"devices": ["/dev/nvme1n1"]})
-check("a different controller is not held up by it",
-      sent and sent[0] == 200 and started == ["/dev/nvme1n1"], (sent, started))
-srv.JOBS["wipe:/dev/nvme0n1"] = {"running": False}
-sent, started = post({"devices": ["/dev/nvme0n2"]})
-check("once that wipe has ended the sibling can start", sent and sent[0] == 200 and
-      started == ["/dev/nvme0n2"], (sent, started))
+check("sibling namespace already being wiped: accepted, queued behind it",
+      sent and sent[0] == 200 and started == ["/dev/nvme0n2"]
+      and QUEUES.get("/dev/nvme0n2") == "nvme0", (sent, started, QUEUES))
+check("... and no message claims one namespace's wipe covers the other",
+      "covers" not in json.dumps(sent), sent)
 srv.JOBS.pop("wipe:/dev/nvme0n1", None)
 
 # ---- which controller a namespace belongs to: nvme_controller -------------
