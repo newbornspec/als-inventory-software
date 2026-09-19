@@ -403,6 +403,13 @@ expect("a temperature attribute failing NOW is treated as heat (cap 89), not as 
        HDD_CLEAN + "; Temperature_Celsius is over the drive's own temperature threshold now; "
        "SMART passed",
        ["Temperature_Celsius is over the drive's own temperature threshold now"])
+expect("231 is a life attribute on one drive and a temperature on another",
+       keep(smart(ata(0, [attr(5, "Reallocated_Sector_Ct", 100, 100, 10, 0, prefailure=True),
+                          attr(202, "Percent_Lifetime_Remain", 94, 94, 1, 6),
+                          attr(231, "Temperature_Celsius", 30, 30, 0, 70, when_failed="past")]))),
+       94, "good", "life remaining 94% reported by the drive",
+       ["Temperature_Celsius went over the drive's temperature threshold in the past — "
+        "a temperature, not damage to the drive"])
 expect("a drive that is hot now is not charged for heat twice",
        keep(smart(ata(7200, now_temp, temp=58), kind="ata-hdd")), 89, "caution",
        HDD_CLEAN + "; " + HOT % (58, 55) + "; SMART passed", [HOT % (58, 55)])

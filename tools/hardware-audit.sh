@@ -2339,8 +2339,11 @@ ERR_ATTRS = {5: r"realloc|retired", 197: r"pending", 198: r"uncorrect|offline",
              187: r"uncorrect", 10: r"spin.?retry", 199: r"crc"}
 
 # Attributes whose failure flag must NOT be read as "the drive is failing":
-# 199 is a cable fault, 190/194 are temperatures. Same id+name guard.
-NO_FAIL_CAP = {199: r"crc", 190: r"temperature|airflow", 194: r"temperature|airflow"}
+# 199 is a cable fault, and 190/194 are temperatures - as is 231 on the drives
+# that use 202 for wear instead (hence the id AND name guard again: on a
+# Sandisk, 231 is SSD_Life_Left and must keep its flag).
+NO_FAIL_CAP = {199: r"crc", 190: r"temperature|airflow", 194: r"temperature|airflow",
+               231: r"temperature"}
 
 CW_BITS = [(0x01, "available spare below threshold"), (0x02, "temperature out of range"),
            (0x04, "reliability degraded"), (0x08, "media is read-only"),
