@@ -431,8 +431,13 @@ def _queue_load_unlocked():
 
 
 def _queue_write_unlocked(items):
+    _durable_jsonl_write(queue_path(), QUEUE_FALLBACK, items)
+
+
+def _durable_jsonl_write(path, fallback, items):
+    """Write a JSON-lines file on the stick, falling back to RAM. Shared by the
+    offline queue and the in-progress wipe markers; the caller holds the lock."""
     text = "".join(json.dumps(it) + "\n" for it in items)
-    path = queue_path()
     err = None
     try:
         # Atomic, like every other write to the stick: these are audits that
@@ -448,12 +453,12 @@ def _queue_write_unlocked(items):
         # dance audit.conf already uses.
         err = write_boot_file(path, text)
 
-    if err is None and queue_on_stick():
+    if err is None and path != fallback:
         # The stick copy is authoritative now. Drop any RAM copy, or the same
         # record would be counted — and re-uploaded — twice.
         try:
-            if os.path.exists(QUEUE_FALLBACK):
-                os.remove(QUEUE_FALLBACK)
+            if os.path.exists(fallback):
+                os.remove(fallback)
         except OSError:
             pass
         return
@@ -461,7 +466,7 @@ def _queue_write_unlocked(items):
         # Never lose a record because the stick would not take it. RAM is worse
         # than the stick, and far better than nowhere.
         try:
-            with open(QUEUE_FALLBACK, "w") as fh:
+            with open(fallback, "w") as fh:
                 fh.write(text)
         except OSError:
             pass
@@ -486,6 +491,110 @@ def queue_add(payload):
 
 def queue_count():
     return len(queue_load())
+
+
+# ------------------------------------------------- wipes in progress ----
+# A wipe's record used to exist only in memory until its upload finished:
+# JOBS held the result, on_done filed it, and only a FAILED upload reached
+# the disk. But the engine runs in its own session (start_new_session), so it
+# outlives this process - a backend restart or an OOM kill mid-wipe left the
+# engine erasing the drive, its WIPE_RESULT going to a dead pipe, and no record
+# at all, not even a failed one. A power cut during the upload (up to the 25 s
+# api timeout, before queue_add) lost a finished wipe the same way. Either way
+# the drive was erased, or half erased, and the system had no trace of it.
+#
+# So every wipe writes a marker to the stick BEFORE its engine starts, with
+# everything needed to file a record without this process: the profile, lot,
+# operator, drive and start time. When the wipe's record is built the marker
+# is replaced by that exact payload, and it is removed once the record has
+# been uploaded or queued. At startup a leftover marker is filed:
+#   - with its final payload, if the wipe had finished (at worst a duplicate
+#     of a record that did reach the server - never a lost one);
+#   - otherwise as FAILED, "outcome unknown": the station cannot know what the
+#     engine did after it lost sight of it, and the honest record of a drive
+#     that may be half overwritten is a failed wipe, to be wiped again.
+PENDING_FALLBACK = "/tmp/als-wipe-pending.jsonl"
+PENDING_LOCK = threading.Lock()
+PENDING_RESTART_REASON = ("the station restarted while this wipe was running, so "
+                          "its outcome is unknown - wipe the drive again")
+
+
+def pending_path():
+    """Beside the offline queue on the stick, so a marker survives a power cut."""
+    base = os.path.dirname(CONF_PATH) if CONF_PATH else None
+    return os.path.join(base, "wipe-pending.jsonl") if base else PENDING_FALLBACK
+
+
+def _pending_load_unlocked():
+    path = pending_path()
+    items = _read_jsonl(path)
+    if path != PENDING_FALLBACK:
+        items += _read_jsonl(PENDING_FALLBACK)
+    return [it for it in items if isinstance(it, dict) and it.get("id")]
+
+
+def _pending_update(fn):
+    """Read-modify-write the markers under the lock. Never raises: a marker
+    that cannot be written must not stop a wipe or lose its record."""
+    try:
+        with PENDING_LOCK:
+            _durable_jsonl_write(pending_path(), PENDING_FALLBACK,
+                                 fn(_pending_load_unlocked()))
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def pending_add(entry):
+    entry = dict(entry, id=os.urandom(8).hex())
+    _pending_update(lambda items: items + [entry])
+    return entry["id"]
+
+
+def pending_finalize(pid, payload):
+    _pending_update(lambda items: [dict(it, final=payload) if it["id"] == pid else it
+                                   for it in items])
+
+
+def pending_remove(pid):
+    _pending_update(lambda items: [it for it in items if it["id"] != pid])
+
+
+def pending_failed_payload(entry):
+    """The record for a wipe whose outcome was lost: FAILED, with why."""
+    dev = entry.get("device") or ""
+    started = entry.get("startedEpoch")
+    started = started if isinstance(started, (int, float)) else None
+    # The time it was found, but never earlier than it started - a machine
+    # with a dead RTC can boot believing it is years ago.
+    fin = max(time.time(), started or 0)
+    result = {"status": "failed", "method": "none", "device": dev,
+              "reason": PENDING_RESTART_REASON, "finishedAt": utc_iso(fin)}
+    return build_wipe_payload(entry.get("base") or {}, result, dev,
+                              entry.get("drive") or {}, entry.get("method"),
+                              started, bool(entry.get("clockAtStart")))
+
+
+def recover_pending_wipes():
+    """File a record for every wipe a previous run of this process started and
+    never recorded. Runs at startup, before the first capture - and so before
+    any new wipe can start, since /api/wipe/start refuses without a profile.
+    Removes only the markers it filed, all the same. Returns how many."""
+    with PENDING_LOCK:
+        items = _pending_load_unlocked()
+    filed = []
+    for it in items:
+        try:
+            final = it.get("final")
+            payload = final if isinstance(final, dict) else pending_failed_payload(it)
+        except Exception:  # noqa: BLE001
+            continue            # unreadable marker: leave it for a person to see
+        # Queued BEFORE the marker goes: a crash between the two files the
+        # record twice rather than not at all.
+        queue_add(payload)
+        filed.append(it["id"])
+    if filed:
+        _pending_update(lambda cur: [it for it in cur if it["id"] not in filed])
+    return len(filed)
 
 
 UPLOAD_LOCK = threading.Lock()
@@ -698,6 +807,28 @@ def wipe_record_fields(result, device, drive=None, method=None,
                             if isinstance(k, str) and (v is None or (
                                 isinstance(v, (int, float)) and not isinstance(v, bool)))}
     return out, notes
+
+
+def build_wipe_payload(base, result, dev, drive, method, started_epoch, clock_at_start):
+    """One drive's wipe record: `base` (profile, lot, operator) plus the wipe
+    fields. Shared by the live path (record_wipe) and startup recovery of a
+    wipe whose outcome was lost, so the two can never file different shapes."""
+    fields, notes = wipe_record_fields(
+        result, dev, drive=drive, method=method,
+        started_epoch=started_epoch, clock_at_start=clock_at_start)
+    payload = dict(base)
+    payload["dataWipeStatus"] = result.get("status")
+    payload["dataWipeMethod"] = result.get("method") or "none"
+    payload.update(fields)
+    # Record WHY a wipe failed, so the audit trail explains itself instead of
+    # just saying "Failed".
+    reason = (result.get("reason") or "").strip()
+    if reason and result.get("status") == "failed":
+        notes.insert(0, "Wipe failed on %s: %s" % (dev, reason))
+    if notes:
+        payload["notes"] = "\n".join(notes)
+    stamp_tool(payload, result)
+    return payload
 
 
 def upload_audit(payload):
@@ -2982,36 +3113,30 @@ class Handler(BaseHTTPRequestHandler):
             # change what this erase is filed under.
             clock_at_start = CLOCK["network"]
 
-            def make_recorder(dev, drive, started_epoch):
+            base = {"profile": profile}
+            if lot_id:
+                base["lotId"] = lot_id
+            if sub_lot_id:
+                base["subLotId"] = sub_lot_id
+
+            def make_recorder(dev, drive, started_epoch, pid):
                 def record_wipe(result):
                     # "refused" = the engine wrote nothing to the drive (wrong
                     # serial, USB, boot disk...). Filing it would put a failed
                     # wipe on an asset whose drive was never touched.
                     if result.get("status") not in ("wiped", "failed"):
+                        pending_remove(pid)
                         return
-                    fields, notes = wipe_record_fields(
-                        result, dev, drive=drive, method=method,
-                        started_epoch=started_epoch, clock_at_start=clock_at_start)
-                    payload = {
-                        "profile": profile,
-                        "dataWipeStatus": result.get("status"),
-                        "dataWipeMethod": result.get("method") or "none",
-                    }
-                    payload.update(fields)
-                    # Record WHY a wipe failed, so the audit trail explains
-                    # itself instead of just saying "Failed".
-                    reason = (result.get("reason") or "").strip()
-                    if reason and result.get("status") == "failed":
-                        notes.insert(0, "Wipe failed on %s: %s" % (dev, reason))
-                    if notes:
-                        payload["notes"] = "\n".join(notes)
-                    if lot_id:
-                        payload["lotId"] = lot_id
-                    if sub_lot_id:
-                        payload["subLotId"] = sub_lot_id
-                    stamp_tool(payload, result)
+                    payload = build_wipe_payload(base, result, dev, drive, method,
+                                                 started_epoch, clock_at_start)
                     stamp_provenance(payload)
+                    # On disk before the upload starts: a power cut during the
+                    # POST now files this record at the next boot.
+                    pending_finalize(pid, payload)
                     out, queued, err = upload_audit(payload)
+                    # Uploaded or queued - either way it is no longer only in
+                    # this process's memory.
+                    pending_remove(pid)
                     if queued:
                         # Only the upload is pending; the record, dates and
                         # all, is on disk and uploads itself later.
@@ -3034,11 +3159,23 @@ class Handler(BaseHTTPRequestHandler):
                 # closes the gap between this check and the erase. An engine
                 # that predates the argument ignores it. No serial, no argument.
                 argv = audit_cmd("--wipe-drive", d, method, *([serial] if serial else []))
+                started_epoch = time.time()
+                drive = {k: offered[d].get(k) for k in
+                         ("serial", "model", "bytes", "transport", "rotational")}
+                # The marker goes to the stick BEFORE the engine starts - see
+                # recover_pending_wipes. Provenance is stamped now: after a
+                # restart there is no operator in memory to stamp it from.
+                pid = pending_add({"device": d, "drive": drive, "method": method,
+                                   "startedEpoch": started_epoch,
+                                   "clockAtStart": clock_at_start,
+                                   "base": stamp_provenance(dict(base))})
                 ok = start_job(wipe_kind(d), argv,
                                "WIPE_RESULT ", d,
-                               on_done=make_recorder(d, dict(offered[d]), time.time()),
+                               on_done=make_recorder(d, drive, started_epoch, pid),
                                noun="wipe", record_on_no_result=True,
                                hint="The drive may be failing or was disconnected.")
+                if not ok:
+                    pending_remove(pid)     # never started: nothing to record
                 (started if ok else busy).append(d)
             if not started:
                 return self._send(409, {"message": "a wipe is already running on %s"
@@ -3208,6 +3345,15 @@ def main():
     # here would stop the web server from listening — the kiosk browser opens
     # within seconds and would show "unable to connect".
     def boot():
+        # First, before the capture that makes a new wipe possible: file any
+        # wipe the previous run of this process started and never recorded.
+        # queue_worker / the login in refresh() upload them.
+        try:
+            n = recover_pending_wipes()
+            if n:
+                print("recovered %d wipe record(s) left by a restart" % n)
+        except Exception as exc:  # noqa: BLE001
+            print("wipe recovery: %s" % exc)
         try:
             _ok, msg = sync_clock()
             print("clock: %s" % msg)

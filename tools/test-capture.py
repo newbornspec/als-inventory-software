@@ -21,16 +21,27 @@ ever run against a disk.
 
     python3 tools/test-capture.py
 """
+import atexit
 import importlib.util
 import io
 import json
 import os
+import shutil
 import sys
+import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 spec = importlib.util.spec_from_file_location("als_server", os.path.join(HERE, "gui", "server.py"))
 srv = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(srv)
+
+# In-progress wipe markers (and any queued record) go to a scratch folder, never
+# beside a real audit.conf or into the machine's /tmp.
+_TMP = tempfile.mkdtemp(prefix="als-test-")
+atexit.register(shutil.rmtree, _TMP, True)
+srv.CONF_PATH = None
+srv.PENDING_FALLBACK = os.path.join(_TMP, "wipe-pending.jsonl")
+srv.QUEUE_FALLBACK = os.path.join(_TMP, "audit-queue.jsonl")
 
 PASS, FAIL = [0], []
 

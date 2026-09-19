@@ -55,9 +55,22 @@ JOBS = []          # (device, argv, on_done, kwargs) per start_job call
 UPLOADS = []
 
 
+srv.CONF_PATH = None
+PFILE = os.path.join(TMP, "wipe-pending.jsonl")
+srv.PENDING_FALLBACK = PFILE
+srv.QUEUE_FALLBACK = os.path.join(TMP, "queue.jsonl")
+BUSY = {"on": False}
+
+
+def pending():
+    return srv._pending_load_unlocked()
+
+
 def fake_start_job(kind, argv, marker, device="", on_done=None, **kw):
-    JOBS.append({"device": device, "argv": list(argv), "on_done": on_done, "kw": kw})
-    return True
+    JOBS.append({"device": device, "argv": list(argv), "on_done": on_done, "kw": kw,
+                 # What was on disk at the moment the engine would have started.
+                 "pendingAtStart": pending()})
+    return not BUSY["on"]
 
 
 def fake_upload(payload):
@@ -444,6 +457,138 @@ try:
     NET["up"] = False
     srv.queue_write([])
 
+    print("a wipe the station loses sight of is still recorded")
+
+    def fresh_process():
+        """A second copy of server.py: shares nothing with `srv` but the disk,
+        which is exactly what a restarted backend has."""
+        sp = importlib.util.spec_from_file_location("als_server_restarted",
+                                                    os.path.join(HERE, "gui", "server.py"))
+        m = importlib.util.module_from_spec(sp)
+        sp.loader.exec_module(m)
+        m.CONF_PATH = None
+        m.PENDING_FALLBACK = srv.PENDING_FALLBACK
+        m.QUEUE_FALLBACK = srv.QUEUE_FALLBACK
+        m.STICK_VERSION_FILE = srv.STICK_VERSION_FILE
+        return m
+
+    srv.queue_write([])
+    # The earlier sections start wipes whose stubbed jobs never finish; their
+    # markers are exactly what a restart would recover. Start clean.
+    srv._pending_update(lambda items: [])
+    srv.upload_audit = fake_upload
+    srv.stamp_provenance = lambda p: dict(p, operatorName="Ann") if isinstance(p, dict) else p
+    h = Fake("/api/wipe/start", {"devices": ["/dev/sda"], "lotId": "lot-7"})
+    JOBS.clear()
+    UPLOADS.clear()
+    t_before = real_time()
+    h.do_POST()
+    check("marker: the wipe starts", h.sent[0] == 200 and len(JOBS) == 1, h.sent)
+    at_start = JOBS[0]["pendingAtStart"] if JOBS else []
+    check("marker: on disk BEFORE the engine starts", len(at_start) == 1 and
+          at_start[0].get("device") == "/dev/sda", at_start)
+
+    # THE CASE: the backend dies mid-wipe. The engine (own session) may carry
+    # on, but nothing in this process will ever file its result.
+    srv.stamp_provenance = lambda p: p      # a restarted process has no operator
+    m = fresh_process()
+    n = m.recover_pending_wipes()
+    q = m.queue_load()
+    check("restart mid-wipe: one record filed", n == 1 and len(q) == 1, q)
+    r = q[0] if q else {}
+    check("restart mid-wipe: status failed", r.get("dataWipeStatus") == "failed", r)
+    check("restart mid-wipe: says the outcome is unknown",
+          "outcome is unknown" in (r.get("notes") or ""), r.get("notes"))
+    check("restart mid-wipe: filed under the machine it was started on",
+          (r.get("profile") or {}).get("identification", {}).get("serialNumber") == "HOST-1", r)
+    check("restart mid-wipe: names the drive",
+          (r.get("wipedDrive") or {}).get("serialNumber") == "W2" and
+          r["wipedDrive"].get("devicePath") == "/dev/sda", r.get("wipedDrive"))
+    check("restart mid-wipe: keeps the lot and the operator stamped at start",
+          r.get("lotId") == "lot-7" and r.get("operatorName") == "Ann", r)
+    check("restart mid-wipe: carries the start time",
+          srv.ISO_UTC.match(r.get("wipeStartedAt") or "") and
+          r["wipeStartedAt"] >= srv.utc_iso(t_before - 1), r.get("wipeStartedAt"))
+    check("restart mid-wipe: tool stamped", r.get("toolName") == "als-audit-station", r)
+    check("restart mid-wipe: the marker is gone", pending() == [], pending())
+    check("recovery twice: files nothing more", m.recover_pending_wipes() == 0 and
+          len(m.queue_load()) == 1)
+    srv.queue_write([])
+
+    # A dead RTC after the restart: the record is never dated before its start.
+    srv.pending_add({"device": "/dev/sda", "drive": {"serial": "W2"}, "method": "auto",
+                     "startedEpoch": 1789812000.0, "clockAtStart": True,
+                     "base": {"profile": PROFILE}})
+    saved_t = m.time.time
+    m.time.time = lambda: 946684800.0       # the machine thinks it is 2000
+    try:
+        m.recover_pending_wipes()
+    finally:
+        m.time.time = saved_t
+    r = (m.queue_load() or [{}])[0]
+    check("dead RTC at recovery: wipedAt not before the wipe started",
+          r.get("wipedAt") == "2026-09-19T10:00:00Z", r.get("wipedAt"))
+    check("recovered with the clock unsynced: says so", r.get("wipedAtClock") == "unsynced", r)
+    srv.queue_write([])
+
+    # The wipe finishes and uploads normally: the marker goes.
+    start(["/dev/sda"])
+    JOBS[0]["on_done"]({"status": "wiped", "method": "m", "device": "/dev/sda"})
+    check("uploaded: one record, marker removed", len(UPLOADS) == 1 and pending() == [],
+          (UPLOADS, pending()))
+
+    # Refused: nothing written to the drive, nothing filed, marker removed.
+    start(["/dev/sda"])
+    JOBS[0]["on_done"]({"status": "refused", "method": "none", "device": "/dev/sda"})
+    check("refused: nothing filed, marker removed", UPLOADS == [] and pending() == [],
+          (UPLOADS, pending()))
+
+    # A job that never started (a wipe already running on that drive).
+    BUSY["on"] = True
+    try:
+        sent = start(["/dev/sda"])
+    finally:
+        BUSY["on"] = False
+    check("never started: marker removed", sent[0] == 409 and pending() == [], (sent, pending()))
+
+    # Power cut DURING the upload: the finished payload is already on disk.
+    SEEN = []
+
+    def dying_upload(payload):
+        SEEN.append(pending())
+        raise KeyboardInterrupt("power cut")    # nothing after this runs
+
+    srv.upload_audit = dying_upload
+    start(["/dev/sda"])
+    try:
+        JOBS[0]["on_done"]({"status": "wiped", "method": "m", "device": "/dev/sda",
+                            "finishedAt": "2026-09-19T10:01:07Z"})
+    except KeyboardInterrupt:
+        pass
+    during = SEEN[0] if SEEN else []
+    check("during the upload: the marker holds the finished record",
+          len(during) == 1 and (during[0].get("final") or {}).get("dataWipeStatus") == "wiped",
+          during)
+    m = fresh_process()
+    m.recover_pending_wipes()
+    q = m.queue_load()
+    check("power cut mid-upload: the WIPED record is filed at the next boot, not a failed one",
+          len(q) == 1 and q[0].get("dataWipeStatus") == "wiped" and
+          q[0].get("wipedAt") == "2026-09-19T10:01:07Z", q)
+    check("power cut mid-upload: marker gone", pending() == [], pending())
+    srv.queue_write([])
+    srv.upload_audit = fake_upload
+    srv.stamp_provenance = lambda p: p
+
+    # Offline: the record is queued, and the marker goes (the queue has it).
+    srv.upload_audit = REAL["upload_audit"]
+    start(["/dev/sda"])
+    JOBS[0]["on_done"]({"status": "wiped", "method": "m", "device": "/dev/sda"})
+    check("offline: queued once, marker removed", srv.queue_count() == 1 and pending() == [],
+          (srv.queue_count(), pending()))
+    srv.queue_write([])
+    srv.upload_audit = fake_upload
+
     print("a wipe job that dies still files a failed record")
 
     import time as _t
@@ -491,6 +636,8 @@ try:
     sent, job = run_real('print(\'WIPE_RESULT {"status":"wiped","method":"m","device":"/dev/sda"}\')')
     check("wiped through the real job runner: one record", len(UPLOADS) == 1 and
           UPLOADS[0]["dataWipeStatus"] == "wiped", UPLOADS)
+    check("real job runner: no wipe marker left behind by any of these", pending() == [],
+          pending())
 finally:
     shutil.rmtree(TMP, ignore_errors=True)
 
