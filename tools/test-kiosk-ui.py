@@ -14,6 +14,9 @@ is true.
    in their own blocks after every pending timer has fired; the run ends with a
    Done button, not by hiding itself; "certificate available" appears only when
    every drive wiped and was recorded, and a server "no" (contract C4) wins.
+3. The header connection chip follows /api/net as it changes (Connected ->
+   Not connected -> Server unreachable), says "Not connected" when /api/net
+   itself fails, and is not painted over by a later bootstrap.
 
 Needs node. Without it the test says SKIP and passes, unless
 ALS_REQUIRE_NODE=1 (set it where node is expected, e.g. CI runners, which
@@ -75,7 +78,9 @@ function mk(id) {
 }
 const document = {
   getElementById: (id) => els[id] || (els[id] = mk(id)),
-  addEventListener() {}, querySelectorAll: () => [], activeElement: null };
+  addEventListener(t, f) { (LISTEN[t] = LISTEN[t] || []).push(f); },
+  querySelectorAll: () => [], activeElement: null, hidden: false };
+const LISTEN = {};
 const timers = [];
 const ctx = vm.createContext({
   document, console, prompt: () => null, screen: {}, innerWidth: 0, innerHeight: 0,
@@ -88,7 +93,7 @@ const flush = () => { while (timers.length) { try { timers.shift()(); } catch (e
 const hidden = (id) => document.getElementById(id).classList.contains('hidden');
 
 (async () => {
-  run(`REAL_POLL=pollJob; REAL_FETCH=fetch;`);
+  run(`REAL_POLL=pollJob; REAL_FETCH=fetch; REAL_BOOT=bootstrap; REAL_JGET=jget;`);
   // Markup state the real page starts in.
   for (const id of ['wRun', 'wSummary', 'wDone']) document.getElementById(id).className = 'hidden';
   document.getElementById('wMethod').value = 'auto';
@@ -330,6 +335,40 @@ const hidden = (id) => document.getElementById(id).classList.contains('hidden');
   run(`renderQueue({waiting:1,waitingHeld:0,waitingRejected:0,queueDurable:true,rejected:[]})`);
   out.rqNetOnly = !hidden('rejBanner');
 
+  // The live connection chip, driven by /api/net (pollNet), not only by the
+  // bootstrap at page load.
+  const chip = () => ({ text: document.getElementById('hConn').textContent,
+    dot: document.getElementById('hDot').className,
+    title: document.getElementById('hConnWrap').title,
+    color: document.getElementById('hConn').style.color });
+  run(`NETASK=[]; NETANS=null; jget=async(u)=>{ NETASK.push(u);
+         if(NETANS instanceof Error) throw NETANS; return NETANS; };`);
+  const poll = async (ans) => { run(`NETANS=${ans}`); await run(`pollNet()`); return chip(); };
+  out.netC = await poll(`{state:'connected',via:'wifi',ssid:'ALS Warehouse',checkedAt:1,since:1}`);
+  out.netN = await poll(`{state:'no-network',via:null,ssid:null,checkedAt:2,since:2}`);
+  out.netU = await poll(`{state:'server-unreachable',via:'wifi',ssid:'ALS Warehouse',checkedAt:3,since:3}`);
+  out.netE = await poll(`{state:'connected',via:'ethernet',ssid:null,checkedAt:4,since:4}`);
+  out.netDown = await poll(`new Error('station service down')`);
+  out.netJunk = await poll(`{state:'weird'}`);
+  out.netAsked = run(`NETASK`);
+  // connClick: Settings whenever the chip is not "Connected".
+  run(`OPENED=0; openSettings=()=>{OPENED++;}; BOOT={};`);
+  await poll(`{state:'server-unreachable',via:'wifi'}`); run(`connClick()`);
+  await poll(`{state:'no-network'}`); run(`connClick()`);
+  await poll(`{state:'connected',via:'wifi'}`); run(`connClick()`);
+  out.netOpened = run(`OPENED`);
+  // A later bootstrap (Rescan, capturing re-poll) does not paint its old
+  // verdict over the live one.
+  run(`jget=async()=>({error:'old failure',server:'',lots:[],drives:[]});`);
+  try { await run(`REAL_BOOT()`); } catch (e) {}
+  out.netAfterBoot = chip();
+  // Page visible again: asks at once.
+  run(`NETASK=[]; jget=async(u)=>{NETASK.push(u); return {state:'no-network'};};`);
+  for (const f of (LISTEN.visibilitychange || [])) f();
+  await new Promise(r => setImmediate(r));
+  out.netOnVisible = { asked: run(`NETASK`), chip: chip() };
+  run(`jget=REAL_JGET`);
+
   process.stdout.write(JSON.stringify(out));
 })().catch((e) => { process.stdout.write(JSON.stringify({ error: String(e && e.stack || e) })); });
 """
@@ -354,6 +393,13 @@ def main():
     check("...outside the offline banner and the Settings panel",
           bool(btn) and html.rfind('id="errBanner"', 0, btn.start()) == -1
           and html.rfind('id="ovSet"', 0, btn.start()) == -1, "")
+    check("chip before any answer: 'Checking…' with a grey dot, never a green one",
+          '<span class="dot wait" id="hDot"' in html
+          and '<span id="hConn" aria-live="polite">Checking…</span>' in html, "")
+    check("the chip's words are announced (aria-live polite on #hConn)",
+          re.search(r'<span id="hConn" aria-live="polite">', html) is not None, "")
+    check("the chip is polled every ~10 s and once at load",
+          "setInterval(pollNet,10000)" in js and re.search(r"^pollNet\(\);", js, re.M) is not None, "")
     check("...and it posts /api/rescan", re.search(
         r"async function rescan\(\)\{[^}]*jpost\('/api/rescan'", js, re.S) is not None, "")
 
@@ -574,6 +620,29 @@ def main():
     check("prior banner: without C4 the newest row is labelled as a record, not the machine",
           o["pwLegacy"] == ["last wipe record: wiped"], o["pwLegacy"])
     check("prior banner: nothing known, nothing said", o["pwNothing"] == [], o["pwNothing"])
+    check("chip: 'Connected' + green dot, via Wi-Fi and the SSID in the tooltip",
+          o["netC"]["text"] == "Connected" and o["netC"]["dot"] == "dot"
+          and "Wi-Fi (ALS Warehouse)" in o["netC"]["title"], o["netC"])
+    check("chip: Connected -> 'Not connected' (red) when /api/net says no-network",
+          o["netN"]["text"] == "Not connected" and "bad" in o["netN"]["dot"]
+          and "red" in o["netN"]["color"], o["netN"])
+    check("chip: 'Server unreachable' (amber, different words) with a network but no server",
+          o["netU"]["text"] == "Server unreachable" and "warn" in o["netU"]["dot"]
+          and "not answering" in o["netU"]["title"], o["netU"])
+    check("chip: back to Connected, via Ethernet in the tooltip",
+          o["netE"]["text"] == "Connected" and "Ethernet" in o["netE"]["title"], o["netE"])
+    check("chip: /api/net itself failing -> 'Not connected'",
+          o["netDown"]["text"] == "Not connected" and "bad" in o["netDown"]["dot"], o["netDown"])
+    check("chip: an unknown state is not shown as connected",
+          o["netJunk"]["text"] == "Not connected", o["netJunk"])
+    check("chip: asks /api/net", set(o["netAsked"]) == {"/api/net"}, o["netAsked"])
+    check("chip: tapping it opens Settings whenever it is not connected (2 of 3 taps)",
+          o["netOpened"] == 2, o["netOpened"])
+    check("chip: a later bootstrap does not paint over the live state",
+          o["netAfterBoot"]["text"] == "Connected", o["netAfterBoot"])
+    check("chip: the page becoming visible asks at once",
+          o["netOnVisible"]["asked"] == ["/api/net"]
+          and o["netOnVisible"]["chip"]["text"] == "Not connected", o["netOnVisible"])
     check("prior banner end to end: shows the failed roll-up, never 'wipe: wiped'",
           "a drive FAILED its wipe" in o["priorHtml"] and "wipe: wiped" not in o["priorHtml"]
           and "ALS-9" in o["priorHtml"], o["priorHtml"])
