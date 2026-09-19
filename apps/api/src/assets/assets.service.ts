@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   Injectable,
@@ -11,8 +12,9 @@ import { AVAILABLE, GONE as GONE_STATUSES } from './stock-status';
 import { nextUnitId } from './unit-id';
 import { Batch, BatchStatus } from '../batches/batch.entity';
 import { AssetEventType, AssetHistory } from './asset-history.entity';
-import { AssetAudit } from './asset-audit.entity';
+import { AssetAudit, DataWipeStatus } from './asset-audit.entity';
 import { assertMayClaimWiped } from './manual-wipe';
+import { isNotAnErase } from './wipe-method';
 import { PermissionsService } from '../auth/permissions.service';
 import { CreateAssetDto } from './dto/create-asset.dto';
 import { UpdateAssetDto } from './dto/update-asset.dto';
@@ -405,6 +407,15 @@ export class AssetsService {
     // Both fields carry the claim (the wipe record, and the device's status),
     // so both are checked, or it just moves to whichever was not.
     await assertMayClaimWiped(this.permissions, userId, dto);
+    // Even with that permission, a block discard is not an erase - see wipe-method.ts.
+    if (
+      dto.dataWipeStatus === DataWipeStatus.WIPED &&
+      isNotAnErase(dto.dataWipeMethod)
+    ) {
+      throw new BadRequestException(
+        'A block discard (TRIM) is not an erase, so it cannot be recorded as "Wiped". Record the method that actually erased the drive, or record it as not wiped.',
+      );
+    }
 
     // Same normalisation the USB tool's ingest path applies, so an audit typed
     // into the web form can't reintroduce a 15 GB capacity or put a screen size

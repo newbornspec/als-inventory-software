@@ -7,6 +7,7 @@ import { AssetAudit, DataWipeStatus } from './asset-audit.entity';
 import { Batch } from '../batches/batch.entity';
 import { COMPANY } from '../common/company';
 import { lotAttestation, sourceOf, wipeAttestation } from './manual-wipe';
+import { DISCARD_REFUSAL, discardedNotice, isNotAnErase } from './wipe-method';
 import {
   assertOwnsBatch,
   isScopedManager,
@@ -58,6 +59,16 @@ export class CertificatesService {
     const latest = new Map<string, AssetAudit>();
     for (const w of wipes) if (!latest.has(w.assetId)) latest.set(w.assetId, w);
 
+    // A device whose latest recorded wipe was a block discard (TRIM) is left
+    // off: that was never an erase - see wipe-method.ts. The LATEST wipe
+    // decides, not any wipe: an older proper wipe says nothing about the drive
+    // after it was used and discarded again. The certificate counts what it
+    // left off, so nobody reads a short list as the whole lot.
+    const discarded = [...latest.values()].filter((w) =>
+      isNotAnErase(w.dataWipeMethod),
+    );
+    for (const w of discarded) latest.delete(w.assetId);
+
     const rows = assets
       .filter((a) => latest.has(a.id))
       .map((a) => {
@@ -84,11 +95,13 @@ export class CertificatesService {
 
     if (rows.length === 0) {
       throw new BadRequestException(
-        'No wiped devices in this lot — record data-wipe audits with status "Wiped" first.',
+        discarded.length
+          ? `No device in this lot can be certified: the only wipes recorded (${discarded.length}) were block discards (TRIM), which are not an erase. Wipe those drives again with the ALS audit station.`
+          : 'No wiped devices in this lot — record data-wipe audits with status "Wiped" first.',
       );
     }
 
-    const buffer = await this.renderLot(batch, rows);
+    const buffer = await this.renderLot(batch, rows, discarded.length);
     return { buffer, filename: `erasure-certificate-${batch.batchNumber}.pdf` };
   }
 
@@ -120,6 +133,8 @@ export class CertificatesService {
         'No completed data erasure on record for this device — record an audit with data-wipe status "Wiped" first.',
       );
     }
+    if (isNotAnErase(wipe.dataWipeMethod))
+      throw new BadRequestException(DISCARD_REFUSAL);
 
     const buffer = await this.render(asset, wipe);
     return { buffer, filename: `erasure-certificate-${asset.tag}.pdf` };
@@ -257,6 +272,7 @@ export class CertificatesService {
   private renderLot(
     batch: Batch,
     rows: Array<{ serial: string; device: string; storage: string; method: string; manual: boolean; date: Date }>,
+    discarded = 0,
   ): Promise<Buffer> {
     return new Promise((resolve, reject) => {
       const doc = new PDFDocument({ size: 'A4', margin: 40 });
@@ -301,6 +317,14 @@ export class CertificatesService {
       // Headline, lead sentence and date column all depend on the mix of
       // station wipes and hand records - see lotAttestation in manual-wipe.ts.
       doc.font('Helvetica').fontSize(9.5).fillColor('#222222').text(lot.intro, { width: right - left });
+      if (discarded > 0) {
+        doc.moveDown(0.4);
+        doc
+          .font('Helvetica')
+          .fontSize(9.5)
+          .fillColor('#222222')
+          .text(discardedNotice(discarded), { width: right - left });
+      }
       doc.moveDown(0.6);
 
       const cols = [

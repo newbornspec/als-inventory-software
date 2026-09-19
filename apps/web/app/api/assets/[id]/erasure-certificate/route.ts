@@ -16,9 +16,22 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
     cache: 'no-store',
   });
 
+  // The link is a plain <a>, so whatever comes back here is the page the
+  // operator sees. A refusal - no wipe on record, or a wipe that was only a
+  // block discard (TRIM) - has to read as a sentence, not as raw JSON. Same
+  // handling as the lot route.
   if (!res.ok) {
     const body = await res.text();
-    return new NextResponse(body || 'Failed to generate certificate', { status: res.status });
+    let message = body;
+    try {
+      message = JSON.parse(body).message ?? body;
+    } catch {
+      /* not JSON */
+    }
+    return new NextResponse(message || 'Failed to generate certificate', {
+      status: res.status,
+      headers: { 'Content-Type': 'text/plain' },
+    });
   }
 
   return new NextResponse(res.body, {

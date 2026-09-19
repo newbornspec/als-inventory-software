@@ -18,6 +18,7 @@ import { HardwareProfile } from './hardware-profile.type';
 import { normaliseHardwareProfile } from './normalise-profile';
 import { screenSizeFor, standardiseRamGb } from '../common/spec-normalise';
 import { ActivityService } from '../activity/activity.service';
+import { downgradeDiscardClaim } from '../assets/wipe-method';
 
 // What a capture proves on its own, for the normal case where the tool sends no
 // explicit call. Deliberately the floor rather than a guess: nothing here claims a
@@ -162,6 +163,12 @@ export class DevicesService {
         );
       }
     }
+
+    // A stick still running the pre-19-Sep wipe engine can report a block
+    // discard (TRIM) as "wiped". Kept as a record, filed as FAILED - it never
+    // reaches the device as data_wiped and can never be certified. See
+    // wipe-method.ts.
+    dto = downgradeDiscardClaim(dto);
 
     const user = await this.users.findOne({ where: { id: userId } });
     // Amazon: any lotId in the payload is IGNORED, not honoured — once the
