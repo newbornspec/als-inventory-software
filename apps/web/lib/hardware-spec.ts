@@ -11,6 +11,10 @@
 // identically — the same device must not read one way on one screen and
 // another way on the next.
 
+// Relative, not '@/lib/...', so the API's jest run can import this file too
+// (apps/api/src/devices/drive-health-rows.spec.ts pins the Storage rows).
+import { driveHealthView } from './drive-health';
+
 export interface HardwareProfileLike {
   identification?: { manufacturer?: string; model?: string; productName?: string };
   system?: {
@@ -46,6 +50,9 @@ export interface HardwareProfileLike {
     interface?: string;
     smartStatus?: string;
     serialNumber?: string;
+    // Contract C5 drive health, as the station sent it. Read only through
+    // lib/drive-health.ts, which checks every field.
+    health?: unknown;
   }>;
   graphics?: Array<{ manufacturer?: string; model?: string; type?: string; vram?: string }>;
   // manufacturer/panel are not captured by every tool, but the schema is
@@ -78,6 +85,9 @@ export interface SpecRow {
   params: string;
   // Chain-of-custody detail (drive serials), shown small under the params.
   sub?: string;
+  // A plain-language line under the params: what a drive's health figure is
+  // based on, or why it could not be measured and what to do about it.
+  note?: string;
   flag?: SpecFlag;
 }
 
@@ -99,13 +109,33 @@ const paren = (parts: (string | number | undefined | null | false)[]) => {
   return inner ? `(${inner})` : '';
 };
 
-// A drive that failed SMART is the single most consequential thing on this
-// table: it decides whether the unit can be sold or must be destroyed.
-function smartFlag(status?: string): SpecFlag | undefined {
-  if (!status) return undefined;
-  const s = status.toUpperCase();
-  if (s.includes('FAIL')) return { label: 'SMART FAILED', tone: 'bad' };
-  return undefined;
+// A drive's health is the most consequential thing on this table: it decides
+// whether the unit can be sold or must be destroyed. The chip is the measured
+// percentage and its status in WORDS ("94% Good") - colour only reinforces it.
+// Worded by lib/drive-health.ts, the same formatter the reports' API copy
+// uses. It never says "Unknown": a drive that could not be measured says so
+// and why, and a profile from before drive health says it was not scanned.
+function driveHealth(d: { health?: unknown; smartStatus?: string }): {
+  flag?: SpecFlag;
+  note: string;
+} {
+  const v = driveHealthView(d);
+  if (v.kind === 'measured') {
+    const tone = v.tone === 'neutral' ? 'good' : v.tone;
+    return { flag: { label: v.cell, tone }, note: v.basis ?? '' };
+  }
+  if (v.kind === 'not-measurable') {
+    return {
+      flag: { label: 'Not measurable', tone: 'warn' },
+      note: `${v.headline} — ${v.action}`,
+    };
+  }
+  // Not scanned yet. An old SMART FAILED verdict came from the drive itself,
+  // so it keeps its flag - it just never becomes a percentage.
+  return {
+    flag: v.legacySmartFailed ? { label: 'SMART FAILED', tone: 'bad' } : undefined,
+    note: `Health: ${v.headline}`,
+  };
 }
 
 export function specRows(p: HardwareProfileLike | null | undefined): SpecRow[] {
@@ -154,13 +184,15 @@ export function specRows(p: HardwareProfileLike | null | undefined): SpecRow[] {
   }
 
   for (const d of p.storage ?? []) {
+    const health = driveHealth(d);
     rows.push({
       component: 'Storage',
       qty: 1,
       mfgArch: text([d.type || d.interface, d.manufacturer]) || DASH,
       params: text([d.capacity, d.model && d.model !== d.capacity && d.model]) || DASH,
       sub: d.serialNumber ? `S/N ${d.serialNumber}` : undefined,
-      flag: smartFlag(d.smartStatus),
+      note: health.note || undefined,
+      flag: health.flag,
     });
   }
 
