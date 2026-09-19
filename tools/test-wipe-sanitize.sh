@@ -97,21 +97,34 @@ mklog "$L/ok4big"   65535 257 20  30    # CDW10 = 0x14: action bits 2:0 = 4, AUS
 : > "$L/empty"                          # the page could not be read at all
 
 echo "the result is read as numbers, not words"
-san 4 "$L/ok4";   [ "$RC" -eq 0 ] && ok "SSTAT 0x0101 + SPROG 65535 + action 4 issued 4: success" || bad "SSTAT 0x0101 + SPROG 65535 + action 4 issued 4: success" "rc=$RC polls=$POLLS"
+san 4 "$L/never" "$L/ok4";   [ "$RC" -eq 0 ] && ok "SSTAT 0x0101 + SPROG 65535 + action 4 issued 4: success" || bad "SSTAT 0x0101 + SPROG 65535 + action 4 issued 4: success" "rc=$RC polls=$POLLS"
 [ "$ISSUED" = "issue sanitize /dev/nvme9 -a 4" ] && ok "the sanitize issued is exactly the action asked for" || bad "the sanitize issued is exactly the action asked for" "$ISSUED"
-san 4 "$L/ok4nd"; [ "$RC" -eq 0 ] && ok "status 4 (done, no-deallocate) + action 4: success" || bad "status 4 (done, no-deallocate) + action 4: success" "rc=$RC"
-san 4 "$L/ok4big"; [ "$RC" -eq 0 ] && ok "only CDW10 bits 2:0 are the action (0x14 is action 4)" || bad "only CDW10 bits 2:0 are the action (0x14 is action 4)" "rc=$RC"
-san 2 "$L/ok2";   [ "$RC" -eq 0 ] && ok "block erase: status done + action 2 issued 2: success" || bad "block erase: status done + action 2 issued 2: success" "rc=$RC"
-san 4 "$L/run4" "$L/run4" "$L/ok4"; [ "$RC" -eq 0 ] && [ "$POLLS" -eq 3 ] && ok "in progress, then done: waits, then success" || bad "in progress, then done: waits, then success" "rc=$RC polls=$POLLS"
+san 4 "$L/never" "$L/ok4nd"; [ "$RC" -eq 0 ] && ok "status 4 (done, no-deallocate) + action 4: success" || bad "status 4 (done, no-deallocate) + action 4: success" "rc=$RC"
+san 4 "$L/never" "$L/ok4big"; [ "$RC" -eq 0 ] && ok "only CDW10 bits 2:0 are the action (0x14 is action 4)" || bad "only CDW10 bits 2:0 are the action (0x14 is action 4)" "rc=$RC"
+san 2 "$L/never" "$L/ok2";   [ "$RC" -eq 0 ] && ok "block erase: status done + action 2 issued 2: success" || bad "block erase: status done + action 2 issued 2: success" "rc=$RC"
+san 4 "$L/never" "$L/run4" "$L/run4" "$L/ok4"; [ "$RC" -eq 0 ] && [ "$POLLS" -eq 4 ] && ok "in progress, then done: waits, then success" || bad "in progress, then done: waits, then success" "rc=$RC polls=$POLLS"
 
 echo "anything short of all three is NOT success"
-san 4 "$L/fail4"; [ "$RC" -ne 0 ] && ok "SSTAT 0x0103 (failed): fails" || bad "SSTAT 0x0103 (failed): fails" "rc=0"
-[ "$POLLS" -eq 1 ] && ok "a reported failure fails at once, it does not wait out the deadline" || bad "a reported failure fails at once, it does not wait out the deadline" "polls=$POLLS"
+san 4 "$L/never" "$L/fail4"; [ "$RC" -ne 0 ] && ok "SSTAT 0x0103 (failed): fails" || bad "SSTAT 0x0103 (failed): fails" "rc=0"
+[ "$POLLS" -eq 2 ] && ok "a reported failure fails at once, it does not wait out the deadline" || bad "a reported failure fails at once, it does not wait out the deadline" "polls=$POLLS"
 san 4 "$L/stale2"; [ "$RC" -ne 0 ] && ok "a stale success for a DIFFERENT action (block erase) is not success" || bad "a stale success for a DIFFERENT action (block erase) is not success" "rc=0"
 san 4 "$L/part4"; [ "$RC" -ne 0 ] && ok "status done but SPROG 32768: not success" || bad "status done but SPROG 32768: not success" "rc=0"
 san 4 "$L/never"; [ "$RC" -ne 0 ] && ok "a log that never shows the sanitize: not success" || bad "a log that never shows the sanitize: not success" "rc=0"
 san 4 "$L/empty"; [ "$RC" -ne 0 ] && ok "an unreadable log page: not success" || bad "an unreadable log page: not success" "rc=0"
 san 4 "$L/stale2" "$L/run4" "$L/ok4"; [ "$RC" -eq 0 ] && ok "stale success, then running, then this action done: success" || bad "stale success, then running, then this action done: success" "rc=$RC polls=$POLLS"
+
+echo "a success left over from an earlier sanitize of the SAME action is not this one"
+# The log is read before the command is issued. When that snapshot already
+# says "done, 65535, this action", the same page afterwards proves nothing:
+# the run has to see its own operation (status 2, or progress below 65535).
+san 4 "$L/ok4"; [ "$RC" -ne 0 ] && ok "log unchanged from a stale completed crypto sanitize: not success" || bad "log unchanged from a stale completed crypto sanitize: not success" "rc=0 polls=$POLLS"
+[ "$POLLS" -eq 14 ] && ok "the stale case gives up after the 60 s grace (snapshot + 13 reads), not the full deadline" || bad "the stale case gives up after the 60 s grace (snapshot + 13 reads), not the full deadline" "polls=$POLLS"
+san 4 "$L/ok4" "$L/run4" "$L/ok4"; [ "$RC" -eq 0 ] && ok "stale same-action snapshot, then running, then done: success" || bad "stale same-action snapshot, then running, then done: success" "rc=$RC polls=$POLLS"
+san 4 "$L/ok4" "$L/ok4" "$L/ok4" "$L/ok4" "$L/run4" "$L/ok4"; [ "$RC" -eq 0 ] && ok "firmware updates the page late (stale for 3 reads, then running): success" || bad "firmware updates the page late (stale for 3 reads, then running): success" "rc=$RC polls=$POLLS"
+san 4 "$L/ok4" "$L/part4" "$L/ok4"; [ "$RC" -eq 0 ] && ok "progress seen below 65535 counts as this run's operation" || bad "progress seen below 65535 counts as this run's operation" "rc=$RC polls=$POLLS"
+san 4 "$L/empty" "$L/ok4"; [ "$RC" -ne 0 ] && ok "snapshot unreadable, then a completed entry never seen running: not success" || bad "snapshot unreadable, then a completed entry never seen running: not success" "rc=0"
+san 4 "$L/stale2" "$L/ok4"; [ "$RC" -eq 0 ] && [ "$POLLS" -eq 2 ] && ok "snapshot of a DIFFERENT action, then this action done: success at once" || bad "snapshot of a DIFFERENT action, then this action done: success at once" "rc=$RC polls=$POLLS"
+san 2 "$L/ok2"; [ "$RC" -ne 0 ] && ok "the same rule for block erase (action 2)" || bad "the same rule for block erase (action 2)" "rc=0"
 
 echo "the wait is based on the drive's own estimate"
 lim() { env -i "$BASH" -c "$FUNCS
@@ -122,9 +135,10 @@ nvme_sanitize_limit $1"; }
 [ "$(lim 4294967295)" = 1200 ] && ok "0xFFFFFFFF (no estimate): the old 20 minutes" || bad "0xFFFFFFFF (no estimate): the old 20 minutes" "$(lim 4294967295)"
 [ "$(lim '')" = 1200 ]       && ok "no estimate field: the old 20 minutes" || bad "no estimate field: the old 20 minutes" "$(lim '')"
 # The stale case above carries a 30 s crypto estimate: 300 s at one read per
-# 5 s is 60 waits, then one last read - 61 reads, not the 241 of the old fixed
-# 20 minutes. Proves the estimate is what set the deadline.
-san 4 "$L/stale2"; [ "$POLLS" -eq 61 ] && ok "the deadline actually used is the estimate's (61 reads for 300 s)" || bad "the deadline actually used is the estimate's (61 reads for 300 s)" "polls=$POLLS"
+# 5 s is 60 waits, then one last read - 61 reads (plus the one snapshot read
+# before the command), not the 241 of the old fixed 20 minutes. Proves the
+# estimate is what set the deadline.
+san 4 "$L/stale2"; [ "$POLLS" -eq 62 ] && ok "the deadline actually used is the estimate's (61 reads for 300 s, plus the snapshot)" || bad "the deadline actually used is the estimate's (61 reads for 300 s, plus the snapshot)" "polls=$POLLS"
 
 echo
 echo "$PASS passed, $FAIL failed"

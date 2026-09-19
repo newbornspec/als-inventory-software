@@ -559,8 +559,29 @@ nvme_sanitize_limit() {
 # "completed" (1 or 4), progress is 65535, and the action the log records is
 # the action issued here. Anything else is still running, stale, or failed.
 # Returns 0 on success.
+#
+# The log only describes the LAST sanitize, with no timestamp. A drive that was
+# crypto-sanitized before (by a refurbisher, or an earlier run) already shows
+# "done, 65535, action 4" before we issue anything - and a controller that
+# updates the page a moment after accepting the command, or accepts it without
+# starting a new operation, would let that old entry pass as this erase. So the
+# log is read BEFORE the command. If that snapshot already looks like the
+# success we are waiting for (or cannot be read at all), a completed entry is
+# accepted only after this run has SEEN the new operation: status 2 (in
+# progress) or progress below 65535. If that never shows within a short grace,
+# the result is indistinguishable from the old one and is not accepted - the
+# caller then falls back to the next method, which is honest; a false "wiped"
+# is not.
 nvme_sanitize() {
-  local ctrl="$1" act="$2" limit=1200 waited=0 st est
+  local ctrl="$1" act="$2" limit=1200 waited=0 st est need_fresh=0 grace=60
+  if nvme_sanitize_log "$ctrl"; then
+    st=$(( SAN_SSTAT & 7 ))
+    case "$st" in
+      1|4) [ "$SAN_SPROG" = "65535" ] && [ "$SAN_ACT" = "$act" ] && need_fresh=1 ;;
+    esac
+  else
+    need_fresh=1
+  fi
   nvme sanitize "$ctrl" -a "$act" >/dev/null 2>&1 || return 1
   echo "    sanitize started — waiting for completion …"
   while :; do
@@ -568,10 +589,19 @@ nvme_sanitize() {
       case "$act" in 4) est="$SAN_EST_CE" ;; 2) est="$SAN_EST_BE" ;; 3) est="$SAN_EST_OW" ;; *) est="" ;; esac
       limit=$(nvme_sanitize_limit "$est")
       st=$(( SAN_SSTAT & 7 ))
+      # The new operation, seen: running, or progress not yet complete.
+      if [ "$st" = 2 ] || { [ -n "$SAN_SPROG" ] && [ "$SAN_SPROG" != "65535" ]; }; then
+        need_fresh=0
+      fi
       case "$st" in
         1|4)
           if [ "$SAN_SPROG" = "65535" ] && [ "$SAN_ACT" = "$act" ]; then
-            return 0
+            [ "$need_fresh" = 0 ] && return 0
+            # Identical to what the log said before we issued the command.
+            if [ "$waited" -ge "$grace" ]; then
+              echo "    sanitize log still shows only the earlier completed action $act — this run's erase was never seen; not accepted"
+              return 1
+            fi
           fi
           # A completed entry for a DIFFERENT action (or not at 100%) is the
           # previous sanitize, not this one. Keep waiting; the deadline decides.
