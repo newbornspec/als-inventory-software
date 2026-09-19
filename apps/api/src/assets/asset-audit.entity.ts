@@ -11,6 +11,7 @@ import { User } from '../users/user.entity';
 import { HardwareProfile } from '../devices/hardware-profile.type';
 // Type-only: erased at runtime, so no import cycle with manual-wipe.ts.
 import type { WipeSource } from './manual-wipe';
+import type { WipedDrive, WipeSmart } from '../devices/wipe-detail';
 
 export enum DataWipeStatus {
   NOT_STARTED = 'not_started',
@@ -146,6 +147,116 @@ export class AssetAudit {
   // and migration 1752640000000-AddWipeSource.
   @Column({ name: 'wipe_source', type: 'varchar', length: 16, nullable: true })
   wipeSource: WipeSource | null;
+
+  // --- per-drive wipe detail (remediation spec steps 19, 26, 39) ----------
+  // All NULL on rows from before migration 1752650000000-AddWipeRecordDetail,
+  // on rows from sticks that predate these fields, and on non-wipe audits.
+  // Written only by the station ingest, through devices/wipe-detail.ts, which
+  // stores NULL plus a note for anything it cannot accept rather than
+  // rejecting the record. Not in the PowerSync upload allow-list, so no web
+  // client can set them.
+
+  // When the drive was erased, by the station's clock (created_at is when the
+  // record reached the server, which for an offline-queued record is later).
+  @Column({ name: 'wiped_at', type: 'timestamptz', nullable: true })
+  wipedAt: Date | null;
+
+  @Column({ name: 'wipe_started_at', type: 'timestamptz', nullable: true })
+  wipeStartedAt: Date | null;
+
+  // 'network' | 'unsynced' - whether the station clock behind wiped_at was
+  // network-synced at the time.
+  @Column({
+    name: 'wiped_at_clock',
+    type: 'varchar',
+    length: 16,
+    nullable: true,
+  })
+  wipedAtClock: string | null;
+
+  // Which drive this record is about. Indexed for per-drive lookups; the rest
+  // of the drive's identity is in wipedDrive.
+  @Column({
+    name: 'wiped_drive_serial',
+    type: 'varchar',
+    length: 128,
+    nullable: true,
+  })
+  wipedDriveSerial: string | null;
+
+  @Column({ name: 'wiped_drive', type: 'jsonb', nullable: true })
+  wipedDrive: WipedDrive | null;
+
+  // Which code produced the record.
+  @Column({ name: 'tool_name', type: 'varchar', length: 64, nullable: true })
+  toolName: string | null;
+
+  @Column({ name: 'tool_version', type: 'varchar', length: 64, nullable: true })
+  toolVersion: string | null;
+
+  @Column({ name: 'tool_commit', type: 'varchar', length: 64, nullable: true })
+  toolCommit: string | null;
+
+  // What was asked for (auto|crypto|secure|overwrite|zero), what was tried in
+  // order, and why a stronger method was not used.
+  @Column({
+    name: 'wipe_method_requested',
+    type: 'varchar',
+    length: 32,
+    nullable: true,
+  })
+  wipeMethodRequested: string | null;
+
+  @Column({
+    name: 'wipe_method_attempted',
+    type: 'varchar',
+    length: 255,
+    nullable: true,
+  })
+  wipeMethodAttempted: string | null;
+
+  @Column({
+    name: 'wipe_fallback_reason',
+    type: 'varchar',
+    length: 255,
+    nullable: true,
+  })
+  wipeFallbackReason: string | null;
+
+  // 'purge' | 'clear' | 'none' (NIST SP 800-88). CHECK-constrained in the DB.
+  @Column({
+    name: 'sanitisation_level',
+    type: 'varchar',
+    length: 16,
+    nullable: true,
+  })
+  sanitisationLevel: string | null;
+
+  // Read-back result: 'clean' | 'found' | 'unverified'.
+  @Column({
+    name: 'wipe_verification',
+    type: 'varchar',
+    length: 16,
+    nullable: true,
+  })
+  wipeVerification: string | null;
+
+  // HPA/DCO outcome: none | hpa-removed | unknown | dco-present | hpa-present.
+  @Column({ name: 'hidden_areas', type: 'varchar', length: 32, nullable: true })
+  hiddenAreas: string | null;
+
+  // Device-lock roll-up (CLEAR | LOCKED | WARNING | UNVERIFIED), derived by the
+  // server from hardware_profile - see lockStatusOf in devices/wipe-detail.ts.
+  @Column({ name: 'lock_status', type: 'varchar', length: 16, nullable: true })
+  lockStatus: string | null;
+
+  // Human-readable limitations of this wipe. [] = the engine reported none;
+  // NULL = not reported (older stick).
+  @Column({ name: 'wipe_limitations', type: 'jsonb', nullable: true })
+  wipeLimitations: string[] | null;
+
+  @Column({ name: 'wipe_smart', type: 'jsonb', nullable: true })
+  wipeSmart: WipeSmart | null;
 
   @Column({
     name: 'final_disposition',

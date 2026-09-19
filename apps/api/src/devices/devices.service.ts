@@ -19,6 +19,11 @@ import { normaliseHardwareProfile } from './normalise-profile';
 import { screenSizeFor, standardiseRamGb } from '../common/spec-normalise';
 import { ActivityService } from '../activity/activity.service';
 import { downgradeDiscardClaim } from '../assets/wipe-method';
+import {
+  lockStatusOf,
+  normaliseWipeDetail,
+  wipeDetailNote,
+} from './wipe-detail';
 
 // What a capture proves on its own, for the normal case where the tool sends no
 // explicit call. Deliberately the floor rather than a guess: nothing here claims a
@@ -278,6 +283,13 @@ export class DevicesService {
     // Derive the legacy audit-summary columns from the profile where present so
     // existing audit views keep working; the full detail lives in hardware_profile.
     const firstDrive = profile?.storage?.[0];
+
+    // The per-drive wipe detail. Anything unusable is stored NULL and said in
+    // the notes - never a 400, which the stick would retry forever. See
+    // wipe-detail.ts.
+    const { detail: wipeDetail, notes: detailNotes } = normaliseWipeDetail(dto);
+    const detailNote = wipeDetailNote(detailNotes);
+    const notes = [dto.notes, detailNote].filter(Boolean).join('\n') || null;
     await this.audits.save(
       this.audits.create({
         assetId: asset.id,
@@ -321,7 +333,10 @@ export class DevicesService {
         // the append-only trail, so it records what was judged at this moment,
         // including "not judged".
         screenGrade: dto.screenGrade ?? null,
-        notes: dto.notes ?? null,
+        ...wipeDetail,
+        // From the profile, not the payload, so old sticks get it too.
+        lockStatus: lockStatusOf(normalisedProfile),
+        notes,
         auditedById: userId,
       }),
     );
