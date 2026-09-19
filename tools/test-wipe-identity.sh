@@ -99,6 +99,7 @@ VER=$(sed -n 's/^ALS_TOOL_VERSION="\(.*\)"$/\1/p' "$SRC")
 FUNCS="$(grep -E '^(esc|o_begin|o_s|o_s0|o_n|o_raw|o_end|als_utc_now)\(\) \{' "$SRC")
 $(grep '^ALS_TOOL_VERSION=' "$SRC")
 $(extract "$SRC" als_lsblk_val)
+$(extract "$SRC" als_lsblk_unescape)
 $(extract "$SRC" als_drive_identity)
 $(extract "$SRC" wipe_result)
 $(extract "$SRC" clear_label)
@@ -234,6 +235,82 @@ STUBS_SAVE="$STUBS"; STUBS="$STUBS_CTL"
 run "$DEV" auto "" STUB_FW=ok
 STUBS="$STUBS_SAVE"
 check "a model with control bytes (lsblk \\x01, \\x1b): WIPE_RESULT still parses, bytes dropped" wiped auto "$SER"
+
+echo "lsblk's \\xNN escapes: never turned back into bytes that are not UTF-8"
+# lsblk -P escapes every byte it cannot print as \xNN. Decoding a \xff back to
+# a raw 0xFF made the WIPE_RESULT line invalid UTF-8, and the kiosk - which
+# reads the engine as strict UTF-8 text - threw before it could parse it: an
+# erased drive with no record. The WHOLE output must decode strictly.
+cat > "$T/utf8.py" <<'PYEOF'
+import json, sys
+b = sys.stdin.buffer.read()
+try:
+    t = b.decode("utf-8")          # strict, like Popen(text=True)
+except UnicodeDecodeError as e:
+    print("not UTF-8: %s" % e); sys.exit(1)
+lines = [l for l in t.splitlines() if l.startswith("WIPE_RESULT ")]
+if len(lines) != 1:
+    print("%d WIPE_RESULT lines" % len(lines)); sys.exit(1)
+r = json.loads(lines[0][len("WIPE_RESULT "):])
+d = r.get("drive") or {}
+print("%s|%s|%s" % (r.get("status"), d.get("serialNumber"), d.get("model")))
+PYEOF
+STUBS_HI=$(printf '%s' "$STUBS" | sed 's/980 \\\\x22PRO\\\\x22/WDC\\\\xff Blue\\\\xe9/')
+case "$STUBS_HI" in *xff*xe9*) ;; *) echo "could not plant the high bytes"; exit 1 ;; esac
+STUBS_SAVE="$STUBS"; STUBS="$STUBS_HI"
+run "$DEV" auto "" STUB_FW=ok 'STUB_SERIAL=AB\xff12'
+STUBS="$STUBS_SAVE"
+r=$(printf '%s\n' "$OUT" | PYTHONIOENCODING=utf-8 "$PY" "$T/utf8.py" 2>&1)
+[ "$r" = 'wiped|AB\xff12|Samsung SSD WDC\xff Blue\xe9' ] \
+  && ok "a 0xFF / 0xE9 byte in serial and model: the whole output is strict UTF-8, kept as \\xNN text" \
+  || bad "a 0xFF / 0xE9 byte in serial and model: the whole output is strict UTF-8, kept as \\xNN text" "$r"
+# The refusal line prints the drive's serial too - same rule.
+STUBS="$STUBS_HI"
+run "$DEV" auto "SOMETHING-ELSE" STUB_FW=ok 'STUB_SERIAL=AB\xff12'
+STUBS="$STUBS_SAVE"
+r=$(printf '%s\n' "$OUT" | PYTHONIOENCODING=utf-8 "$PY" "$T/utf8.py" 2>&1)
+case "$r" in refused\|*) ok "a mismatch refusal naming a 0xFF serial: still strict UTF-8" ;; *) bad "a mismatch refusal naming a 0xFF serial: still strict UTF-8" "$r" ;; esac
+
+unesc() { env -i PATH="$SAFE" "$BASH" -c "$(extract "$SRC" als_lsblk_unescape)
+als_lsblk_unescape \"\$1\"" _ "$1"; }
+[ "$(unesc 'S3Z\x241234')" = 'S3Z$1234' ]  && ok "\\x24 decodes to \$" || bad "\\x24 decodes to \$" "$(unesc 'S3Z\x241234')"
+[ "$(unesc 'a\x5cb\x22c\x60d')" = 'a\b"c`d' ] && ok "\\x5c \\x22 \\x60 decode to backslash, quote, backtick" || bad "\\x5c \\x22 \\x60 decode to backslash, quote, backtick" "$(unesc 'a\x5cb\x22c\x60d')"
+[ "$(unesc 'a\x01b\x7fc\x1b')" = 'abc' ]   && ok "control-byte escapes are dropped" || bad "control-byte escapes are dropped" "$(unesc 'a\x01b\x7fc\x1b')"
+[ "$(unesc 'a\xffb\xc3\xa9')" = 'a\xffb\xc3\xa9' ] && ok "high-byte escapes stay as literal \\xNN text" || bad "high-byte escapes stay as literal \\xNN text" "$(unesc 'a\xffb\xc3\xa9')"
+[ "$(unesc 'a\xZZ\x4')" = 'a\xZZ\x4' ]     && ok "a malformed escape is left as it was" || bad "a malformed escape is left as it was" "$(unesc 'a\xZZ\x4')"
+[ "$(unesc 'plain')" = 'plain' ]           && ok "text with no escape is unchanged" || bad "text with no escape is unchanged" "$(unesc 'plain')"
+
+echo "a serial lsblk escapes: the profile and the wipe must agree on it"
+# The kiosk sends the profile's storage[].serialNumber back as the expected
+# serial. When the profile kept lsblk's raw "\x24" and the wipe decoded it to
+# "$", the right drive was refused as a mismatch on every attempt.
+run "$DEV" auto 'S3Z$1234' STUB_FW=ok 'STUB_SERIAL=S3Z\x241234'
+check "serial S3Z\$1234 (lsblk: S3Z\\x241234), expected in decoded form: wiped" wiped auto 'S3Z$1234'
+run "$DEV" auto 'S3Z\x241234' STUB_FW=ok 'STUB_SERIAL=S3Z\x241234'
+check "the same, expected in an older profile's raw escape form: wiped" wiped auto 'S3Z$1234'
+run "$DEV" auto 'S3Z\x251234' STUB_FW=ok 'STUB_SERIAL=S3Z\x241234'
+check "an escape naming a DIFFERENT byte: still refused" refused auto 'S3Z$1234'; nowrite "different escaped serial"
+# The profile's storage loop must compute serialNumber with the very same code:
+# run its actual D_SERIAL line and compare with what the wipe reads.
+PROF_LINE=$(grep -E '^[[:space:]]*D_SERIAL=' "$SRC" | head -n1)
+PVAL=$(grep '^pval() {' "$SRC")
+LS_LINE='NAME="sda" TYPE="disk" SERIAL="WD-AB\x24C\xc3\xa9\x22 " MODEL="x"'
+prof=$(env -i PATH="$SAFE" L="$LS_LINE" "$BASH" -c "$PVAL
+$(extract "$SRC" als_lsblk_unescape)
+$(extract "$SRC" als_lsblk_val)
+line=\"\$L\"
+$PROF_LINE
+printf '%s' \"\$D_SERIAL\"")
+eng=$(env -i PATH="$SAFE" L="$LS_LINE" "$BASH" -c "$(extract "$SRC" als_lsblk_unescape)
+$(extract "$SRC" als_lsblk_val)
+lsblk() { printf '%s\n' \"\$L\"; }
+$(extract "$SRC" als_drive_identity)
+als_drive_identity /nonexistent-harness-device
+printf '%s' \"\$DRV_SERIAL\"")
+[ -n "$eng" ] && [ "$prof" = "$eng" ] \
+  && ok "profile serialNumber == wipe's DRV_SERIAL for an escaped serial ($eng)" \
+  || bad "profile serialNumber == wipe's DRV_SERIAL for an escaped serial" "profile [$prof] engine [$eng]"
+case "$(grep -E '^[[:space:]]*D_RM=' "$SRC")" in *'D_MODEL=$(als_lsblk_val "$line" MODEL)'*) ok "the profile's model uses the same normaliser" ;; *) bad "the profile's model uses the same normaliser" "$(grep -E '^[[:space:]]*D_RM=' "$SRC")" ;; esac
 
 
 echo

@@ -775,15 +775,52 @@ als_boot_disk() {
 # pval() does the same parsing but is defined after the dispatch has already
 # exited, so gui_wipe_one cannot see it.
 #
-# Pull KEY="value" out of one lsblk -P line, without eval, trimmed. lsblk -P
-# writes a quote, backslash or other unsafe byte inside a value as \xNN (a
-# backslash itself is \x5c), so the only backslashes are those escapes and
-# printf %b turns them back into the drive's real text; esc() then makes that
-# text JSON-safe.
+# Pull KEY="value" out of one lsblk -P line, without eval, trimmed, with
+# lsblk's escapes normalised by als_lsblk_unescape. The profile's storage loop
+# uses THIS helper for SERIAL and MODEL too, so the serial the kiosk sends back
+# as the expected serial (storage[].serialNumber) is byte-for-byte the text
+# DRV_SERIAL holds here. When the two were normalised differently (the profile
+# kept lsblk's raw "\x24", this side decoded it to "$"), a drive whose serial
+# held any escaped byte was refused as "identity mismatch" on every attempt.
 als_lsblk_val() {
   local v
   v=$(printf ' %s' "$1" | grep -oE " $2=\"[^\"]*\"" | head -n1 | sed -e "s/^ $2=\"//" -e 's/"$//')
-  printf '%b' "$v" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
+  als_lsblk_unescape "$v" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
+}
+# lsblk -P writes a quote, backslash, $, backtick and any byte it cannot print
+# in the current locale as \xNN (a backslash itself is \x5c), so the only
+# backslashes in a value are those escapes. Turn them back into text ONLY where
+# that is safe:
+#   \x20-\x7e  printable ASCII: decoded (\x24 -> $, \x22 -> ", \x5c -> \)
+#   \x00-\x1f, \x7f  control bytes: dropped (JSON cannot carry them raw)
+#   \x80-\xff  kept as the literal four characters \xNN
+# The last rule is the one that matters. This used to decode everything with
+# printf %b, so a stray 0xFF pad byte in a firmware model string came back as
+# a raw 0xFF - not UTF-8, so the WIPE_RESULT line was not valid text and the
+# kiosk (which reads the engine as strict UTF-8) died decoding it: an erased
+# drive with no record. Leaving high bytes as escape text keeps every line
+# pure ASCII for what lsblk escaped. A real accented character lsblk printed
+# unescaped (a UTF-8 locale) passes through as it was.
+als_lsblk_unescape() {
+  local s="$1" out="" h c
+  while :; do
+    case "$s" in *'\x'*) ;; *) break ;; esac
+    out="$out${s%%\\x*}"
+    s="${s#*\\x}"
+    h="${s:0:2}"
+    case "$h" in
+      [0-9a-fA-F][0-9a-fA-F])
+        if [ $((16#$h)) -ge 32 ] && [ $((16#$h)) -le 126 ]; then
+          printf -v c '%b' "\\x$h"
+          out="$out$c"; s="${s:2}"; continue
+        elif [ $((16#$h)) -lt 32 ] || [ $((16#$h)) -eq 127 ]; then
+          s="${s:2}"; continue
+        fi
+        ;;
+    esac
+    out="$out\\x"
+  done
+  printf '%s' "$out$s"
 }
 # Sets DRV_SERIAL DRV_MODEL DRV_SIZE DRV_TRAN DRV_ROTA DRV_WWN for device $1.
 # Any of them may be empty: some drives report no serial (owner decision D18:
@@ -879,8 +916,15 @@ gui_wipe_one() {
   # that came up first this time - can put a DIFFERENT drive behind the same
   # /dev name. Checked before anything is written; an empty expected serial
   # (an older kiosk, or a drive that reports none) means no check.
+  # The kiosk sends the profile's storage[].serialNumber, which is normalised by
+  # the same als_lsblk_val as DRV_SERIAL, so an exact match is the normal case.
+  # A profile captured by an older engine kept lsblk's raw escape text (e.g.
+  # "S3Z\x241234" for S3Z$1234); normalising the expected serial the same way
+  # accepts that too. Either form names only the drive lsblk just described, so
+  # this cannot match a different drive.
   expect=$(printf '%s' "$expect" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
-  if [ -n "$expect" ] && [ "$expect" != "$DRV_SERIAL" ]; then
+  if [ -n "$expect" ] && [ "$expect" != "$DRV_SERIAL" ] \
+     && [ "$(als_lsblk_unescape "$expect" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')" != "$DRV_SERIAL" ]; then
     echo "Refusing: $dev reports serial '${DRV_SERIAL:-none}', not the '$expect' that was selected."
     echo "Nothing has been written. Rescan the drives and choose again."
     wipe_result refused "identity mismatch refused" "drive serial '${DRV_SERIAL:-none}' does not match the selected drive '$expect'"
@@ -1115,8 +1159,12 @@ STOR_ELEMS=""; SMART_SUMMARY=""
 while IFS= read -r line; do
   [ -z "$line" ] && continue
   D_NAME=$(pval "$line" NAME); D_TYPE=$(pval "$line" TYPE); D_TRAN=$(pval "$line" TRAN)
-  D_RM=$(pval "$line" RM); D_SIZE=$(pval "$line" SIZE); D_MODEL=$(pval "$line" MODEL)
-  D_SERIAL=$(pval "$line" SERIAL); D_ROTA=$(pval "$line" ROTA)
+  # SERIAL and MODEL go through als_lsblk_val (defined above the --wipe-drive
+  # dispatch), the SAME normaliser the wipe uses for the drive's own identity:
+  # the kiosk sends this serialNumber back as the expected serial, and the two
+  # must be byte-for-byte equal or the right drive is refused as a mismatch.
+  D_RM=$(pval "$line" RM); D_SIZE=$(pval "$line" SIZE); D_MODEL=$(als_lsblk_val "$line" MODEL)
+  D_SERIAL=$(als_lsblk_val "$line" SERIAL); D_ROTA=$(pval "$line" ROTA)
   [ "$D_TYPE" = "disk" ] || continue
   # Exclude USB sticks, external HDD/SSD, SD cards and the live boot medium.
   [ "$D_TRAN" = "usb" ] && continue

@@ -82,6 +82,7 @@ SRC="$HERE/hardware-audit.sh"
 FUNCS="$(grep -E '^(esc|o_begin|o_s|o_s0|o_n|o_raw|o_end|als_utc_now)\(\) \{' "$SRC")
 $(grep '^ALS_TOOL_VERSION=' "$SRC")
 $(extract "$SRC" als_lsblk_val)
+$(extract "$SRC" als_lsblk_unescape)
 $(extract "$SRC" als_drive_identity)
 $(extract "$SRC" wipe_result)
 $(extract "$SRC" clear_label)
