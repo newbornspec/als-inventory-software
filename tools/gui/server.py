@@ -853,6 +853,34 @@ def wipe_record_fields(result, device, drive=None, method=None,
     return out, notes
 
 
+def bios_locked(profile):
+    """The API's single biosLocked boolean, from the lock report the capture
+    already holds (profile.locks, written by lock-checks.sh's lock_json), or
+    None to leave the field out. Plan step 38.
+
+    The text-mode flow has always sent it (hardware-audit.sh, lock_bios_locked);
+    the kiosk never did, so every kiosk wipe record had it NULL. Same meaning:
+    true when any check's STATUS is LOCKED. Read from the status field only,
+    never the row text - lock_status learnt that a PASS row whose detail
+    merely contained "|LOCKED|" flipped the verdict.
+
+    False only when the checks RAN and found nothing locked (roll-up CLEAR or
+    WARNING). UNVERIFIED - some checks could not complete - leaves the field
+    out rather than asserting "not locked" on an unproven machine; the API
+    derives lock_status from the same report and keeps that distinction."""
+    locks = (profile or {}).get("locks") if isinstance(profile, dict) else None
+    if not isinstance(locks, dict):
+        return None
+    checks = locks.get("checks") if isinstance(locks.get("checks"), list) else []
+    sts = [str(c.get("status") or "").strip().upper() for c in checks if isinstance(c, dict)]
+    roll = str(locks.get("status") or "").strip().upper()
+    if "LOCKED" in sts or roll == "LOCKED":
+        return True
+    if roll in ("CLEAR", "WARNING"):
+        return False
+    return None
+
+
 def build_wipe_payload(base, result, dev, drive, method, started_epoch, clock_at_start):
     """One drive's wipe record: `base` (profile, lot, operator) plus the wipe
     fields. Shared by the live path (record_wipe) and startup recovery of a
@@ -864,6 +892,9 @@ def build_wipe_payload(base, result, dev, drive, method, started_epoch, clock_at
     payload["dataWipeStatus"] = result.get("status")
     payload["dataWipeMethod"] = result.get("method") or "none"
     payload.update(fields)
+    locked = bios_locked(payload.get("profile"))
+    if locked is not None:
+        payload["biosLocked"] = locked
     # Record WHY a wipe failed, so the audit trail explains itself instead of
     # just saying "Failed".
     reason = (result.get("reason") or "").strip()

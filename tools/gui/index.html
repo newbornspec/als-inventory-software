@@ -1166,16 +1166,53 @@ function pollJob(kind,o){
    Before this, each drive's outcome was a 4.2 s toast that the NEXT drive's
    toast overwrote: two drives finishing a second apart left the first result
    on screen for under a second, and a failure could vanish unread. */
+/* Plan step 38. The engine reports what was ASKED for (methodRequested), what
+   it tried in order (methodAttempted, comma-separated) and why a stronger or
+   requested method was not used (fallbackReason) - e.g. a "crypto" request
+   on a drive the BIOS froze ends as an overwrite. That used to be invisible:
+   the screen said "Wiped — Overwrite" and nobody knew a purge had been asked
+   for. When the achieved method differs from the request, say so:
+   "requested X, achieved Y (reason)". The engine's own fallbackReason is the
+   signal, or more than one method attempted; an older engine sends neither
+   and the line reads as before. Pure, for tools/test-kiosk-ui.py. */
+const METHOD_WORDS={auto:'the strongest method the drive supports',crypto:'a cryptographic erase',
+  secure:'the drive\'s own secure erase',overwrite:'an overwrite',zero:'a zero fill'};
+const FALLBACK_WORDS={frozen:'the drive\'s security is frozen by the BIOS',
+  unsupported:'the drive does not support it',tool_missing:'the erase tool is missing on this station',
+  verify_failed:'the read-back check after it failed',locked:'the drive is password-locked',
+  aborted:'the drive aborted it',timeout:'it did not finish in time'};
+function fallbackWords(why){
+  return String(why||'').split(',').map(s=>s.trim()).filter(Boolean)
+    .map(s=>FALLBACK_WORDS[s]||s.replace(/_/g,' ')).join('; ');
+}
+function methodNote(r){
+  r=r||{};
+  const tried=String(r.methodAttempted||'').split(',').filter(s=>s.trim());
+  const why=String(r.fallbackReason||'').trim();
+  if(!why&&tried.length<2)return '';
+  const req=String(r.methodRequested||'').trim();
+  return 'requested '+(METHOD_WORDS[req]||req||'a stronger method')+', achieved '+
+    (r.method||'method not reported')+(why?' ('+fallbackWords(why)+')':'');
+}
+/* The engine's limitations are already sentences for a person ("12
+   reallocated sectors - their old contents cannot be reached by an overwrite").
+   Listed as they are, never summarised into a count. */
+function limitsNote(r){
+  const l=((r&&r.limitations)||[]).filter(x=>typeof x==='string'&&x.trim()).map(x=>x.trim());
+  return l.length?' Limitations: '+l.join('; ')+(/[.!?]$/.test(l[l.length-1])?'':'.'):'';
+}
 function wipeOutcome(r){
   r=r||{};
   if(r.status==='wiped'){
-    const m=r.method||'method not reported';
+    const m=methodNote(r)||r.method||'method not reported';
+    const lim=limitsNote(r);
     if(r.recorded)
-      return{cls:'ok',text:'Wiped — '+m+' — recorded'+(r.recordTag?' as '+r.recordTag:'')};
+      return{cls:(methodNote(r)||lim)?'warn':'ok',
+        text:'Wiped — '+m+' — recorded'+(r.recordTag?' as '+r.recordTag:'')+lim};
     if(r.queued)
       return{cls:'warn',text:'Wiped — '+m+' — NOT recorded yet: no connection. The record is '+
-        'saved on this machine and uploads by itself when the network returns.'};
-    return{cls:'warn',text:'Wiped — '+m+' — NOT recorded'+(r.recordError?': '+r.recordError:'')};
+        'saved on this machine and uploads by itself when the network returns.'+lim};
+    return{cls:'warn',text:'Wiped — '+m+' — NOT recorded'+(r.recordError?': '+r.recordError:'')+lim};
   }
   if(r.status==='refused')
     /* The engine wrote nothing (wrong drive, USB, boot disk...), so nothing is
@@ -1185,7 +1222,23 @@ function wipeOutcome(r){
       '. Nothing was written to the drive and nothing was recorded.'};
   const why=r.reason||r.message||(r.method&&r.method!=='none'?r.method:'')||'reason not reported';
   return{cls:'bad',text:'FAILED — '+why+(r.recorded?' (the failure is recorded)':
-    (r.queued?' (the failure is saved on this machine and uploads automatically)':''))};
+    (r.queued?' (the failure is saved on this machine and uploads automatically)':''))+
+    limitsNote(r)};
+}
+
+/* The toast when a run ends. One drive: its method note in full, since that is
+   the one thing the operator must not miss. Several: how many did not get
+   what was asked for; each drive's block has the detail. */
+function wipeToast(results){
+  const rs=(results||[]).filter(Boolean);
+  const fb=rs.filter(r=>r.status==='wiped'&&methodNote(r));
+  const lim=rs.some(r=>limitsNote(r));
+  let t='Wipe finished — ';
+  if(rs.length===1&&fb.length===1)t+=methodNote(fb[0])+'.';
+  else if(fb.length)t+=fb.length+' of '+rs.length+' drives did not get the method asked for — see each drive.';
+  else t+='the result for each drive is on screen.';
+  if(lim)t+=' Limitations noted — see the drive'+(rs.length>1?'s':'')+'.';
+  return t;
 }
 
 /* Can the operator be told "certificate available"? Only when EVERY drive in
@@ -1352,7 +1405,7 @@ function confirmWipe(){
           const local=certSummary(all);
           showSummary(local);
           $('wDone').classList.remove('hidden');
-          toast('Wipe finished — the result for each drive is on screen.',local.cls!=='bad');
+          toast(wipeToast(all),local.cls!=='bad');
           if(all.every(x=>x&&x.status==='wiped'&&x.recorded))
             askEligibility(all).then(e=>{if(RUN===run)showSummary(certSummary(all,e));});
         }});

@@ -215,6 +215,31 @@ const hidden = (id) => document.getElementById(id).classList.contains('hidden');
   out.e2eElig = run(`ELIG`);
   out.e2eSummary = document.getElementById('wSummary').innerHTML;
 
+  // Step 38: requested X, achieved Y (reason), and limitations in words.
+  const FB = `({status:'wiped',method:'Overwrite + verify',recorded:true,recordTag:'ALS-9',
+    methodRequested:'secure',methodAttempted:'ata-secure-erase,overwrite',fallbackReason:'frozen',
+    limitations:['12 reallocated sectors were not overwritten','Hidden areas could not be checked']})`;
+  out.oFallback = run(`wipeOutcome(${FB})`);
+  out.oSame = run(`wipeOutcome({status:'wiped',method:'NVMe crypto erase',recorded:true,
+    methodRequested:'auto',methodAttempted:'nvme-sanitize-crypto',fallbackReason:''})`);
+  out.oTwoTried = run(`wipeOutcome({status:'wiped',method:'NVMe format',recorded:true,
+    methodRequested:'crypto',methodAttempted:'nvme-sanitize-crypto,nvme-format'})`);
+  out.oUnknownWhy = run(`wipeOutcome({status:'wiped',method:'Zero pass',recorded:true,
+    methodRequested:'overwrite',fallbackReason:'weird_new_code'})`);
+  out.oFailedLim = run(`wipeOutcome({status:'failed',method:'none',reason:'read-back found data',
+    limitations:['Could not read the SMART counts']})`);
+  out.tOne = run(`wipeToast([${FB}])`);
+  out.tMany = run(`wipeToast([${FB},${W('NVMe crypto erase')}])`);
+  out.tPlain = run(`wipeToast([${W('NVMe crypto erase')}])`);
+  // The run's own toast, end to end.
+  run(`RUN=null; TOASTS=[]; const _t=toast; toast=(m,g)=>TOASTS.push(m); selectedWipeDrives=()=>['/dev/sda'];
+       jpost=async()=>({ok:true,status:200,data:{started:['/dev/sda'],busy:[]}});`);
+  run(`confirmWipe()`);
+  await run(`ovGo()`);
+  run(`POLLS[POLLS.length-1].o.onDone(${FB})`);
+  out.runToast = run(`TOASTS.slice(-1)[0]`);
+  out.runBlock = document.getElementById('wres__dev_sda').innerHTML;
+
   // Operator sign-in (plan step 27). Flag off: the typed-name control stays,
   // the sign-in button is hidden. Flag on, nobody signed in: Sign in, and
   // the panel opens by itself - once. Signed in: Sign out.
@@ -384,6 +409,37 @@ def main():
           o["e2eElig"] == ["/api/wipe/eligibility?assetId=a-1"], o["e2eElig"])
     check("end to end: server yes -> 'certificate available'",
           "certificate available" in o["e2eSummary"], o["e2eSummary"])
+
+    t = o["oFallback"]["text"]
+    check("fallback: 'requested X, achieved Y (reason)' in plain words",
+          "requested the drive's own secure erase, achieved Overwrite + verify "
+          "(the drive's security is frozen by the BIOS)" in t, t)
+    check("fallback: still says recorded", "recorded as ALS-9" in t, t)
+    check("fallback: limitations listed in words, each one",
+          "Limitations: 12 reallocated sectors were not overwritten; Hidden areas could not be "
+          "checked." in t, t)
+    check("fallback: shown amber, not green", o["oFallback"]["cls"] == "warn", o["oFallback"])
+    check("achieved = requested: no 'requested' clause, green",
+          "requested" not in o["oSame"]["text"] and o["oSame"]["cls"] == "ok", o["oSame"])
+    check("two methods tried, no reason given: still says what was asked for",
+          "requested a cryptographic erase, achieved NVMe format" in o["oTwoTried"]["text"],
+          o["oTwoTried"])
+    check("an unknown reason code is shown readably, not dropped",
+          "(weird new code)" in o["oUnknownWhy"]["text"], o["oUnknownWhy"])
+    check("failed: limitations listed too",
+          "Could not read the SMART counts" in o["oFailedLim"]["text"], o["oFailedLim"])
+    check("toast, one drive: the method note in full",
+          "requested the drive's own secure erase, achieved Overwrite + verify" in o["tOne"]
+          and "Limitations noted" in o["tOne"], o["tOne"])
+    check("toast, several drives: counts the ones that fell back",
+          "1 of 2 drives did not get the method asked for" in o["tMany"], o["tMany"])
+    check("toast, nothing to flag: as before",
+          o["tPlain"] == "Wipe finished — the result for each drive is on screen.", o["tPlain"])
+    check("a real run: the toast says requested/achieved",
+          "achieved Overwrite + verify" in (o["runToast"] or ""), o["runToast"])
+    check("a real run: the drive's block says requested/achieved and the limitations",
+          "requested the drive&#39;s own secure erase" in o["runBlock"] and
+          "Limitations:" in o["runBlock"], o["runBlock"])
 
     si = o["siOff"]
     check("sign-in off: the typed operator control stays, no sign-in button",
