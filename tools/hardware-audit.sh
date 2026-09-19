@@ -2414,10 +2414,12 @@ def nothing_of(kinds):
     return "no " + ", ".join(kinds[:-1]) + " or " + kinds[-1]
 
 
-def finish(source, L, E, deductions, caps, notes, fields, tool, flat_extra, clean=None):
+def finish(source, L, E, deductions, caps, notes, fields, tool, flat_extra, clean=None,
+           enabled=False):
     """Apply the formula's last step and build the object. `clean` is the
     all-clear sentence for THIS drive's readable counters (None when it
-    reports none: then the basis says only what was read)."""
+    reports none: then the basis says only what was read). `enabled` records
+    that the station had to switch SMART on to get this answer."""
     pct = min([L if L is not None else 100, E] + [c for c, _ in caps])
     pct = int(round(max(0, min(100, pct))))
     reasons = list(deductions) + [t for _, t in caps] + list(notes)
@@ -2438,6 +2440,8 @@ def finish(source, L, E, deductions, caps, notes, fields, tool, flat_extra, clea
         if fields.get("smartPassed") is True:
             parts.append("SMART passed")
         basis = "; ".join(parts)
+    if enabled:
+        basis += "; SMART was switched on by the station to read it"
     h = {"measured": True, "percent": pct, "status": band(pct), "basis": basis,
          "reasons": reasons, "source": source}
     h.update(fields)
@@ -2514,6 +2518,14 @@ def smart(raw, rc, kind, tried):
     deductions, caps, notes = [], [], []
     E = 100
     hot_attr = None      # a temperature attribute the drive flags right now
+    if tried:
+        # `smartctl -s on` wrote the SMART-enable flag to this drive's own
+        # configuration and it stays on after the audit. It is the only write
+        # an otherwise read-only capture performs, so the record says it
+        # happened: in the reasons, in the basis, and therefore on the kiosk,
+        # in the report and in the payload the profile is filed with.
+        notes.append("SMART was switched on by the station to read this drive "
+                     "(it was switched off)")
     fields = {"smartPassed": passed, "temperatureC": None, "powerOnHours": None,
               "powerCycles": None, "lifeUsedPct": None, "availableSparePct": None,
               "reallocatedSectors": None, "pendingSectors": None,
@@ -2691,7 +2703,7 @@ def smart(raw, rc, kind, tried):
         # ours: still heat, still the same cap, never counted twice.
         caps.append((89, "%s is over the drive's own temperature threshold now" % hot_attr))
 
-    finish(source, L, E, deductions, caps, notes, fields, tool, flat, clean)
+    finish(source, L, E, deductions, caps, notes, fields, tool, flat, clean, bool(tried))
 
 
 def scsi_counters(d):
@@ -2898,7 +2910,10 @@ als_drive_health() {
         raw=$(als_health_to smartctl -j -x "/dev/$name" 2>/dev/null); rc=$?
         DH_OUT=$(printf '%s' "$raw" | "$py" -c "$(als_health_py)" smart "$rc" "$kind" 0 2>/dev/null)
         if [ "$DH_OUT" = "ENABLE" ]; then
-          # SMART supported but switched off: switch it on once and read again.
+          # SMART supported but switched off: switch it on once and read
+          # again. This writes the enable flag to the drive's own settings and
+          # it stays on afterwards - the only write a capture makes - so the
+          # helper records it in the health object (see `tried` there).
           als_health_to smartctl -s on "/dev/$name" >/dev/null 2>&1
           raw=$(als_health_to smartctl -j -x "/dev/$name" 2>/dev/null); rc=$?
           DH_OUT=$(printf '%s' "$raw" | "$py" -c "$(als_health_py)" smart "$rc" "$kind" 1 2>/dev/null)

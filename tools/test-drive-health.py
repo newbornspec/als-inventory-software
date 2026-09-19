@@ -511,6 +511,18 @@ check("SMART switched off: first read asks the engine to switch it on", out.stri
 expect_nm("SMART still off after `smartctl -s on`", keep(smart(off, kind="ata-hdd", tried=1)),
           "SMART is switched off and would not turn on", "enable SMART in the BIOS, then press Rescan",
           "ata-hdd")
+# `smartctl -s on` writes to the customer's drive - the only write an audit
+# capture performs. When it works, the record has to say so: the station
+# changed a setting on that drive, and a chain of custody that omits its own
+# one write is not a chain of custody.
+res = keep(smart(ata(7200, hdd_attrs(realloc=3)), kind="ata-hdd", tried=1))
+expect("a drive whose SMART the station switched on says so", res, 94, "good",
+       "3 reallocated sectors; SMART passed; SMART was switched on by the station to read it",
+       ["3 reallocated sectors",
+        "SMART was switched on by the station to read this drive (it was switched off)"])
+check("the same drive read without switching anything on says nothing of the kind",
+      "switched on by the station" not in json.dumps(smart(ata(7200, hdd_attrs(realloc=3)),
+                                                           kind="ata-hdd")))
 unsup = base("ATA", "sat", "/dev/sda")
 unsup["smart_support"] = {"available": False}
 expect_nm("SMART unsupported", keep(smart(unsup, kind="ata-ssd")), "the drive does not report health data",

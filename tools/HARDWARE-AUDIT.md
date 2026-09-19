@@ -414,6 +414,11 @@ The percentage is the drive's own data put through one formula
 4. **Percent** = the lowest of the three; the status comes only from the
    percent (Good 90-100, Caution 50-89, Bad 0-49).
 
+A drive that supports SMART but has it switched off is switched on once
+(`smartctl -s on`) and read again. That is the only write a capture makes and
+it stays on afterwards, so the health record says it happened, in the reasons
+and in the basis.
+
 The basis only ever names counters the drive actually reported: a drive that
 reports no wear figure, no error counter and no alarm of its own is recorded
 as not measurable, never as a confident 100%.
