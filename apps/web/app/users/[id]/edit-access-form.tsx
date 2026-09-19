@@ -40,6 +40,29 @@ export function EditAccessForm({ user, isSelf }: { user: AppUser; isSelf: boolea
           role's baseline, same rule as everywhere else. */}
       <PermissionsPicker role={role} initial={user.permissions} initialRole={user.role} />
 
+      {/* The audit station signs in as one account every operator uses.
+          Flagging it lets an erasure certificate say that no person was
+          recorded, instead of a reader taking the account name for the
+          person who wiped the drive (plan step 28). */}
+      <div className="flex items-start gap-2 pt-2">
+        <input
+          id="users-edit-access-station"
+          type="checkbox"
+          name="isStation"
+          defaultChecked={!!user.isStation}
+          className="mt-1"
+        />
+        <div>
+          <label htmlFor="users-edit-access-station" className="text-sm text-neutral-800">
+            Station account (shared)
+          </label>
+          <p className="text-xs text-neutral-600">
+            Tick for a login shared by several people, such as the audit station. Certificates for
+            its wipes then say the operator was not recorded unless one was typed at the station.
+          </p>
+        </div>
+      </div>
+
       {state.error && <p role="alert" className="text-sm text-red-700">{state.error}</p>}
 
       <button

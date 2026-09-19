@@ -66,6 +66,14 @@ export class User {
   @Column({ name: 'password_changed_at', type: 'timestamp', nullable: true })
   passwordChangedAt: Date | null;
 
+  // A SHARED account - the audit station's login, used by every operator -
+  // rather than one person. Set by an admin on the Users page. A station wipe
+  // filed by such an account with no typed operator name prints "Operator:
+  // not recorded (shared station account)" on its certificate (plan step 28,
+  // stage 1: label only, never block - owner decision D28).
+  @Column({ name: 'is_station', type: 'boolean', default: false })
+  isStation: boolean;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 

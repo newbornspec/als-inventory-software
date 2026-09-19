@@ -18,6 +18,7 @@ import { RequirePermissions } from '../auth/guards/permissions.decorator';
 import { AssetsService } from './assets.service';
 import { BarcodeService, BarcodeType } from './barcode.service';
 import { CertificatesService } from './certificates.service';
+import type { RequestUser } from '../common/ownership';
 import { CreateAssetDto } from './dto/create-asset.dto';
 import { UpdateAssetDto } from './dto/update-asset.dto';
 import { QueryAssetsDto } from './dto/query-assets.dto';
@@ -107,6 +108,31 @@ export class AssetsController {
       type: 'application/pdf',
       disposition: `attachment; filename="${filename}"`,
     });
+  }
+
+  // The signed certificate as data, for checking it independently (plan step
+  // 30; 404 while CERT_SIGNING_KEY is unset). Same permissions as the PDF.
+  @RequirePermissions('assets', 'goods_in', 'amazon_audit')
+  @Get(':id/erasure-certificate.json')
+  @Header('Cache-Control', 'no-store')
+  signedCertificate(
+    @Param('id') id: string,
+    @Req() req: { user: RequestUser },
+  ) {
+    return this.certificates.signedRecord(id, req.user);
+  }
+
+  // May a certificate be issued, and if not, why - per drive (contract C4).
+  // Same permissions and the same scoped-manager rule as the certificate
+  // download above, because it answers the same question without the PDF.
+  @RequirePermissions('assets', 'goods_in', 'amazon_audit')
+  @Get(':id/certificate-eligibility')
+  @Header('Cache-Control', 'no-store')
+  certificateEligibility(
+    @Param('id') id: string,
+    @Req() req: { user: RequestUser },
+  ) {
+    return this.certificates.eligibility(id, req.user);
   }
 
   @RequirePermissions('assets', 'goods_in', 'scan')

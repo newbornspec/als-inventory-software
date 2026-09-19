@@ -2,6 +2,7 @@ import PDFDocument from 'pdfkit';
 import { CertificatesService, erasurePeople } from './certificates.service';
 import { wipeAttestation } from './manual-wipe';
 import { DataWipeStatus } from './asset-audit.entity';
+import { LEGACY_DRIVE } from './certificate-content';
 
 // Remediation spec C-1: the station signs in as one shared account, and the
 // certificate printed that account as the person who performed the wipe.
@@ -116,9 +117,14 @@ describe('the rendered certificate', () => {
     expect(texts).not.toContain('Performed by');
   });
 
-  it('keeps the station attestation wording', async () => {
+  it('keeps the station result wording, and names the storage medium, not the device (step 20)', async () => {
     const texts = await printed('J Smith');
-    expect(texts).toContain(wipeAttestation('station').intro);
     expect(texts).toContain(wipeAttestation('station').result);
+    expect(texts.join(' ')).toContain('the storage medium identified below');
+    // This record predates per-drive tracking (D20): labelled, and dated by
+    // receipt, never as the day the wipe was performed.
+    expect(followedBy(texts, 'Drive')).toBe(LEGACY_DRIVE);
+    expect(texts).toContain('Date recorded');
+    expect(texts).not.toContain('Date performed');
   });
 });

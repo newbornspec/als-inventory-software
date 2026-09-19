@@ -97,6 +97,15 @@ export default async function UsersPage() {
                         Disabled
                       </span>
                     )}
+                    {user.isStation && ' '}
+                    {user.isStation && (
+                      <span
+                        title="Shared station account: its wipes name no person unless the operator typed one"
+                        className="ml-2 rounded bg-neutral-100 px-1.5 py-0.5 text-[11px] font-medium uppercase tracking-wide text-neutral-700"
+                      >
+                        Station
+                      </span>
+                    )}
                   </th>
                   <td className={`${TD} text-neutral-600`}>{user.email}</td>
                   <td className={TD}>

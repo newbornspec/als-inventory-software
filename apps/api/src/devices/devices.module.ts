@@ -7,9 +7,13 @@ import { AssetAudit } from '../assets/asset-audit.entity';
 import { AssetHistory } from '../assets/asset-history.entity';
 import { DevicesController } from './devices.controller';
 import { DevicesService } from './devices.service';
+import { ErasureCertificatesModule } from '../certificates/erasure-certificates.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([User, Batch, Asset, AssetAudit, AssetHistory])],
+  imports: [
+    TypeOrmModule.forFeature([User, Batch, Asset, AssetAudit, AssetHistory]),
+    ErasureCertificatesModule,
+  ],
   controllers: [DevicesController],
   providers: [DevicesService],
 })

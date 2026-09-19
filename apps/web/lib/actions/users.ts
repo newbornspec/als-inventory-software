@@ -14,6 +14,9 @@ export interface AppUser {
   // WHEN someone was switched off, which matters when the question is whether
   // an audit was filed before or after they left.
   disabledAt?: string | null;
+  // A SHARED account (the audit station's login) rather than one person.
+  // Absent from an older API: treated as false.
+  isStation?: boolean;
 }
 
 export interface ActionState {
@@ -65,6 +68,10 @@ export async function updateUserAccess(
   const dto = {
     role: String(formData.get('role') ?? ''),
     permissions: formData.getAll('permissions').map(String),
+    // An unticked checkbox sends nothing, so absence means "not a station".
+    // The checkbox is always rendered on this form, so this never clears the
+    // flag by accident.
+    isStation: formData.get('isStation') === 'on',
   };
   try {
     await apiFetch(`/users/${id}`, { method: 'PATCH', body: JSON.stringify(dto) });

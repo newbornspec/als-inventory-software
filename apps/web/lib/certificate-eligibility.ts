@@ -59,6 +59,68 @@ export function failedNearWipe(wiped: WipeRowLike, rows: WipeRowLike[]): boolean
 
 export type CertificateBlock = 'none' | 'discard' | 'mixed';
 
+// --- The API's own answer (contract C4) --------------------------------------
+//
+// Since plan step 23 the API decides per drive (every drive's latest record a
+// wipe, every internal drive accounted for) and says so at
+// GET /assets/:id/certificate-eligibility. The asset page reads that instead of
+// re-implementing the per-drive rule here. The copy of the interim rule above
+// stays only as the FALLBACK for an API that predates the endpoint (it answers
+// 404) or a request that failed: then the page behaves exactly as it did before.
+export interface CertificateEligibility {
+  available: boolean;
+  reason: string | null;
+  verdict: 'wiped' | 'failed' | 'incomplete' | 'none';
+  drives: Array<{
+    key: string;
+    serialNumber: string | null;
+    model: string | null;
+    status: 'wiped' | 'failed' | 'missing';
+    method: string | null;
+    wipedAt: string | null;
+    manual: boolean;
+  }>;
+}
+
+const DISCARD_MESSAGE =
+  'No erasure certificate: the latest wipe was a block discard (TRIM), which is not an erase. Wipe the drive again with the ALS audit station.';
+const MIXED_MESSAGE =
+  'No erasure certificate: a drive in this device failed its wipe close to (or after) the wipe on record, so it may still hold data. Wipe the failed drive again with the ALS audit station.';
+
+export interface CertificateLinkState {
+  // Offer the download link.
+  offer: boolean;
+  // Why not, in words - null when there is nothing to explain (no wipe at all).
+  message: string | null;
+  // The per-drive picture, when the API gave one.
+  drives: CertificateEligibility['drives'];
+}
+
+// What the asset page shows. `eligibility` is null when the API did not answer
+// (404 from an older API, or any error): "unknown", so the old local rule
+// decides, as it did before the endpoint existed.
+export function certificateLinkState(
+  eligibility: CertificateEligibility | null,
+  rows: WipeRowLike[],
+): CertificateLinkState {
+  if (eligibility) {
+    return {
+      offer: eligibility.available,
+      message:
+        eligibility.available || eligibility.verdict === 'none'
+          ? null
+          : `No erasure certificate: ${eligibility.reason ?? 'not every drive has been wiped.'}`,
+      drives: eligibility.drives,
+    };
+  }
+  const block = certificateBlock(rows);
+  return {
+    offer: block === null,
+    message: block === 'discard' ? DISCARD_MESSAGE : block === 'mixed' ? MIXED_MESSAGE : null,
+    drives: [],
+  };
+}
+
 export function certificateBlock(rows: WipeRowLike[]): CertificateBlock | null {
   const latest = latestWipe(rows);
   if (!latest) return 'none';

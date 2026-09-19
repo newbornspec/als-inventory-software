@@ -25,6 +25,10 @@ import { ALL_PERMISSIONS } from './permissions';
 const PUBLIC_CONTROLLERS = new Set([
   'AppController', // health probe
   'AuthController', // login/refresh are public by nature; me/logout are marked
+  // The public erasure-certificate check (plan step 30, owner decision D30):
+  // minimal data only, random ids, rate limited, and 404 unless
+  // PUBLIC_VERIFY_ENABLED=1.
+  'VerifyController',
 ]);
 
 function findControllerFiles(dir: string): string[] {

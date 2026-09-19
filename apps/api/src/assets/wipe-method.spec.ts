@@ -236,13 +236,14 @@ describe('the certificate routes refuse a discard', () => {
       ],
     );
     await svc.lotErasureCertificate('b1');
-    const [, rows, discarded] = renderLot.mock.calls[0] as [
+    const [, rows, , notices] = renderLot.mock.calls[0] as [
       unknown,
       Array<{ serial: string }>,
-      number,
+      unknown,
+      string[],
     ];
     expect(rows.map((r) => r.serial)).toEqual(['SN-a1']);
-    expect(discarded).toBe(2);
+    expect(notices).toEqual([discardedNotice(2)]);
   });
 
   it('refuses a lot whose only wipes were discards, and says that is why', async () => {

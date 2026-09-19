@@ -20,6 +20,7 @@ import { AssetPhoto } from '../photos/asset-photo.entity';
 import { ActivityLog } from '../activity/activity-log.entity';
 import { LookupValue } from '../lookups/lookup-value.entity';
 import { Invoice } from '../invoices/invoice.entity';
+import { ErasureCertificate } from '../certificates/erasure-certificate.entity';
 
 // EVERY entity, in ONE place.
 //
@@ -62,4 +63,5 @@ export const ALL_ENTITIES = [
   ActivityLog,
   LookupValue,
   Invoice,
+  ErasureCertificate,
 ];

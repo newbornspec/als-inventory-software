@@ -8,9 +8,13 @@ import { AssetsController } from './assets.controller';
 import { AssetsService } from './assets.service';
 import { BarcodeService } from './barcode.service';
 import { CertificatesService } from './certificates.service';
+import { ErasureCertificatesModule } from '../certificates/erasure-certificates.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Asset, AssetHistory, AssetAudit, Batch])],
+  imports: [
+    TypeOrmModule.forFeature([Asset, AssetHistory, AssetAudit, Batch]),
+    ErasureCertificatesModule,
+  ],
   controllers: [AssetsController],
   providers: [AssetsService, BarcodeService, CertificatesService],
   exports: [AssetsService, CertificatesService],

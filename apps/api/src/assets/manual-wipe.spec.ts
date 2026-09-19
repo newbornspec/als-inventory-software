@@ -116,4 +116,43 @@ describe('lotAttestation - a lot can mix station wipes and hand records', () => 
     expect(a.intro).toMatch(/other than rows marked "\(manual record\)"/);
     expect(a.dateHeader).toBe('Date');
   });
+
+  // Step 39 on the lot certificate (review, wave 2): ANY limitation removes
+  // "unrecoverable" for that row - the lead sentence included, not only a
+  // later paragraph a reader may never reach.
+  it('limitations on some rows: the claim excludes them in the lead sentence', () => {
+    const a = lotAttestation(0, 5, 2);
+    expect(a.intro).toMatch(
+      /^This certifies that the data-storage media in each device listed below, other than rows marked "\(limitations recorded\)", has been sanitised[^.]*unrecoverable/,
+    );
+    expect(a.intro).toMatch(
+      /makes no claim that previously stored data on them cannot be recovered/,
+    );
+    expect(a.headline).toMatch(/2 with limitations recorded/);
+    expect(a.dateHeader).toBe('Wiped');
+  });
+  it('limitations on every station row: no "unrecoverable" anywhere', () => {
+    for (const a of [lotAttestation(0, 3, 3), lotAttestation(2, 5, 3)])
+      expect(`${a.headline} ${a.intro}`).not.toMatch(
+        /unrecoverable|certified erased/i,
+      );
+  });
+  it('limitations and manual rows together exclude both', () => {
+    const a = lotAttestation(1, 5, 1);
+    expect(a.intro).toMatch(
+      /other than rows marked "\(limitations recorded\)" or "\(manual record\)"/,
+    );
+    expect(a.intro).toMatch(/entered by hand/);
+    expect(a.headline).toMatch(
+      /4 erased by the ALS audit station \(1 with limitations recorded\), 1 recorded manually/,
+    );
+  });
+  it('no limitations: the wording is exactly as before', () => {
+    for (const [m, t] of [
+      [0, 5],
+      [5, 5],
+      [2, 5],
+    ])
+      expect(lotAttestation(m, t, 0)).toEqual(lotAttestation(m, t));
+  });
 });
