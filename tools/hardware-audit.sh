@@ -484,20 +484,92 @@ ata_secure_erase() {
   return 1
 }
 
+# Read the NVMe Sanitize Status log page (log 81h) as NUMBERS.
+#
+# This used to grep `nvme sanitize-log -H` for the English words "completed
+# successfully". That log page describes the LAST sanitize the controller ran,
+# not the one just issued - so a success left over from an earlier sanitize
+# (a previous run, the refurbisher before us, or a block erase when we asked for
+# crypto) matched the words and was taken as this erase finishing. The words are
+# also nvme-cli's wording, which changes between versions.
+#
+# So read the raw page (-b) and decode the fields the spec defines, little-endian:
+#   bytes 0-1   SPROG   progress, 65535 = complete
+#   bytes 2-3   SSTAT   bits 2:0 = status (0 never, 1 done, 2 running, 3 FAILED,
+#                       4 done with no-deallocate)
+#   bytes 4-7   SCDW10  the Sanitize command's CDW10; bits 2:0 = the action run
+#   bytes 8-19  estimated seconds for overwrite / block erase / crypto erase
+#               (0 or 0xFFFFFFFF = no estimate)
+# Sets SAN_SPROG SAN_SSTAT SAN_ACT SAN_EST_OW SAN_EST_BE SAN_EST_CE.
+# Returns 1 if the page could not be read (fewer than 8 bytes came back).
+nvme_sanitize_log() {
+  local b
+  SAN_SPROG=""; SAN_SSTAT=""; SAN_ACT=""; SAN_EST_OW=""; SAN_EST_BE=""; SAN_EST_CE=""
+  b=$(nvme sanitize-log "$1" -b 2>/dev/null | od -An -tu1 -v -N20 2>/dev/null)
+  # shellcheck disable=SC2086
+  set -- $b
+  [ "$#" -ge 8 ] || return 1
+  SAN_SPROG=$(( $1 + $2 * 256 ))
+  SAN_SSTAT=$(( $3 + $4 * 256 ))
+  SAN_ACT=$(( $5 & 7 ))
+  if [ "$#" -ge 20 ]; then
+    SAN_EST_OW=$(( ${9} + ${10} * 256 + ${11} * 65536 + ${12} * 16777216 ))
+    SAN_EST_BE=$(( ${13} + ${14} * 256 + ${15} * 65536 + ${16} * 16777216 ))
+    SAN_EST_CE=$(( ${17} + ${18} * 256 + ${19} * 65536 + ${20} * 16777216 ))
+  fi
+  return 0
+}
+
+# How long to wait for a sanitize, in seconds, from the drive's own estimate.
+# $1 = estimated seconds (may be empty, 0 or 4294967295 = no estimate).
+# Twice the estimate plus a minute, never under 5 minutes (a crypto erase that
+# estimates 2 s should not be failed by a slow first log read), capped at 6 h.
+# With no estimate, the 20 minutes this always waited.
+nvme_sanitize_limit() {
+  local est="${1:-}"
+  case "$est" in ''|*[!0-9]*|0|4294967295) echo 1200; return 0 ;; esac
+  est=$(( est * 2 + 60 ))
+  [ "$est" -lt 300 ] && est=300
+  [ "$est" -gt 21600 ] && est=21600
+  echo "$est"
+}
+
 # Run an NVMe SANITIZE (action 4 = crypto erase, 2 = block erase) on the
 # controller and wait for it to finish. Sanitize is asynchronous, so poll the
-# sanitize-log until it reports completion. Returns 0 on success.
+# sanitize log. Success ONLY when all three hold at once: the status is
+# "completed" (1 or 4), progress is 65535, and the action the log records is
+# the action issued here. Anything else is still running, stale, or failed.
+# Returns 0 on success.
 nvme_sanitize() {
-  local ctrl="$1" act="$2" i log
+  local ctrl="$1" act="$2" limit=1200 waited=0 st est
   nvme sanitize "$ctrl" -a "$act" >/dev/null 2>&1 || return 1
   echo "    sanitize started — waiting for completion …"
-  for i in $(seq 1 240); do
-    log=$(nvme sanitize-log "$ctrl" -H 2>/dev/null)
-    printf '%s\n' "$log" | grep -qi 'completed successfully' && return 0
-    printf '%s\n' "$log" | grep -qi 'sanitize.*fail' && return 1
+  while :; do
+    if nvme_sanitize_log "$ctrl"; then
+      case "$act" in 4) est="$SAN_EST_CE" ;; 2) est="$SAN_EST_BE" ;; 3) est="$SAN_EST_OW" ;; *) est="" ;; esac
+      limit=$(nvme_sanitize_limit "$est")
+      st=$(( SAN_SSTAT & 7 ))
+      case "$st" in
+        1|4)
+          if [ "$SAN_SPROG" = "65535" ] && [ "$SAN_ACT" = "$act" ]; then
+            return 0
+          fi
+          # A completed entry for a DIFFERENT action (or not at 100%) is the
+          # previous sanitize, not this one. Keep waiting; the deadline decides.
+          ;;
+        3)
+          echo "    sanitize reported FAILED (status $SAN_SSTAT, action $SAN_ACT)"
+          return 1
+          ;;
+      esac
+    fi
+    if [ "$waited" -ge "$limit" ]; then
+      echo "    sanitize did not report completion of action $act within ${limit}s"
+      return 1
+    fi
     sleep 5
+    waited=$(( waited + 5 ))
   done
-  return 1
 }
 
 # Firmware crypto / secure erase for ONE drive per AUDIT_WIPE_METHOD
