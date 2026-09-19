@@ -595,9 +595,27 @@ expect("eMMC PRE_EOL 0x03 (urgent) caps at 25", keep(emmc(extcsd(0x02, 0x02, 0x0
        ["the drive reports its reserve blocks are nearly used up (pre-EOL urgent)"])
 expect("eMMC over its rated life (0x0B)", keep(emmc(extcsd(0x0B, 0x0A, 0x01))), 0, "bad",
        "life remaining 0% reported by the drive", [])
-expect_nm("eMMC that defines no estimate (0x00)", keep(emmc(extcsd(0, 0, 0))),
+expect_nm("eMMC that defines no estimate (0x00) and reports a normal pre-EOL",
+          keep(emmc(extcsd(0, 0, 0x01))), "the drive does not report health data",
+          u"none on this machine — test it on another machine or replace", "emmc")
+expect_nm("eMMC that defines nothing at all", keep(emmc(extcsd(0, 0, 0))),
           "the drive does not report health data",
           u"none on this machine — test it on another machine or replace", "emmc")
+# No life-time estimate, but the chip is shouting about its reserve blocks:
+# the contract's step 4 is min(L if present, E, all caps), so the cap alone
+# is the answer. Throwing the pre-EOL away and reporting "no health data"
+# hid the one thing the chip did say.
+res = keep(emmc(extcsd(0, 0, 0x03)))
+expect("eMMC with no life estimate but PRE_EOL urgent", res, 25, "bad",
+       "no wear figure reported by the drive; the drive reports its reserve blocks are "
+       "nearly used up (pre-EOL urgent)",
+       ["the drive reports its reserve blocks are nearly used up (pre-EOL urgent)"])
+check("eMMC with no life estimate: no wear figure is invented",
+      res["health"].get("lifeUsedPct") is None and "ssdLifeUsedPct" not in res["flat"], res["raw"])
+expect("eMMC with no life estimate but PRE_EOL warning", keep(emmc(extcsd(0, 0, 0x02))), 89,
+       "caution", "no wear figure reported by the drive; the drive reports its reserve blocks are "
+       "running low (pre-EOL warning)",
+       ["the drive reports its reserve blocks are running low (pre-EOL warning)"])
 expect_nm("eMMC, mmc-utils not on the stick", keep(emmc("", rc=127)), "this build cannot read eMMC health",
           "update the stick", "emmc")
 expect_nm("eMMC read timed out", keep(emmc("", rc=124)), "the drive did not answer the health request in 30 s",

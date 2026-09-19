@@ -2756,16 +2756,22 @@ def emmc(raw, rc):
         return int(m.group(1), 16) if m else None
     a, b, eol = field("DEVICE_LIFE_TIME_EST_TYP_A"), field("DEVICE_LIFE_TIME_EST_TYP_B"), field("PRE_EOL_INFO")
     est = [x for x in (a, b) if x]      # 0x00 = "not defined" by the drive
-    if rc != 0 or not est:
-        return emit(not_measured(R_UNSUP, "emmc"))
-    worst = max(est)
-    L = max(0, min(100, 100 - 10 * worst))
     caps = []
     if eol == 2:
         caps.append((89, "the drive reports its reserve blocks are running low (pre-EOL warning)"))
     elif eol == 3:
         caps.append((25, "the drive reports its reserve blocks are nearly used up (pre-EOL urgent)"))
-    used = min(100, 10 * worst)
+    # A chip that defines no life-time estimate may still be shouting about
+    # its reserve blocks, and the formula is min(L if present, E, all caps):
+    # the cap alone is then the answer. Dropping it and saying "no health
+    # data" hid the one thing such a chip did say.
+    if rc != 0 or (not est and not caps):
+        return emit(not_measured(R_UNSUP, "emmc"))
+    L = used = None
+    if est:
+        worst = max(est)
+        L = max(0, min(100, 100 - 10 * worst))
+        used = min(100, 10 * worst)
     fields = {"smartPassed": None, "temperatureC": None, "powerOnHours": None,
               "powerCycles": None, "lifeUsedPct": used, "availableSparePct": None,
               "reallocatedSectors": None, "pendingSectors": None,
