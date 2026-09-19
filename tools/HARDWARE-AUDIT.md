@@ -117,14 +117,7 @@ from the USB. `hardware-audit.sh` and `audit.conf` still live in the USB **root*
 > Quick reference for operators: see **`SETUP-AUTORUN.txt`** (plain text) in this
 > folder — copy it onto the USB so the steps are always to hand.
 
-### B. Click-to-run icon (if you use the graphical desktop)
-
-If you start the desktop with `startx`, copy **`hardware-audit.desktop`** to the
-desktop (or `~/.local/share/applications/`) and mark it executable
-(`chmod +x hardware-audit.desktop`). Double-click **“Hardware Audit”** and it opens a
-terminal and runs — no command typed.
-
-### C. Fully baked custom image (advanced)
+### B. Fully baked custom image (advanced)
 
 For a fleet, you can rebuild a custom SystemRescue ISO with the script, `audit.conf`
 and `ar_nowait` compiled in, so a written USB just works. This is a lot more effort

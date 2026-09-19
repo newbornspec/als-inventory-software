@@ -31,15 +31,15 @@ $files = [ordered]@{
     # looks like it simply found nothing — exactly the partial-sync failure
     # described above. The two must travel together.
     'lock-checks.sh'         = 'lock-checks.sh'
-    # Locates the tools partition by label on an Ubuntu stick, where the boot
-    # medium is read-only ISO9660 and the tools live on a second partition.
+    # Locates the stick from the live session. The Ubuntu stick is ONE FAT32
+    # partition (Rufus ISO mode) with the tools at its root, mounted read-only
+    # at /cdrom; this also finds it under /media or by label when it is not.
     'find-media.sh'          = 'find-media.sh'
     # Builds the overlay layer that makes the stick boot into the kiosk and
     # carries nvme-cli/smartmontools. Has to run FROM the live session, so it
     # only helps if it is actually on the stick.
     'make-als-layer.sh'      = 'make-als-layer.sh'
     'autorun'                = 'autorun\autorun'
-    'hardware-audit.desktop' = 'hardware-audit.desktop'
     'gui\index.html'         = 'gui\index.html'
     'gui\server.py'          = 'gui\server.py'
     'gui\start-gui.sh'       = 'gui\start-gui.sh'
