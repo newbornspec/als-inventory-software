@@ -4,6 +4,8 @@ import { useEffect, useRef, useState } from 'react';
 import { getPowerSyncDb } from '@/lib/powersync/client';
 import { Nav } from '@/app/components/nav';
 import { AuditForm } from '@/app/components/audit-form';
+import { useSessionAccess } from '@/lib/use-session-access';
+import { hasAnyPermission, hasPermission } from '@/lib/permissions';
 import { formatLabel } from '@/lib/asset-options';
 import { CameraScanner } from './camera-scanner';
 
@@ -36,6 +38,13 @@ export default function ScanPage() {
   const [tag, setTag] = useState('');
   const [result, setResult] = useState<ScanResult>(null);
   const [showAudit, setShowAudit] = useState(false);
+  // Offered only when the server will accept it - an offline audit from an
+  // account that cannot record audits is discarded on sync, silently, after
+  // the form has already said "recorded". Remembered on this device so it
+  // works with no signal; see use-session-access.ts.
+  const access = useSessionAccess();
+  const mayAudit = hasAnyPermission(access, ['perform_goods_in_audit', 'perform_amazon_audit']);
+  const mayRecordWipe = hasPermission(access, 'record_manual_wipe');
   const [recent, setRecent] = useState<{ tag: string; name: string; when: string }[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -358,7 +367,7 @@ export default function ScanPage() {
                 {formatLabel(result.asset.stock_status)}
                 {selectedBatch && ' — added to ' + selectedBatch.batch_number}
               </div>
-              {!showAudit && (
+              {!showAudit && mayAudit && (
                 <button
                   onClick={() => setShowAudit(true)}
                   className="mt-2 text-xs text-emerald-700 underline"
@@ -368,7 +377,11 @@ export default function ScanPage() {
               )}
             </div>
             {showAudit && (
-              <AuditForm assetId={result.asset.id} onSaved={() => setShowAudit(false)} />
+              <AuditForm
+                assetId={result.asset.id}
+                mayRecordWipe={mayRecordWipe}
+                onSaved={() => setShowAudit(false)}
+              />
             )}
           </div>
         )}
@@ -380,7 +393,7 @@ export default function ScanPage() {
                 {selectedBatch ? ' into ' + selectedBatch.batch_number : ''}.{' '}
                 <span className="text-sky-700">Created in inventory.</span>
               </div>
-              {!showAudit && (
+              {!showAudit && mayAudit && (
                 <button
                   onClick={() => setShowAudit(true)}
                   className="mt-2 text-xs text-sky-700 underline"
@@ -390,7 +403,11 @@ export default function ScanPage() {
               )}
             </div>
             {showAudit && (
-              <AuditForm assetId={result.asset.id} onSaved={() => setShowAudit(false)} />
+              <AuditForm
+                assetId={result.asset.id}
+                mayRecordWipe={mayRecordWipe}
+                onSaved={() => setShowAudit(false)}
+              />
             )}
           </div>
         )}

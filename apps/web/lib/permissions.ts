@@ -32,6 +32,11 @@ export const ACTION_PERMISSIONS: { slug: string; label: string; hint: string }[]
   { slug: 'return_sold', label: 'Return Sold Stock', hint: 'Bring sold stock back into inventory' },
   { slug: 'return_from_pallet', label: 'Return from Pallet', hint: 'Move devices off a pallet back into Goods In (admin-grade)' },
   { slug: 'delete_asset', label: 'Delete Asset', hint: 'Remove a device and its history' },
+  {
+    slug: 'record_manual_wipe',
+    label: 'Record Manual Wipe',
+    hint: 'Mark a drive "Wiped" by hand, e.g. after a third-party tool. Its certificate says it was manually recorded',
+  },
   { slug: 'delete_pallet', label: 'Delete Pallet', hint: 'Remove a pallet' },
   { slug: 'merge_pallets', label: 'Merge Pallets', hint: 'Combine pallets into one' },
   { slug: 'manage_ownership', label: 'Manage Lot Ownership', hint: "Reassign a lot's owner" },

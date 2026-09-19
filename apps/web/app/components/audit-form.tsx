@@ -19,7 +19,22 @@ const TEST_FIELDS = ['keyboard', 'ports', 'webcam', 'wifi', 'speakers'] as const
 // syncs them (and denormalizes the grade/status onto the parent asset, plus
 // logs the history event) once connectivity returns — see
 // apps/api/src/powersync/powersync.service.ts#applyAuditSideEffects.
-export function AuditForm({ assetId, onSaved }: { assetId: string; onSaved?: () => void }) {
+// mayRecordWipe: whether this person holds "Record Manual Wipe". Without it the
+// "Wiped" / "Data wiped" choices are not offered - the server would drop the
+// claim anyway (see manual-wipe.ts), and a choice that silently vanishes on sync
+// is worse than one that was never there. Defaults to false: a caller that does
+// not know the user's permissions (the Scan page) offers no hand-typed wipes.
+export function AuditForm({
+  assetId,
+  onSaved,
+  mayRecordWipe = false,
+}: {
+  assetId: string;
+  onSaved?: () => void;
+  mayRecordWipe?: boolean;
+}) {
+  const auditStatuses = mayRecordWipe ? AUDIT_STATUSES : AUDIT_STATUSES.filter((s) => s !== 'data_wiped');
+  const wipeStatuses = mayRecordWipe ? DATA_WIPE_STATUSES : DATA_WIPE_STATUSES.filter((s) => s !== 'wiped');
   const [auditStatus, setAuditStatus] = useState('');
   const [cosmeticGrade, setCosmeticGrade] = useState('');
   const [tests, setTests] = useState<Record<string, string>>({});
@@ -100,7 +115,7 @@ export function AuditForm({ assetId, onSaved }: { assetId: string; onSaved?: () 
             className="field-underline w-full px-2 py-1.5 text-sm"
           >
             <option value="">—</option>
-            {AUDIT_STATUSES.map((s) => (
+            {auditStatuses.map((s) => (
               <option key={s} value={s}>
                 {formatLabel(s)}
               </option>
@@ -159,7 +174,7 @@ export function AuditForm({ assetId, onSaved }: { assetId: string; onSaved?: () 
             className="field-underline w-full px-2 py-1.5 text-sm"
           >
             <option value="">—</option>
-            {DATA_WIPE_STATUSES.map((s) => (
+            {wipeStatuses.map((s) => (
               <option key={s} value={s}>
                 {formatLabel(s)}
               </option>

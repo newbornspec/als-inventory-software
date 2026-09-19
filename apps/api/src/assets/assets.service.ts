@@ -12,6 +12,8 @@ import { nextUnitId } from './unit-id';
 import { Batch, BatchStatus } from '../batches/batch.entity';
 import { AssetEventType, AssetHistory } from './asset-history.entity';
 import { AssetAudit } from './asset-audit.entity';
+import { assertMayClaimWiped } from './manual-wipe';
+import { PermissionsService } from '../auth/permissions.service';
 import { CreateAssetDto } from './dto/create-asset.dto';
 import { UpdateAssetDto } from './dto/update-asset.dto';
 import { QueryAssetsDto } from './dto/query-assets.dto';
@@ -91,6 +93,7 @@ export class AssetsService {
     @InjectRepository(AssetAudit) private audits: Repository<AssetAudit>,
     @InjectRepository(Batch) private batches: Repository<Batch>,
     private activity: ActivityService,
+    private permissions: PermissionsService,
   ) {}
 
   // A scoped manager may only place/keep an asset in a lot they can access
@@ -302,6 +305,9 @@ export class AssetsService {
   async create(dto: CreateAssetDto, user?: RequestUser): Promise<Asset> {
     // Managers can only create assets inside a lot they own.
     await this.assertOwnsTargetLot(dto.batchId ?? null, user);
+    // A device created already marked 'data_wiped' is a wipe claim with no wipe
+    // record behind it. The web's own forms never send auditStatus here.
+    await assertMayClaimWiped(this.permissions, user?.userId, dto);
     const userId = user?.userId;
     const asset = await this.assets.save(
       this.assets.create({ ...dto, unitId: await nextUnitId(this.assets) }),
@@ -320,6 +326,8 @@ export class AssetsService {
   async update(id: string, dto: UpdateAssetDto, user?: RequestUser): Promise<Asset> {
     // 404s for a scoped manager who doesn't own the asset's current lot.
     const before = await this.findOne(id, user);
+    // Same claim, same rule as the audit route - see manual-wipe.ts.
+    await assertMayClaimWiped(this.permissions, user?.userId, dto);
     // A sold asset is locked: no edits or moves except by an admin (who should
     // normally use the return flow rather than editing in place).
     if (before.stockStatus === AssetStockStatus.SOLD && user && user.role !== 'admin') {
@@ -392,6 +400,12 @@ export class AssetsService {
   async createAudit(assetId: string, dto: CreateAssetAuditDto, userId: string): Promise<AssetAudit> {
     const asset = await this.findOne(assetId); // 404s if the asset doesn't exist
 
+    // Claiming a drive was erased, by hand. Allowed with its own permission,
+    // and the certificate then says "manually recorded" - see manual-wipe.ts.
+    // Both fields carry the claim (the wipe record, and the device's status),
+    // so both are checked, or it just moves to whichever was not.
+    await assertMayClaimWiped(this.permissions, userId, dto);
+
     // Same normalisation the USB tool's ingest path applies, so an audit typed
     // into the web form can't reintroduce a 15 GB capacity or put a screen size
     // on a tower. deviceType falls back to category for rows captured before
@@ -405,6 +419,8 @@ export class AssetsService {
           : {}),
         assetId,
         auditedById: userId,
+        // Server-set, never from the request: a person typed this outcome.
+        wipeSource: dto.dataWipeStatus ? 'manual' : null,
       }),
     );
 

@@ -6,6 +6,7 @@ import { Asset } from './asset.entity';
 import { AssetAudit, DataWipeStatus } from './asset-audit.entity';
 import { Batch } from '../batches/batch.entity';
 import { COMPANY } from '../common/company';
+import { lotAttestation, sourceOf, wipeAttestation } from './manual-wipe';
 import {
   assertOwnsBatch,
   isScopedManager,
@@ -75,7 +76,8 @@ export class CertificatesService {
             .filter(Boolean)
             .join(' '),
           storage,
-          method: w.dataWipeMethod?.trim() || 'Not specified',
+          method: (w.dataWipeMethod?.trim() || 'Not specified') + wipeAttestation(sourceOf(w)).methodSuffix,
+          manual: sourceOf(w) === 'manual',
           date: new Date(w.createdAt),
         };
       });
@@ -155,7 +157,11 @@ export class CertificatesService {
         year: 'numeric',
       });
       const technician = (wipe.auditedBy as any)?.name ?? '—';
-      const method = wipe.dataWipeMethod?.trim() || 'Not specified';
+      // What this certificate may truthfully claim depends on who recorded
+      // the wipe - the station, which erased and read back the drive, or a
+      // person typing an outcome. See manual-wipe.ts.
+      const att = wipeAttestation(sourceOf(wipe));
+      const method = (wipe.dataWipeMethod?.trim() || 'Not specified') + att.methodSuffix;
       const d = new Date(wipe.createdAt);
       const certNo = `ERA-${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(
         d.getDate(),
@@ -185,10 +191,7 @@ export class CertificatesService {
         .font('Helvetica')
         .fontSize(10.5)
         .fillColor('#222222')
-        .text(
-          'This certifies that the data-storage media contained in the device identified below has been sanitised using the method stated, rendering previously stored data unrecoverable by generally available means.',
-          { align: 'left' },
-        );
+        .text(att.intro, { align: 'left' });
       doc.moveDown(1);
 
       const section = (title: string, rows: [string, string][]) => {
@@ -219,9 +222,9 @@ export class CertificatesService {
 
       section('Data erasure', [
         ['Method', method],
-        ['Result', 'Wiped — data unrecoverable'],
-        ['Date performed', wipedOn],
-        ['Performed by', technician],
+        ['Result', att.result],
+        [att.dateLabel, wipedOn],
+        [att.performerLabel, technician],
       ]);
 
       const extra: [string, string][] = [];
@@ -253,7 +256,7 @@ export class CertificatesService {
 
   private renderLot(
     batch: Batch,
-    rows: Array<{ serial: string; device: string; storage: string; method: string; date: Date }>,
+    rows: Array<{ serial: string; device: string; storage: string; method: string; manual: boolean; date: Date }>,
   ): Promise<Buffer> {
     return new Promise((resolve, reject) => {
       const doc = new PDFDocument({ size: 'A4', margin: 40 });
@@ -264,6 +267,7 @@ export class CertificatesService {
 
       const left = 40;
       const right = doc.page.width - 40;
+      const lot = lotAttestation(rows.filter((r) => r.manual).length, rows.length);
       const t = new Date();
       const ymd = `${t.getFullYear()}${String(t.getMonth() + 1).padStart(2, '0')}${String(
         t.getDate(),
@@ -292,16 +296,11 @@ export class CertificatesService {
         .fontSize(10)
         .fillColor('#222222')
         .text(`Lot: ${batch.batchNumber}${batch.source ? '     Supplier: ' + batch.source : ''}`)
-        .text(`Devices certified erased: ${rows.length}`);
+        .text(lot.headline);
       doc.moveDown(0.5);
-      doc
-        .font('Helvetica')
-        .fontSize(9.5)
-        .fillColor('#222222')
-        .text(
-          'This certifies that the data-storage media in each device listed below has been sanitised using the method stated, rendering previously stored data unrecoverable by generally available means.',
-          { width: right - left },
-        );
+      // Headline, lead sentence and date column all depend on the mix of
+      // station wipes and hand records - see lotAttestation in manual-wipe.ts.
+      doc.font('Helvetica').fontSize(9.5).fillColor('#222222').text(lot.intro, { width: right - left });
       doc.moveDown(0.6);
 
       const cols = [
@@ -310,7 +309,7 @@ export class CertificatesService {
         { key: 'device', label: 'Device', x: left + 128, w: 150 },
         { key: 'storage', label: 'Storage', x: left + 278, w: 85 },
         { key: 'method', label: 'Method', x: left + 363, w: 92 },
-        { key: 'date', label: 'Wiped', x: left + 455, w: right - (left + 455) },
+        { key: 'date', label: lot.dateHeader, x: left + 455, w: right - (left + 455) },
       ] as const;
       const bottom = doc.page.height - doc.page.margins.bottom - 80;
 

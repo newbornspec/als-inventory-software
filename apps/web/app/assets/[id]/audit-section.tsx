@@ -20,7 +20,20 @@ export interface AssetAuditRecord {
   createdAt: string;
 }
 
-export function AuditSection({ assetId, audits }: { assetId: string; audits: AssetAuditRecord[] }) {
+export function AuditSection({
+  assetId,
+  audits,
+  mayRecordWipe = false,
+  mayAudit = true,
+}: {
+  assetId: string;
+  audits: AssetAuditRecord[];
+  // Holds "Record Manual Wipe" - passed through to the form. See AuditForm.
+  mayRecordWipe?: boolean;
+  // Holds Perform Goods In/Amazon Audit - without it the button is not shown,
+  // because the API refuses the audit (and discards it if it came offline).
+  mayAudit?: boolean;
+}) {
   const [showForm, setShowForm] = useState(false);
   const router = useRouter();
   const addRef = useRef<HTMLButtonElement>(null);
@@ -38,7 +51,7 @@ export function AuditSection({ assetId, audits }: { assetId: string; audits: Ass
     <section className="rounded-xl border border-neutral-200 bg-white p-4">
       <div className="flex items-center justify-between">
         <h2 className="text-xs font-semibold uppercase tracking-wide text-neutral-900">ITAD Audits</h2>
-        {!showForm && (
+        {!showForm && mayAudit && (
           <button
             ref={addRef}
             onClick={() => {
@@ -66,6 +79,7 @@ export function AuditSection({ assetId, audits }: { assetId: string; audits: Ass
         <div className="mt-3">
           <AuditForm
             assetId={assetId}
+            mayRecordWipe={mayRecordWipe}
             onSaved={() => {
               setShowForm(false);
               // Say it happened; the effect above restores focus to the

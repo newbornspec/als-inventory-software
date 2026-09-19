@@ -9,6 +9,8 @@ import {
 import { Asset, AssetAuditStatus, AssetConditionGrade } from './asset.entity';
 import { User } from '../users/user.entity';
 import { HardwareProfile } from '../devices/hardware-profile.type';
+// Type-only: erased at runtime, so no import cycle with manual-wipe.ts.
+import type { WipeSource } from './manual-wipe';
 
 export enum DataWipeStatus {
   NOT_STARTED = 'not_started',
@@ -136,6 +138,14 @@ export class AssetAudit {
   // not just a wiped/not-wiped flag.
   @Column({ name: 'data_wipe_method', type: 'varchar', nullable: true })
   dataWipeMethod: string | null;
+
+  // 'station' | 'manual' - who recorded the wipe outcome, and so what the
+  // certificate may claim. Set by the SERVER only: the station ingest writes
+  // 'station', the web routes write 'manual', and anything a client sends for
+  // it is discarded. Null when no wipe status was recorded. See manual-wipe.ts
+  // and migration 1752640000000-AddWipeSource.
+  @Column({ name: 'wipe_source', type: 'varchar', length: 16, nullable: true })
+  wipeSource: WipeSource | null;
 
   @Column({
     name: 'final_disposition',

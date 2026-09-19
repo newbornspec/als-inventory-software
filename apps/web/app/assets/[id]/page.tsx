@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { apiFetch, ApiError, getSessionUser } from '@/lib/api-server';
+import { apiFetch, ApiError, getSessionAccess, getSessionUser } from '@/lib/api-server';
+import { hasAnyPermission, hasPermission } from '@/lib/permissions';
 import { getLocations } from '@/lib/data';
 import type { Asset } from '@/lib/actions/assets';
 import type { Batch } from '@/lib/actions/batches';
@@ -64,7 +65,14 @@ export default async function AssetDetailPage({
   const { id } = await params;
   const user = await getSessionUser();
 
-  const [asset, history, audits, photos] = await loadAsset(id);
+  // Permissions come from /auth/me, not the JWT (which carries none). Fetched
+  // alongside the asset so it adds no round trip to the page.
+  const [[asset, history, audits, photos], access] = await Promise.all([
+    loadAsset(id),
+    getSessionAccess(),
+  ]);
+  const mayRecordWipe = hasPermission(access, 'record_manual_wipe');
+  const mayAudit = hasAnyPermission(access, ['perform_goods_in_audit', 'perform_amazon_audit']);
   // findAudits() orders by createdAt DESC, so [0] is the most recent
   // capture. Already fetched for the Lifecycle stream - no extra request.
   const latestAudit = audits[0] ?? null;
@@ -359,7 +367,12 @@ export default async function AssetDetailPage({
             )}
           </section>
 
-          <AuditSection assetId={asset.id} audits={audits} />
+          <AuditSection
+            assetId={asset.id}
+            audits={audits}
+            mayRecordWipe={mayRecordWipe}
+            mayAudit={mayAudit}
+          />
 
           {/* Above the hardware profile deliberately: whether the machine can
               be resold at all outranks how much RAM it has. */}

@@ -54,6 +54,13 @@ export const ACTION_PERMISSIONS = [
   // owner. Deliberately in NO default set below; admins pass via role bypass.
   'return_from_pallet',
   'delete_asset',
+  // Marking a drive "Wiped" BY HAND in the web app (after a third-party tool, or
+  // physical destruction). The certificate then says "manually recorded, not
+  // verified by the ALS audit station". Deliberately in NO default set below:
+  // it is granted person by person. Admins pass via role bypass. Enforced in
+  // the services (assets/manual-wipe.ts), not a route decorator, because the
+  // same routes also record audits that claim no wipe at all.
+  'record_manual_wipe',
   'delete_pallet',
   'merge_pallets',
   'manage_ownership', // reassigning a lot's owner

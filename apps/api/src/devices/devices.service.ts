@@ -301,6 +301,11 @@ export class DevicesService {
         chargerIncluded: dto.chargerIncluded ?? null,
         dataWipeStatus: dto.dataWipeStatus ?? null,
         dataWipeMethod: dto.dataWipeMethod ?? null,
+        // This route is the station's. 'station' means "filed through the
+        // station's endpoint" - as trustworthy as that endpoint's callers,
+        // which later steps of the remediation plan tighten (operator sign-in,
+        // signed records). The web routes can never set this value.
+        wipeSource: dto.dataWipeStatus ? 'station' : null,
         // Unconditional: asset_audits is the append-only compliance trail, so it
         // records the grade judged at this moment (or null). This is what the
         // erasure certificate's "Cosmetic grade" line reads.
