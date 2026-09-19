@@ -21,8 +21,11 @@ Scenario knobs (environment variables, all optional):
                       offline: every drive wipes; the record is queued.
     PREVIEW_ELIG      yes (default) | no | 404 - what the certificate-eligibility
                       check (contract C4) answers. 404 = an API older than C4.
-    PREVIEW_WORKFLOW  amazon (default) | goods_in - the batch is only named in
-                      goods_in.
+    PREVIEW_WORKFLOW  amazon (default) | goods_in | none - the batch is only
+                      named in goods_in. none = a dual-permission account that
+                      has not chosen: Wipe is disabled, with the reason.
+    PREVIEW_QUEUE     rejected: one wipe record sits in the offline queue and
+                      the server refused it (the banner that says why).
     PREVIEW_SECONDS   how long each fake wipe "runs" (default 4).
     PREVIEW_NAMESPACES  set to 1 to add a second namespace (nvme0n2) of the
                       same NVMe drive, to see the namespace warning (owner
@@ -44,7 +47,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 OUTCOME = os.environ.get("PREVIEW_OUTCOME", "mixed")
 ELIG = os.environ.get("PREVIEW_ELIG", "yes")
 SECONDS = float(os.environ.get("PREVIEW_SECONDS", "4"))
-STATE = {"workflow": os.environ.get("PREVIEW_WORKFLOW", "amazon"), "operator": "Preview"}
+_WF = os.environ.get("PREVIEW_WORKFLOW", "amazon")
+STATE = {"workflow": "" if _WF == "none" else _WF, "operator": "Preview"}
+QUEUE = os.environ.get("PREVIEW_QUEUE", "")
 LOCK = threading.Lock()
 JOBS = {}          # "wipe:/dev/x" -> {"start": epoch, "result": {...}, "order": n}
 
@@ -85,8 +90,20 @@ def bootstrap():
         "server": "https://preview.invalid", "currentUser": "Preview user",
         "operator": STATE["operator"], "workflow": STATE["workflow"],
         "workflows": ["amazon", "goods_in"], "adminPinSet": False, "launch": "preview",
-        "waiting": 0, "queueDurable": True, "imageSource": "usb", "imageError": None,
+        "imageSource": "usb", "imageError": None, **queue_status(),
     }
+
+
+def queue_status():
+    """Shaped like server.py's queue_status()."""
+    if QUEUE != "rejected":
+        return {"waiting": 0, "waitingHeld": 0, "waitingRejected": 0,
+                "waitingRejectedWipes": 0, "rejected": [], "queueDurable": True}
+    return {"waiting": 1, "waitingHeld": 0, "waitingRejected": 1, "waitingRejectedWipes": 1,
+            "rejected": [{"code": 400, "count": 1, "wipes": 1, "reason":
+                          "No audit lot selected — pick the lot you are working on "
+                          "in Als Inventory first."}],
+            "queueDurable": True}
 
 
 def result_for(dev, order):
@@ -170,6 +187,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, fh.read(), "text/html; charset=utf-8")
         if u.path == "/api/bootstrap":
             return self._send(200, bootstrap())
+        if u.path == "/api/queue":
+            return self._send(200, queue_status())
         if u.path == "/api/job":
             return self._send(200, job((q.get("type") or [""])[0]))
         if u.path == "/api/wipe/eligibility":

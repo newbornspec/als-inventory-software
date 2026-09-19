@@ -275,6 +275,13 @@
       </div>
     </div>
 
+    <!-- queued records the SERVER refused (renderQueue): kept and retried,
+         but not a network problem, so it is said here, not only in the chip -->
+    <div class="alert hidden" id="rejBanner">
+      <h4 id="rejTitle"></h4>
+      <p id="rejMsg" style="white-space:pre-line"></p>
+    </div>
+
     <div class="grid">
       <!-- ======================= LEFT COLUMN ======================= -->
       <div class="col">
@@ -442,6 +449,8 @@
               <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                 stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 21h16"/></svg>
               Load OS Image</button>
+            <!-- Why Load OS Image is not offered yet (installGate). -->
+            <div class="k hidden" id="iGateMsg" style="margin-top:8px"></div>
           </div>
           <div class="hidden" id="iRun">
             <div class="prow"><span id="iStat">Writing image</span><b id="iPct">0%</b></div>
@@ -485,6 +494,9 @@
               <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                 stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg>
               Wipe</button>
+            <!-- Why Wipe is not offered yet (wipeGate): shown under the button
+                 instead of leaving a greyed-out control with no explanation. -->
+            <div class="k hidden" id="wGateMsg" style="margin-top:8px"></div>
           </div>
           <div class="hidden" id="wRun"><div id="wRuns"></div>
             <div class="health hidden" id="wSummary"></div>
@@ -636,11 +648,42 @@ async function bootstrap(){
   $('hUser').textContent=b.currentUser||'Operator';
   $('hOperator').textContent='Operator: '+(b.operator||'— tap to set');
   renderSignin(b.signin);
+  renderQueue(b);
+  if(b.error){$('errBanner').classList.remove('hidden');$('errMsg').textContent=b.error;}
+  else $('errBanner').classList.add('hidden');
+
+  fillBatches(); fillDrives(); fillImages(); fillHardware(); renderImageSource();
+  renderWorkflow();
+  bootstrapTail(b);
+}
+
+/* The offline queue: the header chip, and the banner for records the SERVER
+   refused. Drawn from /api/bootstrap and from /api/queue, which the page polls
+   on its own (below) - bootstrap is not re-polled once the page has settled,
+   and a record the server refuses must not wait for the next click to show. */
+function renderQueue(b){
   // Records held on this machine because the network was down.
   const q=b.waiting||0;
+  const rej=b.waitingRejected||0;
   $('hQueue').classList.toggle('hidden',!q);
+  // Refused records: not a network problem, so not just "N waiting". Retried
+  // anyway (the fix is usually on the server), but the operator is told what
+  // the server said, prominently, until it accepts them.
+  $('rejBanner').classList.toggle('hidden',!rej);
+  if(rej){
+    const w=b.waitingRejectedWipes||0;
+    const noun=w===rej?(rej===1?'wipe record was':'wipe records were')
+      :(rej===1?'record was':'records were');
+    $('rejTitle').textContent='⚠ '+rej+' '+noun+' not accepted by the server';
+    $('rejMsg').textContent=(b.rejected||[]).map(r=>
+      (r.count>1?r.count+' × ':'')+(r.reason||'no reason given')+
+      (r.code?' (HTTP '+r.code+')':'')).join('\n')+
+      '\n\n'+(rej===1?'It is':'They are')+' kept on this station and retried every few '+
+      'minutes. Nothing is lost - but the server will not take '+(rej===1?'it':'them')+
+      ' until the problem above is fixed. Tell a supervisor.';
+  }
   if(q){
-    $('hQueueN').textContent=q+' waiting to upload';
+    $('hQueueN').textContent=q+' waiting to upload'+(rej?' ('+rej+' refused)':'');
     /* Whether these survive a power-off is the only thing the operator can act
        on, so say it rather than hiding it in a tooltip. */
     const safe=b.queueDurable!==false;
@@ -655,12 +698,17 @@ async function bootstrap(){
       (held?' '+held+' of them belong to another operator and upload only when that person signs in.':'');
     $('hQueue').style.color=safe?'var(--amber)':'var(--red)';
   }
-  if(b.error){$('errBanner').classList.remove('hidden');$('errMsg').textContent=b.error;}
-  else $('errBanner').classList.add('hidden');
+}
+// Its own poll: cheap on the station (the queue file and memory, no network,
+// no hardware), and the only way a refusal found by the background retry
+// reaches a screen nobody is clicking on.
+async function pollQueue(){
+  try{ const s=await jget('/api/queue'); if(s&&typeof s.waiting==='number')renderQueue(s); }
+  catch(e){}
+}
+setInterval(pollQueue,20000);
 
-  fillBatches(); fillDrives(); fillImages(); fillHardware(); renderImageSource();
-  renderWorkflow();
-
+function bootstrapTail(b){
   auditGate();
   // NOTE: the old line here was  $('wStart').disabled=!$('wDrive').value;
   // #wDrive only exists on the single-drive branch of fillWipeDrives(); with two or
@@ -689,6 +737,42 @@ function auditGate(){
   const si=BOOT.signin||{};
   $('aStart').disabled=!(BOOT.device&&wf()&&(!needBatch||$('batchSel').value)&&
     (!si.required||si.signedIn));
+  applyWipeGate();
+}
+
+/* Why a wipe may not start yet, or '' when it may. A wipe is filed exactly like
+   an audit - under the chosen workflow, and for Goods In into the selected
+   batch - so it needs what Start audit needs (auditGate), decided BEFORE the
+   drive is erased. An account allowed both workflows has chosen neither until
+   the operator taps one: a wipe started then produced a record the server
+   refused ("No audit lot selected") after the drive was already erased. The
+   station service refuses that case too (/api/wipe/start); this says why up
+   front instead of after a click. BOOT.workflows is unknown until the first
+   bootstrap answers - the server still decides then. */
+function recordGate(noun){
+  const wfs=BOOT.workflows;
+  if(Array.isArray(wfs)&&!wfs.length)
+    return 'This account has no audit permission, so a '+noun+' could not be recorded.';
+  if(Array.isArray(wfs)&&wfs.length>1&&!wf())
+    return 'Choose Amazon / General audit or Goods In audit at the top first — the '+noun+' is recorded under that workflow.';
+  if(wf()==='goods_in'&&!$('batchSel').value)
+    return 'Select a batch first — a Goods In '+noun+' is recorded into the batch.';
+  return '';
+}
+function wipeGate(){ return recordGate('wipe'); }
+/* A restore overwrites the disk and files its record exactly like a wipe, so
+   it is gated the same way (the station service refuses it too). */
+function installGate(){ return recordGate('restore'); }
+function applyWipeGate(){
+  const why=wipeGate(), msg=$('wGateMsg');
+  $('wStart').disabled=!selectedWipeDrives().length||!!why;
+  msg.textContent=why; msg.classList.toggle('hidden',!why);
+  applyInstallGate();
+}
+function applyInstallGate(){
+  const why=installGate(), msg=$('iGateMsg');
+  $('iStart').disabled=!!why;
+  msg.textContent=why; msg.classList.toggle('hidden',!why);
 }
 
 function fillBatches(){
@@ -877,7 +961,7 @@ function renderHealth(){
 function estimate(){
   renderHealth();
   const picked=selectedWipeDrives(), m=$('wMethod').value;
-  $('wStart').disabled=!picked.length;
+  applyWipeGate();
   if(!picked.length){$('wEst').textContent='—';return;}
   // The worst case is always an OVERWRITE. A drive's own erase takes minutes -
   // when it works. When it is refused (a BIOS-frozen SATA SSD, usually), the
@@ -1112,6 +1196,13 @@ async function doAudit(){
   try{ res=await jpost('/api/audit',body); }
   catch(e){ res={ok:false,data:{message:'Could not reach the audit service.'}}; }
   $('aRun').classList.add('hidden'); auditGate();
+  if(res.ok&&res.data&&res.data.queued&&res.data.rejected){
+    // Not the network: the server refused the record. It is kept and retried,
+    // but the operator is told what the server said instead of "no connection".
+    openOv('The server did not accept this audit',(res.data.message||'')+
+      '\n\nThe record is saved on this station.',false,closeOv,'OK');
+    bootstrap(); checkPrior(); return;
+  }
   if(res.ok&&res.data&&res.data.queued){
     // Offline: the record is on disk and uploads itself once back on the network.
     toast('No connection — audit saved on this machine and will upload automatically ('+
@@ -1371,6 +1462,8 @@ let RUN=null;                        // the wipe run on screen: {devs, results}
 function confirmWipe(){
   const devs=selectedWipeDrives();
   if(!devs.length){toast('No drive selected.',false);return;}
+  const gate=wipeGate();
+  if(gate){openOv('The wipe did not start',gate+'\n\nNothing was erased.',false,closeOv,'OK');return;}
   // Labels frozen now: DRIVES is re-read by every poll, and the run panel must
   // keep naming the disks the operator confirmed.
   const labels={}; for(const d of devs)labels[d]=driveLabel(driveById(d))||d;
@@ -1400,7 +1493,10 @@ function confirmWipe(){
     // silently not run.
     const notStarted=(m)=>openOv('The wipe did not start',
       m+'\n\nNothing was erased.',false,closeOv,'OK');
-    try{ res=await jpost('/api/wipe/start',{devices:devs,
+    // workflow: what THIS screen showed. The station refuses when it has
+    // since been switched on another screen (stale_view_refusal), instead of
+    // filing the wipe under a workflow and lot the operator did not see.
+    try{ res=await jpost('/api/wipe/start',{devices:devs,workflow:wf(),
       lotId:(wf()==='goods_in'?$('batchSel').value:undefined),
                                            method:$('wMethod').value}); }
     catch(e){ notStarted('Could not reach the station service.'); return; }
@@ -1481,16 +1577,22 @@ function confirmInstall(){
   const img=$('iImage').value, dev=$('iDrive').value;
   if(!img){toast('No OS image selected.',false);return;}
   if(!dev){toast('No target drive.',false);return;}
+  const gate=installGate();
+  if(gate){openOv('The restore did not start',gate+'\n\nNothing was written to the disk.',
+    false,closeOv,'OK');return;}
   const io=$('iImage').selectedOptions[0], dobj=$('iDrive').selectedOptions[0];
   const imgName=io?io.textContent.trim():img;
   openOv('Install '+(io?io.textContent:img)+'?','This erases '+(dobj?dobj.textContent:dev)+
     ' and writes the OS image to it. This cannot be undone.', false, async()=>{
     closeOv();
     let res;
-    try{ res=await jpost('/api/os/install',{imageId:img,device:dev,
+    try{ res=await jpost('/api/os/install',{imageId:img,device:dev,workflow:wf(),
       imageName:imgName,lotId:(wf()==='goods_in'?$('batchSel').value:undefined)}); }
     catch(e){ toast('Could not start the install.',false); return; }
-    if(!res.ok){toast(res.data.message||'Could not start install',false);return;}
+    // A refusal stays on screen (like the wipe's): the reasons - no workflow,
+    // a workflow changed on another screen - are too long for a toast.
+    if(!res.ok){openOv('The restore did not start',((res.data&&res.data.message)||
+      'Could not start install'),false,closeOv,'OK');return;}
     $('iActions').classList.add('hidden'); $('iRun').classList.remove('hidden');
     setInstallResult('running',imgName,dev,'');
     $('iStat').textContent='Writing image'; $('iPct').textContent='0%';

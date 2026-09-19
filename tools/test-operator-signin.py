@@ -250,6 +250,12 @@ def settle():
 def wipe():
     """Start a wipe of /dev/sda; returns (http code, message, job or None)."""
     JOBS.clear()
+    # The accounts here are admins (both workflows), and a sign-out forgets
+    # the workflow: pick Goods In the way the operator would at the top of
+    # the screen, or the wipe is refused for having none (that refusal is
+    # tested in test-wipe-workflow.py; this file is about WHO files).
+    if not srv.current_workflow() and "goods_in" in srv.allowed_workflows():
+        post("/api/workflow", {"workflow": "goods_in"})
     sent = post("/api/wipe/start", {"devices": ["/dev/sda"]})
     return sent[0], (sent[1] or {}).get("message", ""), (JOBS[0] if JOBS else None)
 
@@ -619,7 +625,17 @@ try:
     check("no permission for one call: still signed in", (srv.operator_identity() or {}).get("id") == "u-ann",
           srv.OPERATOR)
     check("...the record is kept to retry", POSTS == [] and len(srv.queue_load()) == 1, srv.queue_load())
+    # It is a refusal of THIS record, not a session end: shown with the
+    # server's reason and retried less often (test-queue-rejection.py). Wind
+    # the clock past that interval instead of waiting it out.
+    check("...and the server's reason is shown with it",
+          srv.queue_status()["rejected"][:1] == [{"code": 403, "count": 1, "wipes": 1,
+                                                  "reason": "You don't have permission to do this."}],
+          srv.queue_status())
     FORBID.clear()
+    with srv.REJECTED_LOCK:
+        for v in srv.REJECTED.values():
+            v["at"] -= srv.REJECT_RETRY_SECS + 1
     srv.queue_flush()
     check("...and goes once the server accepts it", [u for u, _b in POSTS] == ["u-ann"], POSTS)
     srv.operator_signout()
