@@ -112,6 +112,33 @@ describe('ingest settles the asset wipe status per drive', () => {
     expect(assets[0].auditStatus).toBe(AssetAuditStatus.POWER_ON);
   });
 
+  // Deliberate, owner-reversible (review, wave 2): records from an old stick
+  // name no drive, so for them the interim D11 rule decides the STATUS too,
+  // not only the certificate. On master "latest wins" read a two-drive
+  // laptop whose second drive failed a minute before the first was wiped as
+  // data_wiped - the failure this remediation exists for. The cost: a
+  // single-drive machine that failed and was re-wiped on an old stick reads
+  // data_wipe_failed for 24 hours after the failure (its certificate is
+  // refused for the same 24 hours either way).
+  it('old-stick records (no drive identity): D11 decides the status too', async () => {
+    const legacy = (status: DataWipeStatus) =>
+      ({
+        profile,
+        auditKind: 'amazon',
+        dataWipeStatus: status,
+        dataWipeMethod: 'NVMe crypto erase',
+      }) as IngestAuditDto;
+    expect(
+      await statusAfter(
+        legacy(DataWipeStatus.FAILED),
+        legacy(DataWipeStatus.WIPED),
+      ),
+    ).toBe(AssetAuditStatus.DATA_WIPE_FAILED);
+    expect(await statusAfter(legacy(DataWipeStatus.WIPED))).toBe(
+      AssetAuditStatus.DATA_WIPED,
+    );
+  });
+
   it('the audit row still records what this one event established', async () => {
     const { svc, audits } = ingestHarness();
     await svc.ingest('u1', wipe('S-A', DataWipeStatus.WIPED));

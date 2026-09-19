@@ -75,7 +75,19 @@ maybe('settleWipeStatus under concurrent ingests (Postgres)', () => {
     await ds?.destroy();
   });
 
-  const payload = (host: string, drive: string, status?: DataWipeStatus) =>
+  // listStorage: whether the profile lists the two drives. The racing tests
+  // leave it off: with both drives listed, a settle that read only drive A's
+  // row would already answer 'incomplete' (data_wipe_failed), so no
+  // interleaving could ever write data_wiped and the test could not tell a
+  // missing lock from a working one (review, wave 2). Without the list, a
+  // stale read of "A wiped" alone reads as the whole machine wiped - exactly
+  // the race the lock must prevent.
+  const payload = (
+    host: string,
+    drive: string,
+    status?: DataWipeStatus,
+    listStorage = true,
+  ) =>
     ({
       auditKind: 'amazon',
       profile: {
@@ -84,20 +96,22 @@ maybe('settleWipeStatus under concurrent ingests (Postgres)', () => {
           model: 'Latitude 7490',
           serialNumber: host,
         },
-        storage: [
-          {
-            model: 'Samsung SSD 980',
-            serialNumber: `${host}-A`,
-            interface: 'NVMe',
-            type: 'NVMe',
-          },
-          {
-            model: 'ST1000LM',
-            serialNumber: `${host}-B`,
-            interface: 'SATA',
-            type: 'HDD',
-          },
-        ],
+        storage: listStorage
+          ? [
+              {
+                model: 'Samsung SSD 980',
+                serialNumber: `${host}-A`,
+                interface: 'NVMe',
+                type: 'NVMe',
+              },
+              {
+                model: 'ST1000LM',
+                serialNumber: `${host}-B`,
+                interface: 'SATA',
+                type: 'HDD',
+              },
+            ]
+          : undefined,
       },
       ...(status
         ? {
@@ -108,6 +122,11 @@ maybe('settleWipeStatus under concurrent ingests (Postgres)', () => {
         : {}),
     }) as IngestAuditDto;
 
+  // A smoke test of real concurrency, NOT the proof of the lock: the window
+  // between a settle's read and its write is so narrow that, with setLock
+  // removed, 3 runs of these 25 pairs still all ended data_wipe_failed
+  // (checked in review, wave 2). The forced interleaving below is the test
+  // that fails without the lock.
   it('two concurrent ingests, one failed: always data_wipe_failed', async () => {
     const runs = 25;
     const outcomes: Array<string | null> = [];
@@ -117,9 +136,9 @@ maybe('settleWipeStatus under concurrent ingests (Postgres)', () => {
       const { assetId } = await svc.ingest(userId, payload(host, ''));
       // Alternate which request starts first.
       const a = () =>
-        svc.ingest(userId, payload(host, 'A', DataWipeStatus.WIPED));
+        svc.ingest(userId, payload(host, 'A', DataWipeStatus.WIPED, false));
       const b = () =>
-        svc.ingest(userId, payload(host, 'B', DataWipeStatus.FAILED));
+        svc.ingest(userId, payload(host, 'B', DataWipeStatus.FAILED, false));
       await Promise.all(i % 2 ? [a(), b()] : [b(), a()]);
       const asset = await ds
         .getRepository(Asset)

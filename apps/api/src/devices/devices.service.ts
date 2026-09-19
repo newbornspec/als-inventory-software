@@ -424,6 +424,14 @@ export class DevicesService {
   // the asset row FOR UPDATE and reads the rows inside that lock, so whichever
   // request settles last is guaranteed to see both rows, and its answer is
   // the one that stays.
+  //
+  // OLD STICKS. Records that name no drive are decided by the interim D11
+  // rule (certificate-eligibility.ts) here too, not only for the
+  // certificate: "latest wins" is exactly what read a two-drive laptop as
+  // data_wiped when its second drive had failed a minute earlier. Deliberate
+  // and owner-reversible; the cost is that a failed-then-re-wiped machine on
+  // an old stick shows data_wipe_failed for 24 hours after the failure, the
+  // same window in which its certificate is refused.
   private async settleWipeStatus(assetId: string): Promise<void> {
     await this.assets.manager.transaction(async (m) => {
       const current = await m
