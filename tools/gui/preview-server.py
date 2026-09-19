@@ -27,6 +27,11 @@ Scenario knobs (environment variables, all optional):
     PREVIEW_QUEUE     rejected: one wipe record sits in the offline queue and
                       the server refused it (the banner that says why).
     PREVIEW_SECONDS   how long each fake wipe "runs" (default 4).
+    PREVIEW_NET       what the live connection check (/api/net, the header
+                      chip) answers: connected (default, over Wi-Fi) |
+                      no-network | server-unreachable | flap (cycles through
+                      all three, 12 s each, so the chip can be watched
+                      changing - the page polls every 10 s).
     PREVIEW_NAMESPACES  set to 1 to add a second namespace (nvme0n2) of the
                       same NVMe drive, to see the namespace warning (owner
                       decision D36) and the second namespace waiting its
@@ -50,6 +55,10 @@ SECONDS = float(os.environ.get("PREVIEW_SECONDS", "4"))
 _WF = os.environ.get("PREVIEW_WORKFLOW", "amazon")
 STATE = {"workflow": "" if _WF == "none" else _WF, "operator": "Preview"}
 QUEUE = os.environ.get("PREVIEW_QUEUE", "")
+NET_MODE = os.environ.get("PREVIEW_NET", "connected")
+NET_FLAP = ("connected", "no-network", "server-unreachable")
+NET_T0 = time.time()
+NET_SEEN = {"state": None, "since": int(NET_T0)}
 LOCK = threading.Lock()
 JOBS = {}          # "wipe:/dev/x" -> {"start": epoch, "result": {...}, "order": n}
 
@@ -104,6 +113,20 @@ def queue_status():
                           "No audit lot selected — pick the lot you are working on "
                           "in Als Inventory first."}],
             "queueDurable": True}
+
+
+def net_status():
+    """Shaped like server.py's net_status() (GET /api/net)."""
+    now = time.time()
+    st = NET_FLAP[int((now - NET_T0) // 12) % 3] if NET_MODE == "flap" else NET_MODE
+    if st not in NET_FLAP:
+        st = "connected"
+    if st != NET_SEEN["state"]:
+        NET_SEEN.update(state=st, since=int(now))
+    up = st != "no-network"
+    return {"state": st, "via": "wifi" if up else None,
+            "ssid": "ALS-Warehouse (preview)" if up else None,
+            "checkedAt": int(now), "since": NET_SEEN["since"]}
 
 
 def result_for(dev, order):
@@ -189,6 +212,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, bootstrap())
         if u.path == "/api/queue":
             return self._send(200, queue_status())
+        if u.path == "/api/net":
+            return self._send(200, net_status())
         if u.path == "/api/job":
             return self._send(200, job((q.get("type") or [""])[0]))
         if u.path == "/api/wipe/eligibility":
@@ -239,8 +264,8 @@ def main():
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8765
     # Loopback only: this is a design preview, not something to expose.
     srv = ThreadingHTTPServer(("127.0.0.1", port), Handler)
-    print("kiosk preview on http://127.0.0.1:%d/  (outcome=%s, eligibility=%s, workflow=%s)"
-          % (port, OUTCOME, ELIG, STATE["workflow"]))
+    print("kiosk preview on http://127.0.0.1:%d/  (outcome=%s, eligibility=%s, workflow=%s, net=%s)"
+          % (port, OUTCOME, ELIG, STATE["workflow"], NET_MODE))
     srv.serve_forever()
 
 
