@@ -14,6 +14,7 @@ import { AssetEditForm } from './edit-form';
 import { SellAssetButton } from './sell-button';
 import { DeleteAssetButton } from './delete-asset-button';
 import { AuditSection, type AssetAuditRecord } from './audit-section';
+import type { CertificateEligibility } from '@/lib/certificate-eligibility';
 import { PhotosSection } from './photos-section';
 import { HardwareSection } from './hardware-section';
 import { DeviceLocksSection, type DeviceLocks } from './device-locks-section';
@@ -57,6 +58,18 @@ async function loadAsset(
   }
 }
 
+// The API's per-drive answer to "may this device be certified?" (contract
+// C4). null means unknown - an API that predates the endpoint answers 404, and
+// any other failure must not take the page down - and the audit section then
+// falls back to its local copy of the interim rule.
+async function loadEligibility(id: string): Promise<CertificateEligibility | null> {
+  try {
+    return await apiFetch<CertificateEligibility>(`/assets/${id}/certificate-eligibility`);
+  } catch {
+    return null;
+  }
+}
+
 export default async function AssetDetailPage({
   params,
 }: {
@@ -67,9 +80,10 @@ export default async function AssetDetailPage({
 
   // Permissions come from /auth/me, not the JWT (which carries none). Fetched
   // alongside the asset so it adds no round trip to the page.
-  const [[asset, history, audits, photos], access] = await Promise.all([
+  const [[asset, history, audits, photos], access, eligibility] = await Promise.all([
     loadAsset(id),
     getSessionAccess(),
+    loadEligibility(id),
   ]);
   const mayRecordWipe = hasPermission(access, 'record_manual_wipe');
   const mayAudit = hasAnyPermission(access, ['perform_goods_in_audit', 'perform_amazon_audit']);
@@ -372,6 +386,7 @@ export default async function AssetDetailPage({
             audits={audits}
             mayRecordWipe={mayRecordWipe}
             mayAudit={mayAudit}
+            eligibility={eligibility}
           />
 
           {/* Above the hardware profile deliberately: whether the machine can

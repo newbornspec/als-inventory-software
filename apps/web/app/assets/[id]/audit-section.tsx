@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { AuditForm } from '@/app/components/audit-form';
-import { certificateBlock } from '@/lib/certificate-eligibility';
+import { certificateLinkState, type CertificateEligibility } from '@/lib/certificate-eligibility';
 
 export interface AssetAuditRecord {
   id: string;
@@ -32,9 +32,14 @@ export function AuditSection({
   audits,
   mayRecordWipe = false,
   mayAudit = true,
+  eligibility = null,
 }: {
   assetId: string;
   audits: AssetAuditRecord[];
+  // The API's own per-drive answer (GET /assets/:id/certificate-eligibility).
+  // null = unknown (an API that predates it answers 404): the local copy of
+  // the interim rule decides instead, as before.
+  eligibility?: CertificateEligibility | null;
   // Holds "Record Manual Wipe" - passed through to the form. See AuditForm.
   mayRecordWipe?: boolean;
   // Holds Perform Goods In/Amazon Audit - without it the button is not shown,
@@ -45,10 +50,12 @@ export function AuditSection({
   const router = useRouter();
   const addRef = useRef<HTMLButtonElement>(null);
   const [saved, setSaved] = useState(false);
-  // The same rule the certificate route applies (lib/certificate-eligibility.ts
-  // is a tested copy of the API's), so the page never offers a link that
-  // answers 400. 'none' simply shows no link, as before.
-  const block = certificateBlock(audits);
+  // The certificate route's own answer, so the page never offers a link that
+  // answers 400 and says why when it does not. No wipe at all simply shows no
+  // link, as before.
+  const cert = certificateLinkState(eligibility, audits);
+  // Worth listing when there is more than one drive, or something to explain.
+  const showDrives = cert.drives.length > 1 || (cert.drives.length > 0 && !cert.offer);
 
   // Focus the reopened "+ Record audit" button AFTER React has re-mounted it —
   // calling focus() inside onSaved ran before the re-render, when the ref was
@@ -76,7 +83,7 @@ export function AuditSection({
         )}
       </div>
 
-      {block === null && (
+      {cert.offer && (
         <a
           href={`/api/assets/${assetId}/erasure-certificate`}
           className="mt-2 inline-block rounded-md border border-emerald-200 px-3 py-1.5 text-xs text-emerald-700 hover:bg-emerald-50"
@@ -86,17 +93,29 @@ export function AuditSection({
       )}
       {/* Say why the link is missing: a wiped device with no certificate
           otherwise reads as a bug. */}
-      {block === 'discard' && (
-        <p className="mt-2 text-xs text-amber-800">
-          No erasure certificate: the latest wipe was a block discard (TRIM), which is not an erase. Wipe the
-          drive again with the ALS audit station.
-        </p>
-      )}
-      {block === 'mixed' && (
-        <p className="mt-2 text-xs text-amber-800">
-          No erasure certificate: a drive in this device failed its wipe close to (or after) the wipe on record,
-          so it may still hold data. Wipe the failed drive again with the ALS audit station.
-        </p>
+      {cert.message && <p className="mt-2 text-xs text-amber-800">{cert.message}</p>}
+      {showDrives && (
+        <ul className="mt-2 space-y-0.5 text-xs text-neutral-700" aria-label="Drives in this device">
+          {cert.drives.map((d) => (
+            <li key={d.key}>
+              <span
+                className={
+                  d.status === 'wiped' ? 'text-emerald-700' : d.status === 'failed' ? 'text-red-700' : 'text-amber-800'
+                }
+              >
+                {d.status === 'wiped' ? 'Wiped' : d.status === 'failed' ? 'Failed' : 'Not wiped yet'}
+              </span>
+              {' — '}
+              {d.model ? `${d.model} ` : ''}
+              {d.serialNumber
+                ? `(serial ${d.serialNumber})`
+                : d.key === '(machine)'
+                  ? '(drive not individually recorded)'
+                  : '(serial not reported by the drive)'}
+              {d.manual ? ' — recorded manually' : ''}
+            </li>
+          ))}
+        </ul>
       )}
 
       {showForm && (

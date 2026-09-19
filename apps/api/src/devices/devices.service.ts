@@ -5,7 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { User, UserRole } from '../users/user.entity';
 import { PermissionsService } from '../auth/permissions.service';
 import { Batch } from '../batches/batch.entity';
@@ -25,6 +25,7 @@ import {
   wipeDetailNote,
 } from './wipe-detail';
 import { hostTag } from './host-identity';
+import { expectedDrivesFromRows, rollupWipe } from './wipe-rollup';
 
 // What a capture proves on its own, for the normal case where the tool sends no
 // explicit call. Deliberately the floor rather than a guess: nothing here claims a
@@ -215,8 +216,32 @@ export class DevicesService {
     // The operator's explicit call if the tool sent one, else the floor the capture
     // itself establishes. Both land on the audit row unconditionally; what may reach
     // the asset is decided by derivedMayReplace.
-    const explicitStatus = dto.auditStatus ?? null;
-    const auditStatus = explicitStatus ?? deriveAuditStatus(dto);
+    const auditStatus = dto.auditStatus ?? deriveAuditStatus(dto);
+
+    // A wipe OUTCOME (one drive's record) never decides the asset's wipe status
+    // on its own: the station files one record per drive, and "the latest
+    // record wins" made a two-drive laptop read data_wiped whenever the good
+    // drive's record happened to land last. The asset's wipe status is settled
+    // after the row is saved, from EVERY drive's record, by settleWipeStatus
+    // below. Until then this path writes at most the power-on floor the
+    // capture proves - and an explicit data_wiped / data_wipe_failed in the
+    // payload is a per-drive claim like any other, so it goes through the same
+    // roll-up. Any other explicit call (a person's 'ready_for_sale') still wins
+    // outright, as before.
+    const wipeOutcome =
+      !dto.manual &&
+      (dto.dataWipeStatus === DataWipeStatus.WIPED ||
+        dto.dataWipeStatus === DataWipeStatus.FAILED);
+    const isWipeStatus = (s: AssetAuditStatus | null) =>
+      s === AssetAuditStatus.DATA_WIPED ||
+      s === AssetAuditStatus.DATA_WIPE_FAILED;
+    const explicitStatus =
+      dto.auditStatus && !(wipeOutcome && isWipeStatus(dto.auditStatus))
+        ? dto.auditStatus
+        : null;
+    const floor = dto.profile ? AssetAuditStatus.POWER_ON : null;
+    const assetStatus: AssetAuditStatus | null =
+      explicitStatus ?? (wipeOutcome ? floor : deriveAuditStatus(dto));
 
     // Serial is the device identity; re-running just files another audit.
     let asset = await this.assets
@@ -231,7 +256,9 @@ export class DevicesService {
       // previously known only to power on. See derivedMayReplace.
       const statusPatch =
         explicitStatus ??
-        (auditStatus && derivedMayReplace(auditStatus, asset.auditStatus) ? auditStatus : null);
+        (assetStatus && derivedMayReplace(assetStatus, asset.auditStatus)
+          ? assetStatus
+          : null);
       // Refresh auto-captured hardware identity + profile, and the grade when the
       // operator supplied one; leave the lot as set (moving it only if a different
       // lot was chosen) and never touch cost, location, stock status or notes.
@@ -272,7 +299,7 @@ export class DevicesService {
           ...(dto.cosmeticGrade ? { conditionGrade: dto.cosmeticGrade } : {}),
           // No existing value to protect on a brand-new asset, so the derived
           // floor applies unguarded.
-          ...(auditStatus ? { auditStatus } : {}),
+          ...(assetStatus ? { auditStatus: assetStatus } : {}),
           // Amazon-created devices carry NO lot: batch_id NULL is the spec's
           // own marker that the audit belongs to the workspace, not receiving.
           batchId: lotId,
@@ -344,6 +371,8 @@ export class DevicesService {
       }),
     );
 
+    if (wipeOutcome) await this.settleWipeStatus(asset.id);
+
     await this.history.save(
       this.history.create({
         assetId: asset.id,
@@ -377,5 +406,48 @@ export class DevicesService {
       deviceType,
       lot: batch?.batchNumber ?? null,
     };
+  }
+
+  // The asset's wipe status, from every drive's record (plan step 23, owner
+  // decision D23): data_wiped only when rollupWipe says the MACHINE is wiped -
+  // every drive's latest record a wipe, and every internal drive of the
+  // wipe-time profile accounted for - otherwise data_wipe_failed, which also
+  // covers "still wiping" (no enum change). Still through derivedMayReplace,
+  // so a person's 'ready_for_sale' is never overwritten by a machine.
+  //
+  // WHY THE LOCK. A multi-drive laptop's records arrive as separate requests,
+  // often seconds apart (the station wipes drives in parallel), and can be
+  // handled by two API instances at once. Without a lock, request A (drive A
+  // wiped) can read the rows before request B's FAILED row exists, B then
+  // writes data_wipe_failed, and A - finishing last - overwrites it with
+  // data_wiped. Each request saves its own row FIRST (committed), then takes
+  // the asset row FOR UPDATE and reads the rows inside that lock, so whichever
+  // request settles last is guaranteed to see both rows, and its answer is
+  // the one that stays.
+  private async settleWipeStatus(assetId: string): Promise<void> {
+    await this.assets.manager.transaction(async (m) => {
+      const current = await m
+        .getRepository(Asset)
+        .createQueryBuilder('a')
+        .setLock('pessimistic_write')
+        .where('a.id = :id', { id: assetId })
+        .getOne();
+      if (!current) return;
+      const rows = await m.getRepository(AssetAudit).find({
+        where: {
+          assetId,
+          dataWipeStatus: In([DataWipeStatus.WIPED, DataWipeStatus.FAILED]),
+        },
+      });
+      const { verdict } = rollupWipe(rows, expectedDrivesFromRows(rows));
+      if (verdict === 'none') return;
+      const next =
+        verdict === 'wiped'
+          ? AssetAuditStatus.DATA_WIPED
+          : AssetAuditStatus.DATA_WIPE_FAILED;
+      if (derivedMayReplace(next, current.auditStatus)) {
+        await m.getRepository(Asset).update(assetId, { auditStatus: next });
+      }
+    });
   }
 }

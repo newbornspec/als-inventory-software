@@ -1,4 +1,6 @@
+import { FindOperator } from 'typeorm';
 import { UserRole } from '../users/user.entity';
+import { AssetAudit } from '../assets/asset-audit.entity';
 import { DevicesService } from './devices.service';
 
 // An in-memory DevicesService for ingest specs: just enough of each
@@ -53,9 +55,55 @@ export function ingestHarness() {
   const auditRepo = {
     create: (a: Record<string, unknown>) => ({ ...a }),
     save: (a: Record<string, unknown>) => {
-      audits.push(a);
-      return Promise.resolve(a);
+      // createdAt as the database would stamp it, strictly increasing so
+      // "latest" is well defined for the wipe roll-up.
+      const saved = {
+        id: `audit-${++seq}`,
+        createdAt: new Date(Date.UTC(2026, 8, 19, 10, 0, audits.length)),
+        ...a,
+      };
+      audits.push(saved);
+      return Promise.resolve(saved);
     },
+    // settleWipeStatus's read: this asset's rows with a wipe outcome.
+    find: ({
+      where,
+    }: {
+      where: { assetId: string; dataWipeStatus: FindOperator<string[]> };
+    }) =>
+      Promise.resolve(
+        audits.filter(
+          (a) =>
+            a.assetId === where.assetId &&
+            where.dataWipeStatus.value.includes(a.dataWipeStatus as string),
+        ),
+      ),
+  };
+
+  // settleWipeStatus runs in a transaction that locks the asset row. The lock
+  // itself is proven against real Postgres (wipe-settle.pg-spec); here it is
+  // enough that the same repositories answer inside it.
+  const lockedAssetQb = () => {
+    let id = '';
+    const qb = {
+      setLock: () => qb,
+      where: (_sql: string, params: { id: string }) => {
+        id = params.id;
+        return qb;
+      },
+      getOne: () => Promise.resolve(assets.find((a) => a.id === id) ?? null),
+    };
+    return qb;
+  };
+  const txManager = {
+    getRepository: (entity: unknown) =>
+      entity === AssetAudit
+        ? auditRepo
+        : { ...assetRepo, createQueryBuilder: lockedAssetQb },
+  };
+  (assetRepo as Record<string, unknown>).manager = {
+    transaction: (cb: (m: typeof txManager) => Promise<unknown>) =>
+      cb(txManager),
   };
 
   const passthrough = {
