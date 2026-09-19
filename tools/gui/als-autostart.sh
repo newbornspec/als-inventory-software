@@ -198,6 +198,47 @@ fi
 # the process we start IS the browser, with no wrapper in between. On an older
 # layer (or ALS_ESR=0) there is no firefox-esr, and `firefox` - the snap - is
 # used exactly as before.
+
+# The browser must never keep or fill in an operator's password.
+#
+# With operator sign-in on (AUDIT_OPERATOR_SIGNIN=1) people type their OWN ALS
+# login on this screen. index.html asks for autocomplete=new-password and
+# empties the field before sending, but that only stops AUTOFILL: Firefox
+# still offers "Save login for 127.0.0.1?" after a sign-in, and one tap on
+# Save keeps that person's password in the profile for the next person at the
+# bench (in RAM on a live boot today, on disk the day $HOME is persistent).
+# So every profile this script opens is written with the password manager off:
+#   signon.rememberSignons        never offer to save a login
+#   signon.autofillForms          never fill a saved one in
+#   signon.formlessCapture.enabled  do not capture logins outside a <form>
+#   signon.generation.enabled     do not suggest generated passwords
+#   browser.formfill.enable       no form history (the email field included)
+# Chromium's equivalents live in its profile's Preferences file
+# (credentials_enable_service = the "Offer to save passwords" setting,
+# profile.password_manager_enabled on older builds).
+write_ff_prefs() {  # write_ff_prefs <profile dir>
+    mkdir -p "$1"
+    cat > "$1/user.js" <<'PREFS'
+user_pref("browser.startup.homepage_override.mstone", "ignore");
+user_pref("browser.shell.checkDefaultBrowser", false);
+user_pref("datareporting.policy.dataSubmissionEnabled", false);
+user_pref("browser.aboutwelcome.enabled", false);
+user_pref("toolkit.telemetry.reportingpolicy.firstRun", false);
+user_pref("app.update.auto", false);
+user_pref("browser.startup.upgradeDialog.enabled", false);
+user_pref("signon.rememberSignons", false);
+user_pref("signon.autofillForms", false);
+user_pref("signon.formlessCapture.enabled", false);
+user_pref("signon.generation.enabled", false);
+user_pref("browser.formfill.enable", false);
+PREFS
+}
+write_chromium_prefs() {  # write_chromium_prefs <user-data-dir>
+    mkdir -p "$1/Default"
+    printf '%s\n' '{"credentials_enable_service":false,"credentials_enable_autosignin":false,"profile":{"password_manager_enabled":false},"autofill":{"profile_enabled":false,"credit_card_enabled":false}}' \
+        > "$1/Default/Preferences"
+}
+
 if [ "$MODE" = "kiosk" ]; then
     BROWSER=""
     for b in ${ALS_BROWSER:-} firefox-esr firefox chromium chromium-browser google-chrome-stable epiphany-browser; do
@@ -224,18 +265,12 @@ if [ "$MODE" = "kiosk" ]; then
                 # session, would otherwise stop the kiosk on a dialog.
                 PROFILE="${HOME:-/tmp}/als-kiosk-profile"
                 [ "$BROWSER" = "firefox-esr" ] && PROFILE="${HOME:-/tmp}/als-kiosk-profile-esr"
-                mkdir -p "$PROFILE"
-                cat > "$PROFILE/user.js" <<'PREFS'
-user_pref("browser.startup.homepage_override.mstone", "ignore");
-user_pref("browser.shell.checkDefaultBrowser", false);
-user_pref("datareporting.policy.dataSubmissionEnabled", false);
-user_pref("browser.aboutwelcome.enabled", false);
-user_pref("toolkit.telemetry.reportingpolicy.firstRun", false);
-user_pref("app.update.auto", false);
-user_pref("browser.startup.upgradeDialog.enabled", false);
-PREFS
+                write_ff_prefs "$PROFILE"
                 ARGS="--profile $PROFILE --kiosk"
                 ;;
+            chromium|chromium-browser|google-chrome-stable)
+                write_chromium_prefs "${HOME:-/tmp}/als-kiosk-profile"
+                ARGS="--kiosk --start-fullscreen --no-first-run --window-position=0,0 --user-data-dir=${HOME:-/tmp}/als-kiosk-profile" ;;
             *)  ARGS="--kiosk --start-fullscreen --no-first-run --window-position=0,0 --user-data-dir=${HOME:-/tmp}/als-kiosk-profile" ;;
         esac
         log "kiosk: $BROWSER $ARGS $URL"
@@ -261,8 +296,14 @@ note "ALS Audit Station is ready" "Opening $URL in a normal window."
 # entry, which does not exist once snapd is masked - and dpkg -x never ran
 # update-desktop-database for firefox-esr.desktop, so what xdg-open would fall
 # back to is not something to leave to chance.
+# Its own profile, written with the password manager off (write_ff_prefs):
+# the default profile would offer to save an operator's login like any
+# website's. A separate directory from the kiosk's, so the two modes never
+# fight over one profile's lock.
 if command -v firefox-esr >/dev/null 2>&1; then
-    setsid firefox-esr --new-window "$URL" >>"${HOME:-/tmp}/als-browser.log" 2>&1 &
+    FULLPROFILE="${HOME:-/tmp}/als-full-profile-esr"
+    write_ff_prefs "$FULLPROFILE"
+    setsid firefox-esr --profile "$FULLPROFILE" --new-window "$URL" >>"${HOME:-/tmp}/als-browser.log" 2>&1 &
     log "firefox-esr pid $! - done"
     exit 0
 fi

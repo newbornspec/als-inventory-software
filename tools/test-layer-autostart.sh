@@ -75,11 +75,25 @@ case "$l" in *"http://127.0.0.1:8800"*) ok "onto the local backend" ;; *) bad "u
 grep -q 'browser.aboutwelcome.enabled", false' "$T/home/als-kiosk-profile-esr/user.js" 2>/dev/null \
   && ok "first-run welcome suppressed" || bad "prefs" "$(cat "$T/home/als-kiosk-profile-esr/user.js" 2>&1)"
 
+
+# The browser must never keep or fill an operator's password (sign-in with
+# each person's own ALS login, AUDIT_OPERATOR_SIGNIN=1).
+nopw() {  # nopw <label> <user.js>
+  local f="$2" p miss=""
+  for p in 'signon.rememberSignons", false' 'signon.autofillForms", false' \
+           'signon.formlessCapture.enabled", false' 'browser.formfill.enable", false'; do
+    grep -q "$p" "$f" 2>/dev/null || miss="$miss [$p]"
+  done
+  [ -z "$miss" ] && ok "$1: password saving and autofill off" || bad "$1: password prefs" "missing$miss"
+}
+nopw "kiosk firefox-esr" "$T/home/als-kiosk-profile-esr/user.js"
+
 echo "kiosk, only the snap firefox (an older layer, or ALS_ESR=0)"
 run kiosk firefox
 l=$(browser_line)
 case "$l" in "firefox --profile $T/home/als-kiosk-profile --kiosk "*) ok "firefox, same profile and args as before" ;;
   *) bad "snap path unchanged" "$l" ;; esac
+nopw "kiosk snap firefox" "$T/home/als-kiosk-profile/user.js"
 
 echo "kiosk, ALS_BROWSER still wins"
 rm -f "$CALLS"; for b in firefox firefox-esr chromium; do mkstub "$b"; done
@@ -89,15 +103,50 @@ env -i HOME="$T/home" PATH="$STUB:$BASE" ALS_SETTLE=0 ALS_BROWSER=chromium \
 settle
 l=$(browser_line)
 case "$l" in "chromium "*) ok "ALS_BROWSER=chromium honoured" ;; *) bad "ALS_BROWSER" "$l" ;; esac
+CRP="$T/home/als-kiosk-profile/Default/Preferences"
+case "$l" in *"--user-data-dir=$T/home/als-kiosk-profile"*) ok "chromium: its own user-data-dir" ;; *) bad "chromium profile" "$l" ;; esac
+if grep -q '"credentials_enable_service":false' "$CRP" 2>/dev/null \
+   && grep -q '"password_manager_enabled":false' "$CRP" 2>/dev/null; then
+  ok "chromium: offer-to-save-passwords off in that profile's Preferences"
+else
+  bad "chromium password prefs" "$(cat "$CRP" 2>&1)"
+fi
 
 echo "full (normal window)"
 run full firefox firefox-esr
 l=$(browser_line)
-case "$l" in "firefox-esr --new-window http://127.0.0.1:8800") ok "firefox-esr by name, not xdg-open" ;; *) bad "full with esr" "$l" ;; esac
+case "$l" in "firefox-esr --profile $T/home/als-full-profile-esr --new-window http://127.0.0.1:8800") ok "firefox-esr by name, not xdg-open, in its own profile" ;; *) bad "full with esr" "$l" ;; esac
 case "$l" in *--kiosk*) bad "full is not kiosk" "$l" ;; *) ok "not a kiosk window" ;; esac
+nopw "full firefox-esr" "$T/home/als-full-profile-esr/user.js"
 run full firefox
 l=$(browser_line)
 case "$l" in "xdg-open http://127.0.0.1:8800") ok "without ESR: xdg-open, as before" ;; *) bad "full without esr" "$l" ;; esac
+
+echo "start-gui.sh (the older launcher) writes the same password prefs"
+# kiosk_args writes the profile and prints the flags; run just that function
+# (and the Chromium prefs writer it calls) against a temp HOME.
+SG="$T/sg.sh"
+awk '/^write_chromium_prefs\(\) \{/{p=1} /^kiosk_args\(\) \{/{p=1} p{print} p&&/^}/{p=0}' \
+  "$HERE/gui/start-gui.sh" > "$SG"
+if grep -q '^kiosk_args()' "$SG" && grep -q '^write_chromium_prefs()' "$SG"; then
+  rm -rf "$T/sghome"; mkdir -p "$T/sghome"
+  fa=$(HOME="$T/sghome" "$REAL_BASH" -c '. "$1"; kiosk_args firefox' _ "$SG")
+  case "$fa" in *"--profile $T/sghome/als-ff-profile --kiosk"*) ok "start-gui firefox: its own profile" ;; *) bad "start-gui firefox args" "$fa" ;; esac
+  nopw "start-gui firefox" "$T/sghome/als-ff-profile/user.js"
+  ca=$(HOME="$T/sghome" "$REAL_BASH" -c '. "$1"; kiosk_args chromium' _ "$SG")
+  SGP="$T/sghome/als-cr-profile/Default/Preferences"
+  if case "$ca" in *"--user-data-dir=$T/sghome/als-cr-profile"*) true ;; *) false ;; esac \
+     && grep -q '"credentials_enable_service":false' "$SGP" 2>/dev/null; then
+    ok "start-gui chromium: offer-to-save-passwords off in its user-data-dir"
+  else
+    bad "start-gui chromium prefs" "$ca / $(cat "$SGP" 2>&1)"
+  fi
+else
+  bad "start-gui.sh: kiosk_args and write_chromium_prefs found" "both functions" "$(head -3 "$SG")"
+fi
+grep -q 'write_chromium_prefs /tmp/als-cr-profile' "$HERE/gui/start-gui.sh" \
+  && ok "start-gui under cage: the chromium profile it uses gets the prefs too" \
+  || bad "cage chromium prefs" "write_chromium_prefs /tmp/als-cr-profile before cage"
 
 echo
 echo "$PASS passed, $FAIL failed"

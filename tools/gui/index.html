@@ -521,8 +521,10 @@
          but do not fill a SAVED login into a new-password field - so a login
          the browser kept for the previous person at this bench is not typed
          in for the next one. Stopping the browser from SAVING the login at
-         all belongs in the kiosk browser profile (start-gui.sh:
-         signon.rememberSignons=false), not in this page. -->
+         all belongs in the kiosk browser profile, not in this page: the
+         user.js that als-autostart.sh (write_ff_prefs) and start-gui.sh
+         write sets signon.rememberSignons=false and turns autofill off, and
+         Chromium gets the same in its Preferences. -->
     <label class="fld"><span>Password</span>
       <input id="signPass" type="password" autocomplete="new-password"
         onkeydown="if(event.key==='Enter')doSignIn()" /></label>

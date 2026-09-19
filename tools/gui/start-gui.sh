@@ -102,6 +102,16 @@ fi
 # internet). Path is baked into the xinit RC below.
 XFILL="$DIR/fullscreen-x.py"
 
+# Chromium's password manager off in a user-data-dir, before it starts:
+# credentials_enable_service is "Offer to save passwords",
+# profile.password_manager_enabled the same on older builds. Written fresh
+# each start - this is a kiosk profile, nothing in it is anyone's to keep.
+write_chromium_prefs() {  # write_chromium_prefs <user-data-dir>
+  mkdir -p "$1/Default"
+  printf '%s\n' '{"credentials_enable_service":false,"credentials_enable_autosignin":false,"profile":{"password_manager_enabled":false},"autofill":{"profile_enabled":false,"credit_card_enabled":false}}' \
+    > "$1/Default/Preferences"
+}
+
 kiosk_args() {   # per-browser full-screen flags
   case "$1" in
     firefox|firefox-esr)
@@ -114,18 +124,28 @@ kiosk_args() {   # per-browser full-screen flags
       # cover hidden directories.
       PROFILE="${HOME:-/tmp}/als-ff-profile"
       mkdir -p "$PROFILE"
-      # Suppress the first-run tour / import wizard on a fresh profile.
+      # Suppress the first-run tour / import wizard on a fresh profile, and
+      # switch the password manager off: operators type their own ALS login
+      # on this screen (AUDIT_OPERATOR_SIGNIN=1), and the browser must never
+      # offer to save it, fill it in, or keep the email in form history.
+      # Same list as als-autostart.sh write_ff_prefs.
       cat > "$PROFILE/user.js" <<'PREFS'
 user_pref("browser.startup.homepage_override.mstone", "ignore");
 user_pref("browser.shell.checkDefaultBrowser", false);
 user_pref("datareporting.policy.dataSubmissionEnabled", false);
 user_pref("browser.aboutwelcome.enabled", false);
 user_pref("toolkit.telemetry.reportingpolicy.firstRun", false);
+user_pref("signon.rememberSignons", false);
+user_pref("signon.autofillForms", false);
+user_pref("signon.formlessCapture.enabled", false);
+user_pref("signon.generation.enabled", false);
+user_pref("browser.formfill.enable", false);
 PREFS
       printf '%s' "--profile $PROFILE --kiosk"
       ;;
     chromium|chromium-browser|google-chrome-stable)
       # Same private-/tmp trap as Firefox above - Chromium ships as a snap too.
+      write_chromium_prefs "${HOME:-/tmp}/als-cr-profile"
       printf '%s' "--kiosk --start-fullscreen --window-position=0,0 --no-first-run --no-sandbox --user-data-dir=${HOME:-/tmp}/als-cr-profile"
       ;;
     *) printf '%s' "" ;;
@@ -164,6 +184,7 @@ launch_cage() {  # PRIMARY path: Cage owns the display and full-screens us on an
   case "$BROWSER" in
     chromium|chromium-browser|google-chrome-stable)
       # Run Chromium as a native Wayland client so it scales crisply to the panel.
+      write_chromium_prefs /tmp/als-cr-profile
       cage -- "$BROWSER" --kiosk --ozone-platform=wayland \
         --no-first-run --no-sandbox --user-data-dir=/tmp/als-cr-profile "$URL"
       ;;
