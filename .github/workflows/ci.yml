@@ -38,6 +38,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Test prerequisites
+        # gpg: test-layer-esr-fetch.sh verifies real (throwaway) keys the way
+        # make-als-layer.sh verifies Mozilla's. Present on ubuntu-latest today;
+        # installed explicitly so an image change cannot turn it into a red
+        # that has nothing to do with the code.
+        run: |
+          command -v gpg >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq gnupg; }
+          gpg --version | head -1
+
       - name: Run every tools/test-* script
         shell: bash
         run: |
