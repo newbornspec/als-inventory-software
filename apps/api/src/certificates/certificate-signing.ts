@@ -140,9 +140,11 @@ export interface CertificatePayload {
   issuedAt: string; // ISO-8601, UTC
   prevSha256: string | null;
   keyId: string;
-  // The wipe records (asset_audits ids, sorted) the certificate was drawn
-  // from. A later wipe of the machine changes this set, which is what makes
-  // it a NEW certificate rather than the old one reprinted.
+  // The erasures the certificate covers, one key per drive (drive, outcome,
+  // method and wipe time - wipeKey in certificate-ledger.ts), sorted. A later
+  // wipe of the machine changes this set, which is what makes it a NEW
+  // certificate rather than the old one reprinted; the same wipe filed twice
+  // does not.
   sources: string[];
   certificate: DeviceCertificate;
   summary: CertificateSummary;

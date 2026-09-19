@@ -291,6 +291,30 @@ maybe('stored, signed erasure certificates (Postgres)', () => {
     expect(await ledger.verify(before.id)).toEqual({ valid: true });
   }, 60000);
 
+  // Review of step 29: the stick's offline queue re-sends a wipe whose
+  // response was lost - the same drive, the same wipedAt - and ingest files
+  // it as a second row. That is the same erasure, so it must keep the
+  // certificate the customer already holds, not mint "-2" with a new date.
+  it('the same wipe filed twice (a retried upload) keeps ONE certificate', async () => {
+    const ledger = new CertificateLedger(ds, signer);
+    const svc = devices(ledger);
+    const host = `CERT-${Date.now()}-retry`;
+    const { assetId } = await svc.ingest(userId, payload(host));
+    const wipe = payload(host, DataWipeStatus.WIPED);
+    await svc.ingest(userId, wipe);
+    const [first] = await certsOf(assetId);
+    expect(first).toBeDefined();
+    await svc.ingest(userId, JSON.parse(JSON.stringify(wipe)) as typeof wipe);
+    const rows = await ds
+      .getRepository(AssetAudit)
+      .count({ where: { assetId, dataWipeStatus: DataWipeStatus.WIPED } });
+    expect(rows).toBe(2); // ingest does file the duplicate ...
+    expect(await certsOf(assetId)).toEqual([first]); // ... but it certifies nothing new
+    const record = await certificates(ledger).signedRecord(assetId);
+    expect(record.number).toBe(first.number);
+    expect(record.id).toBe(first.id);
+  }, 60000);
+
   it('a drive failure after issue: no new certificate, and the download is refused', async () => {
     const ledger = new CertificateLedger(ds, signer);
     const svc = devices(ledger);

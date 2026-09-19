@@ -2,7 +2,10 @@ import { randomUUID } from 'node:crypto';
 import { In, type DataSource, type EntityManager } from 'typeorm';
 import { Asset } from '../assets/asset.entity';
 import { AssetAudit, DataWipeStatus } from '../assets/asset-audit.entity';
-import { buildDeviceCertificate } from '../assets/certificate-content';
+import {
+  buildDeviceCertificate,
+  certificateNumber,
+} from '../assets/certificate-content';
 import { latestWipe } from '../assets/certificate-eligibility';
 import {
   expectedDrivesFromRows,
@@ -239,8 +242,8 @@ export class CertificateLedger {
     const rollup = rollupWipe(rows, expectedDrivesFromRows(rows));
     if (rollup.verdict !== 'wiped') return { certifiable: false };
     const sources = rollup.drives
-      .map((d) => d.row?.id)
-      .filter((id): id is string => !!id)
+      .map((d) => (d.row ? wipeKey(d.row) : null))
+      .filter((k): k is string => !!k)
       .sort();
     return {
       certifiable: true,
@@ -310,6 +313,50 @@ export class CertificateLedger {
     await m.getRepository(ErasureCertificate).insert(row);
     return row;
   }
+}
+
+// What makes two wipe records the SAME erasure, for deciding whether the
+// machine needs a new certificate: the drive as the record itself names it,
+// the outcome and method, and when the station says it wiped. NOT the row
+// id: ingest has no de-duplication, so a stick whose upload response was
+// lost re-sends the identical wipe (its offline queue keeps the original
+// wipedAt), a second row is filed, and keying on row ids issued a second
+// certificate - a new "-2" number and issued date for one erasure, while the
+// customer already held the first (review of step 29; D23 keeps a record's
+// number stable). A genuine re-wipe always has a new wipedAt. The drive is
+// taken from the row alone, not from the roll-up's key for it, because that
+// key can change when an unrelated record of another drive arrives.
+//
+// Rows from sticks that predate wipedAt carry only the day the API received
+// them, so they are keyed by that day - the same day the unsigned
+// certificate number is made from (certificateNumber), which already gave a
+// same-day duplicate the same number. Owner-reversible: a re-wipe by an old
+// stick on the same day then keeps the day's certificate.
+export function wipeKey(
+  row: Pick<
+    AssetAudit,
+    | 'dataWipeStatus'
+    | 'dataWipeMethod'
+    | 'createdAt'
+    | 'wipedAt'
+    | 'wipedDriveSerial'
+    | 'wipedDrive'
+  >,
+): string {
+  const t = (v: unknown) =>
+    typeof v === 'string' || typeof v === 'number' ? String(v).trim() : '';
+  const d = (row.wipedDrive ?? {}) as Record<string, unknown>;
+  const drive = [
+    t(row.wipedDriveSerial ?? d.serialNumber).toUpperCase(),
+    t(d.wwn).toLowerCase(),
+    t(d.model),
+    t(d.sizeBytes),
+    t(d.devicePath),
+  ].join('/');
+  const when = row.wipedAt
+    ? `at:${new Date(row.wipedAt).toISOString()}`
+    : `day:${certificateNumber('', row).slice(4, 12)}`;
+  return [drive, t(row.dataWipeStatus), t(row.dataWipeMethod), when].join('|');
 }
 
 function sameSources(c: ErasureCertificate, sources: string[]): boolean {
