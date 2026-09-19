@@ -188,20 +188,27 @@ nvme() {
   echo \"nvme \$*\" >> \"\$LOG\"
   case \"\$1\" in
     id-ctrl) [ -n \"\${SANICAP:-}\" ] || return 1
-             printf '{\"vid\":5197,\"sn\":\"S5H2\",\"sanicap\":%s,\"fna\":%s,\"nn\":32}\n' \"\$SANICAP\" \"\${FNA:-0}\" ;;
-    list-ns) i=0; for n in \${NSL-1}; do printf '[%4d]:0x%x\n' \"\$i\" \"\$n\"; i=\$((i+1)); done ;;
+             printf '{\"vid\":5197,\"sn\":\"S5H2\",\"oacs\":%s,\"sanicap\":%s,\"fna\":%s,\"nn\":%s}\n' \"\${OACS:-15}\" \"\$SANICAP\" \"\${FNA:-0}\" \"\${NN:-32}\" ;;
+    list-ns) case \" \$* \" in
+               *' --all '*) [ \"\${LSALL_RC:-0}\" = 0 ] || return 1; l=\${NSL-1} ;;
+               *) [ \"\${LSACT_RC:-0}\" = 0 ] || return 1; l=\${NSL_ACT-\${NSL-1}} ;;
+             esac
+             i=0; for n in \$l; do printf '[%4d]:0x%x\n' \"\$i\" \"\$n\"; i=\$((i+1)); done ;;
     list-subsys) printf '%s\n' \"\${SUBSYS:-}\" ;;
     format) return \"\${FMT_RC:-0}\" ;;
     *) echo \"UNEXPECTED nvme \$*\" >> \"\$LOG\"; return 1 ;;
   esac
 }
 nvme_sanitize() { echo \"sanitize \$1 -a \$2\" >> \"\$LOG\"; case \"\$2\" in 4) return \"\${SAN4_RC:-0}\" ;; 2) return \"\${SAN2_RC:-0}\" ;; esac; return 1; }
+FW_LEVEL=unset
 firmware_erase \"/dev/\$NAME\" \"\$NAME\"; rc=\$?
 echo \"M=\$M\"
+echo \"FW_LEVEL=\$FW_LEVEL\"
 exit \$rc" 2>&1)
   RC=$?
   CALLS=$(command cat "$LOG")
   MLAB=$(printf '%s\n' "$OUT" | command sed -n 's/^M=//p')
+  LEVEL=$(printf '%s\n' "$OUT" | command sed -n 's/^FW_LEVEL=//p')
 }
 # first LINE-PATTERN: the line number of the first call matching it (999 = none)
 first() { printf '%s\n' "$CALLS" | command grep -n -e "$1" | head -n1 | cut -d: -f1 | command grep . || echo 999; }
@@ -252,20 +259,25 @@ fe nvme0n1 auto SANICAP=3 FNA=4 NSL=1
   && ok "SANICAP 0x3: sanitize -a 4 is issued before any format" || bad "SANICAP 0x3: sanitize -a 4 is issued before any format" "$CALLS"
 case "$CALLS" in *format*) bad "  ... and when it works, no format at all" "$CALLS" ;; *) ok "  ... and when it works, no format at all" ;; esac
 [ "$MLAB" = "NVMe cryptographic erase (sanitize)" ] && ok "  ... recorded as the sanitize crypto erase" || bad "  ... recorded as the sanitize crypto erase" "$MLAB"
+[ "$LEVEL" = purge ] && ok "  ... sanitisation level purge (set by firmware_erase itself)" || bad "  ... sanitisation level purge (set by firmware_erase itself)" "$LEVEL"
 fe nvme0n1 auto SANICAP=3 FNA=4 NSL=1 SAN4_RC=1
 [ "$(first 'sanitize .* -a 4')" -lt "$(first 'sanitize .* -a 2')" ] && [ "$(first 'sanitize .* -a 2')" -lt 999 ] && [ "$MLAB" = "NVMe block-erase sanitize" ] \
   && ok "crypto sanitize fails: block-erase sanitize next, still before any format" || bad "crypto sanitize fails: block-erase sanitize next, still before any format" "$CALLS / $MLAB"
+[ "$LEVEL" = purge ] && ok "  ... block-erase sanitize: purge" || bad "  ... block-erase sanitize: purge" "$LEVEL"
 case "$CALLS" in *format*) bad "  ... no format while a sanitize worked" "$CALLS" ;; *) ok "  ... no format while a sanitize worked" ;; esac
 fe nvme0n1 auto SANICAP=3 FNA=4 NSL=1 SAN4_RC=1 SAN2_RC=1
 [ "$RC" -eq 0 ] && [ "$(first 'sanitize .* -a 2')" -lt "$(first 'format /dev/nvme0n1 -s 2')" ] && [ "$MLAB" = "NVMe cryptographic erase (nvme format -s2)" ] \
   && ok "both sanitizes fail, one namespace: format -s2 last" || bad "both sanitizes fail, one namespace: format -s2 last" "$CALLS / $MLAB"
+[ "$LEVEL" = purge ] && ok "  ... format -s2 (crypto): purge" || bad "  ... format -s2 (crypto): purge" "$LEVEL"
 fe nvme0n1 auto SANICAP=0 FNA=0 NSL=1
 case "$CALLS" in *sanitize*) bad "SANICAP 0: no sanitize is sent" "$CALLS" ;; *) ok "SANICAP 0: no sanitize is sent" ;; esac
 [ "$RC" -eq 0 ] && [ "$MLAB" = "NVMe secure erase (nvme format -s1)" ] && case "$CALLS" in *"-s 2"*) false ;; *) true ;; esac \
   && ok "  ... one namespace, FNA without crypto: format -s1 only" || bad "  ... one namespace, FNA without crypto: format -s1 only" "$CALLS / $MLAB"
+[ "$LEVEL" = purge ] && ok "  ... format -s1 (user data erase): purge" || bad "  ... format -s1 (user data erase): purge" "$LEVEL"
 fe nvme0n1 crypto SANICAP=2 FNA=0 NSL=1
 [ "$RC" -ne 0 ] && case "$CALLS" in *"-a 2"*|*"-s 1"*) false ;; *) true ;; esac \
   && ok "crypto asked, only block erase supported: no block erase, no -s1 format passed off as crypto" || bad "crypto asked, only block erase supported: no block erase, no -s1 format passed off as crypto" "$CALLS"
+[ "$LEVEL" = unset ] && ok "  ... and a failed firmware erase sets no level" || bad "  ... and a failed firmware erase sets no level" "$LEVEL"
 fe nvme0n1 secure SANICAP=3 FNA=4 NSL=1
 case "$CALLS" in *"-a 4"*|*"-s 2"*) bad "secure asked: block erase / -s1 only, no crypto" "$CALLS" ;; *) ok "secure asked: block erase / -s1 only, no crypto" ;; esac
 fe nvme0n1 auto FNA=0 NSL=1
@@ -289,6 +301,87 @@ case "$OUT" in *"other namespace(s) nvme0n1 nvme0n3"*) ok "wiping nvme0n2 of thr
 mkfs; ns nvme0n1 243:0 1
 fe nvme0n1 auto SANICAP=0 FNA=0 NSL=""
 case "$CALLS" in *format*) bad "the namespace list cannot be read: no format (coverage unknown)" "$CALLS" ;; *) ok "the namespace list cannot be read: no format (coverage unknown)" ;; esac
+
+echo "step 36 review: a drive that cannot list ALLOCATED namespaces"
+# `nvme list-ns --all` is Identify CNS 10h, which the spec requires only of
+# controllers with Namespace Management - most single-namespace consumer drives
+# reject it. The coverage check then saw no namespaces and never used format,
+# so a drive with no sanitize support fell from a verified format Purge to an
+# hours-long overwrite (Clear). Proof of one namespace is taken from id-ctrl
+# NN = 1, or - only without Namespace Management (OACS bit 3 clear) - from the
+# mandatory ACTIVE list (CNS 02h).
+mkfs; ns nvme0n1 243:0 1
+fe nvme0n1 auto SANICAP=0 FNA=0 LSALL_RC=1 NN=1 OACS=0 LSACT_RC=1
+[ "$RC" -eq 0 ] && [ "$MLAB" = "NVMe secure erase (nvme format -s1)" ] && [ "$LEVEL" = purge ] \
+  && ok "list-ns --all rejected, id-ctrl NN=1, no sanitize: format -s1 (purge)" || bad "list-ns --all rejected, id-ctrl NN=1, no sanitize: format -s1 (purge)" "rc=$RC $MLAB $LEVEL / $CALLS"
+fe nvme0n1 auto SANICAP=0 FNA=0 LSALL_RC=1 NN=32 OACS=0 NSL_ACT=1
+[ "$RC" -eq 0 ] && case "$CALLS" in *"list-ns /dev/nvme0"$'\n'*"format /dev/nvme0n1 -s 1"*) true ;; *) false ;; esac \
+  && ok "list-ns --all rejected, no Namespace Management: the active list (one namespace) allows format" || bad "list-ns --all rejected, no Namespace Management: the active list (one namespace) allows format" "rc=$RC $CALLS"
+fe nvme0n1 auto SANICAP=0 FNA=0 LSALL_RC=1 NN=32 OACS=0 NSL_ACT="1 2"
+[ "$RC" -ne 0 ] && case "$CALLS" in *format*) false ;; *) true ;; esac && case "$OUT" in *"other namespace(s) nvme0n2"*) true ;; *) false ;; esac \
+  && ok "  ... the active list shows two: no format, names nvme0n2" || bad "  ... the active list shows two: no format, names nvme0n2" "rc=$RC $OUT"
+fe nvme0n1 auto SANICAP=0 FNA=0 LSALL_RC=1 NN=32 OACS=8 NSL_ACT=1
+case "$CALLS" in *format*) bad "  ... WITH Namespace Management the active list is not trusted (a detached namespace is not in it): no format" "$CALLS" ;; *) ok "  ... WITH Namespace Management the active list is not trusted (a detached namespace is not in it): no format" ;; esac
+fe nvme0n1 auto SANICAP=0 FNA=0 LSALL_RC=1 NN=32 OACS=0 LSACT_RC=1
+case "$CALLS" in *format*) bad "  ... neither list readable and NN > 1: no format" "$CALLS" ;; *) ok "  ... neither list readable and NN > 1: no format" ;; esac
+fe nvme0n1 auto SANICAP=0 FNA=0 NN=1 NSL="1 2"
+case "$CALLS" in *format*) bad "  ... NN=1 but the allocated list shows two (a lying id-ctrl): the list wins, no format" "$CALLS" ;; *) ok "  ... NN=1 but the allocated list shows two (a lying id-ctrl): the list wins, no format" ;; esac
+
+echo "ATA secure erase: the sanitisation level comes from the erase actually run"
+# NIST SP 800-88: the ENHANCED erase is a Purge, the normal one a Clear (it
+# writes only the user area). Every other test stubs firmware_erase and injects
+# the level, so this runs the real ata_secure_erase with `hdparm` a shell
+# FUNCTION that logs and answers -I from $INFO - never a device.
+ATA="$(extract "$SRC" ata_secure_erase)"
+case "$ATA" in *'ata_secure_erase() {'*) ;; *) echo "could not extract ata_secure_erase - refusing to run"; exit 1 ;; esac
+for t in tr; do
+  real=$(command -v "$t") || { echo "missing $t"; exit 1; }
+  printf '#!/bin/sh\nexec "%s" "$@"\n' "$real" > "$SAFE/$t"; chmod +x "$SAFE/$t"
+done
+SEC='Security:
+	Master password revision code = 65534
+		supported
+	not	enabled
+	not	locked
+	not	frozen
+	not	expired: security count'
+# ase WANT INFO -> RC, OUT, CALLS, LEVEL, MLAB
+ase() {
+  : > "$LOG"
+  OUT=$(env -i PATH="$SAFE" LOG="$LOG" INFO="$2" "$BASH" -c "$ATA
+hdparm() {
+  echo \"hdparm \$*\" >> \"\$LOG\"
+  case \"\$1\" in -I) printf '%s\n' \"\$INFO\" ;; esac
+  return 0
+}
+rtcwake() { echo \"rtcwake \$*\" >> \"\$LOG\"; return 1; }
+sleep() { :; }
+FW_LEVEL=unset
+ata_secure_erase /dev/sdz $1; rc=\$?
+echo \"M=\$M\"
+echo \"FW_LEVEL=\$FW_LEVEL\"
+exit \$rc" 2>&1)
+  RC=$?
+  CALLS=$(command cat "$LOG")
+  MLAB=$(printf '%s\n' "$OUT" | command sed -n 's/^M=//p')
+  LEVEL=$(printf '%s\n' "$OUT" | command sed -n 's/^FW_LEVEL=//p')
+}
+ase auto "$SEC"
+[ "$RC" -eq 0 ] && case "$CALLS" in *"--security-erase ALSwipe1"*) true ;; *) false ;; esac && [ "$LEVEL" = clear ] \
+  && ok "no enhanced erase: the NORMAL secure erase runs and is recorded as clear" || bad "no enhanced erase: the NORMAL secure erase runs and is recorded as clear" "rc=$RC $LEVEL / $CALLS"
+ase auto "$SEC
+		supported: enhanced erase"
+[ "$RC" -eq 0 ] && case "$CALLS" in *"--security-erase-enhanced ALSwipe1"*) true ;; *) false ;; esac && [ "$LEVEL" = purge ] \
+  && ok "enhanced erase supported: the ENHANCED erase runs and is recorded as purge" || bad "enhanced erase supported: the ENHANCED erase runs and is recorded as purge" "rc=$RC $LEVEL / $CALLS"
+ase crypto "$SEC
+		supported: enhanced erase"
+[ "$RC" -eq 0 ] && [ "$LEVEL" = purge ] && ok "crypto asked, enhanced supported: purge" || bad "crypto asked, enhanced supported: purge" "rc=$RC $LEVEL"
+ase crypto "$SEC"
+[ "$RC" -ne 0 ] && [ "$LEVEL" = unset ] && case "$CALLS" in *security-erase*) false ;; *) true ;; esac \
+  && ok "crypto asked, no enhanced erase: nothing run, no level set" || bad "crypto asked, no enhanced erase: nothing run, no level set" "rc=$RC $LEVEL / $CALLS"
+ase auto "$(printf '%s\n' "$SEC" | command sed 's/not	frozen/frozen/')"
+[ "$RC" -ne 0 ] && [ "$LEVEL" = unset ] && case "$CALLS" in *security-erase*) false ;; *) true ;; esac \
+  && ok "a frozen drive: nothing run, no level set" || bad "a frozen drive: nothing run, no level set" "rc=$RC $LEVEL / $CALLS"
 
 echo "the whole engine"
 live=$(grep -n 'ctrl="/dev/\${d%%n' "$SRC")

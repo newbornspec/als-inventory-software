@@ -1006,13 +1006,34 @@ firmware_erase() {
       h=$(printf '%s' "$idc" | grep -oE '"fna"[[:space:]]*:[[:space:]]*[0-9]+' | grep -oE '[0-9]+$' | head -n1)
       [ -n "$h" ] && fna="$h"
       # Every namespace the controller has, attached or not ("[   0]:0x1").
+      # `list-ns --all` is Identify CNS 10h, which the spec requires only of
+      # controllers with Namespace Management; most single-namespace consumer
+      # drives reject it. Taking that as "coverage unknown" dropped every such
+      # drive without a sanitize from a format Purge to an hours-long
+      # overwrite (Clear). So when it gives nothing:
+      #   - without Namespace Management (OACS bit 3 clear) no namespace can
+      #     be created or detached, so the mandatory ACTIVE list (CNS 02h) is
+      #     every namespace there is - use it;
+      #   - with Namespace Management, or OACS unreadable, the active list
+      #     could miss a detached namespace - not used;
+      #   - id-ctrl NN = 1 (the most namespaces the controller can ever have)
+      #     proves there is exactly one - this one - whatever the lists say.
+      # A list that DID answer always wins over NN (it names what is there).
       nsl=$(nvme list-ns "$ctrl" --all 2>/dev/null)
+      local oacs nn
+      oacs=$(printf '%s' "$idc" | grep -oE '"oacs"[[:space:]]*:[[:space:]]*[0-9]+' | grep -oE '[0-9]+$' | head -n1)
+      nn=$(printf '%s' "$idc" | grep -oE '"nn"[[:space:]]*:[[:space:]]*[0-9]+' | grep -oE '[0-9]+$' | head -n1)
+      if ! printf '%s\n' "$nsl" | grep -qE '^[[:space:]]*\[[[:space:]]*[0-9]*\][[:space:]]*:[[:space:]]*0x0*[1-9a-fA-F]' \
+          && [ -n "$oacs" ] && [ $(( oacs & 8 )) -eq 0 ]; then
+        nsl=$(nvme list-ns "$ctrl" 2>/dev/null)
+      fi
       for h in $(printf '%s\n' "$nsl" | sed -n 's/^[[:space:]]*\[[[:space:]]*[0-9]*\][[:space:]]*:[[:space:]]*0x\([0-9a-fA-F][0-9a-fA-F]*\).*/\1/p'); do
         h=$(( 16#$h )); [ "$h" -gt 0 ] || continue
         nsids="$nsids $h"; n=$(( n + 1 ))
       done
       own=$(cat "${ALS_SYS_ROOT:-}/sys/block/$d/nsid" 2>/dev/null)
       case "$own" in ''|*[!0-9]*) own="${d##*n}" ;; esac
+      [ "$n" -eq 0 ] && [ "$nn" = 1 ] && { nsids="$own"; n=1; }
       onedrive="${d%n*}"; onedrive="${onedrive%c*}"   # nvme0c1n2 / nvme0n2 -> nvme0
       for h in $nsids; do
         [ "$h" = "$own" ] || others="$others ${onedrive}n$h"
