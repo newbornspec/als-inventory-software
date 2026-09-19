@@ -16,6 +16,74 @@ on:
     branches: [master]
 
 jobs:
+  tools:
+    # The Audit Station's own tests: the wipe ladder, the wipe gate, the lock
+    # checks, the boot guard... Until this job existed they only ran when
+    # someone remembered to run them by hand on a Linux box, so a change to the
+    # engine that erases customer drives could merge with every one of them red.
+    #
+    # A GLOB, not a list. Every tools/test-*.sh runs with bash and every
+    # tools/test-*.py with python3, so a new test is picked up the moment it is
+    # committed - a hand-maintained list is exactly the thing that silently
+    # stops covering the newest test.
+    #
+    # No Postgres, no npm: these tests are bash + python3 stdlib by rule, and
+    # they stub every destructive tool (a wipe test points at a temp REGULAR
+    # FILE, never a /dev node). Every test runs even after one fails, each gets
+    # a PASS/FAIL line, and the job fails if any did.
+    name: tool tests (tools/test-*.sh, tools/test-*.py)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Test prerequisites
+        # gpg: test-layer-esr-fetch.sh verifies real (throwaway) keys the way
+        # make-als-layer.sh verifies Mozilla's. Present on ubuntu-latest today;
+        # installed explicitly so an image change cannot turn it into a red
+        # that has nothing to do with the code.
+        run: |
+          command -v gpg >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq gnupg; }
+          gpg --version | head -1
+
+      - name: Run every tools/test-* script
+        shell: bash
+        run: |
+          set -u
+          shopt -s nullglob
+          python3 --version
+          bash --version | head -1
+          tests=(tools/test-*.sh tools/test-*.py)
+          if [ "${#tests[@]}" -eq 0 ]; then
+            echo "no tools/test-* scripts found - refusing to report green on nothing"
+            exit 1
+          fi
+          passed=(); failed=()
+          for t in "${tests[@]}"; do
+            case "$t" in
+              *.sh) runner=bash ;;
+              *.py) runner=python3 ;;
+            esac
+            echo "::group::$t"
+            # stdin from /dev/null: a test that stops to prompt must fail, not
+            # hang the job until the timeout. timeout: one wedged test must not
+            # hide the results of the others.
+            if timeout 300 "$runner" "$t" </dev/null; then rc=0; else rc=$?; fi
+            echo "::endgroup::"
+            if [ "$rc" -eq 0 ]; then
+              echo "PASS  $t"; passed+=("$t")
+            else
+              echo "::error title=tool test failed::$t exited $rc"
+              echo "FAIL  $t  (exit $rc)"; failed+=("$t")
+            fi
+          done
+          echo
+          echo "=== tool tests: ${#passed[@]} passed, ${#failed[@]} failed of ${#tests[@]} ==="
+          for t in "${passed[@]}"; do echo "  PASS  $t"; done
+          for t in "${failed[@]}"; do echo "  FAIL  $t"; done
+          [ "${#failed[@]}" -eq 0 ]
+
   api:
     name: typecheck, tests, migrations, boot
     runs-on: ubuntu-latest

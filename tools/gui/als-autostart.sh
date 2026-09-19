@@ -189,9 +189,18 @@ fi
 # The safety that made a normal window attractive is kept anyway, and it costs
 # nothing: this only runs AFTER the backend has answered on the port. A kiosk
 # window is opened onto a URL already known to respond, never onto a hope.
+#
+# firefox-esr FIRST. A layer built by make-als-layer.sh bakes in Mozilla's
+# firefox-esr .deb and masks snapd, because seeding the snaps was the slowest
+# thing in the whole boot (~95 s, ~1.4 GB copied into RAM every time). On such
+# a layer the snap Firefox does not exist; `firefox` is Mozilla's wrapper that
+# execs firefox-esr, so it would work too, but naming the real binary means
+# the process we start IS the browser, with no wrapper in between. On an older
+# layer (or ALS_ESR=0) there is no firefox-esr, and `firefox` - the snap - is
+# used exactly as before.
 if [ "$MODE" = "kiosk" ]; then
     BROWSER=""
-    for b in ${ALS_BROWSER:-} firefox firefox-esr chromium chromium-browser google-chrome-stable epiphany-browser; do
+    for b in ${ALS_BROWSER:-} firefox-esr firefox chromium chromium-browser google-chrome-stable epiphany-browser; do
         [ -n "$b" ] && command -v "$b" >/dev/null 2>&1 && { BROWSER="$b"; break; }
     done
     if [ -z "$BROWSER" ]; then
@@ -200,11 +209,21 @@ if [ "$MODE" = "kiosk" ]; then
     else
         case "$BROWSER" in
             firefox|firefox-esr)
-                # $HOME, never /tmp: Firefox on Ubuntu is a snap and a snap has
-                # its own private /tmp, so a --profile under /tmp is invisible
-                # to it. No leading dot - the snap home interface does not
-                # reliably cover hidden directories.
+                # $HOME, never /tmp. The SNAP Firefox has its own private /tmp,
+                # so a --profile under /tmp is invisible to it, and the snap
+                # home interface does not reliably cover hidden directories -
+                # hence no leading dot. firefox-esr is a plain .deb with no
+                # such confinement; the same path works for it, so both share
+                # one rule rather than two code paths.
+                #
+                # A SEPARATE directory per browser. Firefox refuses a profile
+                # last written by a NEWER version ("You've launched an older
+                # version of Firefox"), and the snap Firefox is always newer
+                # than ESR. $HOME is RAM on a live boot so today they never
+                # meet, but a persistent home, or switching browsers within a
+                # session, would otherwise stop the kiosk on a dialog.
                 PROFILE="${HOME:-/tmp}/als-kiosk-profile"
+                [ "$BROWSER" = "firefox-esr" ] && PROFILE="${HOME:-/tmp}/als-kiosk-profile-esr"
                 mkdir -p "$PROFILE"
                 cat > "$PROFILE/user.js" <<'PREFS'
 user_pref("browser.startup.homepage_override.mstone", "ignore");
@@ -212,6 +231,8 @@ user_pref("browser.shell.checkDefaultBrowser", false);
 user_pref("datareporting.policy.dataSubmissionEnabled", false);
 user_pref("browser.aboutwelcome.enabled", false);
 user_pref("toolkit.telemetry.reportingpolicy.firstRun", false);
+user_pref("app.update.auto", false);
+user_pref("browser.startup.upgradeDialog.enabled", false);
 PREFS
                 ARGS="--profile $PROFILE --kiosk"
                 ;;
@@ -235,6 +256,16 @@ fi
 
 log "opening a normal (non-kiosk) browser window at $URL"
 note "ALS Audit Station is ready" "Opening $URL in a normal window."
+# firefox-esr by name when the layer carries it. xdg-open picks the desktop's
+# DEFAULT browser, which on this image is firefox_firefox.desktop - the snap's
+# entry, which does not exist once snapd is masked - and dpkg -x never ran
+# update-desktop-database for firefox-esr.desktop, so what xdg-open would fall
+# back to is not something to leave to chance.
+if command -v firefox-esr >/dev/null 2>&1; then
+    setsid firefox-esr --new-window "$URL" >>"${HOME:-/tmp}/als-browser.log" 2>&1 &
+    log "firefox-esr pid $! - done"
+    exit 0
+fi
 setsid xdg-open "$URL" >>"${HOME:-/tmp}/als-browser.log" 2>&1 &
 log "xdg-open pid $! - done"
 exit 0

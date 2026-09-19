@@ -31,15 +31,15 @@ $files = [ordered]@{
     # looks like it simply found nothing — exactly the partial-sync failure
     # described above. The two must travel together.
     'lock-checks.sh'         = 'lock-checks.sh'
-    # Locates the tools partition by label on an Ubuntu stick, where the boot
-    # medium is read-only ISO9660 and the tools live on a second partition.
+    # Locates the stick from the live session. The Ubuntu stick is ONE FAT32
+    # partition (Rufus ISO mode) with the tools at its root, mounted read-only
+    # at /cdrom; this also finds it under /media or by label when it is not.
     'find-media.sh'          = 'find-media.sh'
     # Builds the overlay layer that makes the stick boot into the kiosk and
     # carries nvme-cli/smartmontools. Has to run FROM the live session, so it
     # only helps if it is actually on the stick.
     'make-als-layer.sh'      = 'make-als-layer.sh'
     'autorun'                = 'autorun\autorun'
-    'hardware-audit.desktop' = 'hardware-audit.desktop'
     'gui\index.html'         = 'gui\index.html'
     'gui\server.py'          = 'gui\server.py'
     'gui\start-gui.sh'       = 'gui\start-gui.sh'
@@ -107,12 +107,28 @@ function Find-AuditStick {
 # perfectly up to date kept an older commit on it - and the one question the
 # stamp exists to answer got a misleading answer. It records the commit this
 # stick was VERIFIED against, not the last commit that happened to change a file.
+#
+# "-dirty" is appended when TRACKED files in the repo have uncommitted changes
+# (staged or not; untracked files are ignored, the same rule as
+# `git describe --dirty`). Without it, a stick synced from a working tree with
+# an edit in progress was stamped with the clean commit's hash, and every wipe
+# record it filed claimed to come from code that does not exist at that commit.
+# The kiosk reads the first line as "commit <value>" and sends <value> as the
+# record's toolCommit, so the format stays exactly "commit <hash>[-dirty]".
+# If git cannot answer the dirty question, the hash is kept without a suffix
+# rather than guessed at.
 function Write-Stamp {
     param([string] $Target, [string] $ToolsDir)
     try {
         $commit = & git -C $ToolsDir rev-parse --short HEAD 2>$null
         if ($LASTEXITCODE -ne 0) { $commit = 'unknown' }
     } catch { $commit = 'unknown' }
+    if ($commit -ne 'unknown') {
+        try {
+            $changed = & git -C $ToolsDir status --porcelain --untracked-files=no 2>$null
+            if ($LASTEXITCODE -eq 0 -and $changed) { $commit = "$commit-dirty" }
+        } catch {}
+    }
     $stampPath = Join-Path $Target 'gui\.stick-version'
     $parent = Split-Path -Parent $stampPath
     if (-not (Test-Path $parent)) { New-Item -ItemType Directory -Force -Path $parent | Out-Null }

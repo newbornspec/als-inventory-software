@@ -3,11 +3,18 @@
 # Locate the ALS audit media, whatever live system booted.
 #
 # WHY THIS EXISTS
-# SystemRescue (archiso) writes to a single FAT32 partition, so the tools sat at
-# the root of the boot medium and /run/archiso/bootmnt always found them. An
-# Ubuntu ISO written to USB is read-only ISO9660 — you cannot add files to it —
-# so the tools live on a SECOND, writable partition instead, and the live system
-# mounts that wherever it likes (or not at all).
+# The audit stick is Ubuntu 24.04 written by Rufus in ISO Image mode: ONE FAT32
+# partition, with the tools copied to its ROOT next to casper/ and EFI/ (see
+# UBUNTU-STICK.md). casper mounts that partition read-only at /cdrom, so on the
+# stick as built today strategy 2 finds it. There is no second data partition -
+# an earlier version of this comment said there was, which described a DD-written
+# ISO9660 stick that was never used. The other strategies cover the tools being
+# run from a dev checkout, from a stick the desktop auto-mounted under /media,
+# or from a bare shell where nothing mounted it at all.
+#
+# /run/archiso/bootmnt is where the retired SystemRescue stick mounted itself.
+# It is still probed (it costs one stat) so an old stick keeps working, but no
+# current build uses it.
 #
 # Four search strategies, cheapest first. Every one of them is read-only.
 #
@@ -27,7 +34,8 @@ als_find_media() {
   als_is_media "$d" && { printf '%s' "$d"; return 0; }
 
   # 2. The mountpoints live systems conventionally use.
-  #    /run/archiso/bootmnt = SystemRescue; /cdrom + /isodevice = Ubuntu casper.
+  #    /cdrom + /isodevice = Ubuntu casper (the current stick);
+  #    /run/archiso/bootmnt = the retired SystemRescue stick.
   for d in /run/archiso/bootmnt /cdrom /isodevice /mnt/usb /media/usb; do
     als_is_media "$d" && { printf '%s' "$d"; return 0; }
   done

@@ -126,6 +126,32 @@ USB writable first (needed after every boot):
 
 
 ---------------------------------------------------------------------
+  H) UBUNTU STICK: FASTER BOOT (Firefox ESR, snapd off)
+---------------------------------------------------------------------
+The CURRENT stick is Ubuntu 24.04 (see UBUNTU-STICK.md); sections A-G
+above describe the old SystemRescue stick.
+
+Rebuilding the layer on the station now also:
+  - bakes in Mozilla's Firefox ESR (key fingerprint checked; the build
+    STOPS if it does not match 35BAA0B33E9EB396F59CA838C0BA5CE6DC6315A3),
+  - turns snapd off in the layer - ONLY when ESR really went in, ALL of it
+    (a half-finished unpack, e.g. the stick ran out of RAM space, is
+    removed again and snapd is left on) - so the
+    ~1.4 GB of snaps are no longer copied into RAM on every boot (~95 s),
+  - stops ldconfig & co. re-running on every boot (~8 s).
+
+   sudo bash /cdrom/make-als-layer.sh build --with-session
+
+To go back, any one of:
+   sudo env ALS_ESR=0 bash /cdrom/make-als-layer.sh build --with-session
+      (no ESR, snapd left alone; add ALS_UPDATE_STAMPS=0 to also drop
+       the ldconfig stamps)
+   copy an OLDER casper\minimal.standard.live.als.squashfs back onto
+      the stick from Windows (keep a copy before you rebuild)
+   sudo bash /cdrom/make-als-layer.sh undo      (removes the layer)
+
+
+---------------------------------------------------------------------
   WIPE METHODS (AUDIT_WIPE_METHOD)
 ---------------------------------------------------------------------
    crypto    = cryptographic erase - destroys the drive's encryption

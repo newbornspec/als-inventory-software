@@ -99,6 +99,60 @@ the Windows registry at all.
 - **Wiping** works the same — `hardware-audit.sh` uses `hdparm`/`nvme`/`shred`,
   all present or apt-installable.
 
+## Boot speed: Firefox ESR in the layer, snapd off
+
+**What was slow.** The station's own boot report (Latitude 3310) showed the app
+ready at 82 s, and the single biggest cost was `snapd.seeded.service` at 95 s:
+on every boot snapd copies 11 seeded snaps (~1.4 GB — gnome-42-2204, firefox,
+thunderbird, the installer, …) into RAM, because a live session never
+remembers it already did. The kiosk only needed one of them: Firefox, which on
+Ubuntu 24.04 exists only as a snap. Separately, `ldconfig.service` (8.3 s) ran
+on every boot too, because the layer's `/usr` is newer than the image's
+`/etc/.updated`, which systemd reads as "/usr was upgraded, rebuild caches".
+
+**What `make-als-layer.sh build` now does** (it needs internet, as before):
+
+1. Downloads Mozilla's signing key, checks it is exactly one key with
+   fingerprint `35BAA0B33E9EB396F59CA838C0BA5CE6DC6315A3` (Mozilla's published
+   value) and **stops the build** if it is not. The key and the repository are
+   used for this one download only: nothing is added to the live system's
+   `/etc/apt`, and nothing but the package itself goes into the layer.
+2. Bakes Mozilla's `firefox-esr` .deb into the layer, next to nvme-cli & co.
+   Every library it needs is already on the stock image.
+   If the unpack fails or comes out incomplete (the live overlay running out
+   of space mid-unpack is the likely cause), every ESR file is taken back out
+   and the build carries on as if ESR had never been fetched.
+3. **Only if** `firefox-esr` really ended up in the layer — every file the
+   package ships, each at its packaged size, checked against the .deb's own
+   list and checked again inside the finished squashfs — masks snapd's units
+   in the layer (`/etc/systemd/system/snapd.* -> /dev/null`). No snap is seeded
+   any more — the snap Firefox, Thunderbird and the "Install Ubuntu" app are
+   gone from that boot; the audit tools never used them. `firefox` on the
+   command line runs ESR too (Mozilla's package ships that wrapper).
+4. Writes `/etc/.updated` and `/var/.updated` with the same time as the layer's
+   `/usr`, so ldconfig and the other "after an upgrade" jobs stop running every
+   boot. If the layer ever ships something those jobs would need (an
+   `ld.so.conf.d` entry, hwdb or sysusers files, a journal catalog), the stamp
+   is left out and they run exactly as before.
+
+`gui/als-autostart.sh` picks `firefox-esr` first, so the kiosk opens it with
+its own profile (`~/als-kiosk-profile-esr`); on a layer without ESR it opens the
+snap `firefox` exactly as before. Nothing on the FAT32 side has to change.
+
+**How to go back** — any one of these:
+
+- Build without it: `sudo env ALS_ESR=0 bash /cdrom/make-als-layer.sh build --with-session`
+  — no ESR, snapd untouched, snaps seed as before. `ALS_UPDATE_STAMPS=0` leaves
+  the update stamps out as well.
+- Put an older `casper/minimal.standard.live.als.squashfs` back on the stick
+  from Windows (keep a copy of the current one before rebuilding). The layer
+  file is the whole change; the next boot behaves like the old one.
+- `sudo bash /cdrom/make-als-layer.sh undo` removes the layer entirely.
+
+**If the Mozilla key check fails**, do not work around it: it means the key
+that was downloaded is not Mozilla's. Check Mozilla's own instructions from a
+trusted machine; meanwhile build with `ALS_ESR=0`.
+
 ## Verifying the stick is actually signed
 
 Before trusting it in the yard, confirm the shim is there:

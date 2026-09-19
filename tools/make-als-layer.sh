@@ -200,6 +200,423 @@ say()  { printf '%s\n' "$*"; }
 die()  { printf '\n  !!  %s\n\n' "$*" >&2; exit 1; }
 step() { printf '\n== %s\n' "$*"; }
 
+# =============================================================================
+# BOOT SPEED: Firefox ESR instead of the snap, and no per-boot update jobs.
+#
+# MEASURED on the station (boot-report.txt, Latitude 3310): APP READY at 82 s,
+# and the biggest single cost was snapd.seeded.service at 95 s - snapd copying
+# 11 seeded snaps, ~1.4 GB (gnome-42-2204 541 MB, firefox 271, thunderbird 221,
+# ubuntu-desktop-bootstrap 118, gtk-common-themes 96, core22 77, snapd 47, ...)
+# into the RAM overlay on EVERY boot, because a live session forgets that it
+# ever seeded them. The kiosk only needed one of those: Firefox, which on 24.04
+# exists only as a snap.
+#
+# So the layer carries Mozilla's own firefox-esr .deb, and - only when that
+# browser really is in the layer - masks snapd, so nothing is seeded at all.
+# Owner-approved; reversible by ALS_ESR=0 at build time, or by putting an older
+# layer file back on the stick (see UBUNTU-STICK.md).
+#
+# Every function below is also exercised off the station by
+# tools/test-layer-*.sh, which source this file with ALS_LAYER_LIB=1 and stop
+# just before the root check - nothing below that line runs in a test.
+# =============================================================================
+
+# The key that signs packages.mozilla.org. The fingerprint is Mozilla's own
+# published value (their "install Firefox .deb on Debian/Ubuntu" instructions,
+# e.g. blog.nightly.mozilla.org 2023-10-30), and it was also read back out of
+# the key file served at MOZ_KEY_URL on 2026-09-19: ONE primary RSA-2048 key,
+# no subkeys, 35BAA0B33E9EB396F59CA838C0BA5CE6DC6315A3. A key that does not
+# match is not "probably fine": it means the download was tampered with or
+# replaced, and apt would then trust whatever it signs. The build stops.
+MOZ_FPR="35BAA0B33E9EB396F59CA838C0BA5CE6DC6315A3"
+MOZ_KEY_URL="https://packages.mozilla.org/apt/repo-signing-key.gpg"
+MOZ_REPO="https://packages.mozilla.org/apt mozilla main"
+
+# The real ESR binary. /usr/bin/firefox-esr is only a symlink to it, and a
+# dangling symlink must not count as "ESR is in the layer".
+ESR_BIN="usr/lib/firefox-esr/firefox"
+
+# Every snapd unit in noble's snapd package, read out of the .debs: 2.66.1+24.04
+# (the version in the stick's 24.04.2 manifest) and 2.76.3+ubuntu24.04 (noble-
+# updates today) ship the same eleven services/sockets/timer and the same
+# dependency edges; 2.76 only adds a third target. Units a given stick's snapd
+# does not ship cost nothing to mask - a /dev/null link for a unit nobody
+# defines is simply never consulted.
+#
+# The three snapd TARGETS (snapd.mounts.target, snapd.mounts-pre.target,
+# snapd.gpio-chardev-setup.target) are deliberately NOT masked: they have no
+# ExecStart, so they cost nothing, and a target is exactly the kind of unit
+# something else might Requires= - masking one is the only way this could take
+# down a unit that has nothing to do with snaps.
+#
+# WHY MASKING CANNOT BREAK A Requires= CHAIN: a unit that Requires=/BindsTo=/
+# Requisite= a masked unit fails with it. Every unit, drop-in and .wants
+# symlink shipped by the 129 packages in the 24.04.2 desktop manifest that
+# carry systemd files (their current noble .debs, 2026-09-19) was extracted and
+# searched: NOTHING outside snapd itself
+# names a snapd unit in any dependency directive - not gdm3 (whose After= list
+# is getty@tty1, plymouth-quit, rc-local, plymouth-start,
+# systemd-user-sessions, cloud-config), not casper, not systemd. Inside snapd
+# the only hard edges are snapd.service and snapd.seeded.service
+# Requires=snapd.socket, which are masked together, and the user unit
+# snapd.session-agent.service Requires= its own socket, also masked together.
+# casper's 55disable_snap_refresh writes /run/systemd/system/snapd.hold.service
+# with After=snapd.service and WantedBy=snapd.service only - soft edges from a
+# masked unit, so it simply never starts.
+SNAPD_SYSTEM_UNITS="snapd.service snapd.socket snapd.seeded.service snapd.apparmor.service
+  snapd.autoimport.service snapd.core-fixup.service snapd.failure.service
+  snapd.recovery-chooser-trigger.service snapd.snap-repair.service
+  snapd.snap-repair.timer snapd.system-shutdown.service"
+SNAPD_USER_UNITS="snapd.session-agent.service snapd.session-agent.socket"
+
+# Fetch a URL to a file. curl is NOT on this image (checked against every
+# casper layer), wget is; python3 is the fallback because it is always there.
+als_fetch() {
+  local url="$1" out="$2"
+  if command -v wget >/dev/null 2>&1; then
+    wget -q -T 30 -O "$out" "$url" 2>/dev/null && [ -s "$out" ]
+    return
+  fi
+  command -v python3 >/dev/null 2>&1 || return 1
+  python3 - "$url" "$out" <<'PY' 2>/dev/null
+import sys, urllib.request
+with urllib.request.urlopen(sys.argv[1], timeout=30) as r, open(sys.argv[2], "wb") as f:
+    f.write(r.read())
+PY
+  [ -s "$out" ]
+}
+
+# Print the fingerprint of every PRIMARY key in a key file, one per line.
+# --show-keys reads the file without importing it anywhere; GNUPGHOME is a
+# throwaway so root's own keyring is never touched.
+als_key_fprs() {
+  local key="$1" home
+  home=$(mktemp -d) || return 1
+  chmod 0700 "$home"
+  GNUPGHOME="$home" gpg --batch --quiet --with-colons --show-keys "$key" 2>/dev/null \
+    | awk -F: '$1=="pub"{want=1; next} $1=="fpr" && want {print toupper($10); want=0; next} {want=0}'
+  rm -rf "$home"
+}
+
+# 0 only if the file holds EXACTLY ONE primary key and it is the expected one.
+# "Exactly one" matters: signed-by= trusts EVERY key in the file, so a file with
+# Mozilla's key plus one more would pass a "does it contain the fingerprint"
+# check and still let the extra key sign packages.
+als_key_ok() {
+  local key="$1" want="${2:-$MOZ_FPR}" fprs n
+  command -v gpg >/dev/null 2>&1 || { say "  gpg is not available - cannot verify the key"; return 1; }
+  fprs=$(als_key_fprs "$key")
+  n=$(printf '%s\n' "$fprs" | grep -c .)
+  say "  key file holds $n primary key(s): $(echo $fprs)"
+  [ "$n" = "1" ] && [ "$fprs" = "$want" ]
+}
+
+# Download firefox-esr into $2 from Mozilla's signed repository, touching
+# NOTHING on the build host's apt configuration and nothing in the stage.
+#
+#   $1  a private work directory OUTSIDE the stage (key, source list, lists)
+#   $2  where the .deb goes (the stage's .debs directory, which do_build
+#       unpacks with dpkg -x and deletes)
+#
+# The key and the source line live only in $1, and apt is pointed at them with
+# -o options for these two commands alone, so:
+#   - the host's /etc/apt is never written - no mozilla.list is left behind to
+#     be picked up by a later `apt-get upgrade` on the station;
+#   - Dir::Cache and Dir::State::Lists are private too, so the host's package
+#     lists and caches are not replaced by a Mozilla-only view;
+#   - nothing here is under the stage, so no key or source can be packed into
+#     the layer. Only the .deb's own files are.
+#
+# Returns 0 with a deb in $2, 1 when ESR was skipped for a benign reason (no
+# network, no gpg) - then the build carries on without ESR and snapd is left
+# alone. A key that does not match is NOT benign: it dies.
+als_fetch_esr() {
+  local work="$1" debs="$2" apt_moz n
+  mkdir -p "$work/lists/partial" "$work/cache/archives/partial" "$work/parts.d" || return 1
+  if ! als_fetch "$MOZ_KEY_URL" "$work/mozilla.asc"; then
+    say "  could not download Mozilla's signing key (no internet?) - ESR skipped,"
+    say "  snapd left as it is. Re-run with a connection to bake it in."
+    return 1
+  fi
+  command -v gpg >/dev/null 2>&1 || {
+    say "  gpg is missing, so the key cannot be verified - ESR skipped, snapd left alone"
+    return 1
+  }
+  als_key_ok "$work/mozilla.asc" "$MOZ_FPR" || die "Mozilla's signing key did NOT verify.
+      Expected exactly one key, fingerprint $MOZ_FPR.
+      Either the download was altered or Mozilla has rotated its key. Do not
+      work around this. Check https://support.mozilla.org/kb/install-firefox-linux
+      from a trusted machine; to build without Firefox ESR meanwhile:
+          sudo env ALS_ESR=0 bash $0 build ..."
+  say "  Mozilla signing key verified ($MOZ_FPR)"
+  printf 'deb [signed-by=%s] %s\n' "$work/mozilla.asc" "$MOZ_REPO" > "$work/mozilla.list"
+  apt_moz="-o Dir::Etc::SourceList=$work/mozilla.list -o Dir::Etc::SourceParts=$work/parts.d
+           -o Dir::State::Lists=$work/lists -o Dir::Cache=$work/cache"
+  # shellcheck disable=SC2086
+  if ! apt-get $apt_moz update >/dev/null 2>&1; then
+    say "  could not read Mozilla's repository (no internet, or its signature"
+    say "  did not verify) - ESR skipped, snapd left alone"
+    return 1
+  fi
+  # shellcheck disable=SC2086
+  ( cd "$debs" && apt-get $apt_moz download firefox-esr >/dev/null 2>&1 )
+  n=$(find "$debs" -maxdepth 1 -name 'firefox-esr_*.deb' | wc -l)
+  if [ "$n" != "1" ]; then
+    say "  firefox-esr did not download ($n files) - ESR skipped, snapd left alone"
+    rm -f "$debs"/firefox-esr_*.deb
+    return 1
+  fi
+  say "  downloaded $(basename "$(find "$debs" -maxdepth 1 -name 'firefox-esr_*.deb')")"
+  return 0
+}
+
+# "Is ESR in the layer?" has to mean "is ALL of it in the layer", not "does
+# the binary exist". A HALF-UNPACKED ESR IS WORSE THAN NONE, and it is the
+# likely way this goes wrong: the build runs on the live station, the stage is
+# on the RAM-backed casper overlay that already holds ~1.4 GB of seeded snaps,
+# and the ESR .deb unpacks to ~311 MB. The .deb's tar order puts
+# usr/lib/firefox-esr/firefox at entry 31 of 99 and libxul.so (185 MB) at
+# entry 90, so an overlay that fills up mid-unpack leaves an executable
+# `firefox` next to a truncated libxul.so. A review reproduced exactly that
+# (200 MB tmpfs stage, the real 153.3.0esr .deb): dpkg -x failed, the old
+# `dpkg -x ... 2>/dev/null && ...` swallowed it, the old `-x firefox` gate
+# masked snapd, and the staged binary died with "Couldn't load XPCOM". That
+# station boots to NO browser at all: ESR is broken and the snap Firefox can
+# no longer seed.
+#
+# So the proof is the .deb's own file list: every regular file it ships must be
+# in the stage at exactly the size the .deb says.
+
+# List a .deb's contents, one entry per line: "<type> <size> <path>", where
+# type is dpkg-deb's first mode character (- d l h ...) and path has no
+# leading "./" and no " -> target" / " link to target" suffix.
+als_deb_entries() {
+  dpkg-deb -c "$1" 2>/dev/null | awk '{
+    t = substr($1, 1, 1); s = $3; p = $0
+    for (i = 1; i <= 5; i++) sub(/^[^ ]+ +/, "", p)
+    if (t == "l") sub(/ -> .*$/, "", p)
+    if (t == "h") sub(/ link to .*$/, "", p)
+    sub(/^\.\//, "", p); sub(/\/$/, "", p)
+    if (p != "" && p != ".") print t, s, p
+  }'
+}
+
+# 0 only if $1 (a stage, or the mounted layer) holds a COMPLETE firefox-esr:
+# $2 is the list als_deb_entries wrote for its .deb, it names ESR_BIN, and
+# every regular file in it is present, regular, and exactly the listed size.
+# No list, or an empty one, is "not complete" - never guess.
+als_esr_complete() {
+  local root="$1" list="$2" t s p n=0
+  [ -n "$list" ] && [ -s "$list" ] || return 1
+  [ -x "$root/$ESR_BIN" ] && [ ! -L "$root/$ESR_BIN" ] || return 1
+  grep -q "^- [0-9]* $ESR_BIN\$" "$list" || return 1
+  while read -r t s p; do
+    [ "$t" = "-" ] || continue
+    [ -f "$root/$p" ] && [ ! -L "$root/$p" ] || return 1
+    [ "$(stat -c %s "$root/$p" 2>/dev/null)" = "$s" ] || return 1
+    n=$((n + 1))
+  done < "$list"
+  [ "$n" -gt 0 ]
+}
+
+# Take every trace of a firefox-esr unpack back out of the stage: each
+# non-directory entry the .deb lists, then its private directory. Used when the
+# unpack failed or came out incomplete, so the layer carries no half browser -
+# als-autostart prefers firefox-esr, and Mozilla's /usr/bin/firefox (a script
+# that execs firefox-esr) would shadow Ubuntu's snap wrapper. With all of it
+# gone, the stage is as if ESR had never been fetched: snap Firefox, snapd on.
+als_remove_esr() {
+  local stage="$1" list="$2" t s p
+  if [ -n "$list" ] && [ -f "$list" ]; then
+    while read -r t s p; do
+      [ "$t" = "d" ] && continue
+      rm -f "$stage/$p"
+    done < "$list"
+  fi
+  rm -rf "$stage/usr/lib/firefox-esr"
+  rm -f "$stage/usr/bin/firefox-esr" "$stage/usr/share/applications/firefox-esr.desktop"
+}
+
+# Unpack the firefox-esr .deb $1 into stage $2, writing its entry list to $3
+# (OUTSIDE the stage - it must not land in the layer; the mount-time check
+# reads it again). 0 = complete and in place. Anything else - a list that
+# cannot be read, dpkg -x failing (ENOSPC on the RAM overlay is the likely
+# one), or a result that does not match the list - removes what did land and
+# returns 1, and the build carries on WITHOUT ESR and with snapd untouched.
+als_unpack_esr() {
+  local deb="$1" stage="$2" list="$3" rc
+  if ! als_deb_entries "$deb" > "$list" || ! grep -q "^- [0-9]* $ESR_BIN\$" "$list"; then
+    say "  could not read the file list of $(basename "$deb") - ESR skipped, snapd left alone"
+    als_remove_esr "$stage" ""; rm -f "$list"
+    return 1
+  fi
+  dpkg -x "$deb" "$stage"; rc=$?
+  if [ "$rc" != "0" ]; then
+    say "  dpkg -x $(basename "$deb") FAILED (exit $rc - out of space on the live"
+    say "  overlay?). Removing the partial unpack; ESR skipped, snapd left alone."
+    als_remove_esr "$stage" "$list"; rm -f "$list"
+    return 1
+  fi
+  if ! als_esr_complete "$stage" "$list"; then
+    say "  $(basename "$deb") unpacked INCOMPLETE (a file is missing or the wrong"
+    say "  size). Removing it; ESR skipped, snapd left alone."
+    als_remove_esr "$stage" "$list"; rm -f "$list"
+    return 1
+  fi
+  return 0
+}
+
+# Mask snapd in the stage - but ONLY if a COMPLETE ESR is really in it.
+#
+# That condition is the whole safety of this change. Masking snapd without a
+# replacement browser would leave the kiosk with no browser at all (the stock
+# /usr/bin/firefox is a wrapper that exits with "requires the firefox snap").
+# So this looks at the stage itself, after unpacking, rather than at whether a
+# download "succeeded" - and at every file of the package, not just the binary
+# (see als_esr_complete: a binary with a truncated libxul.so is no browser).
+#
+# $1 = stage, $2 = the entry list als_unpack_esr wrote. No list, no mask.
+#
+# The masks go in /etc/systemd/system (and /etc/systemd/user), which outranks
+# /usr/lib/systemd - and, for the record, is NOT under /lib, so the merged-/usr
+# trap in the fold step cannot bite here. Directory modes are normalised to
+# 0755 with the rest of the stage, matching stock.
+als_mask_snapd() {
+  local stage="$1" list="${2:-}" u
+  if ! als_esr_complete "$stage" "$list"; then
+    say "  a complete firefox-esr is NOT in the layer - snapd left alone (the snap"
+    say "  Firefox is still the only browser, and it needs snapd to seed)"
+    return 1
+  fi
+  mkdir -p "$stage/etc/systemd/system" "$stage/etc/systemd/user" || die "mkdir for the snapd masks failed"
+  for u in $SNAPD_SYSTEM_UNITS; do
+    ln -sfn /dev/null "$stage/etc/systemd/system/$u" || die "could not mask $u"
+  done
+  for u in $SNAPD_USER_UNITS; do
+    ln -sfn /dev/null "$stage/etc/systemd/user/$u" || die "could not mask user unit $u"
+  done
+  say "  masked: $(echo $SNAPD_SYSTEM_UNITS)"
+  say "  masked (user): $SNAPD_USER_UNITS"
+  return 0
+}
+
+# ConditionNeedsUpdate: why ldconfig ran on EVERY boot, and why it stops now.
+#
+# ldconfig.service, systemd-sysusers, systemd-hwdb-update and
+# systemd-update-done carry ConditionNeedsUpdate=/etc; journal-catalog-update
+# and update-done carry ConditionNeedsUpdate=/var. systemd (v255,
+# condition_test_needs_update) runs them when /usr's mtime is NEWER than
+# /etc/.updated (or /var/.updated): seconds first; only on equal seconds does
+# it look at nanoseconds, and only when /usr has nanoseconds and the stamp has
+# none does it read TIMESTAMP_NSEC from inside the stamp.
+#
+# Overlayfs reports a merged directory's mtime from the TOPMOST layer that has
+# it - ours, for /usr - and our /usr is days or months newer than the stock
+# image's stamps. So every boot "needed an update": ldconfig alone was 8.3 s on
+# the critical path, and on a live system nothing it writes survives, so it
+# ran again next time. Forever.
+#
+# The fix is to ship stamps that are never older than our /usr: one time T,
+# written as /usr's mtime AND as both stamps' mtime AND as TIMESTAMP_NSEC, in
+# the file format systemd-update-done itself writes. squashfs stores whole
+# seconds only (nsec reads back 0 on both), so the comparison is decided on
+# seconds, T == T, not newer: nothing reruns. Setting /usr's mtime explicitly
+# (rather than trusting "the stamps were written last") also covers a build
+# host whose clock is behind, and a stage that had no /usr of its own.
+#
+# WHY SKIPPING ldconfig IS SAFE HERE. ldconfig only rebuilds /etc/ld.so.cache.
+# The stock cache already lists every stock library, and the no-upgrade gate
+# means our layer adds libraries, never replaces them. A soname that misses
+# the cache is looked up in ld.so's built-in system search path, which on
+# noble is /lib/x86_64-linux-gnu, /usr/lib/x86_64-linux-gnu, /lib and /usr/lib
+# (`ld.so --help`) - exactly where dpkg -x puts packaged libraries, soname
+# symlinks included. firefox-esr's own libraries live in /usr/lib/firefox-esr
+# and are found by its RPATH, never through the cache. The cache only ADDS
+# value for directories listed in /etc/ld.so.conf(.d) that are not on that
+# built-in path - so if the stage ships an ld.so.conf entry, or a library in
+# such a directory, the /etc stamp is not written and ldconfig runs as before.
+# Same rule for the other jobs: hwdb.d or sysusers.d files in the stage keep
+# the /etc stamp out; a journal catalog keeps the /var stamp out. The stamp is
+# an optimisation, and it steps aside whenever the job it skips has work to do.
+
+# Print, one per line, anything in the stage that a skipped update job would
+# have consumed. $1 = stage, $2 = the host root whose ld.so.conf to read ("/").
+als_stamp_blockers_etc() {
+  local stage="$1" root="${2:-/}" d f
+  for f in "$stage"/etc/ld.so.conf "$stage"/etc/ld.so.conf.d/* \
+           "$stage"/usr/lib/udev/hwdb.d/* "$stage"/etc/udev/hwdb.d/* "$stage"/etc/udev/hwdb.bin \
+           "$stage"/usr/lib/sysusers.d/* "$stage"/etc/sysusers.d/*; do
+    [ -e "$f" ] || [ -L "$f" ] && printf '%s\n' "${f#"$stage"/}"
+  done
+  # Library directories the cache covers but ld.so's built-in path does not.
+  for d in $(cat "$root"/etc/ld.so.conf "$root"/etc/ld.so.conf.d/*.conf 2>/dev/null \
+             | sed 's/#.*//' | grep -v '^[[:space:]]*include' | tr -s ' \t' '\n\n' | grep '^/'); do
+    case "${d%/}" in
+      /lib/x86_64-linux-gnu|/usr/lib/x86_64-linux-gnu|/lib|/usr/lib) continue ;;
+    esac
+    [ -d "$stage$d" ] || continue
+    find "$stage$d" -maxdepth 1 \( -name '*.so' -o -name '*.so.*' \) 2>/dev/null \
+      | sed "s|^$stage/||"
+  done
+}
+als_stamp_blockers_var() {
+  local stage="$1" f
+  for f in "$stage"/usr/lib/systemd/catalog/*; do
+    [ -e "$f" ] && printf '%s\n' "${f#"$stage"/}"
+  done
+}
+
+# Write /etc/.updated and /var/.updated, in systemd-update-done's own format.
+# $1 = stage, $2 = time T in epoch seconds (default: now). MUST run after every
+# other change to the stage - it pins /usr's mtime.
+als_write_update_stamps() {
+  local stage="$1" t="${2:-}" blk_etc blk_var dir wrote=""
+  [ -n "$t" ] || t=$(date +%s)
+  blk_etc=$(als_stamp_blockers_etc "$stage" "${ALS_HOST_ROOT:-/}")
+  blk_var=$(als_stamp_blockers_var "$stage")
+  # /usr must be OURS, so the merged /usr at boot has exactly this mtime rather
+  # than a lower layer's.
+  # And 0755 whether we made it or not: overlayfs takes a merged directory's
+  # mode from the topmost layer, so a group-writable /usr here (a stage built
+  # under umask 002) would be the booted system's /usr. The build's permission
+  # pass already normalises the stage; this function does not rely on it.
+  [ -d "$stage/usr" ] || mkdir -m 0755 "$stage/usr" || die "mkdir usr failed"
+  chmod 0755 "$stage/usr" || die "chmod usr failed"
+  for dir in etc var; do
+    if [ "$dir" = "etc" ] && [ -n "$blk_etc" ]; then
+      say "  /etc/.updated NOT written - the layer ships input for ldconfig/hwdb/sysusers:"
+      printf '%s\n' "$blk_etc" | head -5 | sed 's/^/      /'
+      continue
+    fi
+    if [ "$dir" = "var" ] && [ -n "$blk_var" ]; then
+      say "  /var/.updated NOT written - the layer ships a journal catalog:"
+      printf '%s\n' "$blk_var" | head -5 | sed 's/^/      /'
+      continue
+    fi
+    [ -d "$stage/$dir" ] || mkdir -m 0755 "$stage/$dir" || die "mkdir $dir failed"
+    chmod 0755 "$stage/$dir" || die "chmod $dir failed"
+    printf '%s\n%s\n%s\nTIMESTAMP_NSEC=%s000000000\n' \
+      "# This file was created by systemd-update-done. Its only " \
+      "# purpose is to hold a timestamp of the time this directory" \
+      "# was updated. See man:systemd-update-done.service(8)." \
+      "$t" > "$stage/$dir/.updated" || die "could not write $dir/.updated"
+    chmod 0644 "$stage/$dir/.updated"
+    touch -h -d "@$t" "$stage/$dir/.updated" || die "could not set the $dir/.updated time"
+    wrote="$wrote /$dir/.updated"
+  done
+  # Last, so nothing above can move it: /usr gets the same second.
+  touch -d "@$t" "$stage/usr" || die "could not set the /usr time"
+  if [ -n "$wrote" ]; then
+    say "  wrote$wrote at $(date -u -d "@$t" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo "$t") UTC,"
+    say "  /usr pinned to the same second - ldconfig and friends stay idle at boot"
+  fi
+}
+
+# Test hook: stop here when sourced by tools/test-layer-*.sh.
+if [ "${ALS_LAYER_LIB:-0}" = "1" ]; then
+  return 0 2>/dev/null || exit 0
+fi
+
 [ "$(id -u)" = "0" ] || die "Run this with sudo - it writes to the boot medium."
 
 # --- locate the stick -------------------------------------------------------
@@ -237,7 +654,9 @@ do_build() {
   command -v mksquashfs >/dev/null 2>&1 || die "mksquashfs is still missing - connect to the network and retry."
 
   STAGE=$(mktemp -d) || die "mktemp failed"
-  trap 'rm -rf "$STAGE"; media_ro' EXIT
+  MOZ_WORK=""
+  ESR_LIST="$STAGE.esr-files"
+  trap 'rm -rf "$STAGE" "$ESR_LIST"; [ -n "$MOZ_WORK" ] && rm -rf "$MOZ_WORK"; media_ro' EXIT
 
   # 0755, and this is not cosmetic. mktemp -d creates the directory 0700, and
   # mksquashfs faithfully preserves that as the ROOT directory of the layer.
@@ -430,9 +849,48 @@ do_build() {
   step "Fetching packages: $PACKAGES"
   DEBS="$STAGE/.debs"; mkdir -p "$DEBS"
   ( cd "$DEBS" && apt-get download $PACKAGES >/dev/null 2>&1 )
+
+  # Firefox ESR, from Mozilla's signed repository - see BOOT SPEED at the top.
+  # Same gate as above, asked directly: firefox-esr must be a NEW install. It
+  # is not in Ubuntu's archive at all, so on the stock image it never is
+  # installed; if someone has apt-installed it into this live session, baking
+  # ours in would shadow theirs, so stop and say so.
+  #
+  # One overlap is deliberate and worth knowing about. Mozilla's package ships
+  # /usr/bin/firefox as well as /usr/bin/firefox-esr, and on a real install
+  # its preinst dpkg-diverts Ubuntu's /usr/bin/firefox (the snap wrapper) out
+  # of the way. dpkg -x runs no maintainer scripts, so in the layer ours simply
+  # sits on top of Ubuntu's - and that is what we want: with snapd masked the
+  # snap wrapper could only print "requires the firefox snap", while Mozilla's
+  # wrapper runs `firefox.real` if present (it is not) and otherwise
+  # `exec firefox-esr`. So `firefox` keeps working for start-gui.sh and anyone
+  # typing it. It is a shell script with no libraries behind it - nothing else
+  # on the system is shadowed.
+  if [ "${ALS_ESR:-1}" = "0" ]; then
+    say "  ALS_ESR=0: Firefox ESR not baked in; snapd will be left alone"
+  elif dpkg-query -W -f='${Status}' firefox-esr 2>/dev/null | grep -q 'ok installed'; then
+    die "firefox-esr is already INSTALLED in this live session. Baking ours in
+      would shadow it. Reboot the stick (a fresh session has none) and re-run,
+      or build without it:  sudo env ALS_ESR=0 bash $0 build ..."
+  else
+    MOZ_WORK=$(mktemp -d) || die "mktemp failed"
+    als_fetch_esr "$MOZ_WORK" "$DEBS" || true
+    rm -rf "$MOZ_WORK"; MOZ_WORK=""
+  fi
+  # firefox-esr is unpacked on its own and its exit status is CHECKED: a
+  # partial unpack is removed again rather than left for the snapd mask to
+  # mistake for a browser (see als_esr_complete). ESR_LIST is its file list,
+  # kept beside the stage for the mount-time re-check.
   got=0
+  ESR_LIST="$STAGE.esr-files"; rm -f "$ESR_LIST"
   for deb in "$DEBS"/*.deb; do
     [ -f "$deb" ] || continue
+    case "$(basename "$deb")" in
+      firefox-esr_*.deb)
+        als_unpack_esr "$deb" "$STAGE" "$ESR_LIST" \
+          && { got=$((got+1)); say "  unpacked $(basename "$deb") (complete: every file at its packaged size)"; }
+        continue ;;
+    esac
     dpkg -x "$deb" "$STAGE" 2>/dev/null && { got=$((got+1)); say "  unpacked $(basename "$deb")"; }
   done
   rm -rf "$DEBS"
@@ -504,6 +962,14 @@ do_build() {
       a text console after plymouth-quit. Refusing to build."
   say "  no real /lib /bin /sbin /lib64 in the layer"
 
+  # Before the permission pass, so the /etc/systemd directories it creates are
+  # normalised with everything else.
+  step "Kiosk browser and snapd"
+  if als_esr_complete "$STAGE" "$ESR_LIST"; then
+    say "  firefox-esr baked in (/$ESR_BIN)"
+  fi
+  als_mask_snapd "$STAGE" "$ESR_LIST" || true
+
   # Every directory 0755 root:root, matching the stock layers - EXCEPT the ones
   # that are deliberately NOT 0755 in stock. /tmp is 1777 and /root is 0700 in
   # minimal.squashfs, and forcing either to 0755 would be a fresh version of the
@@ -546,6 +1012,17 @@ do_build() {
     say "  (install-os.sh checks for it first and stops with a clear message)"
   fi
 
+  # LAST change to the stage - it pins /usr's mtime, so anything written into
+  # the stage after this could make /usr newer than the stamps again. See
+  # "ConditionNeedsUpdate" at the top. ALS_UPDATE_STAMPS=0 leaves them out
+  # (ldconfig and friends then run every boot, as they did before).
+  step "Update stamps (so ldconfig & co. do not rerun every boot)"
+  if [ "${ALS_UPDATE_STAMPS:-1}" = "0" ]; then
+    say "  ALS_UPDATE_STAMPS=0: not written"
+  else
+    als_write_update_stamps "$STAGE"
+  fi
+
   # Record exactly what went in, next to the layer on the stick.
   #
   # The two builds that were compared - "packages only, works" and "packages
@@ -584,6 +1061,23 @@ do_build() {
     bad=$(find "$MP" -type d ! -perm -0005 2>/dev/null | head -5)
     [ -n "$bad" ] && fail="these directories are not world-traversable and would lock the system out of them:
 $(printf '%s' "$bad" | sed "s|^$MP|  |")"
+  fi
+
+  # Read back from the squashfs itself, not the stage: a stamp older than our
+  # /usr is exactly the every-boot ldconfig this layer is meant to remove.
+  if [ -z "$fail" ]; then
+    usr_t=$(stat -c %Y "$MP/usr" 2>/dev/null || echo 0)
+    for s in etc/.updated var/.updated; do
+      [ -f "$MP/$s" ] || continue
+      s_t=$(stat -c %Y "$MP/$s")
+      [ "$s_t" -ge "$usr_t" ] || fail="/$s ($s_t) is older than the layer's /usr ($usr_t)"
+    done
+  fi
+  # And never a masked snapd without the browser that replaces it - ALL of it,
+  # every file at its packaged size, read back from the squashfs itself.
+  if [ -z "$fail" ] && [ -L "$MP/etc/systemd/system/snapd.seeded.service" ] \
+     && ! als_esr_complete "$MP" "$ESR_LIST"; then
+    fail="snapd is masked but firefox-esr is not in the layer complete - the kiosk would have no browser"
   fi
   umount "$MP"; rmdir "$MP"
   [ -n "$fail" ] && die "The layer mounted but $fail"
