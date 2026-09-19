@@ -90,6 +90,15 @@ o_n() { [ -n "$2" ] || return 0; case "$2" in ''|*[!0-9]*) return 0;; esac; OB="
 o_s0() { OB="$OB,\"$1\":\"$(esc "$2")\""; }
 o_raw() { [ -n "$2" ] || return 0; OB="$OB,\"$1\":$2"; }
 o_end() { printf '{%s}' "${OB#,}"; }
+# A JSON array of strings from newline-separated text (empty lines skipped),
+# each escaped by esc(). Empty input gives []. Pass the result to o_raw.
+als_json_array() {
+  local out="" l
+  while IFS= read -r l; do
+    [ -n "$l" ] && out="$out,\"$(esc "$l")\""
+  done <<< "$1"
+  printf '[%s]' "${out#,}"
+}
 
 # Reachability, with enough patience for a cold boot.
 #
@@ -438,31 +447,414 @@ ensure_tools() {
 # pseudo devices before any of these run. The text-mode wipe that used to call
 # them too was retired - see wipe_internal_drives.
 
-# Verification pass: sampled read-back confirming the device now reads as zeros
-# at the start, middle and near the end. Returns 0 (verified) or 1 (not clean).
-verify_zero() {
-  local dev="$1" sz mb offs o want
+# --- read-back verification: does the drive still hold what it held? ---------
+#
+# A firmware erase used to be verified by asking whether the drive now read as
+# ZEROS - and when it did not, the result was recorded anyway as
+# "confirmed by the controller", on its own word. A crypto erase SHOULD read
+# back as random (the old key is gone, the ciphertext stays), so that branch
+# existed for a real reason; but it also passed, byte for byte the same, a
+# controller that answered "done" and changed nothing. That drive got a
+# certificate saying its data was unrecoverable while the customer's partition
+# table, NTFS volume and files were still there to be read.
+#
+# So the read-back now asks the question that matters: is any of the OLD data
+# still recognisable? verify_erased reads bounded windows of the drive with
+# O_DIRECT (the first MiB, eight spread across the device, the last MiB, and a
+# MiB at every partition start recorded BEFORE the erase) and hands each one to
+# a small python3 checker (als_verify_py) that:
+#   - hard-fails on any on-disk structure signature: the 0x55AA boot signature
+#     at byte 510, "EFI PART" (primary GPT at LBA 1 for 512 or 4096 byte
+#     sectors, and the backup at the last LBA), NTFS, BitLocker (-FVE-FS-),
+#     FAT/exFAT, LUKS, ext2/3/4, XFS, Btrfs, APFS and swap - at the start of
+#     the disk and at every saved partition start. An erase that worked leaves
+#     none of them; a controller that lied leaves all of them.
+#   - after a FIRMWARE method, accepts content that is all zeros, all 0xFF, a
+#     short repeated vendor fill, or high-entropy (ciphertext after a crypto
+#     erase), judged per 4 KiB. Anything else looks like data and fails.
+#   - after an OVERWRITE, accepts nothing but zeros (the last pass wrote them).
+# Returns 0 = clean, 1 = old data found, 2 = could not verify (a short or failed
+# read, the device gone, no python3). Sets VE_WHY (the finding or the reason),
+# VE_LABEL (what the clean drive read as: zeros, 0xFF, random, pattern, or a
+# "+"-joined mix) and VE_MIB (MiB read). Owner decision D31 (reversible): a
+# drive that could not be verified is recorded as failed, never as wiped.
+#
+# What it cannot see: data that is already high-entropy (compressed or
+# encrypted files) sitting in the middle of the drive between the windows
+# looks the same as ciphertext. The signature checks at every saved partition
+# start are what catch the lying controller; the content check catches the
+# rest of what it reads.
+#
+# The checker is printed by a function (not kept in a variable) so the tests
+# can extract and run exactly this code. Keep every python line from starting
+# with "}" - the tests' extractor ends a function at the first such line.
+als_verify_py() {
+  cat <<'PYEOF'
+import sys, math
+from collections import Counter
+
+def u32(b, o):
+    return int.from_bytes(b[o:o + 4], "little")
+
+def u64(b, o):
+    return int.from_bytes(b[o:o + 8], "little")
+
+# (what it is, offset from the start of the structure, the magic bytes)
+# The bare 0x55AA is last: every NTFS/FAT/BitLocker boot sector carries it
+# too, and the finding should name the volume, not just "a boot sector".
+SIGS = [
+    ("GPT header (EFI PART)", 512, b"EFI PART"),
+    ("GPT header (EFI PART, 4K sectors)", 4096, b"EFI PART"),
+    ("NTFS boot sector", 3, b"NTFS    "),
+    ("BitLocker boot sector (-FVE-FS-)", 3, b"-FVE-FS-"),
+    ("exFAT boot sector", 3, b"EXFAT   "),
+    ("FAT boot sector", 54, b"FAT12   "),
+    ("FAT boot sector", 54, b"FAT16   "),
+    ("FAT boot sector", 54, b"FAT     "),
+    ("FAT32 boot sector", 82, b"FAT32   "),
+    ("LUKS header", 0, b"LUKS\xba\xbe"),
+    ("LUKS2 secondary header", 16384, b"SKUL\xba\xbe"),
+    ("ext2/3/4 superblock", 1080, b"\x53\xef"),
+    ("XFS superblock", 0, b"XFSB"),
+    ("Btrfs superblock", 65600, b"_BHRfS_M"),
+    ("APFS container", 32, b"NXSB"),
+    ("Linux swap signature", 4086, b"SWAPSPACE2"),
+    ("MBR/boot-sector signature 0x55AA", 510, b"\x55\xaa"),
+]
+
+def parts(data, ss):
+    # Partition start byte offsets from the MBR and the GPT (either sector size).
+    out = []
+    if len(data) >= 512 and data[510:512] == b"\x55\xaa":
+        for i in range(4):
+            e = data[446 + 16 * i:462 + 16 * i]
+            if len(e) == 16 and e[4] not in (0, 0xEE) and u32(e, 8):
+                out.append(u32(e, 8) * ss)
+    for gss in (512, 4096):
+        h = data[gss:gss + 92]
+        if len(h) < 92 or h[:8] != b"EFI PART":
+            continue
+        lba, n, esz = u64(h, 72), u32(h, 80), u32(h, 84)
+        if esz < 128 or n > 1024:
+            continue
+        for i in range(n):
+            o = lba * gss + i * esz
+            e = data[o:o + esz]
+            if len(e) < 48:
+                break
+            if e[:16] != bytes(16) and u64(e, 32):
+                out.append(u64(e, 32) * gss)
+    return out
+
+def entropy(c):
+    n = len(c)
+    return -sum(k / n * math.log2(k / n) for k in Counter(c).values())
+
+def classify(c):
+    n = len(c)
+    if c.count(0) == n:
+        return "zeros"
+    if c.count(255) == n:
+        return "0xFF"
+    for p in (1, 2, 4, 8, 16, 32, 64, 128, 256, 512):
+        if n > p and n % p == 0 and c == c[:p] * (n // p):
+            return "pattern"
+    if entropy(c) >= (7.8 if n >= 4096 else 7.0):
+        return "random"
+    return None
+
+def waived(data, r, magic):
+    # A 4 KiB block that is one uniform fill cannot hold a boot sector or a
+    # superblock. Without this a vendor fill of 55 AA 55 AA ... would "hold"
+    # the 0x55AA boot signature at byte 510.
+    o = r // 4096 * 4096
+    k = classify(data[o:o + 4096])
+    if k in ("zeros", "0xFF", "pattern"):
+        return True
+    # A TWO-byte magic (0x55AA, the ext 0xEF53) inside a block of ciphertext
+    # can be chance: 1 in 65536 per place looked, so a genuine crypto erase
+    # would be sent to an hours-long overwrite now and then for nothing.
+    # But "the block reads as random" is NOT enough to call it chance. This
+    # used to waive every 2-byte hit in a random-looking block, and a real MBR
+    # (0x55AA, a real partition table) followed by seven sectors of compressed
+    # boot loader or ciphertext reads as 7.8+ bits/byte - so a controller that
+    # said "done" and erased nothing passed as "random" when the partitions
+    # were headerless full-disk encryption with no longer magic to catch it.
+    # So the hit is waived only when the structure AROUND it is not real:
+    #   - 0x55AA: every one of the four MBR partition entries has a status byte
+    #     of 0x00 or 0x80. A real MBR always does (an empty table is all
+    #     zeros); ciphertext does 1 time in ~270 million.
+    #   - ext 0xEF53: s_rev_level (20 bytes after the magic) is 0 or 1. A real
+    #     superblock always is; ciphertext 1 time in ~2 billion.
+    # Every longer magic (EFI PART, NTFS, -FVE-FS-, LUKS...) always counts.
+    if k != "random" or len(magic) > 2:
+        return False
+    if magic == b"\x55\xaa":
+        st = [r - 64 + 16 * i for i in range(4)]
+        if st[0] < 0:
+            return False
+        return not all(data[x] in (0, 0x80) for x in st)
+    if magic == b"\x53\xef":
+        rev = data[r + 20:r + 24]
+        if len(rev) < 4:
+            return False
+        return u32(rev, 0) not in (0, 1)
+    return False
+
+def check(mode, base, want, size, starts, data):
+    if len(data) < want:
+        return 2, "short read at byte %d: %d of %d bytes came back" % (base, len(data), want)
+    data = data[:want]
+    end = base + want
+    for s in sorted(set(starts)):
+        for name, off, magic in SIGS:
+            a = s + off
+            if base <= a and a + len(magic) <= end and data[a - base:a - base + len(magic)] == magic \
+                    and not waived(data, a - base, magic):
+                return 1, "%s at byte %d" % (name, a)
+    for ss in (512, 4096):
+        a = size - ss
+        if a > 0 and base <= a and a + 8 <= end and data[a - base:a - base + 8] == b"EFI PART" \
+                and not waived(data, a - base, b"EFI PART"):
+            return 1, "backup GPT header (EFI PART) at byte %d" % a
+    if mode == "overwrite":
+        z = len(data) - len(data.lstrip(b"\0"))
+        if z < len(data):
+            return 1, "non-zero data at byte %d (an overwrite must read back as zeros)" % (base + z)
+        return 0, "zeros"
+    seen = []
+    for o in range(0, len(data), 4096):
+        c = data[o:o + 4096]
+        k = classify(c)
+        if k is None:
+            return 1, "data that is not an erase pattern at byte %d (entropy %.2f bits/byte)" % (base + o, entropy(c))
+        if k not in seen:
+            seen.append(k)
+    return 0, ",".join(seen)
+
+# Answers are written with no newline: the shell's $(...) would strip a "\n"
+# but not the "\r" a text-mode stdout adds on some platforms, and a stray "\r"
+# would end up inside the method label.
+def main():
+    a = sys.argv[1:]
+    data = sys.stdin.buffer.read()
+    if a[0] == "parts":
+        sys.stdout.write(" ".join(str(x) for x in parts(data, int(a[1]))))
+        return 0
+    rc, msg = check(a[0], int(a[1]), int(a[2]), int(a[3]), [int(x) for x in a[4:]], data)
+    sys.stdout.write(["clean", "found", "unverified"][rc] + " " + msg)
+    return rc
+
+try:
+    sys.exit(main())
+except SystemExit:
+    raise
+except BaseException as e:
+    sys.stdout.write("unverified checker error: %s" % e)
+    sys.exit(2)
+PYEOF
+}
+
+# Byte offsets where a partition started, recorded BEFORE the erase: the ones
+# the kernel knows (sysfs, in 512-byte units) and the ones in the on-disk MBR /
+# GPT itself (the kernel may not have scanned a table, and a table the kernel
+# rejected can still hold a volume). After the erase these are exactly the
+# places a filesystem's own boot sector or superblock would still be found if
+# the erase did nothing - which is what verify_erased looks for there.
+# $1 = device, $2 = kernel name. Prints space-separated offsets (maybe none).
+als_part_starts() {
+  local dev="$1" d="$2" sys="${ALS_SYS_ROOT:-}/sys" f s out="" py sz ss blk
+  for f in "$sys/block/$d/$d"*/start; do
+    [ -r "$f" ] || continue
+    s=$(cat "$f" 2>/dev/null)
+    case "$s" in ''|*[!0-9]*) continue ;; esac
+    out="$out $(( s * 512 ))"
+  done
+  py=$(command -v python3 2>/dev/null)
   sz=$(blockdev --getsize64 "$dev" 2>/dev/null)
-  case "$sz" in ''|*[!0-9]*) return 1;; esac
-  [ "$sz" -gt 0 ] || return 1
+  if [ -n "$py" ] && case "$sz" in ''|*[!0-9]*|0) false ;; *) true ;; esac; then
+    ss=$(blockdev --getss "$dev" 2>/dev/null)
+    case "$ss" in 512|4096) ;; *) ss=512 ;; esac
+    blk=4096; [ $(( sz % 4096 )) -eq 0 ] || blk=512
+    s=1048576; [ "$sz" -lt "$s" ] && s="$sz"
+    out="$out $(dd if="$dev" bs="$blk" count=$(( s / blk )) iflag=direct 2>/dev/null \
+      | "$py" -c "$(als_verify_py)" parts "$ss" 2>/dev/null)"
+  fi
+  # shellcheck disable=SC2086
+  printf '%s' "$(echo $out)"
+}
+
+verify_erased() {
+  local dev="$1" mode="$2" starts="${3:-}" py sz blk win=1048576 offs o s i n out rc seen=" " cnt=0 lab=""
+  VE_WHY=""; VE_LABEL=""; VE_MIB=0
+  py=$(command -v python3 2>/dev/null)
+  [ -n "$py" ] || { VE_WHY="python3 is not installed, so the drive could not be read back"; return 2; }
+  [ -e "$dev" ] || { VE_WHY="$dev is no longer present"; return 2; }
+  sz=$(blockdev --getsize64 "$dev" 2>/dev/null)
+  case "$sz" in ''|*[!0-9]*|0) VE_WHY="could not read the size of $dev"; return 2 ;; esac
   # Read the DRIVE, not the page cache: flush it, then read with O_DIRECT. A
   # cached copy of what was just written would otherwise answer for the disk.
   blockdev --flushbufs "$dev" >/dev/null 2>&1
-  mb=$(( sz / 1048576 ))
+  # O_DIRECT needs offsets and lengths in whole logical sectors. A size that is
+  # a multiple of 4096 works in 4 KiB units whatever the sector size; one that
+  # is not can only be a 512-byte-sector drive, whose last 512 bytes (the
+  # backup GPT) 4 KiB units would miss.
+  blk=4096; [ $(( sz % 4096 )) -eq 0 ] || blk=512
+  # Bounded windows, never the whole drive: the first MiB, eight spread
+  # evenly, the last MiB, and one at each pre-erase partition start (at most
+  # 32). A 1 TB drive with no partitions reads 10 MiB.
   offs="0"
-  [ "$mb" -gt 128 ] && offs="0 $(( mb / 2 )) $(( mb - 32 ))"
-  want=33554432
-  [ "$sz" -lt "$want" ] && want="$sz"
+  if [ "$sz" -gt "$win" ]; then
+    for i in 1 2 3 4 5 6 7 8; do offs="$offs $(( sz / 9 * i / blk * blk ))"; done
+    offs="$offs $(( (sz - win) / blk * blk ))"
+  fi
+  n=0
+  for s in $starts; do
+    case "$s" in ''|*[!0-9]*) continue ;; esac
+    [ "$s" -lt "$sz" ] || continue
+    n=$(( n + 1 )); [ "$n" -le 32 ] || break
+    offs="$offs $(( s / blk * blk ))"
+  done
   for o in $offs; do
-    # The whole window must come back, and every byte of it must be zero.
-    #
-    # This used to count the NON-zero bytes in whatever dd returned. A read
-    # that failed returned nothing - zero non-zero bytes - so a drive that
-    # could not be read at all "verified (reads as zeros)". cmp settles both
-    # questions in one pass: it compares exactly $want bytes against zeros,
-    # and a short or empty read hits EOF first and fails.
-    dd if="$dev" bs=1M count=32 skip="$o" iflag=direct 2>/dev/null \
-      | cmp -s -n "$want" - /dev/zero || return 1
+    case "$seen" in *" $o "*) continue ;; esac
+    seen="$seen$o "
+    n=$(( sz - o )); [ "$n" -gt "$win" ] && n=$win
+    # shellcheck disable=SC2086
+    out=$(dd if="$dev" bs="$blk" skip=$(( o / blk )) count=$(( n / blk )) iflag=direct 2>/dev/null \
+      | "$py" -c "$(als_verify_py)" "$mode" "$o" "$n" "$sz" 0 $starts 2>/dev/null)
+    rc=$?
+    cnt=$(( cnt + n ))
+    # Only a checker that SAID what it found counts as a finding. A crash, a
+    # killed interpreter or no output is "could not verify", never "clean" and
+    # never a reason to overwrite.
+    case "$rc:$out" in
+      0:clean\ *) for i in $(printf '%s' "${out#clean }" | tr ',' ' '); do
+                    case " $lab " in *" $i "*) ;; *) lab="$lab $i" ;; esac
+                  done ;;
+      1:found\ *) VE_WHY="${out#found }"; VE_MIB=$(( cnt / 1048576 )); return 1 ;;
+      2:unverified\ *) VE_WHY="${out#unverified }"; VE_MIB=$(( cnt / 1048576 )); return 2 ;;
+      *) VE_WHY="the read-back checker gave no verdict at byte $o (exit $rc)"; VE_MIB=$(( cnt / 1048576 )); return 2 ;;
+    esac
+  done
+  VE_MIB=$(( cnt / 1048576 ))
+  # shellcheck disable=SC2086
+  set -- $lab
+  VE_LABEL="$1"; shift
+  for i in "$@"; do VE_LABEL="$VE_LABEL + $i"; done
+  [ -n "$VE_LABEL" ] || { VE_WHY="nothing was read back"; return 2; }
+  return 0
+}
+
+# Why a firmware method was not used, and which ones were (plan step 38).
+#
+# A requested Purge could quietly become an overwrite - most often on a SATA
+# SSD the BIOS left frozen - and the record said only what was achieved, never
+# that something stronger had been asked for, nor why it did not happen.
+# firmware_erase and ata_secure_erase now set, at every way out:
+#   FW_TRIED  comma list, in order, of the firmware methods actually ISSUED to
+#             the drive (nvme-sanitize-crypto, nvme-sanitize-block,
+#             nvme-format-crypto, nvme-format-secure, ata-secure-erase-enhanced,
+#             ata-secure-erase)
+#   FW_WHY    the reason the FIRST (strongest) choice was not the result:
+#             tool_missing | unsupported | frozen | failed | controller_ambiguous
+#             | namespaces (a format would not cover every namespace);
+#             gui_wipe_one adds verify_failed (the drive said done, the read-back
+#             found the old data). The first reason wins: that is the answer to
+#             "why was the stronger method not used".
+# Both empty when the operator asked for an overwrite: nothing fell back.
+fw_why() {
+  [ -n "${FW_WHY:-}" ] || FW_WHY="$1"
+}
+fw_tried() {
+  FW_TRIED="${FW_TRIED:+$FW_TRIED,}$1"
+}
+
+# --- suspend-to-unfreeze: when is it safe? (plan step 42, D-2) ---------------
+#
+# Most BIOSes "freeze" SATA security at boot, which blocks the ATA secure
+# erase; a suspend/resume cycle usually unfreezes it. AUDIT_WIPE_UNFREEZE=1
+# does that with rtcwake. But a suspend stops the WHOLE machine, and the kiosk
+# runs wipes of several drives at the same time: suspending under another
+# drive's overwrite or sanitize can abort it, or corrupt it mid-write. And on
+# some machines resume simply fails - the station then hangs with drives half
+# erased. So a suspend is allowed only when ALL of these hold:
+#   - no other wipe is running on this machine: every running gui_wipe_one
+#     registers itself as a directory named by its PID under ALS_WIPE_RUN_DIR
+#     (default /run/als-wipe, a tmpfs, so a reboot clears it); an entry whose
+#     process is gone is stale and ignored. If THIS wipe could not register,
+#     other wipes could not have either, so nothing can be ruled out: no.
+#   - /sys/power/mem_sleep offers "deep" (S3). s2idle keeps the drives
+#     powered, so it cannot unfreeze anything and would only stall the wipe;
+#   - the machine (DMI product name) is not one where resume is known to fail:
+#     ALS_NO_RESUME_MODELS below, plus AUDIT_WIPE_NO_SUSPEND_MODELS from
+#     audit.conf, "|"-separated, compared case-insensitively. The built-in
+#     list starts EMPTY: no model has yet been seen to fail on this station,
+#     and a guessed entry would be fiction. Add one the day it happens;
+#   - this drive's HPA was not removed temporarily (step 34): the suspend
+#     resets the drive, which brings the HPA back.
+# Still a race: a wipe started during the ~8 seconds of the suspend itself is
+# not seen. The kiosk starts wipes only on an operator's click, and the whole
+# feature stays OFF (owner decision D42) until tried on the station.
+# Returns 0 when a suspend is allowed; else 1 with SUSPEND_WHY.
+ALS_NO_RESUME_MODELS=""
+als_wipe_lock() {
+  local dir="${ALS_WIPE_RUN_DIR:-/run/als-wipe}"
+  WR_LOCK=""
+  [ -d "${dir%/*}" ] || return 1
+  mkdir -p "$dir" 2>/dev/null || return 1
+  # A directory already named by our PID is a dead wipe's leftover (PIDs are
+  # reused) - it is ours now.
+  [ -d "$dir/$$" ] || mkdir "$dir/$$" 2>/dev/null || return 1
+  WR_LOCK="$dir/$$"
+  return 0
+}
+als_wipe_unlock() {
+  [ -n "${WR_LOCK:-}" ] && rmdir "$WR_LOCK" 2>/dev/null
+  WR_LOCK=""
+  return 0
+}
+als_suspend_ok() {
+  local dir="${ALS_WIPE_RUN_DIR:-/run/als-wipe}" sys="${ALS_SYS_ROOT:-}/sys" f p model m lc
+  SUSPEND_WHY=""
+  if [ "${WR_HPA_REMOVED:-0}" = 1 ]; then
+    SUSPEND_WHY="this drive's hidden area (HPA) was removed only until the next reset, and a suspend resets the drive"
+    return 1
+  fi
+  if [ -z "${WR_LOCK:-}" ] || [ ! -d "$WR_LOCK" ]; then
+    SUSPEND_WHY="this wipe could not register in $dir, so other running wipes cannot be ruled out"
+    return 1
+  fi
+  for f in "$dir"/*; do
+    [ -e "$f" ] || continue
+    [ "$f" = "$WR_LOCK" ] && continue
+    p="${f##*/}"
+    case "$p" in
+      ''|*[!0-9]*) SUSPEND_WHY="unexpected entry '$p' in $dir"; return 1 ;;
+    esac
+    if kill -0 "$p" 2>/dev/null || [ -d "/proc/$p" ]; then
+      SUSPEND_WHY="another wipe is running on this machine (process $p)"
+      return 1
+    fi
+    rmdir "$f" 2>/dev/null   # stale: that wipe is gone
+  done
+  if ! grep -qw deep "$sys/power/mem_sleep" 2>/dev/null; then
+    SUSPEND_WHY="this machine does not offer deep suspend (S3)"
+    return 1
+  fi
+  model=$(tr -d '\r\n' < "$sys/class/dmi/id/product_name" 2>/dev/null | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+  if [ -z "$model" ]; then
+    SUSPEND_WHY="the machine model could not be read, so it cannot be checked against the list where resume fails"
+    return 1
+  fi
+  lc=$(printf '%s' "$model" | tr '[:upper:]' '[:lower:]')
+  local IFS='|'
+  for m in $ALS_NO_RESUME_MODELS ${AUDIT_WIPE_NO_SUSPEND_MODELS:-}; do
+    m=$(printf '%s' "$m" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | tr '[:upper:]' '[:lower:]')
+    [ -n "$m" ] || continue
+    if [ "$m" = "$lc" ]; then
+      SUSPEND_WHY="resume is known to fail on this model ($model)"
+      return 1
+    fi
   done
   return 0
 }
@@ -472,34 +864,235 @@ verify_zero() {
 # BIOS "frozen" state (optional suspend/resume) and clears the temporary password
 # if the erase fails so the drive is never left locked.
 ata_secure_erase() {
-  local dev="$1" want="$2" info enh="" eraseflag="--security-erase" pass="ALSwipe1" label="ATA secure erase"
-  command -v hdparm >/dev/null 2>&1 || return 1
+  local dev="$1" want="$2" info enh="" eraseflag="--security-erase" pass="ALSwipe1" label="ATA secure erase" tried
+  command -v hdparm >/dev/null 2>&1 || { fw_why tool_missing; return 1; }
   info=$(hdparm -I "$dev" 2>/dev/null | tr '\t' ' ' | tr -s ' ')
-  printf '%s\n' "$info" | grep -qi 'Security:' || return 1
+  printf '%s\n' "$info" | grep -qi 'Security:' || { fw_why unsupported; echo "    $dev does not offer the ATA security feature set."; return 1; }
   printf '%s\n' "$info" | grep -qi 'supported: enhanced erase' && enh="yes"
 
   if ! printf '%s\n' "$info" | grep -qi 'not frozen'; then
+    # Suspend-to-unfreeze: OFF unless audit.conf sets AUDIT_WIPE_UNFREEZE=1
+    # (owner decision D42: the guards exist, the feature stays disabled until
+    # it has been proved on the station's machines). als_suspend_ok says when
+    # it is safe at all.
     if [ "${AUDIT_WIPE_UNFREEZE:-0}" = "1" ] && command -v rtcwake >/dev/null 2>&1; then
-      echo "    $dev is frozen — suspending ~6s to unfreeze …"
-      rtcwake -m mem -s 6 >/dev/null 2>&1; sleep 2
-      info=$(hdparm -I "$dev" 2>/dev/null | tr '\t' ' ' | tr -s ' ')
+      if als_suspend_ok; then
+        echo "    $dev is frozen — suspending ~6s to unfreeze …"
+        # "deep" is offered (checked); make it the mode `-m mem` uses, or the
+        # suspend is s2idle, which keeps the drive powered - and frozen.
+        grep -q '\[deep\]' "${ALS_SYS_ROOT:-}/sys/power/mem_sleep" 2>/dev/null \
+          || { echo deep > "${ALS_SYS_ROOT:-}/sys/power/mem_sleep"; } 2>/dev/null
+        rtcwake -m mem -s 6 >/dev/null 2>&1; sleep 2
+        info=$(hdparm -I "$dev" 2>/dev/null | tr '\t' ' ' | tr -s ' ')
+      else
+        echo "    $dev is frozen; not suspending to unfreeze it: $SUSPEND_WHY."
+      fi
     fi
-    printf '%s\n' "$info" | grep -qi 'not frozen' || { echo "    $dev still frozen — will overwrite instead."; return 1; }
+    printf '%s\n' "$info" | grep -qi 'not frozen' || { fw_why frozen; echo "    $dev still frozen — will overwrite instead."; return 1; }
   fi
 
   if [ "$want" = "crypto" ]; then
-    [ -n "$enh" ] || return 1
+    [ -n "$enh" ] || { fw_why unsupported; echo "    $dev does not support the enhanced erase that 'crypto' needs."; return 1; }
     eraseflag="--security-erase-enhanced"; label="ATA enhanced secure erase (crypto on self-encrypting drives)"
   elif [ -n "$enh" ]; then
     eraseflag="--security-erase-enhanced"; label="ATA enhanced secure erase"
   fi
+  if [ "$eraseflag" = "--security-erase-enhanced" ]; then tried=ata-secure-erase-enhanced; else tried=ata-secure-erase; fi
+  fw_tried "$tried"
 
-  hdparm --user-master u --security-set-pass "$pass" "$dev" >/dev/null 2>&1 || return 1
+  hdparm --user-master u --security-set-pass "$pass" "$dev" >/dev/null 2>&1 || { fw_why failed; echo "    the drive refused the temporary security password."; return 1; }
   if hdparm --user-master u $eraseflag "$pass" "$dev" >/dev/null 2>&1; then
-    M="$label"; return 0
+    # NIST SP 800-88: the ENHANCED erase (which also reaches reallocated and
+    # vendor-reserved areas) is a Purge; the normal one writes only the user
+    # area, which is a Clear.
+    M="$label"
+    if [ "$eraseflag" = "--security-erase-enhanced" ]; then FW_LEVEL=purge; else FW_LEVEL=clear; fi
+    return 0
   fi
   hdparm --user-master u --security-disable "$pass" "$dev" >/dev/null 2>&1
+  fw_why failed
   echo "    ATA secure erase failed on $dev — will overwrite instead."
+  return 1
+}
+
+# --- hidden areas: HPA and DCO (plan step 34, D-2) ---------------------------
+#
+# An ATA drive can be told to report FEWER sectors than it has. A Host
+# Protected Area (HPA) hides the end of the drive behind a lowered "max
+# address"; a Device Configuration Overlay (DCO) lowers the native maximum
+# itself. Vendors use them for recovery partitions, and they are also a
+# well-known place to leave data. Neither the kernel's size nor an overwrite
+# nor (on many drives) a secure erase reaches past them. This engine used to
+# wipe up to the visible size and certify the drive - with the hidden sectors
+# untouched and never mentioned.
+#
+# ata_hidden_areas asks the drive, reading only:
+#   hdparm -N              " max sectors   = 976771055/976773168, HPA is enabled"
+#                          current/native: current < native is an HPA.
+#   hdparm -I              whether the drive has the HPA / DCO feature sets at all
+#                          (no DCO feature set = no DCO can exist).
+#   hdparm --dco-identify  "Real max sectors: N": above the native max is a DCO.
+# Sets HA_HPA and HA_DCO (none | present | unknown), HA_CUR / HA_NATIVE /
+# HA_REAL (sector counts, when read), HA_AMAX (1 / 0 / "": whether the drive's
+# max address can only be changed permanently) and HA_WHY, and sets HA_STATE and prints
+# the combined state (call it WITHOUT $(...) when the HA_* values are needed):
+#   dco-present > hpa-present > unknown > none
+# Anything it cannot parse - a RAID/RST controller that does not pass ATA
+# commands through, a driver that answers "HPA setting seems invalid", an
+# unexpected layout - is UNKNOWN, never none.
+# It never changes anything; --dco-restore / --dco-setmax are never run by this
+# engine at all (a DCO restore is permanent and has bricked drives).
+ata_hidden_areas() {
+  local dev="$1" info n x real std top v
+  HA_STATE=unknown; HA_HPA=unknown; HA_DCO=unknown; HA_CUR=""; HA_NATIVE=""; HA_REAL=""; HA_WHY=""; HA_AMAX=""
+  if ! command -v hdparm >/dev/null 2>&1; then
+    HA_WHY="hdparm is not installed"; echo unknown; return 0
+  fi
+  info=$(hdparm -I "$dev" 2>/dev/null | tr '\t' ' ' | tr -s ' ')
+  n=$(hdparm -N "$dev" 2>/dev/null | tr '\t' ' ')
+  x=$(printf '%s\n' "$n" | sed -n 's/.*max sectors *= *\([0-9][0-9]*\)\/\([0-9][0-9]*\).*/\1 \2/p' | head -n1)
+  if [ -n "$x" ] && ! printf '%s\n' "$n" | grep -qi 'seems invalid'; then
+    HA_CUR="${x% *}"; HA_NATIVE="${x#* }"
+    # Which command a later `hdparm -N <n>` would send. hdparm (9.52+, and
+    # 9.65 on this stick) decides it by ONE test - ACS-3 with ACCESSIBLE MAX
+    # ADDRESS (IDENTIFY word 119 bit 8) - and prints its -N answer by the
+    # same test: "ACCESSIBLE MAX ADDRESS enabled/disabled" on such a drive,
+    # "HPA is enabled/disabled" otherwise. On an AMA drive the SET is SET
+    # ACCESSIBLE MAX ADDRESS EXT, which ACS-3 defines as non-volatile, and
+    # hdparm ignores the missing "p": the "temporary" removal would
+    # permanently reconfigure the customer's drive. So HA_AMAX: 1 = AMA
+    # (permanent only), 0 = the legacy SET MAX ADDRESS whose volatile form
+    # the drive forgets at power-off, "" = hdparm did not say (then nothing
+    # is ever set - see ata_hpa_remove).
+    if printf '%s\n' "$n" | grep -qi 'ACCESSIBLE MAX ADDRESS'; then HA_AMAX=1
+    elif printf '%s\n' "$n" | grep -qiE 'HPA is (enabled|disabled)'; then HA_AMAX=0
+    fi
+    if [ "$HA_NATIVE" -le 0 ]; then HA_WHY="hdparm -N reported a native max of 0"; HA_CUR=""; HA_NATIVE=""
+    elif [ "$HA_CUR" -eq "$HA_NATIVE" ]; then HA_HPA=none
+    elif [ "$HA_CUR" -lt "$HA_NATIVE" ]; then HA_HPA=present
+    else HA_WHY="hdparm -N reported a current max above the native max"
+    fi
+  elif printf '%s\n' "$info" | grep -q 'Commands/features' \
+       && ! printf '%s\n' "$info" | grep -qi 'Host Protected Area'; then
+    # No HPA feature set (word 82 bit 10) proves there is no HPA only on a
+    # drive older than ACS-3. ACS-3 made that bit obsolete and added
+    # ACCESSIBLE MAX ADDRESS, which lowers the capacity just the same and
+    # which hdparm -I never prints. So "none" only when -I lists the ATA
+    # versions the drive supports and all are below ACS-3 (10); an ACS-3+
+    # drive, or one that does not list them, is unknown.
+    std=$(printf '%s\n' "$info" | sed -n 's/^ *Supported: *\([0-9][0-9 ]*\)$/\1/p' | head -n1)
+    top=""
+    for v in $std; do
+      case "$v" in *[!0-9]*) continue ;; esac
+      if [ -z "$top" ] || [ "$v" -gt "$top" ]; then top="$v"; fi
+    done
+    if [ -n "$top" ] && [ "$top" -lt 10 ]; then
+      HA_HPA=none   # a pre-ACS-3 drive with no HPA feature set
+    else
+      HA_WHY="the drive's max sectors could not be read (hdparm -N), and a drive of ACS-3 or later can hide sectors without the HPA feature set"
+    fi
+  else
+    HA_WHY="the drive's max sectors could not be read (hdparm -N)"
+  fi
+  if printf '%s\n' "$info" | grep -q 'Commands/features' \
+     && ! printf '%s\n' "$info" | grep -qi 'Device Configuration Overlay'; then
+    HA_DCO=none     # the drive has no DCO feature set
+  else
+    real=$(hdparm --dco-identify "$dev" 2>/dev/null | tr '\t' ' ' \
+           | sed -n 's/.*Real max sectors: *\([0-9][0-9]*\).*/\1/p' | head -n1)
+    if [ -n "$real" ] && [ -n "$HA_NATIVE" ]; then
+      HA_REAL="$real"
+      # hdparm prints the DCO maximum as a sector COUNT; accept the max LBA
+      # (one less) as well, so a version that prints the address is not read
+      # as an overlay of one sector. Only MORE than the native max is hidden.
+      if [ "$real" -gt "$HA_NATIVE" ]; then HA_DCO=present
+      elif [ "$real" -eq "$HA_NATIVE" ] || [ "$real" -eq $(( HA_NATIVE - 1 )) ]; then HA_DCO=none
+      else HA_WHY="${HA_WHY:+$HA_WHY; }the DCO maximum ($real) is below the native maximum ($HA_NATIVE)"
+      fi
+    else
+      HA_WHY="${HA_WHY:+$HA_WHY; }the DCO could not be read (hdparm --dco-identify)"
+    fi
+  fi
+  if [ "$HA_DCO" = present ]; then HA_STATE=dco-present
+  elif [ "$HA_HPA" = present ]; then HA_STATE=hpa-present
+  elif [ "$HA_HPA" = unknown ] || [ "$HA_DCO" = unknown ]; then HA_STATE=unknown
+  else HA_STATE=none
+  fi
+  echo "$HA_STATE"
+}
+
+# Remove an HPA TEMPORARILY: `hdparm -N <native>` with no "p" prefix sets the
+# VOLATILE max address, which the drive forgets at its next hardware reset or
+# power cycle - the customer's drive is not permanently reconfigured (owner
+# decision D34, reversible). Then make the kernel re-read the size and require
+# that BOTH the drive (hdparm -N again) and the kernel (the block device's size)
+# now report the full native size - an overwrite only reaches what the kernel
+# thinks the drive holds. $1 = /dev/sdX, $2 = kernel name. Uses HA_NATIVE and
+# HA_AMAX: only a drive whose hdparm -N answer was the legacy "HPA is ..."
+# wording gets the SET - on an ACS-3 ACCESSIBLE MAX ADDRESS drive the same
+# command is PERMANENT (see ata_hidden_areas), and on an unknown wording it
+# might be; either way the drive is left exactly as it is and the wipe fails.
+# Returns 0 when the whole drive is visible; else 1 with HR_WHY (and HR_AMA=1
+# when it was refused because the change could only be permanent).
+ata_hpa_remove() {
+  local dev="$1" d="$2" nat="$HA_NATIVE" n x cur
+  HR_WHY=""; HR_AMA=""
+  case "$nat" in ''|*[!0-9]*) HR_WHY="the native size is not known"; return 1 ;; esac
+  if [ "$HA_AMAX" = 1 ]; then
+    HR_AMA=1
+    HR_WHY="it is an ACS-3 accessible max address, which can only be changed permanently - left as it is (owner decision D34: temporary removal only)"
+    return 1
+  elif [ "$HA_AMAX" != 0 ]; then
+    HR_WHY="hdparm did not say whether the change would be temporary - left as it is"
+    return 1
+  fi
+  # hdparm's own manual: setting the max takes two back-to-back commands the
+  # kernel can interleave with others, "so if it fails initially, just try
+  # again". Once.
+  if ! hdparm -N "$nat" "$dev" >/dev/null 2>&1; then
+    sleep 1
+    hdparm -N "$nat" "$dev" >/dev/null 2>&1 || { HR_WHY="hdparm -N $nat was rejected by the drive"; return 1; }
+  fi
+  n=$(hdparm -N "$dev" 2>/dev/null | tr '\t' ' ')
+  x=$(printf '%s\n' "$n" | sed -n 's/.*max sectors *= *\([0-9][0-9]*\)\/\([0-9][0-9]*\).*/\1 \2/p' | head -n1)
+  cur="${x% *}"
+  if [ -z "$x" ] || [ "$cur" != "$nat" ]; then
+    HR_WHY="the drive still reports ${cur:-an unreadable} of $nat sectors after the removal"
+    return 1
+  fi
+  ata_kernel_whole "$dev" "$d" "$nat"
+}
+
+# Does the KERNEL see the whole drive? $1 = /dev/sdX, $2 = kernel name, $3 =
+# the drive's native sector count. The overwrite and the read-back stop at the
+# kernel's size, not the drive's, and the kernel keeps the size it read at
+# probe time until told to look again - so after a (volatile) HPA removal, and
+# also when hdparm -N says the drive is whole: an earlier attempt in the same
+# boot may have removed the HPA while libata kept the old, smaller size, and
+# then the drive answers current = native while the last sectors are out of
+# the wipe's reach. Checked first, then after a rescan, three times.
+# Returns 0 when the kernel's size is exactly native x sector size; else 1
+# with HR_WHY (an unreadable size is a failure too: nothing is proven).
+ata_kernel_whole() {
+  local dev="$1" d="$2" nat="$3" ss sz i
+  HR_WHY=""
+  case "$nat" in ''|*[!0-9]*) HR_WHY="the native size is not known"; return 1 ;; esac
+  for i in 0 1 2 3; do
+    if [ "$i" -gt 0 ]; then
+      { echo 1 > "${ALS_SYS_ROOT:-}/sys/block/$d/device/rescan"; } 2>/dev/null
+    fi
+    ss=$(blockdev --getss "$dev" 2>/dev/null)
+    sz=$(blockdev --getsize64 "$dev" 2>/dev/null)
+    case "$ss" in ''|*[!0-9]*) ss="" ;; esac
+    case "$sz" in ''|*[!0-9]*) sz="" ;; esac
+    [ -n "$ss" ] && [ -n "$sz" ] && [ "$sz" = $(( nat * ss )) ] && return 0
+    [ "$i" -gt 0 ] && sleep 1
+  done
+  if [ -n "$ss" ] && [ -n "$sz" ] && [ "$sz" -lt $(( nat * ss )) ]; then
+    HR_WHY="the kernel still sees $sz bytes, $(( nat - sz / ss )) sectors short of the whole drive ($nat sectors of $ss bytes)"
+  else
+    HR_WHY="the kernel sees ${sz:-an unreadable number of} bytes, not the whole drive ($nat sectors of ${ss:-unknown size})"
+  fi
   return 1
 }
 
@@ -621,26 +1214,200 @@ nvme_sanitize() {
   done
 }
 
+# Which NVMe CONTROLLER a namespace block device belongs to (plan step 36).
+#
+# A sanitize is a controller command, so it goes to /dev/nvmeY, not to the
+# namespace. This used to be guessed from the name - nvme0n1 -> /dev/nvme0 -
+# but the number in a namespace's name is the SUBSYSTEM's instance, not the
+# controller's. On a machine with two NVMe drives, or with native multipath,
+# they can differ: nvme0n1 can sit on controller nvme1 while /dev/nvme0 is the
+# OTHER drive, which then got the sanitize meant for this one.
+#
+# So ask the kernel, in this order, and accept only ONE answer:
+#   1. a per-path name nvmeXcYnZ names its controller: nvmeY;
+#   2. a multipath head (/sys/block/<ns>/multipath/ lists its paths
+#      nvmeXcYnZ): the controllers of those paths;
+#   3. /sys/block/<ns>/device is the controller itself: its "dev" (major:minor
+#      of the controller's character device) is matched against every
+#      /sys/class/nvme/nvme*/dev - no symlink has to be read;
+#   4. /sys/block/<ns>/device is the subsystem: the nvme* controllers in it;
+#   5. sysfs said nothing: `nvme list-subsys -o json /dev/<ns>`, every "Name"
+#      of a path/controller in it.
+# More than one controller, or none, is AMBIGUOUS: no firmware command is sent
+# (the caller falls back to an overwrite of the namespace itself, which the
+# block device names without doubt). Sets NV_CTRL (/dev/nvmeY) and NV_WHY.
+# ALS_SYS_ROOT (tests only) is prefixed to /sys.
+als_nvme_ctrl() {
+  local d="$1" sys="${ALS_SYS_ROOT:-}/sys" c="" f v x j
+  NV_CTRL=""; NV_WHY=""
+  case "$d" in
+    nvme*c*n*)
+      x="${d#nvme*c}"; x="${x%%n*}"
+      case "$x" in ''|*[!0-9]*) ;; *) c="nvme$x" ;; esac ;;
+  esac
+  if [ -z "$c" ] && [ -d "$sys/block/$d/multipath" ]; then
+    for f in "$sys/block/$d/multipath"/nvme*c*n*; do
+      [ -e "$f" ] || continue
+      x="${f##*/}"; x="${x#nvme*c}"; x="${x%%n*}"
+      case "$x" in ''|*[!0-9]*) continue ;; esac
+      case " $c " in *" nvme$x "*) ;; *) c="$c nvme$x" ;; esac
+    done
+  fi
+  if [ -z "$c" ] && [ -r "$sys/block/$d/device/dev" ]; then
+    v=$(cat "$sys/block/$d/device/dev" 2>/dev/null)
+    for f in "$sys/class/nvme"/nvme*/dev; do
+      [ -r "$f" ] && [ -n "$v" ] || continue
+      [ "$(cat "$f" 2>/dev/null)" = "$v" ] || continue
+      x="${f%/dev}"; c="$c ${x##*/}"
+    done
+  fi
+  if [ -z "$c" ] && [ -d "$sys/block/$d/device" ]; then
+    for f in "$sys/block/$d/device"/nvme*; do
+      x="${f##*/}"
+      case "$x" in nvme|nvme*[!0-9]*) continue ;; esac
+      [ -e "$f" ] && c="$c $x"
+    done
+  fi
+  if [ -z "$c" ]; then
+    j=$(nvme list-subsys -o json "/dev/$d" 2>/dev/null)
+    for x in $(printf '%s' "$j" | grep -oE '"Name"[[:space:]]*:[[:space:]]*"nvme[0-9]+"' | grep -oE 'nvme[0-9]+'); do
+      case " $c " in *" $x "*) ;; *) c="$c $x" ;; esac
+    done
+  fi
+  # shellcheck disable=SC2086
+  set -- $c
+  case "$#" in
+    1) NV_CTRL="/dev/$1"; return 0 ;;
+    0) NV_WHY="could not tell which NVMe controller $d belongs to" ;;
+    *) NV_WHY="$d is reachable through more than one NVMe controller ($*) - ambiguous" ;;
+  esac
+  return 1
+}
+
 # Firmware crypto / secure erase for ONE drive per AUDIT_WIPE_METHOD
 # (auto|crypto|secure|overwrite). Sets M, returns 0 on success (else the caller
-# falls back to an overwrite - never TRIM, which is not an erase).
+# falls back to an overwrite - never TRIM, which is not an erase). Sets FW_TRIED
+# and FW_WHY (see fw_why) on every path.
 firmware_erase() {
   local dev="$1" d="$2" want="${AUDIT_WIPE_METHOD:-auto}"
-  M=""
+  M=""; FW_WHY=""; FW_TRIED=""
   case "$want" in overwrite|zero) return 1 ;; esac
   case "$d" in
     nvme*)
-      command -v nvme >/dev/null 2>&1 || return 1
-      local ctrl="/dev/${d%%n[0-9]*}" err=""   # nvme0n1 -> nvme0
-      if [ "$want" = "crypto" ] || [ "$want" = "auto" ]; then
-        # Prefer format-based crypto, else the SANITIZE crypto-erase (widely supported).
-        err=$(nvme format "$dev" -s 2 --force 2>&1) && { M="NVMe cryptographic erase (nvme format -s2)"; return 0; }
-        nvme_sanitize "$ctrl" 4 && { M="NVMe cryptographic erase (sanitize)"; return 0; }
-        [ "$want" = "crypto" ] && { echo "    crypto erase unavailable — $(printf '%s' "$err" | head -n1)"; return 1; }
+      command -v nvme >/dev/null 2>&1 || { fw_why tool_missing; echo "    nvme-cli is not installed."; return 1; }
+      # NVMe (plan step 36). What used to happen: `nvme format` on the
+      # namespace FIRST, the sanitize only if format failed, the sanitize sent
+      # to a controller guessed from the name, and nobody asked how many
+      # namespaces the drive has. A format with FNA bit 1 clear erases only the
+      # namespace it is given, so a second namespace kept its data under a
+      # "Purge" for the drive. Now:
+      #   - the controller comes from the kernel (als_nvme_ctrl), or nothing
+      #     firmware-level is sent at all;
+      #   - SANITIZE first - crypto erase (-a 4), then block erase (-a 2) - as
+      #     the controller's SANICAP says it supports them. A sanitize erases
+      #     the whole NVM subsystem, every namespace, ticked or not: owner
+      #     decision D36 (reversible) accepts that, and the kiosk says so;
+      #   - `nvme format` last, and only when it is known to cover the whole
+      #     drive: exactly one namespace, or FNA bit 1 (a secure erase applies
+      #     to all namespaces). Otherwise it is not used, and the namespaces it
+      #     would have left are named.
+      # SANICAP bits: 0 crypto erase, 1 block erase. FNA bits: 1 secure erase
+      # covers all namespaces, 2 crypto erase is supported by format. Unreadable
+      # id-ctrl: the sanitize is still tried (an unsupported one just fails),
+      # FNA is taken as 0.
+      local err="" idc sanicap="" fna=0 nsl h own="" nsids="" others="" n=0 fmt_ok=0 onedrive
+      if ! als_nvme_ctrl "$d"; then
+        echo "    $NV_WHY — no NVMe firmware command is sent to a guessed controller."
+        fw_why controller_ambiguous
+        return 1
       fi
-      err=$(nvme format "$dev" -s 1 --force 2>&1) && { M="NVMe secure erase (nvme format -s1)"; return 0; }
-      nvme_sanitize "$ctrl" 2 && { M="NVMe block-erase sanitize"; return 0; }
-      echo "    NVMe firmware erase unavailable — $(printf '%s' "$err" | head -n1)"
+      local ctrl="$NV_CTRL"
+      idc=$(nvme id-ctrl "$ctrl" -o json 2>/dev/null)
+      sanicap=$(printf '%s' "$idc" | grep -oE '"sanicap"[[:space:]]*:[[:space:]]*[0-9]+' | grep -oE '[0-9]+$' | head -n1)
+      h=$(printf '%s' "$idc" | grep -oE '"fna"[[:space:]]*:[[:space:]]*[0-9]+' | grep -oE '[0-9]+$' | head -n1)
+      [ -n "$h" ] && fna="$h"
+      # Every namespace the controller has, attached or not ("[   0]:0x1").
+      # `list-ns --all` is Identify CNS 10h, which the spec requires only of
+      # controllers with Namespace Management; most single-namespace consumer
+      # drives reject it. Taking that as "coverage unknown" dropped every such
+      # drive without a sanitize from a format Purge to an hours-long
+      # overwrite (Clear). So when it gives nothing:
+      #   - without Namespace Management (OACS bit 3 clear) no namespace can
+      #     be created or detached, so the mandatory ACTIVE list (CNS 02h) is
+      #     every namespace there is - use it;
+      #   - with Namespace Management, or OACS unreadable, the active list
+      #     could miss a detached namespace - not used;
+      #   - id-ctrl NN = 1 (the most namespaces the controller can ever have)
+      #     proves there is exactly one - this one - whatever the lists say.
+      # A list that DID answer always wins over NN (it names what is there).
+      nsl=$(nvme list-ns "$ctrl" --all 2>/dev/null)
+      local oacs nn
+      oacs=$(printf '%s' "$idc" | grep -oE '"oacs"[[:space:]]*:[[:space:]]*[0-9]+' | grep -oE '[0-9]+$' | head -n1)
+      nn=$(printf '%s' "$idc" | grep -oE '"nn"[[:space:]]*:[[:space:]]*[0-9]+' | grep -oE '[0-9]+$' | head -n1)
+      if ! printf '%s\n' "$nsl" | grep -qE '^[[:space:]]*\[[[:space:]]*[0-9]*\][[:space:]]*:[[:space:]]*0x0*[1-9a-fA-F]' \
+          && [ -n "$oacs" ] && [ $(( oacs & 8 )) -eq 0 ]; then
+        nsl=$(nvme list-ns "$ctrl" 2>/dev/null)
+      fi
+      for h in $(printf '%s\n' "$nsl" | sed -n 's/^[[:space:]]*\[[[:space:]]*[0-9]*\][[:space:]]*:[[:space:]]*0x\([0-9a-fA-F][0-9a-fA-F]*\).*/\1/p'); do
+        h=$(( 16#$h )); [ "$h" -gt 0 ] || continue
+        nsids="$nsids $h"; n=$(( n + 1 ))
+      done
+      own=$(cat "${ALS_SYS_ROOT:-}/sys/block/$d/nsid" 2>/dev/null)
+      case "$own" in ''|*[!0-9]*) own="${d##*n}" ;; esac
+      [ "$n" -eq 0 ] && [ "$nn" = 1 ] && { nsids="$own"; n=1; }
+      onedrive="${d%n*}"; onedrive="${onedrive%c*}"   # nvme0c1n2 / nvme0n2 -> nvme0
+      for h in $nsids; do
+        [ "$h" = "$own" ] || others="$others ${onedrive}n$h"
+      done
+      others="${others# }"
+      if [ "$n" -ge 1 ] && [ -z "$others" ]; then fmt_ok=1
+      elif [ $(( fna & 2 )) -ne 0 ]; then fmt_ok=1
+      fi
+      local can4=1 can2=1
+      if [ -n "$sanicap" ]; then
+        [ $(( sanicap & 1 )) -ne 0 ] || can4=0
+        [ $(( sanicap & 2 )) -ne 0 ] || can2=0
+      fi
+      if [ "$want" = "crypto" ] || [ "$want" = "auto" ]; then
+        if [ "$can4" = 1 ]; then
+          fw_tried nvme-sanitize-crypto
+          nvme_sanitize "$ctrl" 4 && { M="NVMe cryptographic erase (sanitize)"; FW_LEVEL=purge; return 0; }
+          fw_why failed
+        else
+          fw_why unsupported
+          echo "    the controller does not support a sanitize crypto erase (SANICAP $sanicap)"
+        fi
+      fi
+      if [ "$want" = "secure" ] || [ "$want" = "auto" ]; then
+        if [ "$can2" = 1 ]; then
+          fw_tried nvme-sanitize-block
+          nvme_sanitize "$ctrl" 2 && { M="NVMe block-erase sanitize"; FW_LEVEL=purge; return 0; }
+          fw_why failed
+        else
+          fw_why unsupported
+          echo "    the controller does not support a sanitize block erase (SANICAP $sanicap)"
+        fi
+      fi
+      if [ "$fmt_ok" = 1 ]; then
+        if [ "$want" != "secure" ] && [ $(( fna & 4 )) -ne 0 ]; then
+          fw_tried nvme-format-crypto
+          err=$(nvme format "$dev" -s 2 --force 2>&1) && { M="NVMe cryptographic erase (nvme format -s2)"; FW_LEVEL=purge; return 0; }
+          fw_why failed
+        fi
+        if [ "$want" != "crypto" ]; then
+          fw_tried nvme-format-secure
+          err=$(nvme format "$dev" -s 1 --force 2>&1) && { M="NVMe secure erase (nvme format -s1)"; FW_LEVEL=purge; return 0; }
+          fw_why failed
+        fi
+      elif [ -n "$others" ]; then
+        fw_why namespaces
+        echo "    nvme format not used: it would erase only $d, not the drive's other namespace(s) $others (FNA $fna)."
+      else
+        fw_why namespaces
+        echo "    nvme format not used: the drive's namespaces could not be listed, so it is not known to cover the whole drive."
+      fi
+      fw_why unsupported
+      echo "    NVMe firmware erase unavailable${err:+ — $(printf '%s' "$err" | head -n1)}"
       return 1
       ;;
     *)
@@ -664,6 +1431,81 @@ firmware_erase() {
 # replaced.
 clear_label() {
   if [ "${1:-}" = "1" ]; then echo "NIST Clear"; else echo "NIST Clear; flash: user-addressable blocks only"; fi
+}
+
+# The drive's own count of bad sectors (plan step 38): SMART attribute 5
+# (Reallocated_Sector_Ct) and 197 (Current_Pending_Sector). A reallocated
+# sector is one the drive retired and replaced from its spares; the OLD sector
+# still holds whatever was on it, and no overwrite - nor a NORMAL ATA secure
+# erase, which writes only the user area - can address it again. So these
+# counts decide what an overwrite or a normal secure erase can honestly claim.
+#
+# Read with a time limit (a sick drive can hang a SMART read for minutes), and
+# never able to fail the wipe: whatever goes wrong, the counts are just empty.
+# Sets SC_REALLOC and SC_PENDING (a number, or empty = could not be read).
+# Only the RAW_VALUE's leading digits are taken ("0", "8 (0 2)").
+smart_counts() {
+  local out
+  SC_REALLOC=""; SC_PENDING=""
+  command -v smartctl >/dev/null 2>&1 || return 0
+  if command -v timeout >/dev/null 2>&1; then
+    out=$(timeout 30 smartctl -A "$1" 2>/dev/null)
+  else
+    out=$(smartctl -A "$1" 2>/dev/null)
+  fi
+  SC_REALLOC=$(printf '%s\n' "$out" | awk '$1 == "5" && NF >= 10 { print $10; exit }' | sed 's/[^0-9].*//')
+  SC_PENDING=$(printf '%s\n' "$out" | awk '$1 == "197" && NF >= 10 { print $10; exit }' | sed 's/[^0-9].*//')
+  return 0
+}
+
+# What a wipe that WORKED and was read back may claim (plan step 38). Pure: no
+# I/O, so the rules below are tested on their own.
+#   $1 kind      purge      - ENHANCED ATA secure erase, NVMe sanitize / format
+#                ata-normal - a NORMAL ATA secure erase (user area only)
+#                overwrite  - shred / zero pass
+#   $2 rotational (1 = hard disk; anything else is treated as flash)
+#   $3..$6 reallocated before, pending before, reallocated after, pending after
+#          (empty = not read)
+#   $7 smart     1 (default) = the counts apply to this drive; 0 = they do not
+#                exist on it (NVMe), so there is nothing to have failed to read
+# Prints the NIST SP 800-88 level on the first line, then one limitation per
+# line:
+#   purge                         -> purge; the enhanced erase and a sanitize
+#                                    reach reallocated and spare areas too
+#   ata-normal or overwrite with any reallocated/pending sectors
+#                                 -> clear, with a limitation naming the counts
+#                                    (owner decision D38, reversible: labelled
+#                                    Clear rather than failed or destroyed)
+#   counts that could not be read -> a limitation saying so
+#   overwrite on flash            -> clear, "flash: user-addressable blocks only"
+#   anything else                 -> none
+# NOTHING here ever turns an overwrite or a normal secure erase into purge.
+wipe_assess() {
+  local kind="$1" rota="$2" rb="$3" pb="$4" ra="$5" pa="$6" smart="${7:-1}" r="" p="" v
+  case "$kind" in
+    purge) echo purge; return 0 ;;
+    ata-normal|overwrite) echo clear ;;
+    *) echo none; return 0 ;;
+  esac
+  if [ "$kind" = overwrite ] && [ "$rota" != 1 ]; then
+    echo "flash: user-addressable blocks only - over-provisioned and retired flash blocks are not reached by an overwrite"
+  fi
+  [ "$smart" = 1 ] || return 0
+  # The larger of before and after, per count: a pending sector the overwrite
+  # made the drive reallocate moves from one count to the other.
+  for v in $rb $ra; do case "$v" in *[!0-9]*) ;; *) { [ -z "$r" ] || [ "$v" -gt "$r" ]; } && r="$v" ;; esac; done
+  for v in $pb $pa; do case "$v" in *[!0-9]*) ;; *) { [ -z "$p" ] || [ "$v" -gt "$p" ]; } && p="$v" ;; esac; done
+  if [ -z "$r" ] && [ -z "$p" ]; then
+    echo "SMART reallocated and pending sector counts could not be read, so sectors the drive has retired cannot be ruled out"
+  elif [ -z "$r" ]; then
+    echo "SMART reallocated sector count could not be read, so sectors the drive has retired cannot be ruled out"
+  elif [ -z "$p" ]; then
+    echo "SMART pending sector count could not be read"
+  fi
+  if [ "${r:-0}" -gt 0 ] || [ "${p:-0}" -gt 0 ]; then
+    echo "the drive reports ${r:-unknown} reallocated and ${p:-unknown} pending sectors (SMART 5/197); a retired sector cannot be addressed by $( [ "$kind" = overwrite ] && echo "an overwrite" || echo "a normal ATA secure erase" ), so its old contents may remain"
+  fi
+  return 0
 }
 
 # The text-mode wipe is RETIRED (owner decision D9, 19 Sep 2026; reversible).
@@ -693,12 +1535,18 @@ wipe_internal_drives() {
 # Called as:
 #   hardware-audit.sh --wipe-drive /dev/sdX [auto|crypto|secure|overwrite|zero] [expected-serial]
 # Wipes ONE explicitly named internal drive with the erase helpers above
-# (firmware_erase / shred + verify_zero). This is the only wipe path.
-# Emits human-readable progress on stdout and EXACTLY ONE final line on every
-# exit path (see wipe_result and contract C1):
+# (firmware_erase / shred, each read back by verify_erased). This is the only
+# wipe path. Emits human-readable progress on stdout and EXACTLY ONE final line
+# on every exit path (see wipe_result and contract C1):
 #   WIPE_RESULT {"status":"wiped|failed|refused","device":"/dev/sdX","method":"…",
 #                "reason":"…","toolVersion":…,"startedAt":…,"finishedAt":…,
-#                "drive":{"serialNumber":…},"methodRequested":…}
+#                "drive":{"serialNumber":…},"methodRequested":…,
+#                "sanitisationLevel":"purge|clear|none","verification":"clean|found|unverified",
+#                "hiddenAreas":…,"limitations":[…],"methodAttempted":"a,b",
+#                "fallbackReason":…,"smart":{"reallocatedBefore":…,…}}
+# (the fields after "verification" only on wiped/failed, and only when known)
+# "wiped" ALWAYS means the drive was read back afterwards and none of its old
+# data was recognisable. There is no status for "the drive said it worked".
 # "refused" means NOTHING was written: not a block device, removable, USB, the
 # boot disk, a pseudo-device, or not the drive the operator picked (serial
 # mismatch). Removable, USB and boot disk are three separate checks, so the
@@ -869,6 +1717,14 @@ als_drive_identity() {
   return 0
 }
 
+# Add one line to WR_LIMITS, the wipe's limitations (WIPE_RESULT "limitations").
+# One line of code on purpose: the tests extract functions up to the first line
+# that starts with "}", which a multi-line string would produce.
+wr_limit() {
+  [ -n "$1" ] && WR_LIMITS="${WR_LIMITS}${WR_LIMITS:+$'\n'}$1"
+  return 0
+}
+
 # UTC, ISO-8601, second precision: 2026-09-19T10:01:07Z
 als_utc_now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
@@ -888,22 +1744,60 @@ wipe_result() {
   case "$DRV_ROTA" in 1) o_raw rotational true ;; 0) o_raw rotational false ;; esac
   o_s wwn "$DRV_WWN"
   drv=$(o_end)
+  # SMART bad-sector counts before and after (step 38); a count that could not
+  # be read is left out, and the object with it when none could.
+  local sm
+  o_begin
+  o_n reallocatedBefore "${WR_SM_RB:-}"
+  o_n pendingBefore "${WR_SM_PB:-}"
+  o_n reallocatedAfter "${WR_SM_RA:-}"
+  o_n pendingAfter "${WR_SM_PA:-}"
+  sm=$(o_end)
+  # What was found in the drive's hidden areas (step 34) is part of the method:
+  # "…; hidden areas: none". Only when the check ran (not on a refusal).
+  local meth="$2"
+  case "$1" in wiped|failed) [ -n "${WR_HIDDEN_TXT:-}" ] && meth="$meth; hidden areas: $WR_HIDDEN_TXT" ;; esac
   o_begin
   o_s0 status "$1"
   o_s0 device "$WR_DEV"
-  o_s0 method "$2"
+  o_s0 method "$meth"
   o_s0 reason "$3"
   o_s toolVersion "$ALS_TOOL_VERSION"
   o_s startedAt "$WR_STARTED"
   o_s finishedAt "$(als_utc_now)"
   [ "$drv" = "{}" ] || o_raw drive "$drv"
   o_s methodRequested "$WR_WANT"
+  # Level by NIST SP 800-88, and only for what was actually achieved AND read
+  # back: purge / clear on a verified wipe, none on a failure, left out on a
+  # refusal (nothing was written). See gui_wipe_one.
+  case "$1" in
+    wiped)  o_s sanitisationLevel "$WR_LEVEL" ;;
+    failed) o_s sanitisationLevel none ;;
+  esac
+  o_s verification "$WR_VERIFY"
+  # hiddenAreas: none | hpa-removed | unknown | dco-present | hpa-present (the
+  # last two only on a failure). limitations: always an array once something
+  # was attempted - [] when there is nothing to say.
+  case "$1" in
+    wiped|failed)
+      o_s hiddenAreas "${WR_HIDDEN:-}"
+      o_raw limitations "$(als_json_array "${WR_LIMITS:-}")"
+      # methodAttempted: every method issued, in order ("nvme-sanitize-crypto,
+      # overwrite"); fallbackReason: why the first choice was not the result
+      # (frozen | unsupported | tool_missing | failed | verify_failed | ...).
+      o_s methodAttempted "${WR_TRIED:-}"
+      o_s fallbackReason "${WR_FALLBACK:-}"
+      [ "$sm" = "{}" ] || o_raw smart "$sm"
+      ;;
+  esac
   echo "WIPE_RESULT $(o_end)"
 }
 
 gui_wipe_one() {
   local dev="$1" want="${2:-auto}" expect="${3:-}" d rota m verified fw
-  WR_DEV="$dev"; WR_WANT="$want"; WR_STARTED=$(als_utc_now)
+  WR_DEV="$dev"; WR_WANT="$want"; WR_STARTED=$(als_utc_now); WR_VERIFY=""; WR_LEVEL=""
+  WR_HIDDEN=""; WR_HIDDEN_TXT=""; WR_LIMITS=""; WR_HPA_REMOVED=0
+  WR_TRIED=""; WR_FALLBACK=""; WR_SM_RB=""; WR_SM_PB=""; WR_SM_RA=""; WR_SM_PA=""
   DRV_SERIAL=""; DRV_MODEL=""; DRV_SIZE=""; DRV_TRAN=""; DRV_ROTA=""; DRV_WWN=""
   if [ -z "$dev" ] || [ ! -b "$dev" ]; then
     echo "Refusing: ${dev:-(no device given)} is not a block device."
@@ -960,10 +1854,93 @@ gui_wipe_one() {
     wipe_result refused "identity mismatch refused" "drive serial '${DRV_SERIAL:-none}' does not match the selected drive '$expect'"
     return 1
   fi
+  # From here on this drive is being wiped: register it, so a suspend-to-
+  # unfreeze in ANOTHER wipe on this machine knows to wait (step 42). Removed
+  # when the engine exits - the --wipe-drive entrypoint exits right after this
+  # function - and an entry left by a killed engine is recognised as stale by
+  # its dead PID. A failure to register only disables suspending.
+  als_wipe_lock
+  trap 'als_wipe_unlock' EXIT
   export AUDIT_WIPE_METHOD="$want"
   rota=$(cat "/sys/block/$d/queue/rotational" 2>/dev/null)
   m=""; verified=0; fw=0
   local reason="" sz gb p
+
+  # Hidden areas (plan step 34), checked BEFORE anything is written: an HPA or
+  # DCO hides sectors from the kernel, so neither the firmware erase on many
+  # drives nor an overwrite would reach them - and the drive used to be
+  # certified all the same. Owner decision D34 (reversible):
+  #   HPA only    -> removed TEMPORARILY and verified, or the wipe fails -
+  #                  and on an ACS-3 ACCESSIBLE MAX ADDRESS drive, where only a
+  #                  permanent change exists, it fails without touching it
+  #   DCO present -> the wipe fails, naming it (never --dco-restore)
+  #   unknown     -> the wipe goes ahead, with the limitation recorded - an
+  #                  unreadable answer is common behind RAID/RST controllers,
+  #                  and blocking would fail every such drive
+  # NVMe and eMMC have no HPA/DCO.
+  case "${d##*/}" in
+    nvme*|mmcblk*) ;;
+    *)
+      echo "Checking $dev for hidden areas (HPA / DCO) …"
+      ata_hidden_areas "$dev" >/dev/null
+      # Whenever the drive's native size is known and no removal is due,
+      # the kernel must see all of it: hdparm -N compares only the drive's
+      # own two numbers, and a drive whose HPA an earlier attempt in this
+      # boot removed answers current = native while the kernel still holds
+      # the old, smaller size - the overwrite and the read-back would stop
+      # there and the drive be certified "hidden areas: none".
+      case "$HA_STATE" in
+        none|unknown)
+          if [ -n "$HA_NATIVE" ] && ! ata_kernel_whole "$dev" "$d" "$HA_NATIVE"; then
+            WR_HIDDEN="$HA_STATE"
+            WR_HIDDEN_TXT="the kernel sees less than the drive's $HA_NATIVE sectors"
+            echo "✗ The kernel does not see the whole of $dev: $HR_WHY. Nothing has been erased."
+            wipe_result failed "none" "the end of the drive is out of the wipe's reach: $HR_WHY (usually a hidden area removed earlier in this boot, whose new size the kernel has not taken up)"
+            return 1
+          fi
+          ;;
+      esac
+      case "$HA_STATE" in
+        none)
+          WR_HIDDEN=none; WR_HIDDEN_TXT="none" ;;
+        dco-present)
+          WR_HIDDEN=dco-present
+          WR_HIDDEN_TXT="DCO present (drive reports ${HA_REAL} sectors, native max ${HA_NATIVE})"
+          echo "✗ $dev has a Device Configuration Overlay hiding sectors ($HA_REAL real, $HA_NATIVE visible)."
+          echo "  It is not removed here (a DCO restore is permanent). Nothing has been written."
+          wipe_result failed "none" "a hidden area (DCO) hides $(( HA_REAL - HA_NATIVE )) sectors of this drive; the wipe would not reach them"
+          return 1
+          ;;
+        hpa-present)
+          echo "  Host Protected Area: $HA_CUR of $HA_NATIVE sectors visible - removing it temporarily …"
+          if ata_hpa_remove "$dev" "$d"; then
+            WR_HIDDEN=hpa-removed; WR_HPA_REMOVED=1
+            WR_HIDDEN_TXT="HPA removed temporarily ($HA_CUR -> $HA_NATIVE sectors)"
+            echo "  HPA removed until the next power cycle: the whole drive ($HA_NATIVE sectors) is visible."
+            if [ "$HA_DCO" != none ]; then
+              wr_limit "hidden areas could not be checked for a DCO (device configuration overlay)"
+            fi
+          else
+            WR_HIDDEN=hpa-present
+            if [ "$HR_AMA" = 1 ]; then
+              WR_HIDDEN_TXT="accessible max address lowered ($HA_CUR of $HA_NATIVE sectors visible), not changed: only a permanent change is possible"
+            else
+              WR_HIDDEN_TXT="HPA present ($HA_CUR of $HA_NATIVE sectors visible), could not be removed"
+            fi
+            echo "✗ The hidden area (HPA) could not be removed: $HR_WHY. Nothing has been erased."
+            wipe_result failed "none" "a hidden area (HPA) of $(( HA_NATIVE - HA_CUR )) sectors could not be removed: $HR_WHY"
+            return 1
+          fi
+          ;;
+        *)
+          WR_HIDDEN=unknown; WR_HIDDEN_TXT="could not be checked"
+          wr_limit "hidden areas could not be checked${HA_WHY:+ ($HA_WHY)}"
+          echo "  Hidden areas could not be checked (${HA_WHY:-no answer}) - recorded as a limitation."
+          ;;
+      esac
+      ;;
+  esac
+
   sz=$(blockdev --getsize64 "$dev" 2>/dev/null)
   case "$sz" in ''|*[!0-9]*) gb="" ;; *) gb=$(( sz / 1000000000 )) ;; esac
   echo "Erasing $dev  (method: $want) …"
@@ -972,19 +1949,61 @@ gui_wipe_one() {
     echo "  spinning disk this size can take several hours — progress is shown below."
   fi
 
+  # Where the partitions were, read BEFORE anything is erased: afterwards the
+  # table itself may be gone while the volumes it pointed at are not, and
+  # these offsets are where verify_erased looks for them.
+  local parts vr
+  parts=$(als_part_starts "$dev" "$d")
+
+  # The bad-sector counts BEFORE the erase (plan step 38). Not on NVMe/eMMC,
+  # which have no attributes 5/197; never able to fail the wipe.
+  local smart_ok=1 kind=""
+  case "${d##*/}" in nvme*|mmcblk*) smart_ok=0 ;; esac
+  if [ "$smart_ok" = 1 ]; then
+    smart_counts "$dev"; WR_SM_RB="$SC_REALLOC"; WR_SM_PB="$SC_PENDING"
+  fi
+
+  FW_LEVEL=""; FW_WHY=""; FW_TRIED=""
   if firmware_erase "$dev" "$d"; then m="$M"; fw=1; fi
+  WR_TRIED="$FW_TRIED"; WR_FALLBACK="$FW_WHY"
 
   # No TRIM here, on purpose. This used to run blkdiscard when the firmware
-  # erase failed on an SSD and record it as the wipe - then verify_zero passed
-  # it, because a TRIMmed drive reads back zeros by design whether or not the
-  # NAND was erased. It produced a certificate saying "unrecoverable" about data
-  # that could still be there, for every SSD whose firmware erase failed -
-  # including when the operator had explicitly chosen "overwrite". An SSD now
-  # falls through to a real overwrite, labelled for what it reaches.
+  # erase failed on an SSD and record it as the wipe - then the zeros check
+  # passed it, because a TRIMmed drive reads back zeros by design whether or
+  # not the NAND was erased. It produced a certificate saying "unrecoverable"
+  # about data that could still be there, for every SSD whose firmware erase
+  # failed - including when the operator had explicitly chosen "overwrite". An
+  # SSD now falls through to a real overwrite, labelled for what it reaches.
 
-  if [ -z "$m" ]; then
+  # A firmware erase is believed only once the drive has been read back. There
+  # used to be a third answer here - "confirmed by the controller", taken when the
+  # read-back did not show zeros - and it certified a controller that said
+  # "done" and changed nothing exactly like a real erase. Now:
+  #   clean            -> wiped (Purge, or Clear for a normal ATA erase)
+  #   old data found   -> announced, and down the ladder to a real overwrite
+  #   could not verify -> failed with the reason (owner decision D31)
+  if [ "$fw" = "1" ]; then
+    echo "Verifying: reading the drive back …"
+    verify_erased "$dev" firmware "$parts"; vr=$?
+    case "$vr" in
+      0) verified=1; WR_VERIFY=clean; WR_LEVEL="${FW_LEVEL:-clear}"
+         if [ "$WR_LEVEL" = purge ]; then kind=purge; else kind=ata-normal; fi
+         m="$m — verified (reads as $VE_LABEL)" ;;
+      1) WR_VERIFY=found; WR_FALLBACK=verify_failed
+         echo "  OLD DATA STILL PRESENT after $m: $VE_WHY."
+         echo "  The drive reported success but did not erase. Falling back to a full"
+         echo "  overwrite — this is the slow path and can take hours …"
+         m="" ;;
+      *) WR_VERIFY=unverified
+         reason="could not verify the erase: $VE_WHY"
+         m="$m — NOT verified" ;;
+    esac
+  fi
+
+  if [ -z "$m" ] && [ -z "$reason" ]; then
     if [ "$want" = "zero" ]; then
       echo "  Overwriting — single zero pass (NIST 800-88 Clear) …"
+      WR_TRIED="${WR_TRIED:+$WR_TRIED,}overwrite-zero"
       if run_overwrite "$dev" 1; then
         m="Overwrite — single zero pass ($(clear_label "$rota"))"
       else
@@ -993,6 +2012,7 @@ gui_wipe_one() {
       fi
     else
       echo "  Overwriting (this is the slow path) …"
+      WR_TRIED="${WR_TRIED:+$WR_TRIED,}overwrite"
       if run_overwrite "$dev"; then
         m="Overwrite — shred 1 pass + zero ($(clear_label "$rota"))"
       else
@@ -1000,30 +2020,52 @@ gui_wipe_one() {
         echo "  Overwrite failed: $reason"
       fi
     fi
-  fi
-
-  if [ -n "$m" ]; then
-    echo "Verifying …"
-    if verify_zero "$dev"; then
-      verified=1; m="$m — verified (reads as zeros)"
-    elif [ "$fw" = "1" ]; then
-      verified=1; m="$m — controller-confirmed"
-    else
-      # The firmware claimed success but the disk does not read back as zeros.
-      # Fall back to a full overwrite — announced, because it takes hours.
-      echo "  Verify failed — falling back to a full overwrite pass …"
-      if [ "$want" = "zero" ]; then p=1; else p=2; fi
-      if run_overwrite "$dev" "$p" && verify_zero "$dev"; then
-        m="Overwrite — $([ "$p" = "1" ] && echo "single zero pass" || echo "shred 1 pass + zero") ($(clear_label "$rota")) — verified (reads as zeros)"
-        verified=1
-      else
-        reason="${OVR_ERR:-verification failed: device does not read back as zeros}"
-      fi
+    # The last pass of every overwrite writes zeros, so zeros are the only
+    # acceptable read-back here - and the partition signatures must be gone.
+    if [ -n "$m" ] && [ -z "$reason" ]; then
+      echo "Verifying: reading the drive back …"
+      verify_erased "$dev" overwrite "$parts"; vr=$?
+      case "$vr" in
+        0) verified=1; WR_VERIFY=clean; WR_LEVEL=clear; kind=overwrite
+           m="$m — verified (reads as zeros)" ;;
+        1) WR_VERIFY=found; reason="verification failed: $VE_WHY" ;;
+        *) WR_VERIFY=unverified; reason="could not verify the overwrite: $VE_WHY" ;;
+      esac
     fi
   fi
 
-  if [ -n "$m" ] && [ "$verified" = "1" ]; then
+  # A temporarily removed HPA comes back at the drive's next hardware reset (a
+  # bus reset after an error, a suspend). If that happened during the erase,
+  # the end of the drive may have been out of reach for part of it - and there
+  # is no telling which part. So the drive must STILL show every sector now.
+  if [ "$WR_HPA_REMOVED" = 1 ] && [ -n "$m" ] && [ "$verified" = "1" ] && [ -z "$reason" ]; then
+    local cur_now
+    cur_now=$(hdparm -N "$dev" 2>/dev/null | tr '\t' ' ' | sed -n 's/.*max sectors *= *\([0-9][0-9]*\)\/.*/\1/p' | head -n1)
+    if [ "$cur_now" != "$HA_NATIVE" ]; then
+      verified=0
+      reason="the hidden area (HPA) came back during the wipe (the drive now shows ${cur_now:-an unreadable number of} of $HA_NATIVE sectors) - the end of the drive may not have been erased"
+    fi
+  fi
+
+  # The counts AFTER the erase: an overwrite can make a pending sector get
+  # reallocated. Read on success and failure alike - a failed wipe's record
+  # is where a dying drive shows.
+  if [ "$smart_ok" = 1 ]; then
+    smart_counts "$dev"; WR_SM_RA="$SC_REALLOC"; WR_SM_PA="$SC_PENDING"
+  fi
+
+  if [ -n "$m" ] && [ "$verified" = "1" ] && [ -z "$reason" ]; then
+    # The level the record may claim, and what it cannot reach (step 38).
+    local assess l first=1
+    assess=$(wipe_assess "$kind" "$rota" "$WR_SM_RB" "$WR_SM_PB" "$WR_SM_RA" "$WR_SM_PA" "$smart_ok")
+    while IFS= read -r l; do
+      if [ "$first" = 1 ]; then first=0; WR_LEVEL="$l"; else wr_limit "$l"; fi
+    done <<< "$assess"
     echo "✓ $m"
+    echo "  Read back ${VE_MIB} MiB across the drive: no old data found."
+    echo "  Sanitisation level: $WR_LEVEL (NIST SP 800-88)."
+    [ -n "$WR_LIMITS" ] && printf '%s\n' "$WR_LIMITS" | sed 's/^/  Limitation: /'
+    [ -n "$WR_FALLBACK" ] && echo "  Requested '$want'; the stronger method was not used: $WR_FALLBACK."
     wipe_result wiped "$m" ""
     return 0
   fi

@@ -16,7 +16,7 @@
 #     target, and gui_wipe_one's `[ ! -b ]` is relaxed to `[ ! -e ]` only in
 #     the extracted copy;
 #   - every tool that can write to a disk is a TRIPWIRE that only logs, and the
-#     erase helpers (firmware_erase, run_overwrite, verify_zero) are stubs that
+#     erase helpers (firmware_erase, run_overwrite, verify_erased, als_part_starts) are stubs that
 #     only log; PATH holds nothing but wrappers for read-only tools.
 
 set -u
@@ -89,6 +89,12 @@ else:
     if d.get("rotational") is not False: errs.append("drive.rotational %r" % d.get("rotational"))
     if d.get("wwn") != "eui.0025388b01234567": errs.append("drive.wwn %r" % d.get("wwn"))
 if want["status"] == "failed" and not r.get("reason"): errs.append("a failure with no reason")
+# Plan step 31: the level and the read-back verdict, when the case names them.
+# A refusal wrote nothing, so it carries no level at all.
+if "level" in want and r.get("sanitisationLevel") != (None if want["level"] == "-" else want["level"]):
+    errs.append("sanitisationLevel %r" % r.get("sanitisationLevel"))
+if "verify" in want and r.get("verification") != (None if want["verify"] == "-" else want["verify"]):
+    errs.append("verification %r" % r.get("verification"))
 print("; ".join(errs) if errs else "OK")
 sys.exit(1 if errs else 0)
 PYEOF
@@ -105,15 +111,26 @@ $(extract "$SRC" wipe_result)
 $(extract "$SRC" clear_label)
 $(extract "$SRC" als_disk_is_usb)
 $(extract "$SRC" als_boot_disk)
+$(extract "$SRC" als_json_array)
+$(extract "$SRC" wr_limit)
+$(extract "$SRC" ata_hidden_areas)
+$(extract "$SRC" ata_hpa_remove)
+$(extract "$SRC" ata_kernel_whole)
+$(extract "$SRC" smart_counts)
+$(extract "$SRC" wipe_assess)
+$(extract "$SRC" als_wipe_lock)
+$(extract "$SRC" als_wipe_unlock)
 $(extract "$SRC" gui_wipe_one | sed 's/\[ ! -b "\$dev" \]/[ ! -e "$dev" ]/')"
 case "$FUNCS" in *'[ ! -e "$dev" ]'*) ;; *) echo "could not relax the -b check - refusing to run"; exit 1 ;; esac
 
 # The model carries a quote on purpose - lsblk -P escapes it as \x22, and
 # that must survive into valid JSON. STUB_ID=none: the drive reports nothing.
 STUBS='
-firmware_erase() { echo "firmware_erase $*" >> "$LOG"; if [ "${STUB_FW:-fail}" = "ok" ]; then M="NVMe cryptographic erase (sanitize)"; return 0; fi; return 1; }
+firmware_erase() { echo "firmware_erase $*" >> "$LOG"; if [ "${STUB_FW:-fail}" = "ok" ]; then M="NVMe cryptographic erase (sanitize)"; FW_LEVEL="${STUB_FW_LEVEL:-}"; return 0; fi; return 1; }
 run_overwrite()  { echo "run_overwrite $*" >> "$LOG"; OVR_ERR="${STUB_OVR_ERR:-}"; return "${STUB_OVR_RC:-0}"; }
-verify_zero()    { echo "verify_zero $*" >> "$LOG"; return "${STUB_VERIFY_RC:-0}"; }
+verify_erased()  { echo "verify_erased $*" >> "$LOG"; VE_LABEL="${STUB_VE_LABEL:-zeros}"; VE_WHY="NTFS boot sector at byte 1048576"; VE_MIB=10
+                   case "$2" in firmware) return "${STUB_VERIFY_FW_RC:-${STUB_VERIFY_RC:-0}}" ;; esac; return "${STUB_VERIFY_RC:-0}"; }
+als_part_starts() { echo "als_part_starts $*" >> "$LOG"; printf "1048576"; }
 blockdev()       { echo 512110190592; }
 cat() { case "$*" in */queue/rotational) echo 0 ;; */removable) echo "${STUB_RM:-0}" ;; *) command cat "$@" ;; esac; }
 lsblk() {
@@ -175,15 +192,30 @@ check "a loop pseudo-device: refused" refused auto "$SER";      nowrite "a loop 
 run "$DEV" auto "" STUB_FW=ok
 check "firmware erase + read-back: wiped" wiped auto "$SER"
 run "$DEV" overwrite "" STUB_FW=fail
-check "overwrite + read-back: wiped" wiped overwrite "$SER"
+check "overwrite + read-back: wiped" wiped overwrite "$SER" level=clear verify=clean
 run "$DEV" zero "" STUB_FW=fail
 check "single zero pass: wiped, methodRequested zero" wiped zero "$SER"
-run "$DEV" auto "" STUB_FW=ok STUB_VERIFY_RC=1
-check "firmware erase, not zeros: controller-confirmed wiped" wiped auto "$SER"
+# Plan step 31: there is no "controller-confirmed" any more. Old data found
+# after a firmware erase goes down the ladder to an overwrite; a read-back that
+# could not be done at all is a failure (owner decision D31).
+run "$DEV" auto "" STUB_FW=ok STUB_VERIFY_FW_RC=1
+check "firmware erase leaves old data: overwritten, verified, wiped (Clear)" wiped auto "$SER" level=clear verify=clean
+case "$CALLS" in *run_overwrite*) ok "firmware erase leaves old data: the overwrite ran" ;; *) bad "firmware erase leaves old data: the overwrite ran" "$CALLS" ;; esac
+case "$OUT" in *"OLD DATA STILL PRESENT"*"NTFS boot sector at byte 1048576"*) ok "firmware erase leaves old data: announced, naming what was found" ;; *) bad "firmware erase leaves old data: announced, naming what was found" "$OUT" ;; esac
+run "$DEV" auto "" STUB_FW=ok STUB_VERIFY_FW_RC=2
+check "firmware erase, read-back impossible: failed (D31)" failed auto "$SER" level=none verify=unverified
+case "$CALLS" in *run_overwrite*) bad "read-back impossible: no overwrite is started on a drive that cannot be read" "$CALLS" ;; *) ok "read-back impossible: no overwrite is started on a drive that cannot be read" ;; esac
+run "$DEV" auto "" STUB_FW=ok STUB_VE_LABEL=random
+check "firmware erase reads back random: wiped, verification clean" wiped auto "$SER" verify=clean
+case "$RESULT" in *"reads as random"*) ok "the method says what was read back (random)" ;; *) bad "the method says what was read back (random)" "$RESULT" ;; esac
+run "$DEV" auto "" STUB_FW=ok STUB_FW_LEVEL=purge
+check "verified firmware Purge: sanitisationLevel purge" wiped auto "$SER" level=purge verify=clean
+run "$DEV" auto "WRONG" STUB_FW=ok
+check "a refusal carries no sanitisationLevel and no verification" refused auto "$SER" level=- verify=-
 run "$DEV" auto "" STUB_FW=fail STUB_OVR_RC=1 'STUB_OVR_ERR=shred: /dev/x: error writing at offset 4096: Input/output "error"	tab'
 check "overwrite fails (quote and tab in the error): failed, still valid JSON" failed auto "$SER"
 run "$DEV" auto "" STUB_FW=fail STUB_VERIFY_RC=1
-check "overwrite does not read back clean: failed" failed auto "$SER"
+check "overwrite does not read back clean: failed" failed auto "$SER" level=none verify=found
 [ "$RC" -ne 0 ] && ok "a failed wipe exits non-zero" || bad "a failed wipe exits non-zero" "rc=$RC"
 run "$DEV" crypto "" STUB_FW=ok STUB_ID=none
 check "a drive that reports no identity: wiped, no drive object (D18)" wiped crypto -
