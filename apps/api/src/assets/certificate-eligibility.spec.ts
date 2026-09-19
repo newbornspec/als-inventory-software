@@ -91,7 +91,78 @@ const CASES: Array<
   ],
 ];
 
+// Rows that also carry the station's own wipedAt. createdAt is when the
+// record reached the server; the station's offline queue (kept on the stick
+// across reboots) can deliver a record hours or days after the wipe.
+const timed = (
+  status: 'wiped' | 'failed',
+  wipedAtHours: number | Date,
+  createdAtHours: number,
+  method = 'NVMe crypto erase',
+) => ({
+  dataWipeStatus: status,
+  dataWipeMethod: method,
+  wipedAt: wipedAtHours instanceof Date ? wipedAtHours : at(wipedAtHours),
+  createdAt: at(createdAtHours),
+});
+
+const TIMED_CASES: Array<
+  [string, ReturnType<typeof timed>[], api.CertificateBlock | null]
+> = [
+  [
+    'a WIPED record queued offline and delivered two days late',
+    [timed('failed', 0, 0), timed('wiped', 10 / 60, 48)],
+    'mixed',
+  ],
+  [
+    'a FAILED record queued offline and delivered two days late',
+    [timed('wiped', 0, 0), timed('failed', -0.1, 48)],
+    'mixed',
+  ],
+  [
+    'a failure stamped by a wrong station clock still counts by receipt time',
+    [
+      timed('failed', new Date('2000-01-01T00:00:00Z'), -0.1),
+      timed('wiped', 0, 0),
+    ],
+    'mixed',
+  ],
+  [
+    'a failure two days before the wipe by both clocks is superseded',
+    [timed('failed', -48, -48), timed('wiped', 0, 0)],
+    null,
+  ],
+  [
+    'a legacy failure (no wipedAt) near a new wipe',
+    [
+      { ...timed('failed', 0, -1), wipedAt: null },
+      timed('wiped', 0, 0),
+    ] as never,
+    'mixed',
+  ],
+  [
+    'an old TRIM delivered late is still treated as a possible latest wipe',
+    [
+      timed('wiped', -72, 1, 'Block discard / TRIM (SSD)'),
+      timed('wiped', 0, 0),
+    ],
+    'discard',
+  ],
+  [
+    'the station clock orders the wipes: a late-delivered older wipe does not hide a TRIM',
+    [timed('wiped', 0, 0, 'blkdiscard'), timed('wiped', -72, 1)],
+    'discard',
+  ],
+];
+
 describe('certificateBlock - API and web copies agree', () => {
+  for (const [name, rows, expected] of TIMED_CASES) {
+    it(name, () => {
+      expect(api.certificateBlock(rows)).toBe(expected);
+      expect(web.certificateBlock(rows)).toBe(expected);
+    });
+  }
+
   for (const [name, rows, expected] of CASES) {
     it(name, () => {
       expect(api.certificateBlock(rows)).toBe(expected);
@@ -234,6 +305,36 @@ describe('the certificate routes apply the mixed-result guard', () => {
       new BadRequestException(MIXED_REFUSAL),
     );
     expect(render).not.toHaveBeenCalled();
+  });
+
+  it('refuses when the WIPED record was queued offline and arrived two days late', async () => {
+    const failed = { ...audit('a1', DataWipeStatus.FAILED, 0), wipedAt: at(0) };
+    const wiped = {
+      ...audit('a1', DataWipeStatus.WIPED, 48),
+      wipedAt: at(10 / 60),
+    };
+    const { svc, render } = service([asset('a1')], [failed, wiped]);
+    await expect(svc.erasureCertificate('a1')).rejects.toThrow(
+      new BadRequestException(MIXED_REFUSAL),
+    );
+    expect(render).not.toHaveBeenCalled();
+  });
+
+  it('leaves a queued-late mixed device off the lot certificate', async () => {
+    const { svc, renderLot } = service([asset('a1'), asset('a2')], [
+      audit('a1', DataWipeStatus.WIPED, 0),
+      { ...audit('a2', DataWipeStatus.FAILED, 0), wipedAt: at(0) },
+      { ...audit('a2', DataWipeStatus.WIPED, 48), wipedAt: at(0.2) },
+    ] as never);
+    await svc.lotErasureCertificate('b1');
+    const [, rows, , mixed] = renderLot.mock.calls[0] as [
+      unknown,
+      Array<{ serial: string }>,
+      number,
+      number,
+    ];
+    expect(rows.map((r) => r.serial)).toEqual(['SN-a1']);
+    expect(mixed).toBe(1);
   });
 
   it('[A wiped] alone still produces a PDF', async () => {

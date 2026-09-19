@@ -13,10 +13,11 @@ import {
   type WipeAttestation,
   type WipeSource,
 } from './manual-wipe';
-import { DISCARD_REFUSAL, discardedNotice, isNotAnErase } from './wipe-method';
+import { DISCARD_REFUSAL, discardedNotice } from './wipe-method';
 import {
   MIXED_REFUSAL,
-  failedNearWipe,
+  certificateBlock,
+  latestWipe,
   mixedNotice,
 } from './certificate-eligibility';
 import {
@@ -108,29 +109,28 @@ export class CertificatesService {
       list.push(o);
       byAsset.set(o.assetId, list);
     }
-    const latest = new Map<string, AssetAudit>();
-    for (const o of outcomes) {
-      if (o.dataWipeStatus === DataWipeStatus.WIPED && !latest.has(o.assetId))
-        latest.set(o.assetId, o);
-    }
-
+    // Per device: the wipe on record (the latest by the station's clock), or
+    // why none can be certified - one rule, certificateBlock in
+    // certificate-eligibility.ts, applied on both the station's and the
+    // server's clocks.
+    //
     // A device whose latest recorded wipe was a block discard (TRIM) is left
     // off: that was never an erase - see wipe-method.ts. The LATEST wipe
     // decides, not any wipe: an older proper wipe says nothing about the drive
-    // after it was used and discarded again. The certificate counts what it
-    // left off, so nobody reads a short list as the whole lot.
-    const discarded = [...latest.values()].filter((w) =>
-      isNotAnErase(w.dataWipeMethod),
-    );
-    for (const w of discarded) latest.delete(w.assetId);
-
-    // A device where a drive failed its wipe close to (or after) the wipe on
-    // record is left off the same way: another drive of it may still hold
-    // data. See certificate-eligibility.ts (owner decision D11, interim).
-    const mixed = [...latest.values()].filter((w) =>
-      failedNearWipe(w, byAsset.get(w.assetId) ?? []),
-    );
-    for (const w of mixed) latest.delete(w.assetId);
+    // after it was used and discarded again. A device where a drive failed its
+    // wipe close to (or after) the wipe on record is left off the same way:
+    // another drive of it may still hold data (owner decision D11, interim).
+    // The certificate counts what it left off, so nobody reads a short list as
+    // the whole lot.
+    const latest = new Map<string, AssetAudit>();
+    const discarded: string[] = [];
+    const mixed: string[] = [];
+    for (const [id, list] of byAsset) {
+      const block = certificateBlock(list);
+      if (block === 'discard') discarded.push(id);
+      else if (block === 'mixed') mixed.push(id);
+      else if (block === null) latest.set(id, latestWipe(list) as AssetAudit);
+    }
 
     const rows = assets
       .filter((a) => latest.has(a.id))
@@ -200,27 +200,28 @@ export class CertificatesService {
       throw new NotFoundException(`Asset ${assetId} not found`);
     }
 
-    const wipe = await this.audits.findOne({
-      where: { assetId, dataWipeStatus: DataWipeStatus.WIPED },
+    // Every WIPED and FAILED row: the wipe on record is the latest by the
+    // station's clock, and the mixed-result guard needs the failures - any
+    // FAILED row for the device newer than the wipe, or within 24 hours
+    // before it, on either clock, and there is no certificate. See
+    // certificate-eligibility.ts (owner decision D11, interim).
+    const outcomes = await this.audits.find({
+      where: {
+        assetId,
+        dataWipeStatus: In([DataWipeStatus.WIPED, DataWipeStatus.FAILED]),
+      },
       order: { createdAt: 'DESC' },
       relations: ['auditedBy'],
     });
-    if (!wipe) {
+    const block = certificateBlock(outcomes);
+    if (block === 'none') {
       throw new BadRequestException(
         'No completed data erasure on record for this device — record an audit with data-wipe status "Wiped" first.',
       );
     }
-    if (isNotAnErase(wipe.dataWipeMethod))
-      throw new BadRequestException(DISCARD_REFUSAL);
-    // The mixed-result guard: any FAILED row for the device newer than this
-    // wipe, or within 24 hours before it, and there is no certificate. See
-    // certificate-eligibility.ts (owner decision D11, interim).
-    const failures = await this.audits.find({
-      where: { assetId, dataWipeStatus: DataWipeStatus.FAILED },
-      order: { createdAt: 'DESC' },
-    });
-    if (failedNearWipe(wipe, failures))
-      throw new BadRequestException(MIXED_REFUSAL);
+    if (block === 'discard') throw new BadRequestException(DISCARD_REFUSAL);
+    if (block === 'mixed') throw new BadRequestException(MIXED_REFUSAL);
+    const wipe = latestWipe(outcomes) as AssetAudit;
 
     const buffer = await this.render(asset, wipe);
     return { buffer, filename: `erasure-certificate-${asset.tag}.pdf` };

@@ -21,6 +21,9 @@ export interface AssetAuditRecord {
   // tell an Amazon-workspace device from one hand-created outside Goods In.
   auditKind?: string | null;
   notes: string | null;
+  // When the station says the drive was wiped (NULL on legacy rows). The
+  // certificate rule reads it: a record queued offline reaches the server late.
+  wipedAt?: string | null;
   createdAt: string;
 }
 

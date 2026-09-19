@@ -17,9 +17,13 @@ const REAL_ERASE = /overwrite|erase|sanitiz|sanitis|shred|zero pass|destr/i;
 
 export const MIXED_RESULT_WINDOW_MS = 24 * 60 * 60 * 1000;
 
+// Both clocks, as in the API copy: the station's (wipedAt, else createdAt) and
+// the server's receipt time (createdAt). Blocked if EITHER says so - a record
+// queued offline on the stick can reach the server days after the wipe.
 export interface WipeRowLike {
   dataWipeStatus?: string | null;
   dataWipeMethod?: string | null;
+  wipedAt?: Date | string | null;
   createdAt: Date | string;
 }
 
@@ -28,23 +32,38 @@ export function isNotAnErase(method: string | null | undefined): boolean {
   return method.split(';').some((segment) => DISCARD.test(segment) && !REAL_ERASE.test(segment));
 }
 
-const time = (row: WipeRowLike) => new Date(row.createdAt).getTime();
+type Clock = (row: WipeRowLike) => number;
+const received: Clock = (row) => new Date(row.createdAt).getTime();
+const stationOrReceived: Clock = (row) => new Date(row.wipedAt ?? row.createdAt).getTime();
+const CLOCKS: Clock[] = [stationOrReceived, received];
+
+function latestOn(clock: Clock, rows: WipeRowLike[]): WipeRowLike | null {
+  let latest: WipeRowLike | null = null;
+  for (const r of rows) {
+    if (r.dataWipeStatus !== 'wiped') continue;
+    if (!latest || clock(r) > clock(latest)) latest = r;
+  }
+  return latest;
+}
+
+export function latestWipe(rows: WipeRowLike[]): WipeRowLike | null {
+  return latestOn(stationOrReceived, rows);
+}
 
 export function failedNearWipe(wiped: WipeRowLike, rows: WipeRowLike[]): boolean {
-  const floor = time(wiped) - MIXED_RESULT_WINDOW_MS;
-  return rows.some((r) => r.dataWipeStatus === 'failed' && time(r) >= floor);
+  return CLOCKS.some((clock) => {
+    const floor = clock(wiped) - MIXED_RESULT_WINDOW_MS;
+    return rows.some((r) => r.dataWipeStatus === 'failed' && clock(r) >= floor);
+  });
 }
 
 export type CertificateBlock = 'none' | 'discard' | 'mixed';
 
 export function certificateBlock(rows: WipeRowLike[]): CertificateBlock | null {
-  let latest: WipeRowLike | null = null;
-  for (const r of rows) {
-    if (r.dataWipeStatus !== 'wiped') continue;
-    if (!latest || time(r) > time(latest)) latest = r;
-  }
+  const latest = latestWipe(rows);
   if (!latest) return 'none';
-  if (isNotAnErase(latest.dataWipeMethod)) return 'discard';
+  const byReceipt = latestOn(received, rows)!;
+  if (isNotAnErase(latest.dataWipeMethod) || isNotAnErase(byReceipt.dataWipeMethod)) return 'discard';
   if (failedNearWipe(latest, rows)) return 'mixed';
   return null;
 }

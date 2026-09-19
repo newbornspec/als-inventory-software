@@ -85,8 +85,7 @@ describe('the rendered certificate', () => {
     const svc = new CertificatesService(
       { createQueryBuilder: () => qb } as never,
       {
-        findOne: () => Promise.resolve(wipe),
-        find: () => Promise.resolve([]),
+        find: () => Promise.resolve([wipe]),
       } as never,
       {} as never,
     );

@@ -27,37 +27,74 @@ import { isNotAnErase } from './wipe-method';
 // certificate until wiped once more. That is the safe direction to be wrong in.
 export const MIXED_RESULT_WINDOW_MS = 24 * 60 * 60 * 1000;
 
+// TWO CLOCKS. createdAt is when the record reached the server. The station
+// keeps an offline queue on the stick that survives reboots, so a record can
+// arrive hours or days after the wipe - a two-drive laptop whose FAILED record
+// uploaded at once and whose WIPED record sat in the queue for two days would
+// look like "a failure superseded by a later wipe". wipedAt is the station's
+// own time for the wipe (NULL on legacy rows and on a time the ingest could
+// not accept), and it travels with the queued copy. But a station clock can be
+// wrong (dead RTC battery, never synced). So every rule is applied on BOTH
+// clocks - the station's (wipedAt, falling back to createdAt) and the
+// server's (createdAt) - and a device is blocked if EITHER clock says so.
+// Being wrong in that direction costs a re-wipe; the other costs a false
+// certificate.
 export interface WipeRowLike {
   dataWipeStatus?: string | null;
   dataWipeMethod?: string | null;
+  wipedAt?: Date | string | null;
   createdAt: Date | string;
 }
 
-const time = (row: WipeRowLike) => new Date(row.createdAt).getTime();
+type Clock = (row: WipeRowLike) => number;
+const received: Clock = (row) => new Date(row.createdAt).getTime();
+const stationOrReceived: Clock = (row) =>
+  new Date(row.wipedAt ?? row.createdAt).getTime();
+const CLOCKS: Clock[] = [stationOrReceived, received];
 
-// Any FAILED row newer than `wiped`, or within the window before it.
+function latestOn(clock: Clock, rows: WipeRowLike[]): WipeRowLike | null {
+  let latest: WipeRowLike | null = null;
+  for (const r of rows) {
+    if (r.dataWipeStatus !== 'wiped') continue;
+    if (!latest || clock(r) > clock(latest)) latest = r;
+  }
+  return latest;
+}
+
+// The WIPED row a certificate is issued from: the latest by the station's
+// clock (receipt time for legacy rows).
+export function latestWipe(rows: WipeRowLike[]): WipeRowLike | null {
+  return latestOn(stationOrReceived, rows);
+}
+
+// Any FAILED row newer than `wiped`, or within the window before it, on
+// either clock.
 export function failedNearWipe(
   wiped: WipeRowLike,
   rows: WipeRowLike[],
 ): boolean {
-  const floor = time(wiped) - MIXED_RESULT_WINDOW_MS;
-  return rows.some((r) => r.dataWipeStatus === 'failed' && time(r) >= floor);
+  return CLOCKS.some((clock) => {
+    const floor = clock(wiped) - MIXED_RESULT_WINDOW_MS;
+    return rows.some((r) => r.dataWipeStatus === 'failed' && clock(r) >= floor);
+  });
 }
 
 // Why no certificate can be issued from these rows, or null when one can.
 //   'none'    - no wipe recorded as wiped at all;
-//   'discard' - the latest wipe was a block discard (TRIM), not an erase;
+//   'discard' - the latest wipe (on either clock) was a block discard (TRIM),
+//               not an erase;
 //   'mixed'   - a drive failed its wipe close to (or after) the latest wipe.
 export type CertificateBlock = 'none' | 'discard' | 'mixed';
 
 export function certificateBlock(rows: WipeRowLike[]): CertificateBlock | null {
-  let latest: WipeRowLike | null = null;
-  for (const r of rows) {
-    if (r.dataWipeStatus !== 'wiped') continue;
-    if (!latest || time(r) > time(latest)) latest = r;
-  }
+  const latest = latestWipe(rows);
   if (!latest) return 'none';
-  if (isNotAnErase(latest.dataWipeMethod)) return 'discard';
+  const byReceipt = latestOn(received, rows)!;
+  if (
+    isNotAnErase(latest.dataWipeMethod) ||
+    isNotAnErase(byReceipt.dataWipeMethod)
+  )
+    return 'discard';
   if (failedNearWipe(latest, rows)) return 'mixed';
   return null;
 }
