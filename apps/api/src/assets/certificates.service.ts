@@ -82,6 +82,17 @@ export interface CertificateEligibility {
   }>;
 }
 
+// Plan step 29 / D29 ("unsigned, marked"; cross-check, wave 2). With
+// CERT_SIGNING_KEY set, every device certificate is issued signed and prints
+// a "Digitally signed" line; the lot summary is never signed. Without a mark
+// its holder could not tell it from a signed document, so it says so - only
+// while signing is on. With signing off nothing is signed and no document
+// says anything about signatures, exactly as before step 29. (A PDF already
+// handed out cannot be marked after the fact: an older unsigned device
+// certificate is told apart by having no "Digitally signed" line.)
+export const LOT_NOT_SIGNED_NOTICE =
+  'This lot summary is not itself digitally signed. Each device listed has its own erasure certificate, which is signed and can be checked independently.';
+
 // Is this machine erased? The per-drive roll-up (devices/wipe-rollup.ts) over
 // every WIPED and FAILED row of the asset, with the internal drives of the
 // wipe-time hardware profile as the drives that must each have a wipe.
@@ -249,6 +260,9 @@ export class CertificatesService {
       ...(mixed.length ? [mixedNotice(mixed.length)] : []),
       ...(unfinished.length ? [unfinishedNotice(unfinished.length)] : []),
       ...(locked ? [lockedNotice(locked)] : []),
+      // With signing on, each device's certificate is signed and says so;
+      // this summary is not, and must not pass for one that is.
+      ...(this.ledger?.enabled ? [LOT_NOT_SIGNED_NOTICE] : []),
     ];
     const buffer = await this.renderLot(
       batch,

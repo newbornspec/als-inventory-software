@@ -236,6 +236,43 @@ describe('GET /verify (step 30)', () => {
         200,
       );
     });
+
+    // Cross-check, wave 2: the global budget was taken before the id was even
+    // looked at, so 20 addresses spraying random or malformed ids (30 a
+    // minute each) used up all 600 checks and every genuine QR-code scan got
+    // 429 for the rest of the minute. Guessed ids now cost only their own
+    // caller's budget; the global one is spent only on real chain walks.
+    it("guessed ids from many addresses do not use up everyone else's checks", async () => {
+      const cert = issued();
+      const c = new VerifyController(ledgerWith([cert]));
+      for (let a = 0; a < 25; a++)
+        for (let i = 0; i < 30; i++)
+          expect(
+            await status(
+              c.check(
+                i % 2 ? randomUUID() : 'nope',
+                req(`192.0.2.${a}`),
+                res(),
+              ),
+            ),
+          ).toBe(404);
+      expect(await status(c.check(cert.id, req('203.0.113.50'), res()))).toBe(
+        200,
+      );
+    });
+
+    it('real checks still share one global budget (600 a minute)', async () => {
+      const cert = issued();
+      const c = new VerifyController(ledgerWith([cert]));
+      for (let a = 0; a < 20; a++)
+        for (let i = 0; i < 30; i++)
+          expect(
+            await status(c.check(cert.id, req(`198.18.0.${a}`), res())),
+          ).toBe(200);
+      expect(await status(c.check(cert.id, req('198.18.1.1'), res()))).toBe(
+        429,
+      );
+    });
   });
 });
 

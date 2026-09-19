@@ -32,6 +32,16 @@ export class AddUserIsStation1752660000000 implements MigrationInterface {
   name = 'AddUserIsStation1752660000000';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
+    // The ACCESS EXCLUSIVE lock is momentary only if it is granted at once.
+    // If a long transaction (a report or export joining users) holds any
+    // lock on users when the pre-deploy runs, the ALTER waits - and every
+    // later users query (login, the permissions guard) queues behind it,
+    // stalling the old API that is still serving. So give up after 5 s: the
+    // deploy fails, Railway keeps the old deployment serving, and it can be
+    // retried. SET LOCAL lasts until this migration run's transaction ends
+    // (TypeORM runs them in one; outside a transaction it does nothing).
+    // Proven in migration-locks.pg.spec.ts.
+    await queryRunner.query(`SET LOCAL lock_timeout = '5s'`);
     await queryRunner.query(`
       ALTER TABLE "users"
       ADD COLUMN IF NOT EXISTS "is_station" boolean NOT NULL DEFAULT false

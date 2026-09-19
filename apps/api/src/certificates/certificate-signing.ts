@@ -88,10 +88,23 @@ export class CertificateSigner {
       .split(',')
       .map((s) => s.trim())
       .filter(Boolean)
-      .map((s) => {
-        const k = createPublicKey(pemFromEnv(s));
+      .map((s, i) => {
+        // Same stop-the-start rule as the signing key, but with an error that
+        // names the variable and the entry: a bare OpenSSL "DECODER routines::
+        // unsupported" in a crash-looping deploy's log says nothing about
+        // which setting to fix.
+        let k: KeyObject;
+        try {
+          k = createPublicKey(pemFromEnv(s));
+        } catch (e) {
+          throw new Error(
+            `CERT_VERIFY_PUBLIC_KEYS entry ${i + 1} is not a readable SPKI PEM public key (base64-encoded, entries separated by commas): ${(e as Error).message}`,
+          );
+        }
         if (k.asymmetricKeyType !== 'ed25519')
-          throw new Error('CERT_VERIFY_PUBLIC_KEYS may hold Ed25519 keys only');
+          throw new Error(
+            `CERT_VERIFY_PUBLIC_KEYS entry ${i + 1} is not an Ed25519 public key (got ${k.asymmetricKeyType ?? 'unknown'}); it may hold Ed25519 keys only`,
+          );
         return k;
       });
     return new CertificateSigner(key, retired);

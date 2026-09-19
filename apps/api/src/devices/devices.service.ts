@@ -380,7 +380,21 @@ export class DevicesService {
     );
 
     if (wipeOutcome) {
-      await this.settleWipeStatus(asset.id);
+      // Never fatal, for the same reason as issueCertificate: the wipe record
+      // above is already committed, so a throw here (a DB error taking the
+      // lock) became a 500 the stick retried - filing the same wipe again on
+      // every retry, with the history and activity entries below skipped.
+      // A missed settle leaves the asset's status one wipe behind until the
+      // next wipe filed for it; the certificate routes and C4 decide from the
+      // records themselves, never from this status, so no certificate can
+      // come of it.
+      try {
+        await this.settleWipeStatus(asset.id);
+      } catch (e) {
+        this.log.error(
+          `could not settle the wipe status of asset ${asset.id} after filing its wipe record (the next wipe filed for it will): ${(e as Error).message}`,
+        );
+      }
       await this.issueCertificate(asset.id);
     }
 
@@ -458,9 +472,14 @@ export class DevicesService {
   // rule (certificate-eligibility.ts) here too, not only for the
   // certificate: "latest wins" is exactly what read a two-drive laptop as
   // data_wiped when its second drive had failed a minute earlier. Deliberate
-  // and owner-reversible; the cost is that a failed-then-re-wiped machine on
-  // an old stick shows data_wipe_failed for 24 hours after the failure, the
-  // same window in which its certificate is refused.
+  // and owner-reversible; the cost is that a machine failed and then re-wiped
+  // within 24 hours on an old stick shows data_wipe_failed - and so sits in
+  // Quarantine - with its certificate refused, until a wipe is filed at
+  // least 24 hours after the failure. The window is measured between the
+  // records, not against the current time, and this only runs when a wipe
+  // is filed: time passing clears nothing, and neither does a re-capture
+  // (pinned in wipe-settle.spec.ts). Before wave 2 such a machine read
+  // data_wiped (latest wins) and only its certificate was refused.
   private async settleWipeStatus(assetId: string): Promise<void> {
     await this.assets.manager.transaction(async (m) => {
       const current = await m

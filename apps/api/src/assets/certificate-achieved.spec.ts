@@ -9,7 +9,11 @@ import {
   UNQUALIFIED_DRIVE_RESULT,
   type DeviceCertificate,
 } from './certificate-content';
-import { CertificatesService, rollupFor } from './certificates.service';
+import {
+  CertificatesService,
+  LOT_NOT_SIGNED_NOTICE,
+  rollupFor,
+} from './certificates.service';
 import { ingestHarness } from '../devices/ingest-harness-for-spec';
 import type { IngestAuditDto } from '../devices/dto/ingest-audit.dto';
 
@@ -257,6 +261,7 @@ describe('lot certificate and limitations', () => {
   async function lotOf(
     assets: Array<Record<string, unknown>>,
     rows: AssetAudit[],
+    ledger?: { enabled: boolean },
   ): Promise<{ listed: Listed[]; lot: Lot; notices: string[] }> {
     const qb = {
       addSelect: () => qb,
@@ -270,6 +275,7 @@ describe('lot certificate and limitations', () => {
         findOne: () =>
           Promise.resolve({ id: 'b1', batchNumber: 'LOT-1', ownerId: null }),
       } as never,
+      ledger as never,
     );
     const renderLot = jest
       .spyOn(
@@ -287,6 +293,22 @@ describe('lot certificate and limitations', () => {
   }
   const a1 = { ...ASSET, id: 'a1', serialNumber: 'SN-a1', batchId: 'b1' };
   const a2 = { ...ASSET, id: 'a2', serialNumber: 'SN-a2', batchId: 'b1' };
+
+  // Cross-check, wave 2 (D29 "unsigned, marked"): with CERT_SIGNING_KEY set,
+  // each device's certificate is signed and says so, but the lot summary is
+  // never signed - and said nothing, so its holder could not tell it apart
+  // from a signed document. Without the key nothing changes (no signature
+  // wording anywhere, as before).
+  it('with signing on, the (unsigned) lot summary says it is not signed', async () => {
+    const signedOn = await lotOf([a1], [row({ assetId: 'a1' })], {
+      enabled: true,
+    });
+    expect(signedOn.notices).toContain(LOT_NOT_SIGNED_NOTICE);
+    for (const ledger of [undefined, { enabled: false }]) {
+      const { notices } = await lotOf([a1], [row({ assetId: 'a1' })], ledger);
+      expect(notices.join(' ')).not.toMatch(/sign/i);
+    }
+  });
 
   it('marks a device with limitations, and the lead sentence excludes it', async () => {
     const { listed, lot } = await lotOf(
