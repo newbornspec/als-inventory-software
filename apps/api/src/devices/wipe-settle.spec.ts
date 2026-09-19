@@ -117,9 +117,11 @@ describe('ingest settles the asset wipe status per drive', () => {
   // not only the certificate. On master "latest wins" read a two-drive
   // laptop whose second drive failed a minute before the first was wiped as
   // data_wiped - the failure this remediation exists for. The cost: a
-  // single-drive machine that failed and was re-wiped on an old stick reads
-  // data_wipe_failed for 24 hours after the failure (its certificate is
-  // refused for the same 24 hours either way).
+  // single-drive machine that failed and was re-wiped on an old stick within
+  // 24 hours reads data_wipe_failed - and so sits in Quarantine - with its
+  // certificate refused, until a wipe is filed at least 24 hours after the
+  // failure. The window is measured between the RECORDS, not against the
+  // clock: time passing clears nothing, and neither does a re-capture.
   it('old-stick records (no drive identity): D11 decides the status too', async () => {
     const legacy = (status: DataWipeStatus) =>
       ({
@@ -137,6 +139,51 @@ describe('ingest settles the asset wipe status per drive', () => {
     expect(await statusAfter(legacy(DataWipeStatus.WIPED))).toBe(
       AssetAuditStatus.DATA_WIPED,
     );
+  });
+
+  // Cross-check, wave 2: pins what the comment above now says, because the
+  // code comment used to claim the block lasted "24 hours after the failure".
+  it('old stick, failed then re-wiped: only a wipe filed 24 h+ after the failure clears it', async () => {
+    const legacy = (status: DataWipeStatus, wipedAt?: string) =>
+      ({
+        profile,
+        auditKind: 'amazon',
+        dataWipeStatus: status,
+        dataWipeMethod: 'NVMe crypto erase',
+        ...(wipedAt ? { wipedAt } : {}),
+      }) as IngestAuditDto;
+    const { svc, assets, audits } = ingestHarness();
+    await svc.ingest('u1', legacy(DataWipeStatus.FAILED));
+    await svc.ingest('u1', legacy(DataWipeStatus.WIPED));
+    expect(assets[0].auditStatus).toBe(AssetAuditStatus.DATA_WIPE_FAILED);
+    // A re-capture (no wipe) settles nothing.
+    await svc.ingest('u1', { profile, auditKind: 'amazon' });
+    expect(assets[0].auditStatus).toBe(AssetAuditStatus.DATA_WIPE_FAILED);
+    // The failure is now two days old on both clocks; a new wipe clears it.
+    const old = new Date(Date.UTC(2026, 8, 17, 10));
+    audits[0].createdAt = old;
+    audits[1].createdAt = old;
+    await svc.ingest('u1', legacy(DataWipeStatus.WIPED));
+    expect(assets[0].auditStatus).toBe(AssetAuditStatus.DATA_WIPED);
+  });
+
+  // Cross-check, wave 2: settling runs AFTER the wipe record is committed.
+  // If it threw (a DB error taking the lock), the stick got a 500, retried,
+  // and filed the same wipe again on every retry - with the history and
+  // activity entries skipped. Like issueCertificate, it is now never fatal;
+  // the next wipe filed for the machine settles it, and the certificate
+  // routes decide from the records themselves, not from this status.
+  it('a failure while settling does not turn a filed wipe into a 500', async () => {
+    const { svc, assets, audits } = ingestHarness();
+    await svc.ingest('u1', { profile, auditKind: 'amazon' });
+    const repo = (svc as unknown as { assets: { manager: unknown } }).assets;
+    repo.manager = {
+      transaction: () => Promise.reject(new Error('could not obtain lock')),
+    };
+    const out = await svc.ingest('u1', wipe('S-A', DataWipeStatus.WIPED));
+    expect(out.assetId).toBe(assets[0].id);
+    expect(audits).toHaveLength(2);
+    expect(assets[0].auditStatus).toBe(AssetAuditStatus.POWER_ON);
   });
 
   it('the audit row still records what this one event established', async () => {
