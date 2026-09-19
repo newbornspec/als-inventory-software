@@ -24,6 +24,7 @@ import {
   normaliseWipeDetail,
   wipeDetailNote,
 } from './wipe-detail';
+import { hostTag } from './host-identity';
 
 // What a capture proves on its own, for the normal case where the tool sends no
 // explicit call. Deliberately the floor rather than a guess: nothing here claims a
@@ -205,7 +206,9 @@ export class DevicesService {
     const ramGb = standardiseRamGb(profile?.memory?.totalGb ?? dto.ramGb ?? null);
     const screenSize = screenSizeFor(deviceType, profile?.display?.size ?? dto.screenSize ?? null);
 
-    const tag = serial || `HW-${Date.now()}`;
+    // Serial, else the SMBIOS system UUID, else (no identity at all) a fresh
+    // HW-<timestamp> asset as before. See host-identity.ts (owner decision D24).
+    const tag = hostTag(serial, ident.biosUuid) ?? `HW-${Date.now()}`;
     const name = [manufacturer, model].filter(Boolean).join(' ').trim() || 'Audited device';
     const category = deviceType || 'Uncategorised';
 
