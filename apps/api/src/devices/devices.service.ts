@@ -83,6 +83,13 @@ export function derivedMayReplace(
   return nextRank >= currentRank;
 }
 
+// What a station wipe that named no lot says about itself (see lotlessWipe
+// in ingest). Exported for the specs.
+export const LOTLESS_WIPE_NOTE =
+  'Wipe recorded without a lot: the station did not say which workflow or lot this machine belongs to - move the device into its lot.';
+export const LOTLESS_WIPE_NOTE_HELD =
+  'Wipe recorded without a lot: the station did not say which workflow or lot this machine belongs to. The device was left in the lot';
+
 @Injectable()
 export class DevicesService {
   constructor(
@@ -189,13 +196,37 @@ export class DevicesService {
     // Amazon: any lotId in the payload is IGNORED, not honoured — once the
     // operator chose the workflow, nothing silently re-routes the audit.
     const lotId = isAmazon ? null : (dto.lotId ?? user?.activeAuditLotId ?? null);
-    if (!isAmazon && !lotId) {
+    // A WIPE RECORD THAT NAMES NO LOT (incident, 2026-09-19). A station
+    // account holding both audit permissions sends no auditKind until the
+    // operator picks Amazon or Goods In - and the station let a drive be
+    // erased before that. The drive was really sanitised, but this route
+    // answered 400 "No audit lot selected", the stick treats every failure
+    // as "queue and retry", and the record sat in the stick's queue forever
+    // with nobody told. A wipe that physically happened must be on record,
+    // and guessing a lot would re-attribute it to one it may not belong to.
+    // So it is filed with NO lot - the same lotless shape an Amazon audit
+    // already has - and says so on the record, for a person to move the
+    // device into its lot. auditKind stays exactly as sent.
+    //
+    // Only a station wipe OUTCOME gets this. A capture (no dataWipeStatus)
+    // keeps the 400: nothing irreversible happened, the operator picks a lot
+    // and captures again. A manual add is a person at the web form, who can
+    // pick a lot. A payload lotId or an active lot still wins, as before.
+    const lotlessWipe =
+      !isAmazon &&
+      !lotId &&
+      !dto.manual &&
+      (dto.dataWipeStatus === DataWipeStatus.WIPED ||
+        dto.dataWipeStatus === DataWipeStatus.FAILED);
+    if (!isAmazon && !lotId && !lotlessWipe) {
       throw new BadRequestException(
         'No audit lot selected — pick the lot you are working on in Als Inventory first.',
       );
     }
     const batch = lotId ? await this.batches.findOne({ where: { id: lotId } }) : null;
     if (lotId && !batch) throw new NotFoundException(`Lot ${lotId} not found`);
+    // From here on "files into a lot" means exactly the old non-Amazon path.
+    const intoLot = !isAmazon && !lotlessWipe;
 
     // Prefer the rich profile; fall back to the legacy flat fields.
     const profile: HardwareProfile | null = dto.profile ?? null;
@@ -286,10 +317,12 @@ export class DevicesService {
         ...(dto.cosmeticGrade ? { conditionGrade: dto.cosmeticGrade } : {}),
         ...(statusPatch ? { auditStatus: statusPatch } : {}),
         // An Amazon audit never moves a device between lots — or out of one.
-        // Only the Goods In workflow files devices into batches.
-        ...(!isAmazon && asset.batchId !== lotId ? { batchId: lotId } : {}),
+        // Only the Goods In workflow files devices into batches. A lotless
+        // wipe (see lotlessWipe above) names no lot either, so it must not
+        // take a device OUT of the lot it is already in.
+        ...(intoLot && asset.batchId !== lotId ? { batchId: lotId } : {}),
         // Only touch the sub-lot when one was supplied (the USB tool never sends it).
-        ...(!isAmazon && dto.subLotId !== undefined ? { lotId: dto.subLotId } : {}),
+        ...(intoLot && dto.subLotId !== undefined ? { lotId: dto.subLotId } : {}),
       });
     } else {
       asset = await this.assets.save(
@@ -310,8 +343,9 @@ export class DevicesService {
           ...(assetStatus ? { auditStatus: assetStatus } : {}),
           // Amazon-created devices carry NO lot: batch_id NULL is the spec's
           // own marker that the audit belongs to the workspace, not receiving.
+          // A lotless wipe is created the same way (lotId is null there).
           batchId: lotId,
-          lotId: isAmazon ? null : (dto.subLotId ?? null), // optional sub-lot (spec bucket)
+          lotId: intoLot ? (dto.subLotId ?? null) : null, // optional sub-lot (spec bucket)
           stockStatus: AssetStockStatus.AUDITED,
         }),
       );
@@ -327,7 +361,13 @@ export class DevicesService {
     // wipe-detail.ts.
     const { detail: wipeDetail, notes: detailNotes } = normaliseWipeDetail(dto);
     const detailNote = wipeDetailNote(detailNotes);
-    const notes = [dto.notes, detailNote].filter(Boolean).join('\n') || null;
+    // Said on the record itself (the asset page and the Audit workspace show
+    // audit notes), and again on the history entry below.
+    const lotlessNote = lotlessWipe
+      ? await this.lotlessWipeNote(asset.batchId ?? null)
+      : null;
+    const notes =
+      [dto.notes, detailNote, lotlessNote].filter(Boolean).join('\n') || null;
     await this.audits.save(
       this.audits.create({
         assetId: asset.id,
@@ -405,9 +445,11 @@ export class DevicesService {
         userId,
         notes: isAmazon
           ? 'Amazon audit captured'
-          : dto.manual
-            ? `Manually added to ${batch!.batchNumber}`
-            : `Hardware audit captured into ${batch!.batchNumber}`,
+          : lotlessWipe
+            ? lotlessNote
+            : dto.manual
+              ? `Manually added to ${batch!.batchNumber}`
+              : `Hardware audit captured into ${batch!.batchNumber}`,
       }),
     );
 
@@ -418,9 +460,11 @@ export class DevicesService {
       entityId: asset.id,
       summary: isAmazon
         ? `${created ? 'Audited new device' : 'Re-audited'} ${name} (Amazon audit)`
-        : dto.manual
-          ? `Added ${name} to ${batch!.batchNumber}`
-          : `${created ? 'Audited new device' : 'Re-audited'} ${name} into ${batch!.batchNumber}`,
+        : lotlessWipe
+          ? `Recorded a wipe for ${name} without a lot`
+          : dto.manual
+            ? `Added ${name} to ${batch!.batchNumber}`
+            : `${created ? 'Audited new device' : 'Re-audited'} ${name} into ${batch!.batchNumber}`,
     });
 
     return {
@@ -431,6 +475,16 @@ export class DevicesService {
       deviceType,
       lot: batch?.batchNumber ?? null,
     };
+  }
+
+  // The note a lotless wipe carries (see lotlessWipe in ingest). A device the
+  // server already knows may already sit in a lot: it is left there - the
+  // wipe names no lot, so it is no reason to move the device anywhere - and
+  // the note says which lot, for a person to confirm rather than "move it".
+  private async lotlessWipeNote(heldLotId: string | null): Promise<string> {
+    if (!heldLotId) return LOTLESS_WIPE_NOTE;
+    const held = await this.batches.findOne({ where: { id: heldLotId } });
+    return `${LOTLESS_WIPE_NOTE_HELD} ${held?.batchNumber ?? 'it was already in'} - check that is right.`;
   }
 
   // Plan step 29: with CERT_SIGNING_KEY set, the machine's signed certificate

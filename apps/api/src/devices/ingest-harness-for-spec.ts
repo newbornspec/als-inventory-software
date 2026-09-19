@@ -14,9 +14,19 @@ export interface StoredAsset {
   [key: string]: unknown;
 }
 
-export function ingestHarness() {
+export interface IngestHarnessOptions {
+  // The station account's active lot. Default 'lot-1' (LOT-1), as every
+  // existing spec assumes; null = the account has none.
+  activeLotId?: string | null;
+}
+
+export function ingestHarness(opts: IngestHarnessOptions = {}) {
+  const activeLotId =
+    opts.activeLotId === undefined ? 'lot-1' : opts.activeLotId;
   const assets: StoredAsset[] = [];
   const audits: Array<Record<string, unknown>> = [];
+  const history: Array<Record<string, unknown>> = [];
+  const activity: Array<Record<string, unknown>> = [];
   let seq = 0;
 
   // The only query ingest() builds on assets: LOWER(a.tag) = LOWER(:tag).
@@ -106,22 +116,38 @@ export function ingestHarness() {
       cb(txManager),
   };
 
-  const passthrough = {
-    create: (a: unknown) => a,
-    save: (a: unknown) => Promise.resolve(a),
+  const historyRepo = {
+    create: (a: Record<string, unknown>) => ({ ...a }),
+    save: (a: Record<string, unknown>) => {
+      history.push(a);
+      return Promise.resolve(a);
+    },
+  };
+
+  // Known lots: LOT-1 and LOT-2. Any other id is "not found".
+  const lots: Record<string, { id: string; batchNumber: string }> = {
+    'lot-1': { id: 'lot-1', batchNumber: 'LOT-1' },
+    'lot-2': { id: 'lot-2', batchNumber: 'LOT-2' },
   };
 
   const svc = new DevicesService(
     {
-      findOne: () => Promise.resolve({ id: 'u1', activeAuditLotId: 'lot-1' }),
+      findOne: () =>
+        Promise.resolve({ id: 'u1', activeAuditLotId: activeLotId }),
     } as never,
     {
-      findOne: () => Promise.resolve({ id: 'lot-1', batchNumber: 'LOT-1' }),
+      findOne: ({ where }: { where: { id: string } }) =>
+        Promise.resolve(lots[where.id] ?? null),
     } as never,
     assetRepo as never,
     auditRepo as never,
-    passthrough as never,
-    { record: () => Promise.resolve() } as never,
+    historyRepo as never,
+    {
+      record: (a: Record<string, unknown>) => {
+        activity.push(a);
+        return Promise.resolve();
+      },
+    } as never,
     {
       getAuthz: () =>
         Promise.resolve({
@@ -132,5 +158,5 @@ export function ingestHarness() {
     } as never,
   );
 
-  return { svc, assets, audits };
+  return { svc, assets, audits, history, activity };
 }
