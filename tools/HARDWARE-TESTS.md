@@ -1002,8 +1002,9 @@ disk with known bad sectors, and a machine set to "RAID On" in the BIOS.
 
 1. Boot the laptop from the stick and let the capture finish.
 2. Press **Display all system hardware information**. Next to **Battery**
-   there is a **Drive health** row with one line per drive, for example
-   `512GB NVMe 94% · Good`, with the reason underneath
+   there is a **Drive health** row with one line per drive, each naming the
+   drive it is about, for example `512GB NVMe (nvme0n1) 94% · Good`, with the
+   reason underneath
    (`life remaining 94% reported by the drive · 36 °C · 5,678 h · life used 6%`).
 3. Open the **Wipe** panel. The drive's badge / banner shows the **same**
    percentage and status as step 2 (it is the same reading).
@@ -1014,11 +1015,22 @@ disk with known bad sectors, and a machine set to "RAID On" in the BIOS.
 5. If you have the RAID machine: capture it. The Drive health row says
    `Not measurable — behind a RAID/Intel RST controller` and
    `set the storage mode to AHCI in the BIOS, then press Rescan`. Do that and
-   Rescan: the drive now shows a percentage.
+   Rescan: the drive now shows a percentage. On a machine whose spare SATA
+   controller is left in RAID mode with nothing plugged into it, the row
+   reads `Storage controller in RAID mode` with the same advice - it does not
+   claim a drive that is not there.
+6. If you have a SAS disk in a caddy or a server pull-out: it has no SMART
+   attribute table, and its percentage comes from its grown defect list and
+   uncorrected error counts. Check them with
+   `sudo smartctl -x /dev/sdX | grep -i "defect\|uncorrected"`.
 
 **Pass:**
 - Every drive shows a percentage and a status, or `Not measurable — <reason>`
   with what to do. Nowhere says "Unknown" or "SMART not available".
+- The wipe list's badge and the panel row use exactly the same words for the
+  same drive.
+- A drive that had SMART switched off and was switched on by the station says
+  so in its reason line.
 - NVMe: the percentage is `100 - Percentage Used` (or the Available Spare if
   that is lower), unless the reason line names a fault that lowered it.
 - The capture's text summary (Show details) has a `Drive health` line per drive.

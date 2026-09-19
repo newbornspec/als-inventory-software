@@ -109,7 +109,9 @@ def bootstrap():
                           "tpm": "2.0"},
                    # server.py's drive_health_lines(): one row per drive (contract C5).
                    "driveHealth": [dict(d["healthView"],
-                                        drive=d["size"] + (" NVMe" if d["controller"] else " HDD"))
+                                        drive="%s %s (%s)" % (d["size"],
+                                                              "NVMe" if d["controller"] else "HDD",
+                                                              d["name"]))
                                    for d in DRIVES]},
         "lots": [{"id": "lot-1", "batchNumber": "B-0042", "actualUnitCount": 12,
                   "expectedUnitCount": 20, "createdAt": "2026-09-01T09:00:00Z",
