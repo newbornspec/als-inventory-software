@@ -161,6 +161,35 @@ describe('CertificateSigner.fromEnv', () => {
     ).toThrow(/Ed25519/);
   });
 
+  // Cross-check, wave 2: a bad retired key also stops the API starting (as
+  // it should), but used to do so with a bare OpenSSL error that did not
+  // name the variable - on a crash-looping deploy, the owner has only the
+  // log line to go on.
+  it('an unreadable retired key names CERT_VERIFY_PUBLIC_KEYS and which entry', () => {
+    const { privateKey } = generateKeyPairSync('ed25519');
+    const good = Buffer.from(
+      generateKeyPairSync('ed25519')
+        .publicKey.export({ type: 'spki', format: 'pem' })
+        .toString(),
+    ).toString('base64');
+    for (const bad of [`${good},not a key`, `${good}, , AAAA`])
+      expect(() =>
+        CertificateSigner.fromEnv({
+          CERT_SIGNING_KEY: pemB64(privateKey),
+          CERT_VERIFY_PUBLIC_KEYS: bad,
+        }),
+      ).toThrow(/CERT_VERIFY_PUBLIC_KEYS entry 2 .*not a readable/);
+    const rsa = generateKeyPairSync('rsa', { modulusLength: 1024 }).publicKey;
+    expect(() =>
+      CertificateSigner.fromEnv({
+        CERT_SIGNING_KEY: pemB64(privateKey),
+        CERT_VERIFY_PUBLIC_KEYS: Buffer.from(
+          rsa.export({ type: 'spki', format: 'pem' }).toString(),
+        ).toString('base64'),
+      }),
+    ).toThrow(/CERT_VERIFY_PUBLIC_KEYS entry 1 .*Ed25519/);
+  });
+
   it('publishes retired public keys by key_id for old certificates', () => {
     const old = generateKeyPairSync('ed25519').publicKey;
     const { privateKey } = generateKeyPairSync('ed25519');
