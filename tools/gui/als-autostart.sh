@@ -288,6 +288,41 @@ user_pref("dom.push.connection.enabled", false);
 PREFS
 }
 
+# A NEW Firefox profile starts as a copy of the template the layer build made
+# (make-als-layer.sh, "KIOSK PROFILE TEMPLATE"): the startup cache, add-on
+# database and finished prefs migrations of one earlier run of this same ESR
+# at this same path. Measured off the station: 1.76 s to the first request
+# from an empty profile, 0.94 s from the copy (+0.04 s copying it).
+#
+# Rules, each for a reason:
+#   - only a profile that does not exist yet. One this session already used
+#     (the launcher run twice) is Firefox's own and is left exactly as it is.
+#   - copied into a temporary directory and RENAMED into place only when the
+#     whole copy succeeded, so Firefox never sees half a template. A failed
+#     copy leaves no profile at all, and write_ff_prefs then makes an empty
+#     one - today's behaviour.
+#   - Firefox runs on the COPY, never on the read-only template.
+#   - write_ff_prefs runs after it, so user.js - the prefs the kiosk depends
+#     on - is always written on top of whatever the template holds.
+# ALS_FF_TEMPLATE overrides the location (tests); a layer without a template
+# simply has none, and nothing changes.
+seed_ff_profile() {  # seed_ff_profile <profile dir>
+    local tpl="${ALS_FF_TEMPLATE:-/usr/share/als/firefox-profile-esr}" tmp
+    [ -f "$tpl/compatibility.ini" ] || return 0
+    if [ -e "$1" ] || [ -L "$1" ]; then
+        log "profile $1 already exists - left as it is"
+        return 0
+    fi
+    tmp="$1.template.$$"
+    rm -rf "$tmp"
+    if mkdir -p "$tmp" && cp -R "$tpl/." "$tmp/" && mv "$tmp" "$1"; then
+        log "profile $1 started from the template $tpl"
+    else
+        rm -rf "$tmp"
+        log "could not copy the profile template $tpl - starting from an empty profile"
+    fi
+    return 0
+}
 write_chromium_prefs() {  # write_chromium_prefs <user-data-dir>
     mkdir -p "$1/Default"
     printf '%s\n' '{"credentials_enable_service":false,"credentials_enable_autosignin":false,"profile":{"password_manager_enabled":false},"autofill":{"profile_enabled":false,"credit_card_enabled":false}}' \
@@ -319,7 +354,12 @@ if [ "$MODE" = "kiosk" ]; then
                 # meet, but a persistent home, or switching browsers within a
                 # session, would otherwise stop the kiosk on a dialog.
                 PROFILE="${HOME:-/tmp}/als-kiosk-profile"
-                [ "$BROWSER" = "firefox-esr" ] && PROFILE="${HOME:-/tmp}/als-kiosk-profile-esr"
+                # The template is made by, and only valid for, the layer's
+                # firefox-esr - never the snap.
+                if [ "$BROWSER" = "firefox-esr" ]; then
+                    PROFILE="${HOME:-/tmp}/als-kiosk-profile-esr"
+                    seed_ff_profile "$PROFILE"
+                fi
                 write_ff_prefs "$PROFILE"
                 ARGS="--profile $PROFILE --kiosk"
                 ;;
@@ -357,6 +397,7 @@ note "ALS Audit Station is ready" "Opening $URL in a normal window."
 # fight over one profile's lock.
 if command -v firefox-esr >/dev/null 2>&1; then
     FULLPROFILE="${HOME:-/tmp}/als-full-profile-esr"
+    seed_ff_profile "$FULLPROFILE"
     write_ff_prefs "$FULLPROFILE"
     setsid firefox-esr --profile "$FULLPROFILE" --new-window "$URL" >>"${HOME:-/tmp}/als-browser.log" 2>&1 &
     log "firefox-esr pid $! - done"

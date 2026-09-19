@@ -153,6 +153,56 @@ run full firefox-esr
 grep -q 'app.normandy.enabled", false' "$T/home/als-full-profile-esr/user.js" 2>/dev/null \
   && ok "the 'full' profile gets them too" || bad "full network prefs" "missing"
 
+echo "a new ESR profile starts from the layer's template"
+TPL="$T/tpl"; rm -rf "$TPL"; mkdir -p "$TPL/startupCache"
+printf '[Compatibility]\nLastPlatformDir=/usr/lib/firefox-esr\n' > "$TPL/compatibility.ini"
+printf 'user_pref("browser.migration.version", 160);\n' > "$TPL/prefs.js"
+printf 'cache' > "$TPL/startupCache/scriptCache.bin"
+tpl_sum() { (cd "$TPL" && find . -type f | sort | while read -r f; do printf '%s %s\n' "$f" "$(cat "$f")"; done); }
+before=$(tpl_sum)
+RUN_ENV="ALS_FF_TEMPLATE=$TPL"
+run kiosk firefox-esr
+P="$T/home/als-kiosk-profile-esr"
+[ -f "$P/startupCache/scriptCache.bin" ] && [ -f "$P/compatibility.ini" ] && grep -q migration "$P/prefs.js" 2>/dev/null \
+  && ok "kiosk: startup cache, compatibility.ini and prefs.js copied in" || bad "template copied" "$(find "$P" 2>&1 | head)"
+grep -q 'signon.rememberSignons", false' "$P/user.js" 2>/dev/null && ok "kiosk: user.js still written on top" \
+  || bad "user.js on top of the template" "$(cat "$P/user.js" 2>&1)"
+l=$(browser_line)
+case "$l" in "firefox-esr --profile $P --kiosk "*) ok "kiosk: Firefox runs on the copy, not the template" ;; *) bad "profile arg" "$l" ;; esac
+[ "$(tpl_sum)" = "$before" ] && [ ! -e "$TPL/user.js" ] && ok "the template itself is untouched" || bad "template changed" "$(find "$TPL")"
+ls -d "$T/home"/*.template.* >/dev/null 2>&1 && bad "no temp copy left" "$(ls -d "$T/home"/*.template.*)" \
+  || ok "no half-copied temp directory left behind"
+run full firefox-esr
+[ -f "$T/home/als-full-profile-esr/startupCache/scriptCache.bin" ] && ok "full: the ESR profile starts from it too" \
+  || bad "full template" "$(find "$T/home/als-full-profile-esr" 2>&1 | head)"
+run kiosk firefox
+[ -e "$T/home/als-kiosk-profile/startupCache" ] && bad "snap profile" "got the ESR template" \
+  || ok "the snap Firefox never gets the ESR template"
+
+echo "  a profile that already exists is left as it is"
+PRE_HOME='mkdir -p "$T/home/als-kiosk-profile-esr"; echo "user_pref(\"mine\", 1);" > "$T/home/als-kiosk-profile-esr/prefs.js"'
+run kiosk firefox-esr
+PRE_HOME=""
+grep -q '"mine"' "$P/prefs.js" 2>/dev/null && [ ! -e "$P/startupCache" ] \
+  && ok "existing profile: nothing copied over it" || bad "existing profile" "$(cat "$P/prefs.js" 2>&1)"
+
+echo "  a copy that fails leaves an empty profile, as before"
+printf '#!/bin/sh\nexit 1\n' > "$STUB/cp"; chmod +x "$STUB/cp"
+run kiosk firefox-esr
+rm -f "$STUB/cp"
+[ ! -e "$P/startupCache" ] && [ -f "$P/user.js" ] && ok "failed copy: an empty profile plus user.js" \
+  || bad "failed copy" "$(find "$P" 2>&1 | head)"
+ls -d "$T/home"/*.template.* >/dev/null 2>&1 && bad "failed copy cleaned up" "$(ls -d "$T/home"/*.template.*)" \
+  || ok "failed copy: the temp directory is removed"
+case "$(browser_line)" in "firefox-esr "*) ok "failed copy: the kiosk still opens" ;; *) bad "failed copy launch" "$(browser_line)" ;; esac
+
+echo "  no template on the layer (older layer, or the build made none)"
+RUN_ENV="ALS_FF_TEMPLATE=$T/does-not-exist"
+run kiosk firefox-esr
+RUN_ENV=""
+[ "$(ls -A "$P" 2>/dev/null)" = "user.js" ] && ok "profile holds only user.js - exactly as before" \
+  || bad "no template" "$(ls -A "$P" 2>&1)"
+
 echo "start-gui.sh (the older launcher) writes the same password prefs"
 # kiosk_args writes the profile and prints the flags; run just that function
 # (and the Chromium prefs writer it calls) against a temp HOME.
