@@ -676,6 +676,10 @@ function driveLabel(d){
   // D18: a drive with no readable serial can still be wiped; say so plainly
   // rather than leaving a gap the operator reads as "not loaded yet".
   bits.push(d.serial?('S/N '+d.serial):'serial not reported');
+  // D36: a namespace of a multi-namespace NVMe drive is not a separate disk -
+  // erasing it erases its siblings. Said in the list too, not only at confirm.
+  const ns=d.namespaces||[];
+  if(ns.length>1)bits.push('same NVMe drive as '+ns.filter(x=>x!==d.device).join(', '));
   return bits.join(' · ');
 }
 function driveOpts(){return DRIVES.map(d=>'<option value="'+esc(d.device)+'" data-bytes="'+(d.bytes||0)+
@@ -1151,6 +1155,23 @@ function wipeDone(){
   bootstrap();
 }
 
+/* Owner decision D36 (plan step 36): an NVMe drive can show up as several
+   disks - one per namespace, nvme0n1, nvme0n2 - but its erase is a command to
+   the drive and wipes EVERY namespace, ticked or not. The operator must hear
+   that before confirming, in plain words. `namespaces` comes from
+   list_drives (all namespaces on the same controller). The server refuses two
+   namespaces of one drive in the same request; this is the warning for the
+   one that goes ahead. Pure, for tools/test-kiosk-ui.py. */
+function nsWarning(devs){
+  const out=[];
+  for(const d of devs){
+    const x=driveById(d), ns=(x&&x.namespaces)||[];
+    if(ns.length>1)out.push('\n\n⚠ '+d+' is one of '+ns.length+' parts (namespaces) of the same '+
+      'NVMe drive: '+ns.join(', ')+'. Erasing it erases ALL of them, including any not ticked.');
+  }
+  return out.join('');
+}
+
 let RUN=null;                        // the wipe run on screen: {devs, results}
 function confirmWipe(){
   const devs=selectedWipeDrives();
@@ -1164,7 +1185,8 @@ function confirmWipe(){
     if(h&&h.status==='failing')warns.push(d+' is FAILING ('+(h.reasons||[]).join(', ')+')');
     else if(h&&h.status==='caution')warns.push(d+' reports faults ('+(h.reasons||[]).join(', ')+')');
   }
-  const warn=warns.length?'\n\n⚠ '+warns.join('; ')+' — the wipe may stall or fail.':'';
+  const warn=(warns.length?'\n\n⚠ '+warns.join('; ')+' — the wipe may stall or fail.':'')+
+    nsWarning(devs);
   // Only the Goods In workflow files into a batch. The Amazon / general audit
   // has no batch, and naming one here told the operator something untrue.
   let dest='records the wipe on this machine’s record';

@@ -1248,6 +1248,49 @@ def drive_serial(value):
 
 DRIVES_CACHE = {"ts": 0.0, "data": []}
 
+# Where sysfs is. Only ever changed by tests (tools/test-wipe-gate.py builds a
+# fake tree in a temp folder) - nothing on the station sets it.
+SYS_ROOT = "/sys"
+
+
+def nvme_controller(name):
+    """Which NVMe drive a namespace belongs to: "nvme0" (the controller) or
+    "nvme-subsys0" (the subsystem, on kernels with native NVMe multipath, which
+    Ubuntu's is). None for anything that is not an NVMe namespace.
+
+    Why the kiosk cares (plan step 36, owner decision D36): an NVMe drive can
+    expose several namespaces - nvme0n1, nvme0n2 - and each shows up here as its
+    own disk. But the engine's sanitize is a command to the CONTROLLER, and it
+    erases every namespace on it. Two namespaces of one drive ticked together
+    would start two sanitizes on the same controller at once - the second one
+    fails or aborts the first - and the screen would show two independent wipes
+    that are really one. So /api/wipe/start refuses that, and the confirm dialog
+    says plainly that all namespaces go.
+
+    Read from sysfs, not guessed from the name: /sys/block/nvme0n1 resolves to
+    .../nvme/nvme0/nvme0n1 (or .../nvme-subsystem/nvme-subsys0/nvme0n1 with
+    multipath), and that path is the kernel's own statement of which controller
+    or subsystem owns the namespace. Only when sysfs says nothing (not Linux, a
+    test) does it fall back to the name, where nvme<N>n<M> shares <N> with
+    every other namespace of the same controller (or subsystem) anyway."""
+    if not re.match(r"^nvme\d+n\d+$", name or ""):
+        return None
+    try:
+        real = os.path.realpath(os.path.join(SYS_ROOT, "block", name))
+    except (OSError, ValueError):
+        real = ""
+    parts = real.replace("\\", "/").split("/")
+    # The subsystem wins when there is one: it is the unit a sanitize covers
+    # (the NVMe spec's sanitize acts on the whole NVM subsystem).
+    for p in parts:
+        if re.match(r"^nvme-subsys\d+$", p):
+            return p
+    # Nearest controller above the namespace node itself.
+    for p in reversed(parts[:-1]):
+        if re.match(r"^nvme\d+$", p):
+            return p
+    return re.match(r"^(nvme\d+)n\d+$", name).group(1)
+
 
 def list_drives(force=False):
     """Internal (non-removable, non-USB) whole disks that can be wiped/imaged,
@@ -1320,7 +1363,18 @@ def list_drives(force=False):
             "transport": tran,
             "method": method,
             "health": smart_health("/dev/" + name),
+            # The NVMe controller (or subsystem) this namespace sits on; None
+            # for SATA/SAS disks. See nvme_controller.
+            "controller": nvme_controller(name),
         })
+    # Every namespace of the same NVMe drive, on each of them (a one-element
+    # list for the usual single-namespace drive, [] for non-NVMe). The confirm
+    # dialog warns from this when it is longer than one: wiping any of them
+    # erases all of them (D36).
+    for d in drives:
+        ctrl = d.get("controller")
+        d["namespaces"] = [x["device"] for x in drives
+                           if ctrl and x.get("controller") == ctrl]
     DRIVES_CACHE["ts"], DRIVES_CACHE["data"] = now, drives
     return drives
 
@@ -3108,6 +3162,41 @@ class Handler(BaseHTTPRequestHandler):
                 if d not in offered:
                     return self._send(400, {"message": "%s is not an internal disk this "
                                                        "station can wipe" % d})
+            # One NVMe drive, one wipe (plan step 36, owner decision D36). Two
+            # namespaces of the same controller - nvme0n1 and nvme0n2 - are
+            # listed as two disks, but the engine's sanitize goes to the
+            # controller and erases EVERY namespace on it. Both ticked would
+            # start two sanitizes on one controller at once: the second is
+            # refused or aborts the first, and the screen would report two
+            # independent results for what is one erase. Refused rather than
+            # silently merged, so the operator knows why the list changed; the
+            # message says which one to keep and that it covers the rest.
+            # Checked against running wipes too: a sibling namespace already
+            # being wiped is the same collision, one request later.
+            seen = {}
+            for d in devices:
+                ctrl = offered[d].get("controller")
+                if not ctrl:
+                    continue
+                if ctrl in seen and seen[ctrl] != d:
+                    return self._send(400, {"message": (
+                        "%s and %s are namespaces of the same NVMe drive (%s). One "
+                        "erase of that drive wipes ALL of its namespaces, so tick only "
+                        "one of them - the wipe covers the other as well."
+                        % (seen[ctrl], d, ctrl))})
+                seen[ctrl] = d
+            with LOCK:
+                running = {k[len("wipe:"):] for k, j in JOBS.items()
+                           if k.startswith("wipe:") and j and j.get("running")}
+            for d in devices:
+                ctrl = offered[d].get("controller")
+                for other in running:
+                    if (ctrl and other != d and other in offered
+                            and offered[other].get("controller") == ctrl):
+                        return self._send(409, {"message": (
+                            "%s is on the same NVMe drive (%s) as %s, which is being "
+                            "wiped now - that erase covers %s too. Wait for it to "
+                            "finish." % (d, ctrl, other, d))})
             # No machine identity, no erase. This check used to live in
             # record_wipe, AFTER the drive was already destroyed - so a wipe
             # with no profile erased the data and then filed nothing, leaving

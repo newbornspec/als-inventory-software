@@ -24,6 +24,10 @@ Scenario knobs (environment variables, all optional):
     PREVIEW_WORKFLOW  amazon (default) | goods_in - the batch is only named in
                       goods_in.
     PREVIEW_SECONDS   how long each fake wipe "runs" (default 4).
+    PREVIEW_NAMESPACES  set to 1 to add a second namespace (nvme0n2) of the
+                      same NVMe drive, to see the "erases ALL namespaces"
+                      warning (owner decision D36). The real server refuses
+                      both namespaces in one request; this preview does not.
 
 Everything here is a stand-in for server.py's answers, shaped like them; when
 server.py's responses change, change the matching stub.
@@ -55,6 +59,15 @@ DRIVES = [
      "health": {"status": "caution", "reasons": ["3 reallocated sectors"], "hours": 20111,
                 "tempC": 41}},
 ]
+for _d in DRIVES:
+    _d["controller"] = "nvme0" if _d["device"].startswith("/dev/nvme") else None
+    _d["namespaces"] = [_d["device"]] if _d["controller"] else []
+if os.environ.get("PREVIEW_NAMESPACES") == "1":
+    DRIVES.insert(1, dict(DRIVES[0], device="/dev/nvme0n2", name="nvme0n2", size="1 GB",
+                          bytes=1000000000))
+    for _d in DRIVES:
+        if _d["controller"]:
+            _d["namespaces"] = ["/dev/nvme0n1", "/dev/nvme0n2"]
 
 
 def bootstrap():

@@ -160,6 +160,27 @@ const hidden = (id) => document.getElementById(id).classList.contains('hidden');
     drives:[{key:'W2',serialNumber:'W2',model:'WD Blue',status:'missing'}]}])`);
   out.cUnknown = run(`certSummary([${W('x')}],[{known:false}])`);
 
+  // D36: a namespace of a multi-namespace NVMe drive warns that ALL go.
+  run(`closeOv(); RUN=null; DRIVES=[
+    {device:'/dev/nvme0n1',size:'512 GB',model:'Samsung',serial:'S1',controller:'nvme0',
+     namespaces:['/dev/nvme0n1','/dev/nvme0n2']},
+    {device:'/dev/nvme0n2',size:'1 GB',model:'Samsung',serial:'S1',controller:'nvme0',
+     namespaces:['/dev/nvme0n1','/dev/nvme0n2']},
+    {device:'/dev/nvme1n1',size:'256 GB',model:'WD',serial:'W9',controller:'nvme1',
+     namespaces:['/dev/nvme1n1']}];
+    selectedWipeDrives=()=>['/dev/nvme0n1'];`);
+  run(`confirmWipe()`);
+  out.confirmMultiNs = document.getElementById('ovMsg').textContent;
+  run(`closeOv(); selectedWipeDrives=()=>['/dev/nvme1n1'];`);
+  run(`confirmWipe()`);
+  out.confirmSingleNs = document.getElementById('ovMsg').textContent;
+  out.labelMultiNs = run(`driveLabel(DRIVES[0])`);
+  out.labelSingleNs = run(`driveLabel(DRIVES[2])`);
+  run(`closeOv(); DRIVES=[
+    {device:'/dev/nvme0n1',size:'512 GB',model:'Samsung SSD 980',serial:'S5H2NS0N123',bytes:512e9},
+    {device:'/dev/sda',size:'500 GB',model:'WD Blue',serial:'',bytes:500e9}];
+    selectedWipeDrives=()=>['/dev/nvme0n1','/dev/sda'];`);
+
   // End to end with a server "yes": the run's summary is updated to available.
   run(`RUN=null; ELIG=[]; ELIGANS={known:true,available:true,verdict:'wiped',reason:null,drives:[]}`);
   run(`confirmWipe()`);
@@ -279,6 +300,15 @@ def main():
           "W2" in o["cServerNo"]["text"] and "missing" in o["cServerNo"]["text"], o["cServerNo"])
     check("cert: server unknown (404) is labelled as unconfirmed",
           "could not confirm" in o["cUnknown"]["text"], o["cUnknown"])
+    cm, cs = o["confirmMultiNs"], o["confirmSingleNs"]
+    check("D36: confirm warns that ALL namespaces of the drive are erased",
+          "ALL of them" in cm and "/dev/nvme0n2" in cm and "namespaces" in cm, cm)
+    check("D36: no namespace warning for a single-namespace drive",
+          "namespace" not in cs.lower(), cs)
+    check("D36: the drive list names the sibling namespace",
+          "same NVMe drive as /dev/nvme0n2" in o["labelMultiNs"], o["labelMultiNs"])
+    check("D36: a single-namespace drive's label has no such note",
+          "same NVMe drive" not in o["labelSingleNs"], o["labelSingleNs"])
     check("end to end: the server is asked about the asset the run was filed under",
           o["e2eElig"] == ["/api/wipe/eligibility?assetId=a-1"], o["e2eElig"])
     check("end to end: server yes -> 'certificate available'",
