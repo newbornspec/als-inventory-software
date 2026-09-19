@@ -176,8 +176,109 @@ finally:
 check("records the first serve only", srv.APP_READY["uptime"] == 42.5, srv.APP_READY)
 check("fires exactly one early report", len(spawned) == 1 and spawned[0][1] == (False,), spawned)
 
+print("the report carries the timeline and every link of the splash chain")
+st5 = Stick()
+setup(st5, dict(FINAL_TIMING,
+                timeline=["  23.4s  display manager started", "  81.9s  APP READY (page served)"],
+                plymouth={"conf": "Theme=als", "theme": "present and complete - two-step can load it",
+                          "fallback": "bgrt is OURS - even a failed als looks right",
+                          "pivot": "none - no /run/initramfs/shutdown, so shutdown draws from the real root"}))
+srv.report_now(True)
+rep5 = st5.read("boot-report.txt")
+check("timeline section is written", "--- timeline" in rep5 and "display manager started" in rep5, rep5)
+check("chain is labelled as graphical.target's, not the app's", "NOT the same as the app" in rep5)
+check("fallback and pivot lines are written", "fallback: bgrt is OURS" in rep5 and "pivot: none" in rep5, rep5)
+check("the old /run/initramfs claim is gone", "where shutdown draws from" not in rep5, rep5)
+
 (srv.CONF_PATH, srv.write_boot_file, srv.boot_timing, srv.md5check_state,
  srv.on_boot_media, srv.time.sleep, srv._analyze) = ORIG
+
+print("the self-check verdict - both readings on the Latitude 3310 were wrong")
+V = srv._md5_verdict
+never = {"LoadState": "loaded", "ActiveState": "inactive", "SubState": "dead",
+         "ConditionResult": "no", "ConditionTimestampMonotonic": "0",
+         "ExecMainStartTimestampMonotonic": "0", "ExecMainExitTimestampMonotonic": "0"}
+v = V(never, None, 60_000_000)
+check("not started yet is NOT 'skipped' (ConditionResult=no is only the default)",
+      v.startswith("NOT STARTED YET"), v)
+exited = dict(never, ActiveState="active", SubState="exited",
+              ExecMainStartTimestampMonotonic="111000000", ExecMainExitTimestampMonotonic="111300000")
+v = V(exited, None, 200_000_000)
+check("exited in 0.3s is a skip, NOT 'running' (active covers SubState=exited)",
+      v.startswith("SKIPPED") and "0.3s" in v, v)
+v = V(dict(exited, ExecMainExitTimestampMonotonic="181000000"), None, 200_000_000)
+check("a 70s run is a real re-read, and says the skip was not honoured",
+      v.startswith("RAN") and "70s" in v and "NOT honoured" in v, v)
+v = V(dict(never, ActiveState="activating", SubState="start",
+           ExecMainStartTimestampMonotonic="100000000"), None, 130_000_000)
+check("genuinely running says for how long", v.startswith("RUNNING for 30s"), v)
+check("its own result file wins: skip", V(exited, "skip", 0).startswith("SKIPPED - it started and stood down"))
+check("its own result file wins: fail", "FAILED" in V(exited, "fail", 0))
+check("unit absent", V({"LoadState": "not-found"}, None, 0) == "no such unit on this image")
+
+print("the layer list is the chain this boot mounted, in readable units")
+chain = srv._layer_chain("BOOT_IMAGE=/casper/vmlinuz layerfs-path=minimal.standard.live.als.squashfs fsck.mode=skip ---")
+check("four layers, lowest first", chain == ["minimal.squashfs", "minimal.standard.squashfs",
+                                             "minimal.standard.live.squashfs",
+                                             "minimal.standard.live.als.squashfs"], chain)
+check("no layerfs-path: the image default chain", srv._layer_chain("quiet splash")[-1] == "minimal.standard.live.squashfs")
+check("128 KiB blocks no longer print as '0 GB'", srv._bytes(131072) == "131.07 KB" and srv._bytes(1_650_000_000) == "1.65 GB",
+      (srv._bytes(131072), srv._bytes(1_650_000_000)))
+
+print("the timeline reads the journal's monotonic stamps")
+J = """[    0.000000] host kernel: Linux version 6.8.0
+[   23.412000] host systemd[1]: Started gdm.service - GNOME Display Manager.
+[   31.020000] host als-autostart[2211]: mode=kiosk
+[   31.500000] host als-autostart[2211]: starting backend: python3 /cdrom/gui/server.py (port 8765)
+[   33.900000] host als-autostart[2211]: kiosk: firefox --profile /home/ubuntu/als-kiosk-profile --kiosk http://127.0.0.1:8765/
+[   74.100000] host systemd[1]: Mounted snap-firefox-5751.mount - Mount unit for firefox, revision 5751.
+[   75.000000] host systemd[1]: Mounted snap-firefox-5751.mount - again
+[  110.900000] host systemd[1]: Finished snapd.seeded.service - Wait until snapd is fully seeded.
+"""
+tl = srv._timeline(J)
+labels = [l for _, l in tl]
+check("markers in time order", labels == ["display manager started", "kiosk session running", "backend starting",
+                                          "browser launched", "firefox snap mounted", "snap seeding finished"], labels)
+check("first match wins", dict((l, t) for t, l in tl)["firefox snap mounted"] == 74.1, tl)
+
+print("the splash probe names the missing images instead of blaming /run/initramfs")
+themes = tempfile.mkdtemp()
+os.makedirs(os.path.join(themes, "als"))
+os.makedirs(os.path.join(themes, "bgrt"))
+open(os.path.join(themes, "als", "als.plymouth"), "w").write("[Plymouth Theme]\n")
+open(os.path.join(themes, "bgrt", "bgrt.plymouth"), "w").write("[Plymouth Theme]\nName=BGRT\n")
+p = srv.plymouth_state(themes)
+check("the als theme as first shipped is called INCOMPLETE, naming lock.png",
+      "INCOMPLETE" in p["theme"] and "lock.png" in p["theme"] and "bullet.png" in p["theme"], p["theme"])
+check("stock bgrt is called out as the Ubuntu fallback", "Ubuntu" in p["fallback"], p["fallback"])
+check("no 'initramfs' verdict any more", "initramfs" not in p and "pivot" in p, p)
+for f in srv.TWO_STEP_REQUIRES:
+    open(os.path.join(themes, "als", f), "wb").write(b"x")
+open(os.path.join(themes, "bgrt", "bgrt.plymouth"), "w").write("Name=BGRT\n# Replaced by the ALS audit station\n")
+p = srv.plymouth_state(themes)
+check("complete theme reads complete", p["theme"].startswith("present and complete"), p["theme"])
+check("our bgrt reads as ours", "OURS" in p["fallback"], p["fallback"])
+
+print("make-splash --theme-only: a theme two-step will load, and the boot archive untouched")
+import subprocess
+out = tempfile.mkdtemp()
+r = subprocess.run([sys.executable, os.path.join(HERE, "boot", "make-splash.py"), "--theme-only", "--out", out],
+                   capture_output=True, text=True)
+check("runs", r.returncode == 0, r.stderr[-400:])
+als = os.path.join(out, "theme", "usr", "share", "plymouth", "themes", "als")
+for f in srv.TWO_STEP_REQUIRES:
+    check("ships %s" % f, os.path.isfile(os.path.join(als, f)))
+check("no als-splash.img written", not os.path.exists(os.path.join(out, "als-splash.img")))
+body = open(os.path.join(als, "als.plymouth")).read()
+check("per-mode groups present (two-step reads UseEndAnimation only there)",
+      all(("[%s]" % g) in body for g in ("boot-up", "shutdown", "reboot")) and "UseEndAnimation=false" in body)
+bg = open(os.path.join(out, "theme", "usr", "share", "plymouth", "themes", "bgrt", "bgrt.plymouth")).read()
+check("layer bgrt is ours and draws from themes/als",
+      "Name=BGRT" in bg and "ALS audit station" in bg and "ImageDir=/usr/share/plymouth/themes/als" in bg, bg[:200])
+spec2 = importlib.util.spec_from_file_location("mksplash", os.path.join(HERE, "boot", "make-splash.py"))
+mk = importlib.util.module_from_spec(spec2)
+spec2.loader.exec_module(mk)
+check("server and builder agree on what two-step requires", tuple(mk.TWO_STEP_REQUIRES) == tuple(srv.TWO_STEP_REQUIRES))
 
 print("")
 print("%d passed, %d failed" % (PASS[0], len(FAIL)))

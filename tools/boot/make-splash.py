@@ -165,6 +165,14 @@ def draw_disc(buf, width, cx, cy, radius, rgb, alpha):
                 put(buf, width, x, y, (r, g, b, alpha))
 
 
+def draw_rect(buf, width, x0, y0, x1, y1, rgb, border=None):
+    """Fill [x0,x1) x [y0,y1); an optional 1px border in another colour."""
+    for y in range(y0, y1):
+        for x in range(x0, x1):
+            edge = x in (x0, x1 - 1) or y in (y0, y1 - 1)
+            put(buf, width, x, y, (border if (edge and border) else rgb) + (255,))
+
+
 # --------------------------------------------------------------------------
 # cpio (newc), uncompressed
 # --------------------------------------------------------------------------
@@ -248,6 +256,15 @@ Description=Flat background, wordmark, and a chasing indicator that proves the m
 #
 # Check it yourself from the live session before trusting this:
 #     lsinitramfs /cdrom/casper/initrd | grep plymouth/
+#
+# two-step also REFUSES a theme whose ImageDir lacks lock.png, entry.png or
+# bullet.png - the password-prompt images - even on a machine that never asks
+# for a password (plymouth 24.004 two-step/plugin.c show_splash_screen, and
+# ply-entry.c ply_entry_load). This theme shipped without them for weeks, so it
+# never loaded ANYWHERE: at boot plymouthd fell through to the bgrt override in
+# als-splash.img (which looked identical, so nobody could tell), and at shutdown
+# to Ubuntu's stock bgrt in the real root - the Dell logo and the Ubuntu
+# wordmark. make-splash.py now refuses to write a theme without them.
 ModuleName=two-step
 
 [two-step]
@@ -282,7 +299,36 @@ TitleVerticalAlignment=.5
 MessageBelowAnimation=true
 DialogClearsFirmwareBackground=true
 UseFirmwareBackground=false
+
+# two-step reads UseEndAnimation and UseFirmwareBackground ONLY from these
+# per-mode groups (load_mode_settings), never from [two-step] above. Without
+# them UseEndAnimation defaults to true and the dots play an end sequence before
+# the screen is handed over. The bgrt override that has actually been drawing
+# the boot splash sets exactly this, so the look does not change.
+[boot-up]
+UseEndAnimation=false
+UseFirmwareBackground=false
+
+[shutdown]
+UseEndAnimation=false
+UseFirmwareBackground=false
+
+[reboot]
+UseEndAnimation=false
+UseFirmwareBackground=false
 """
+
+# Every file two-step will not load a theme without. Checked before anything is
+# written, so a theme that would silently fall back to Ubuntu's never ships.
+TWO_STEP_REQUIRES = ('lock.png', 'entry.png', 'bullet.png')
+
+# For the LAYER only: our theme under the name plymouthd falls back to. If als
+# ever fails to load in the real root, the fallback is still ours rather than
+# Ubuntu's. make-als-layer.sh copies themes/bgrt when it finds it here.
+# ImageDir stays themes/als - the real root's spinner images are Ubuntu's.
+BGRT_FILE = PLYMOUTH_FILE.replace(
+    'Name=ALS Audit Station',
+    'Name=BGRT\n# Replaced by the ALS audit station: the fallback theme is ours too.', 1)
 
 PLYMOUTHD_CONF = """\
 # Read by plymouthd BEFORE anything else, and it wins over
@@ -341,6 +387,36 @@ def build_images(outdir, wordmark, subtitle, frames):
             name = '%s%04d.png' % (prefix, f + 1)
             n = write_png(os.path.join(outdir, name), w, h, buf)
             made.append((name, n))
+
+    # ---- the password-prompt images ----------------------------------------
+    # Never seen on this stick (nothing here is encrypted), and two-step will
+    # not load the theme without them - see TWO_STEP_REQUIRES. Drawn in the
+    # theme's own colours in case plymouth ever does show a prompt.
+    field, edge, ink = (0x13, 0x20, 0x3A), (0x1F, 0x33, 0x50), (0x7E, 0x96, 0xB8)
+
+    buf = new_canvas(420, 160)                          # the dialog behind it
+    draw_rect(buf, 420, 0, 0, 420, 160, field, edge)
+    made.append(('box.png', write_png(os.path.join(outdir, 'box.png'), 420, 160, buf)))
+
+    buf = new_canvas(300, 34)                           # the text field
+    draw_rect(buf, 300, 0, 0, 300, 34, field, (0x4D, 0xA3, 0xFF))
+    made.append(('entry.png', write_png(os.path.join(outdir, 'entry.png'), 300, 34, buf)))
+
+    buf = new_canvas(10, 10)                            # one typed character
+    draw_disc(buf, 10, 5, 5, 4, (0xF2, 0xF6, 0xFB), 255)
+    made.append(('bullet.png', write_png(os.path.join(outdir, 'bullet.png'), 10, 10, buf)))
+
+    lw, lh = 20, 26                                     # a padlock
+    buf = new_canvas(lw, lh)
+    for y in range(12):                                 # the shackle: a ring's top
+        for x in range(lw):
+            d2 = (x + 0.5 - 10) ** 2 + (y + 0.5 - 10) ** 2
+            if 16 <= d2 <= 49:
+                put(buf, lw, x, y, ink + (255,))
+    draw_rect(buf, lw, 1, 11, 19, lh, ink)              # the body
+    draw_disc(buf, lw, 10, 17, 2, (0x0B, 0x12, 0x20), 255)
+    draw_rect(buf, lw, 9, 18, 11, 22, (0x0B, 0x12, 0x20))
+    made.append(('lock.png', write_png(os.path.join(outdir, 'lock.png'), lw, lh, buf)))
     return made
 
 
@@ -352,6 +428,10 @@ def main():
     ap.add_argument('--sub', default='STARTING')
     ap.add_argument('--frames', type=int, default=12)
     ap.add_argument('--verify', action='store_true')
+    ap.add_argument('--theme-only', action='store_true',
+                    help='write dist\\theme\\ (the layer copy, i.e. the SHUTDOWN '
+                         'splash) and leave als-splash.img alone - the boot '
+                         'archive on the stick is the one proven on hardware')
     ap.add_argument('--stick', metavar='E:',
                     help='also copy onto the stick: <stick>\\als-splash.img and '
                          '<stick>\\boot\\theme\\.  grub.cfg is NEVER written '
@@ -361,6 +441,10 @@ def main():
     theme_out = os.path.join(args.out, 'theme', THEME_DIR)
     os.makedirs(theme_out, exist_ok=True)
     made = build_images(theme_out, args.text, args.sub, args.frames)
+    missing = [f for f in TWO_STEP_REQUIRES if f not in dict(made)]
+    if missing:
+        raise SystemExit('two-step will not load a theme without %s - refusing '
+                         'to write one that falls back to Ubuntu' % ', '.join(missing))
 
     with open(os.path.join(theme_out, THEME + '.plymouth'), 'w',
               newline='\n') as fh:
@@ -370,6 +454,20 @@ def main():
     with open(os.path.join(conf_dir, 'plymouthd.conf'), 'w',
               newline='\n') as fh:
         fh.write(PLYMOUTHD_CONF)
+    bgrt_dir = os.path.join(args.out, 'theme', 'usr', 'share', 'plymouth',
+                            'themes', 'bgrt')
+    os.makedirs(bgrt_dir, exist_ok=True)
+    with open(os.path.join(bgrt_dir, 'bgrt.plymouth'), 'w', newline='\n') as fh:
+        fh.write(BGRT_FILE)
+
+    if args.theme_only:
+        print('theme     : %s  (%d images)' % (theme_out, len(made)))
+        print('fallback  : %s' % os.path.join(bgrt_dir, 'bgrt.plymouth'))
+        print('archive   : NOT written (--theme-only)')
+        print()
+        print('Sync the stick (sync-usb.ps1 -Apply copies boot\\dist\\theme to')
+        print('boot\\theme), then rebuild the layer so the shutdown splash picks it up.')
+        return
 
     # ---- pack ------------------------------------------------------------
     c = Cpio()

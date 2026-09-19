@@ -357,6 +357,18 @@ do_build() {
       mkdir -p "$STAGE/etc/plymouth"
       printf '[Daemon]\nTheme=als\nShowDelay=0\n' > "$STAGE/etc/plymouth/plymouthd.conf"
       say "  /usr/share/plymouth/themes/als  (shutdown splash)"
+      # two-step refuses a theme without these (plymouth two-step/plugin.c and
+      # ply-entry.c) and falls through to bgrt. The first layer shipped without
+      # them, and that - not /run/initramfs - is why shutdown showed Ubuntu.
+      for f in lock.png entry.png bullet.png; do
+        [ -f "$STAGE/usr/share/plymouth/themes/als/$f" ] || {
+          say "  WARNING: themes/als has no $f - plymouth will NOT load it and"
+          say "           shutdown falls back to Ubuntu's logo. Re-run"
+          say "           tools/boot/make-splash.py --theme-only and re-sync."
+        }
+      done
+      [ -f "$STAGE/usr/share/plymouth/themes/bgrt/bgrt.plymouth" ] \
+        && say "  /usr/share/plymouth/themes/bgrt  (the fallback is ours too)"
     else
       say "  no theme at $THEME_SRC - shutdown will show Ubuntu's splash"
       say "  (run tools/boot/make-splash.py on Windows and re-sync to fix)"

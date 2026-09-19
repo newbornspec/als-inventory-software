@@ -1468,26 +1468,33 @@ def _analyze(args, timeout=8):
     return (r.stdout or "").strip()
 
 
-def plymouth_state():
-    """Why the shutdown splash is Ubuntu's and not ours.
+# two-step will not load a theme whose ImageDir lacks any of these - see
+# plymouth_state. Kept in step with TWO_STEP_REQUIRES in boot/make-splash.py.
+TWO_STEP_REQUIRES = ("lock.png", "entry.png", "bullet.png")
+PLY_THEMES = "/usr/share/plymouth/themes"
 
-    Our theme sets UseFirmwareBackground=false - a flat navy fill, no firmware
-    logo. The operator's photograph of the shutdown screen shows the Dell logo
-    AS the background with the Ubuntu wordmark under it, which is bgrt. So our
-    theme is not drawing; plymouthd is falling back. als.plymouth's own comment
-    predicted this exact failure mode: "the failure mode of this file is a
-    visible Ubuntu logo, never a black screen."
 
-    Four things could cause it and they need different fixes, so this reports
-    all four rather than betting on one:
-      conf      - is OUR plymouthd.conf the one in the running root?
-      theme     - is the als theme actually there, in the running root?
-      module    - is two-step.so present? als names it, and a theme whose
-                  module is missing loads nothing and falls back.
-      initramfs - does /run/initramfs exist? systemd pivots there to shut down
-                  a live system, and a plymouthd re-executed from there reads
-                  ITS theme, not the real root's. If this exists and has no als
-                  theme in it, that is the answer.
+def plymouth_state(themes=PLY_THEMES):
+    """Why the shutdown splash is Ubuntu's and not ours - each link of the chain.
+
+    SETTLED 2026-09-19, from plymouth's own source and this stick's own layer.
+    two-step refuses any theme whose ImageDir lacks lock.png, entry.png or
+    bullet.png (two-step/plugin.c show_splash_screen; ply-entry.c
+    ply_entry_load) - the password-prompt images, required even on a machine
+    that never prompts. The als theme shipped without them, so it never loaded
+    anywhere. plymouthd fell through to bgrt: OURS in the boot archive, which is
+    why the boot splash looked right, and Ubuntu's stock one in the real root,
+    which is what shutdown draws - the Dell logo and the Ubuntu wordmark.
+
+      conf      - our plymouthd.conf names als
+      theme     - als is present AND complete enough for two-step to load
+      module    - two-step.so exists
+      fallback  - whose bgrt the real root falls back to if als still fails
+      pivot     - whether systemd pivots into /run/initramfs to shut down.
+                  /run/initramfs exists on EVERY Ubuntu boot - it is
+                  initramfs-tools' 0700 log directory - so its existence proves
+                  nothing. Only /run/initramfs/shutdown means a pivot. The
+                  previous version of this check got that wrong, and blamed it.
     """
     out = {}
 
@@ -1503,8 +1510,14 @@ def plymouth_state():
     except OSError as exc:
         out["conf"] = "unreadable: %s" % exc
 
-    out["theme"] = ("present" if os.path.isfile(
-        "/usr/share/plymouth/themes/als/als.plymouth") else "MISSING from the running root")
+    als = os.path.join(themes, "als")
+    if not os.path.isfile(os.path.join(als, "als.plymouth")):
+        out["theme"] = "MISSING from the running root"
+    else:
+        lacking = [f for f in TWO_STEP_REQUIRES if not os.path.isfile(os.path.join(als, f))]
+        out["theme"] = ("present and complete - two-step can load it" if not lacking else
+                        "present but INCOMPLETE - no %s, so two-step refuses it and "
+                        "shutdown falls back to bgrt. Rebuild the layer." % ", ".join(lacking))
 
     mods = sorted(os.path.basename(m) for m in
                   glob.glob("/usr/lib/*/plymouth/*.so") + glob.glob("/lib/*/plymouth/*.so"))
@@ -1518,15 +1531,98 @@ def plymouth_state():
     except OSError:
         out["default_alt"] = "unknown"
 
-    if os.path.isdir("/run/initramfs"):
-        has = os.path.isdir("/run/initramfs/usr/share/plymouth/themes/als")
-        out["initramfs"] = ("/run/initramfs EXISTS and %s the als theme - this is "
-                            "where shutdown draws from"
-                            % ("HAS" if has else "DOES NOT HAVE"))
-    else:
-        out["initramfs"] = "/run/initramfs does not exist (shutdown uses the real root)"
+    try:
+        with open(os.path.join(themes, "bgrt", "bgrt.plymouth"), errors="replace") as fh:
+            ours = "ALS audit station" in fh.read()
+        out["fallback"] = ("bgrt is OURS - even a failed als looks right" if ours else
+                           "bgrt is Ubuntu's stock theme - a failed als shows the Ubuntu logo")
+    except OSError:
+        out["fallback"] = "no bgrt theme in the running root"
+
+    try:
+        os.stat("/run/initramfs/shutdown")
+        out["pivot"] = "/run/initramfs/shutdown exists - systemd pivots there to shut down"
+    except FileNotFoundError:
+        out["pivot"] = "none - no /run/initramfs/shutdown, so shutdown draws from the real root"
+    except PermissionError:
+        try:
+            r = subprocess.run(elevate(["test", "-e", "/run/initramfs/shutdown"]),
+                               capture_output=True, timeout=5)
+            out["pivot"] = ("/run/initramfs/shutdown exists - systemd pivots there"
+                            if r.returncode == 0 else
+                            "none - no /run/initramfs/shutdown, so shutdown draws from the real root")
+        except Exception:  # noqa: BLE001
+            out["pivot"] = "unknown (/run/initramfs is root-only)"
+    except OSError as exc:
+        out["pivot"] = "unknown (%s)" % exc
 
     return out
+
+
+# What the APP waited on, as opposed to what graphical.target waited on. The two
+# differ: critical-chain answered "snapd.seeded, 95s" for graphical.target, but
+# the app was up at 82s - before seeding finished - so the chain alone cannot say
+# where the operator's 82 seconds went. First matching journal line for each.
+TIMELINE_MARKS = (
+    ("display manager started", r"Started gdm\.service|Started GNOME Display Manager"),
+    ("kiosk session running", r" als-autostart\[\d+\]: "),
+    ("backend starting", r" als-autostart\[\d+\]: starting backend"),
+    ("browser launched", r" als-autostart\[\d+\]: kiosk: "),
+    ("firefox snap mounted", r"Mounted snap-firefox"),
+    ("snap seeding finished", r"Finished snapd\.seeded\.service"),
+    ("graphical.target reached", r"Reached target graphical\.target"),
+)
+
+
+def _timeline(journal_text, marks=TIMELINE_MARKS):
+    """[(seconds, label)] from `journalctl -o short-monotonic`, in time order."""
+    found = {}
+    pats = [(label, re.compile(rx)) for label, rx in marks]
+    for line in journal_text.splitlines():
+        m = re.match(r"\s*\[\s*(\d+\.\d+)\]", line)
+        if not m:
+            continue
+        for label, rx in pats:
+            if label not in found and rx.search(line):
+                found[label] = float(m.group(1))
+    return sorted((t, label) for label, t in found.items())
+
+
+def boot_timeline():
+    try:
+        r = subprocess.run(elevate(["journalctl", "-b", "-o", "short-monotonic",
+                                    "--no-pager", "-q"]),
+                           capture_output=True, text=True, timeout=20)
+    except Exception as exc:  # noqa: BLE001
+        return ["journal unavailable: %s" % exc]
+    if r.returncode != 0 and not r.stdout:
+        return ["journal unavailable: %s" % (r.stderr.strip() or "no output")]
+    rows = _timeline(r.stdout)
+    if APP_READY["uptime"]:
+        rows = sorted(rows + [(APP_READY["uptime"], "APP READY (page served)")])
+    return ["%6.1fs  %s" % (t, label) for t, label in rows] or ["no markers found"]
+
+
+def _layer_chain(cmdline):
+    """The squashfs files casper ACTUALLY mounts, lowest first.
+
+    casper strips one dot-component at a time off layerfs-path (see
+    make-als-layer.sh), so minimal.standard.live.als.squashfs means four
+    layers. The stick carries forty more - languages, secure-boot variants -
+    that this boot never opens; listing them all buried the four that count."""
+    m = re.search(r"(?:^|\s)layerfs-path=(\S+)", cmdline or "")
+    top = m.group(1) if m else "minimal.standard.live.squashfs"
+    if top.endswith(".squashfs"):
+        top = top[:-len(".squashfs")]
+    parts = top.split(".")
+    return [".".join(parts[:i + 1]) + ".squashfs" for i in range(len(parts))]
+
+
+def _bytes(n):
+    for unit, size in (("GB", 1e9), ("MB", 1e6), ("KB", 1e3)):
+        if n >= size:
+            return ("%.2f" % (n / size)).rstrip("0").rstrip(".") + " " + unit
+    return "%d bytes" % n
 
 
 def boot_timing():
@@ -1555,13 +1651,18 @@ def boot_timing():
     # margin, and every byte the machine reads off the stick goes through it.
     layers = []
     if mp:
-        for f in sorted(glob.glob(os.path.join(mp, "casper", "*.squashfs"))):
-            info = squashfs_info(f)
-            if info:
-                layers.append("%s - %s, %s blocks, %s"
-                              % (os.path.basename(f), info["comp"],
-                                 human_size(info["block"]), human_size(info["size"])))
+        try:
+            with open("/proc/cmdline") as fh:
+                cmdline = fh.read()
+        except OSError:
+            cmdline = ""
+        for name in _layer_chain(cmdline):
+            info = squashfs_info(os.path.join(mp, "casper", name))
+            layers.append("%s - %s, %d KiB blocks, %s" % (
+                name, info["comp"], info["block"] // 1024, _bytes(info["size"]))
+                if info else "%s - NOT FOUND on the stick" % name)
     out["layers"] = layers
+    out["timeline"] = boot_timeline()
 
     try:
         out["plymouth"] = plymouth_state()
@@ -1640,30 +1741,77 @@ def _machine_name():
     return " ".join(parts) or "unknown machine"
 
 
+MD5_UNIT_PROPS = ("LoadState", "ActiveState", "SubState", "Result",
+                  "ConditionResult", "ConditionTimestampMonotonic",
+                  "ExecMainStartTimestampMonotonic", "ExecMainExitTimestampMonotonic")
+MD5_RESULT_FILE = "/run/casper-md5check.json"
+
+
+def _md5_verdict(kv, result, now_us):
+    """Turn systemd's view of casper-md5check (+ its own result file) into words.
+
+    The first version of this read ConditionResult=no as "skipped" - but that is
+    also the DEFAULT for a unit systemd has not got round to yet, so the early
+    report said SKIPPED and the final one, minutes later, said RUNNING for a unit
+    that had long since exited (ActiveState=active covers SubState=exited for a
+    oneshot with RemainAfterExit). Both readings were wrong. The duration is what
+    settles it: standing down for fsck.mode=skip takes well under a second;
+    actually re-reading 5.9 GB takes a minute even on USB 3."""
+    if kv.get("LoadState") == "not-found":
+        return "no such unit on this image"
+
+    def us(key):
+        try:
+            return int(kv.get(key) or 0)
+        except ValueError:
+            return 0
+
+    start, end = us("ExecMainStartTimestampMonotonic"), us("ExecMainExitTimestampMonotonic")
+    act, sub = kv.get("ActiveState", "?"), kv.get("SubState", "?")
+
+    if result == "skip":
+        return "SKIPPED - it started and stood down (fsck.mode=skip honoured)"
+    if result == "fail":
+        return "RAN and FAILED - files on the stick do not match their checksums"
+
+    if act == "activating" or (start and not end and act == "active" and sub == "start"):
+        return "RUNNING for %.0fs so far - re-reading 5.9 GB of the stick" % (
+            max(0, now_us - start) / 1e6)
+    if start and end >= start:
+        took = (end - start) / 1e6
+        if result == "pass" or took >= 5:
+            return "RAN - re-read the stick in %.0fs (fsck.mode=skip NOT honoured)" % took
+        return "SKIPPED - it exited in %.1fs without reading the stick" % took
+    if kv.get("ConditionResult") == "no" and us("ConditionTimestampMonotonic"):
+        return "SKIPPED - its unit condition declined to start it"
+    if act == "inactive" and not start:
+        return "NOT STARTED YET - it is ordered after the desktop comes up"
+    return "%s/%s result=%s" % (act, sub, kv.get("Result", "?"))
+
+
 def md5check_state():
     """Whether Ubuntu's 5.9 GB disc self-check ran, is running, or was skipped.
 
     Asked of systemd directly rather than read from `systemd-analyze blame`,
     because blame refuses to answer until the boot has finished - and the early
-    report is written before that. ConditionResult=no is the proof that
-    fsck.mode=skip worked: the unit was considered and declined to start."""
+    report is written before that. casper-md5check also leaves its own verdict
+    in /run/casper-md5check.json (the installer reads it to warn about a bad
+    stick); when that exists it is the better witness and is preferred."""
     try:
         r = subprocess.run(
-            ["systemctl", "show", "casper-md5check.service",
-             "-p", "LoadState", "-p", "ActiveState", "-p", "SubState",
-             "-p", "ConditionResult", "-p", "Result"],
+            ["systemctl", "show", "casper-md5check.service"]
+            + [a for p in MD5_UNIT_PROPS for a in ("-p", p)],
             capture_output=True, text=True, timeout=5)
     except Exception as exc:  # noqa: BLE001
         return "unknown (%s)" % exc
     kv = dict(l.split("=", 1) for l in r.stdout.splitlines() if "=" in l)
-    if kv.get("LoadState") == "not-found":
-        return "no such unit on this image"
-    if kv.get("ConditionResult") == "no":
-        return "SKIPPED (fsck.mode=skip honoured)"
-    act = kv.get("ActiveState", "?")
-    if act in ("active", "activating"):
-        return "RUNNING - re-reading 5.9 GB of the stick right now"
-    return "%s/%s result=%s" % (act, kv.get("SubState", "?"), kv.get("Result", "?"))
+    result = None
+    try:
+        with open(MD5_RESULT_FILE) as fh:
+            result = str(json.load(fh).get("result") or "").lower() or None
+    except (OSError, ValueError, AttributeError):
+        pass
+    return _md5_verdict(kv, result, int(time.monotonic() * 1e6))
 
 
 def _md5check_blame(blame):
@@ -1713,15 +1861,18 @@ def report_now(final):
             "--- slowest units ---",
         ] + ["  " + l for l in (b.get("blame") or ["(not available until the boot finishes)"])] + [
             "",
-            "--- what the boot waited on ---",
+            "--- what graphical.target waited on (NOT the same as the app) ---",
         ] + ["  " + l for l in (b.get("chain") or ["(not available until the boot finishes)"])] + [
             "",
-            "--- layers ---",
+            "--- timeline: seconds after the kernel started ---",
+        ] + ["  " + l for l in (b.get("timeline") or ["(not available)"])] + [
+            "",
+            "--- layers this boot mounted, lowest first ---",
         ] + ["  " + l for l in (b.get("layers") or [])] + [
             "",
             "--- shutdown splash ---",
         ] + ["  %s: %s" % (k, ply.get(k)) for k in
-             ("conf", "theme", "module", "default_alt", "initramfs") if ply.get(k)] + [""]
+             ("conf", "theme", "module", "fallback", "default_alt", "pivot") if ply.get(k)] + [""]
 
         base = os.path.dirname(CONF_PATH)
         err = write_boot_file(os.path.join(base, "boot-report.txt"), "\n".join(lines))

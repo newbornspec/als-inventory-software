@@ -1255,19 +1255,23 @@ async function loadToolCheck(){
       h+='<div style="margin-top:6px;color:var(--mut2)">Layers:</div>';
       for(const l of b.layers) h+='<div style="font-size:12px">'+esc(l)+'</div>';
     }
+    if(b.timeline&&b.timeline.length){
+      h+='<div style="margin-top:6px;color:var(--mut2)">Timeline (seconds after the kernel started):</div>';
+      for(const l of b.timeline) h+='<div style="font-size:12px;white-space:pre">'+esc(l)+'</div>';
+    }
     if(b.chain&&b.chain.length){
-      h+='<div style="margin-top:6px;color:var(--mut2)">What the boot waited on:</div>';
+      h+='<div style="margin-top:6px;color:var(--mut2)">What graphical.target waited on (not the app):</div>';
       for(const l of b.chain) h+='<div style="font-size:12px;white-space:pre">'+esc(l)+'</div>';
     }
     if(b.blame&&b.blame.length){
       h+='<div style="margin-top:6px;color:var(--mut2)">Slowest units:</div>';
       for(const l of b.blame) h+='<div style="font-size:12px">'+esc(l)+'</div>';
     }
-    // Why the shutdown splash is still Ubuntu's. Four facts, because four
-    // different causes produce the same screen and they need different fixes.
+    // The shutdown splash, one link of plymouth's fallback chain per line - see
+    // plymouth_state() in server.py for why each one is there.
     if(b.plymouth){
       h+='<div style="margin-top:8px;color:var(--mut2)">Shutdown splash:</div>';
-      for(const k of ['conf','theme','module','default_alt','initramfs']){
+      for(const k of ['conf','theme','module','fallback','default_alt','pivot']){
         if(b.plymouth[k]) h+='<div style="font-size:12px">'+esc(k)+': '+esc(b.plymouth[k])+'</div>';
       }
     }
