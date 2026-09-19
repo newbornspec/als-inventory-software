@@ -477,7 +477,12 @@ als_write_update_stamps() {
   blk_var=$(als_stamp_blockers_var "$stage")
   # /usr must be OURS, so the merged /usr at boot has exactly this mtime rather
   # than a lower layer's.
+  # And 0755 whether we made it or not: overlayfs takes a merged directory's
+  # mode from the topmost layer, so a group-writable /usr here (a stage built
+  # under umask 002) would be the booted system's /usr. The build's permission
+  # pass already normalises the stage; this function does not rely on it.
   [ -d "$stage/usr" ] || mkdir -m 0755 "$stage/usr" || die "mkdir usr failed"
+  chmod 0755 "$stage/usr" || die "chmod usr failed"
   for dir in etc var; do
     if [ "$dir" = "etc" ] && [ -n "$blk_etc" ]; then
       say "  /etc/.updated NOT written - the layer ships input for ldconfig/hwdb/sysusers:"
@@ -490,6 +495,7 @@ als_write_update_stamps() {
       continue
     fi
     [ -d "$stage/$dir" ] || mkdir -m 0755 "$stage/$dir" || die "mkdir $dir failed"
+    chmod 0755 "$stage/$dir" || die "chmod $dir failed"
     printf '%s\n%s\n%s\nTIMESTAMP_NSEC=%s000000000\n' \
       "# This file was created by systemd-update-done. Its only " \
       "# purpose is to hold a timestamp of the time this directory" \

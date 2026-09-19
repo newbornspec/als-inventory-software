@@ -77,6 +77,20 @@ for d in etc var usr; do
   [ "$p" = "755" ] && ok "/$d is 0755 (overlay takes the mode from our layer)" || bad "/$d mode" "$p"
 done
 
+echo "group-writable /usr, /etc, /var in the stage (built under umask 002)"
+# The default umask for a normal Ubuntu user is 002, and a CI runner's could be
+# too. The stamping function must SET 0755 on the directories it pins, not
+# inherit whatever the stage happened to be made with - our layer's mode is the
+# booted system's mode for these three.
+S=$(new_stage)
+mkdir -p "$S/etc" "$S/var"
+chmod 0775 "$S/usr" "$S/etc" "$S/var"
+( umask 0002; als_write_update_stamps "$S" "$T0" >/dev/null )
+for d in etc var usr; do
+  p=$(stat -c %a "$S/$d")
+  [ "$p" = "755" ] && ok "0775 /$d is made 0755" || bad "0775 /$d made 0755" "$p"
+done
+
 echo "/usr NEWER than T before stamping (clock behind, or a late write)"
 S=$(new_stage)
 touch -d "@$((T0 + 5000))" "$S/usr"
