@@ -540,6 +540,61 @@ def stamp_provenance(payload):
     return payload
 
 
+# Which code produced a record. Bumped by hand when the kiosk or the engine
+# changes what a wipe does or reports; the engine carries the same constant
+# (ALS_TOOL_VERSION in hardware-audit.sh). A certificate that cannot say which
+# tool erased the drive cannot be checked against that tool's known faults -
+# and this project has already had to withdraw certificates (TRIM "wipes")
+# made by one particular version.
+ALS_TOOL_NAME = "als-audit-station"
+ALS_TOOL_VERSION = "2026.09.19"
+STICK_VERSION_FILE = os.path.join(HERE, ".stick-version")
+
+
+def stick_commit(path=None):
+    """The git commit the stick was synced from, or None.
+
+    sync-usb.ps1 (Write-Stamp) writes gui/.stick-version from Windows:
+        commit 7eda9ea          (or "commit 7eda9ea-dirty", or "commit unknown")
+        synced 2026-09-19T10:00:00
+    PowerShell 5.1's Out-File -Encoding utf8 puts a byte-order mark in front and
+    ends lines with CRLF, and a hand-copied stick may have no stamp at all.
+    Anything that is not a plausible short hash reads as None - the record then
+    simply omits toolCommit rather than carrying junk."""
+    try:
+        with open(path or STICK_VERSION_FILE, "rb") as fh:
+            raw = fh.read(4096)
+    except OSError:
+        return None
+    if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        text = raw.decode("utf-16", errors="replace")
+    else:
+        text = raw.decode("utf-8-sig", errors="replace")
+    for line in text.splitlines():
+        m = re.match(r"^\s*commit\s+([0-9a-fA-F]{4,40}(?:-dirty)?)\s*$", line.lstrip("﻿"))
+        if m:
+            return m.group(1).lower()
+    return None
+
+
+def stamp_tool(payload, result=None):
+    """toolName / toolVersion / toolCommit on a wipe record (contract C2).
+    All three are optional on the API, so an older server simply ignores them.
+
+    The version the ENGINE reports in its WIPE_RESULT wins over this file's:
+    the engine is the code that actually erased the drive. The two only differ
+    on a half-synced stick, and then the eraser's version is the one a
+    certificate needs. An engine that predates the field falls back to ours."""
+    payload["toolName"] = ALS_TOOL_NAME
+    ver = (result or {}).get("toolVersion")
+    ok = isinstance(ver, str) and re.match(r"^[A-Za-z0-9._+-]{1,64}$", ver)
+    payload["toolVersion"] = ver if ok else ALS_TOOL_VERSION
+    commit = stick_commit()
+    if commit:
+        payload["toolCommit"] = commit
+    return payload
+
+
 def upload_audit(payload):
     """Send a device record. On failure, queue it for automatic retry.
     Returns (response_or_None, queued_bool, error_message).
@@ -2707,6 +2762,7 @@ class Handler(BaseHTTPRequestHandler):
                     payload["lotId"] = lot_id
                 if sub_lot_id:
                     payload["subLotId"] = sub_lot_id
+                stamp_tool(payload, result)
                 stamp_provenance(payload)
                 out, queued, err = upload_audit(payload)
                 if queued:
