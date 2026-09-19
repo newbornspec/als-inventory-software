@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { Logger } from '@nestjs/common';
 import { In, type DataSource, type EntityManager } from 'typeorm';
 import { Asset } from '../assets/asset.entity';
 import { AssetAudit, DataWipeStatus } from '../assets/asset-audit.entity';
@@ -16,7 +17,7 @@ import { storable } from './canonical-json';
 import {
   canonicalBytes,
   sha256Hex,
-  verifyChain,
+  verifyRecord,
   type CertificatePayload,
   type CertificateRecord,
   type CertificateSigner,
@@ -51,13 +52,61 @@ import { ErasureCertificate } from './erasure-certificate.entity';
 const LOCK_NAMESPACE = 0x414c53; // 'ALS'
 const LOCK_CERT_CHAIN = 29;
 
-// How long a certificate verified back to the start stays a checkpoint for
-// later walks in this process. The table is insert-only, so a checkpoint
-// only hides tampering by someone who disabled the trigger - and only for
-// this long; the offline verifier and a restart always walk in full.
-const CHECKPOINT_TTL_MS = 15 * 60 * 1000;
-// Predecessors fetched per query while walking the chain.
-const WALK_BATCH = 500;
+// THE PUBLIC CHECK walks the chain, and anyone can ask for it, so the walk
+// is bounded (review of step 30: with 10,000 certificates a full walk is
+// about 7 s of synchronous crypto, and every request did its own, holding
+// the whole chain in memory). Now:
+//   - The chain is walked in seq order, WALK_BATCH certificates per query,
+//     handing the event loop back between batches and holding one batch in
+//     memory at a time.
+//   - What a walk proved is kept: the highest seq verified back to the
+//     first certificate (the checkpoint), or the first seq that failed. A
+//     check of a certificate at or below the checkpoint reads that one row
+//     and checks it in full; a newer certificate extends the walk from the
+//     checkpoint, not from the start.
+//   - One walk at a time per process: concurrent checks wait for the walk
+//     already running instead of starting their own.
+//   - Every CHAIN_RECHECK_MS the chain is walked again from the start, in
+//     the background, while checks keep answering from the last result. The
+//     table is insert-only, so this only matters if someone disabled the
+//     trigger and edited an old row; the offline verifier and a restart
+//     always start from scratch.
+const CHAIN_RECHECK_MS = 15 * 60 * 1000;
+// Certificates fetched and verified per step of a walk (~0.7 ms each).
+const WALK_BATCH = 100;
+
+// What the last walk proved.
+interface ChainState {
+  // Every certificate up to this seq verifies and links back to the first
+  // (0: none yet), and the payload hash of that last one.
+  throughSeq: number;
+  throughSha: string | null;
+  // The first certificate that did not verify or link; every certificate
+  // from it on is invalid.
+  broken: { seq: number; reason: string } | null;
+  // When the last walk that started from the first certificate began.
+  fullWalkAt: number;
+}
+
+type StoredRecord = CertificateRecord & { seq: number };
+
+const RECORD_COLUMNS = `id, seq, number, asset_id, payload, payload_sha256,
+  prev_sha256, signature, key_id, issued_at`;
+
+function recordOf(r: Record<string, unknown>): StoredRecord {
+  return {
+    id: r.id as string,
+    seq: Number(r.seq),
+    number: r.number as string,
+    assetId: r.asset_id as string,
+    payload: r.payload as CertificatePayload,
+    payloadSha256: r.payload_sha256 as string,
+    prevSha256: (r.prev_sha256 as string | null) ?? null,
+    signature: r.signature as string,
+    keyId: r.key_id as string,
+    issuedAt: r.issued_at as Date,
+  };
+}
 
 const LEVEL_RANK = { none: 0, clear: 1, purge: 2 } as const;
 
@@ -100,7 +149,9 @@ type Inputs =
     };
 
 export class CertificateLedger {
-  private checkpoints = new Map<string, number>();
+  private readonly log = new Logger(CertificateLedger.name);
+  private chain: ChainState | null = null;
+  private walking: Promise<void> | null = null;
 
   constructor(
     private readonly ds: DataSource,
@@ -141,74 +192,122 @@ export class CertificateLedger {
     return this.ds.getRepository(ErasureCertificate).findOne({ where: { id } });
   }
 
-  // Re-hash, check the signature and walk the chain back to the first
-  // certificate, or to a checkpoint (a certificate this process verified
-  // back to the start within CHECKPOINT_TTL_MS).
-  async verify(id: string): Promise<Verdict> {
+  // Is this certificate genuine and unaltered, with every certificate before
+  // it? The certificate itself is re-hashed and its signature checked on
+  // every call; the ones before it are covered by the chain walk (see
+  // CHAIN_RECHECK_MS above). Pass the row when the caller already has it,
+  // to save reading it again.
+  async verify(target: string | ErasureCertificate): Promise<Verdict> {
     if (!this.signer) return { valid: false, reason: 'signing is off' };
-    const chain: CertificateRecord[] = [];
-    let rows = await this.walk('id', id);
+    const rec =
+      typeof target === 'string'
+        ? await this.one(target)
+        : { ...target, seq: Number(target.seq) };
+    if (!rec) return { valid: false, reason: 'not found' };
+    const own = verifyRecord(rec, this.signer.verifyKeys);
+    if (!own.valid) return own;
+    const chain = await this.chainThrough(rec.seq);
+    if (chain.broken && rec.seq >= chain.broken.seq)
+      return {
+        valid: false,
+        reason:
+          rec.seq === chain.broken.seq
+            ? chain.broken.reason
+            : `an earlier certificate: ${chain.broken.reason}`,
+      };
+    if (rec.seq > chain.throughSeq)
+      return { valid: false, reason: 'chain is broken' };
+    return { valid: true };
+  }
+
+  // The chain state once it covers `seq` - verified through it, or broken
+  // at or before it - walking only as far as needed, one walk at a time.
+  private async chainThrough(seq: number): Promise<ChainState> {
+    for (let attempt = 0; ; attempt++) {
+      const s = this.chain;
+      const covers =
+        !!s && (s.throughSeq >= seq || (!!s.broken && s.broken.seq <= seq));
+      const fresh = !!s && Date.now() - s.fullWalkAt < CHAIN_RECHECK_MS;
+      if (s && covers) {
+        // Answer from what was proved; start the re-check from the first
+        // certificate in the background when it is due.
+        if (!fresh && !this.walking)
+          this.walk(true).catch((e: Error) =>
+            this.log.error(`certificate chain re-check failed: ${e.message}`),
+          );
+        return s;
+      }
+      // A certificate newer than the checkpoint is missing from a walk only
+      // if it was issued while that walk ran, and the next walk reaches it.
+      // Give up rather than loop if even that does not.
+      if (s && attempt >= 3) return s;
+      await this.walk(!s || !fresh);
+    }
+  }
+
+  // Joins the walk already running, if any; otherwise walks - from the
+  // first certificate (`fromStart`) or on from the checkpoint.
+  private walk(fromStart: boolean): Promise<void> {
+    this.walking ??= this.walkChain(fromStart).finally(() => {
+      this.walking = null;
+    });
+    return this.walking;
+  }
+
+  private async walkChain(fromStart: boolean): Promise<void> {
+    const keys = this.signer!.verifyKeys;
+    const startedAt = Date.now();
+    const prev = fromStart ? null : this.chain;
+    // Nothing after a break can verify; only a walk from the start (the
+    // next re-check) looks again.
+    if (prev?.broken) return;
+    let throughSeq = prev?.throughSeq ?? 0;
+    let throughSha = prev?.throughSha ?? null;
+    let broken: ChainState['broken'] = null;
     for (;;) {
-      if (!rows.length) break;
-      chain.push(...rows);
-      const last = rows[rows.length - 1];
-      if (last.prevSha256 === null) break;
-      // A checkpoint among the predecessors: no need to fetch further.
-      if (chain.slice(1).some((r) => this.isCheckpoint(r.payloadSha256))) break;
-      if (rows.length < WALK_BATCH) break; // predecessor missing
-      rows = await this.walk('sha', last.prevSha256);
+      const rows: Array<Record<string, unknown>> = await this.ds.query(
+        `SELECT ${RECORD_COLUMNS} FROM erasure_certificates
+         WHERE seq > $1 ORDER BY seq LIMIT $2`,
+        [throughSeq, WALK_BATCH],
+      );
+      for (const row of rows) {
+        const r = recordOf(row);
+        const own = verifyRecord(r, keys);
+        // Each certificate names the one issued just before it (the ledger
+        // issues under one lock, in seq order) by the hash that one's
+        // payload really has - which verifyRecord has just recomputed and
+        // matched against its payloadSha256.
+        const reason = !own.valid
+          ? own.reason
+          : r.prevSha256 !== throughSha
+            ? 'chain is broken'
+            : null;
+        if (reason) {
+          broken = { seq: r.seq, reason };
+          break;
+        }
+        throughSeq = r.seq;
+        throughSha = r.payloadSha256;
+      }
+      if (broken || rows.length < WALK_BATCH) break;
+      // Hand the event loop back between batches, so a long walk never
+      // holds up the rest of the API.
+      await new Promise<void>((resolve) => setImmediate(resolve));
     }
-    const verdict = verifyChain(chain, this.signer.verifyKeys, (h) =>
-      this.isCheckpoint(h),
-    );
-    if (verdict.valid) {
-      const until = Date.now() + CHECKPOINT_TTL_MS;
-      for (const r of chain) this.checkpoints.set(r.payloadSha256, until);
-    }
-    return verdict;
+    this.chain = {
+      throughSeq,
+      throughSha,
+      broken,
+      fullWalkAt: prev ? prev.fullWalkAt : startedAt,
+    };
   }
 
-  private isCheckpoint(sha: string): boolean {
-    const until = this.checkpoints.get(sha);
-    if (until === undefined) return false;
-    if (until < Date.now()) {
-      this.checkpoints.delete(sha);
-      return false;
-    }
-    return true;
-  }
-
-  // Up to WALK_BATCH certificates: the one named (by id, or by its stored
-  // hash) and its predecessors in order, following prev_sha256.
-  private async walk(
-    by: 'id' | 'sha',
-    key: string,
-  ): Promise<CertificateRecord[]> {
+  private async one(id: string): Promise<StoredRecord | null> {
     const rows: Array<Record<string, unknown>> = await this.ds.query(
-      `WITH RECURSIVE chain AS (
-         SELECT c.*, 1 AS depth FROM erasure_certificates c
-         WHERE ${by === 'id' ? 'c.id = $1::uuid' : 'c.payload_sha256 = $1'}
-         UNION ALL
-         SELECT p.*, chain.depth + 1 FROM erasure_certificates p
-         JOIN chain ON p.payload_sha256 = chain.prev_sha256
-         WHERE chain.depth < $2
-       )
-       SELECT id, number, asset_id, payload, payload_sha256, prev_sha256,
-              signature, key_id, issued_at
-       FROM chain ORDER BY depth`,
-      [key, WALK_BATCH],
+      `SELECT ${RECORD_COLUMNS} FROM erasure_certificates WHERE id = $1::uuid`,
+      [id],
     );
-    return rows.map((r) => ({
-      id: r.id as string,
-      number: r.number as string,
-      assetId: r.asset_id as string,
-      payload: r.payload as CertificatePayload,
-      payloadSha256: r.payload_sha256 as string,
-      prevSha256: (r.prev_sha256 as string | null) ?? null,
-      signature: r.signature as string,
-      keyId: r.key_id as string,
-      issuedAt: r.issued_at as Date,
-    }));
+    return rows.length ? recordOf(rows[0]) : null;
   }
 
   private latestFor(

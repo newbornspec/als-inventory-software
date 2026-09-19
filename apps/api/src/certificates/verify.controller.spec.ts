@@ -103,7 +103,9 @@ function ledgerWith(certs: ErasureCertificate[]): CertificateLedger {
     enabled: true,
     find: (id: string) =>
       Promise.resolve(certs.find((c) => c.id === id) ?? null),
-    verify: (id: string) => {
+    // The controller passes the row it already read.
+    verify: (target: string | ErasureCertificate) => {
+      const id = typeof target === 'string' ? target : target.id;
       const c = certs.find((x) => x.id === id)!;
       return Promise.resolve(verifyRecord(c, signer.verifyKeys));
     },

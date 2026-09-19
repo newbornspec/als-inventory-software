@@ -75,7 +75,7 @@ export class VerifyController {
     if (!UUID.test(id)) throw new NotFoundException('Certificate not found');
     const cert = await this.ledger.find(id.toLowerCase());
     if (!cert) throw new NotFoundException('Certificate not found');
-    const result = publicResult(cert, await this.ledger.verify(cert.id));
+    const result = publicResult(cert, await this.ledger.verify(cert));
     if (wantsHtml(req)) {
       res.type('html');
       return publicResultHtml(result);

@@ -22,6 +22,7 @@ import type { IngestAuditDto } from '../devices/dto/ingest-audit.dto';
 import { DevicesService } from '../devices/devices.service';
 import { CertificateLedger } from './certificate-ledger';
 import { CertificateSigner } from './certificate-signing';
+import { signedLinks } from './chain-fixture-for-spec';
 import { ErasureCertificate } from './erasure-certificate.entity';
 import { VerifyController } from './verify.controller';
 
@@ -466,6 +467,67 @@ maybe('stored, signed erasure certificates (Postgres)', () => {
     }
     const again = new CertificateLedger(ds, signer);
     expect(await again.verify(ids[2])).toEqual({ valid: true });
+  }, 120000);
+
+  // Review of step 30: the public check is unauthenticated, so what one
+  // request costs must not grow with the chain. Before, every check fetched
+  // and verified every predecessor (up to 500 full payloads per query, until
+  // a checkpoint that all expired together), and concurrent checks each did
+  // their own walk.
+  it('checks share ONE walk of the chain, and a later check reads one row', async () => {
+    // A long chain, without filing hundreds of wipes: signed links appended
+    // after the current head, exactly as the ledger would.
+    const head: Array<{ payload_sha256: string }> = await ds.query(
+      'SELECT payload_sha256 FROM erasure_certificates ORDER BY seq DESC LIMIT 1',
+    );
+    const links = signedLinks(signer, 260, head[0]?.payload_sha256 ?? null);
+    await ds.getRepository(ErasureCertificate).insert(links);
+    const total = await ds.getRepository(ErasureCertificate).count();
+
+    // Every certificate payload read from Postgres through the ledger.
+    let payloads = 0;
+    const realQuery = (sql: string, params?: unknown[]): Promise<unknown> =>
+      DataSource.prototype.query.call(ds, sql, params) as Promise<unknown>;
+    const spy = jest
+      .spyOn(ds, 'query')
+      .mockImplementation(async (sql: string, params?: unknown[]) => {
+        const out = await realQuery(sql, params);
+        if (Array.isArray(out))
+          payloads += out.filter(
+            (r) => !!r && typeof r === 'object' && 'payload' in r,
+          ).length;
+        return out;
+      });
+    try {
+      const ledger = new CertificateLedger(ds, signer);
+      const last = links[links.length - 1].id;
+      // Twenty checks at once on a cold ledger (just deployed).
+      const verdicts = await Promise.all(
+        Array.from({ length: 20 }, () => ledger.verify(last)),
+      );
+      expect(verdicts.every((v) => v.valid)).toBe(true);
+      // One walk of the chain (each row once) plus each check's own row.
+      expect(payloads).toBeLessThanOrEqual(total + 20);
+
+      // Warm: a check of an older certificate reads only that certificate.
+      payloads = 0;
+      expect(await ledger.verify(links[5].id)).toEqual({ valid: true });
+      expect(payloads).toBe(1);
+
+      // A certificate issued since: the walk goes on from where it stopped,
+      // not from the start.
+      const [next] = signedLinks(
+        signer,
+        1,
+        links[links.length - 1].payloadSha256,
+      );
+      await ds.getRepository(ErasureCertificate).insert(next);
+      payloads = 0;
+      expect(await ledger.verify(next.id)).toEqual({ valid: true });
+      expect(payloads).toBe(2); // its own row, and the walk's one new row
+    } finally {
+      spy.mockRestore();
+    }
   }, 120000);
 
   it('without CERT_SIGNING_KEY nothing is stored, and the PDF says nothing about signatures', async () => {
