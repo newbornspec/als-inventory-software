@@ -307,7 +307,7 @@ PREFS
 # ALS_FF_TEMPLATE overrides the location (tests); a layer without a template
 # simply has none, and nothing changes.
 seed_ff_profile() {  # seed_ff_profile <profile dir>
-    local tpl="${ALS_FF_TEMPLATE:-/usr/share/als/firefox-profile-esr}" tmp
+    local tpl="${ALS_FF_TEMPLATE:-/usr/share/als/firefox-profile-esr}" tmp t0 t1
     [ -f "$tpl/compatibility.ini" ] || return 0
     if [ -e "$1" ] || [ -L "$1" ]; then
         log "profile $1 already exists - left as it is"
@@ -315,8 +315,16 @@ seed_ff_profile() {  # seed_ff_profile <profile dir>
     fi
     tmp="$1.template.$$"
     rm -rf "$tmp"
+    # Timed: on the station the copy reads ~19 MB cold off the layer over USB,
+    # a cost no off-station measurement saw. The boot report's "browser
+    # launched" is logged before this, so it counts there too.
+    t0=$(date +%s%N 2>/dev/null)
     if mkdir -p "$tmp" && cp -R "$tpl/." "$tmp/" && mv "$tmp" "$1"; then
-        log "profile $1 started from the template $tpl"
+        t1=$(date +%s%N 2>/dev/null)
+        case "$t0$t1" in
+            ''|*[!0-9]*) log "profile $1 started from the template $tpl" ;;
+            *) log "profile $1 started from the template $tpl in $(( (t1 - t0) / 1000000 )) ms" ;;
+        esac
     else
         rm -rf "$tmp"
         log "could not copy the profile template $tpl - starting from an empty profile"
@@ -338,6 +346,11 @@ if [ "$MODE" = "kiosk" ]; then
         log "kiosk: no browser found - falling back to a normal window"
         note "ALS Audit Station" "No browser found for kiosk mode. Opening normally."
     else
+        # The boot report's "browser launched" is the FIRST journal line that
+        # starts "kiosk: " (server.py TIMELINE_MARKS). Logged here, before the
+        # profile is prepared, so "APP READY minus browser launched" counts
+        # the profile-template copy as well as Firefox's own start.
+        log "kiosk: preparing $BROWSER"
         case "$BROWSER" in
             firefox|firefox-esr)
                 # $HOME, never /tmp. The SNAP Firefox has its own private /tmp,

@@ -172,6 +172,20 @@ case "$l" in "firefox-esr --profile $P --kiosk "*) ok "kiosk: Firefox runs on th
 [ "$(tpl_sum)" = "$before" ] && [ ! -e "$TPL/user.js" ] && ok "the template itself is untouched" || bad "template changed" "$(find "$TPL")"
 ls -d "$T/home"/*.template.* >/dev/null 2>&1 && bad "no temp copy left" "$(ls -d "$T/home"/*.template.*)" \
   || ok "no half-copied temp directory left behind"
+# The boot report's "browser launched" is the FIRST journal line starting
+# "kiosk: " (server.py TIMELINE_MARKS). It must be logged BEFORE the template
+# copy, or "APP READY minus browser launched" - the number the station check
+# reads - silently leaves the copy's cost out. And the copy times itself.
+lg=$(grep '^logger ' "$CALLS")
+n_kiosk=$(printf '%s\n' "$lg" | grep -n -- '-- kiosk: ' | head -1 | cut -d: -f1)
+n_tpl=$(printf '%s\n' "$lg" | grep -n 'started from the template' | head -1 | cut -d: -f1)
+if [ -n "$n_kiosk" ] && [ -n "$n_tpl" ] && [ "$n_kiosk" -lt "$n_tpl" ]; then
+  ok "the first 'kiosk: ' journal line (browser launched) comes before the template copy"
+else
+  bad "browser-launched marker before the copy" "kiosk line $n_kiosk, template line $n_tpl"
+fi
+printf '%s\n' "$lg" | grep -Eq 'started from the template .* in [0-9]+ ms' \
+  && ok "the template copy logs how long it took" || bad "copy duration logged" "$(printf '%s\n' "$lg" | grep template)"
 run full firefox-esr
 [ -f "$T/home/als-full-profile-esr/startupCache/scriptCache.bin" ] && ok "full: the ESR profile starts from it too" \
   || bad "full template" "$(find "$T/home/als-full-profile-esr" 2>&1 | head)"

@@ -336,6 +336,9 @@ packages), the Windows PC.
    not in this build. Photograph the reason it gives.)
    If it says `copy failed`, do **not** boot the stick again. Put back the
    copy you made in *Prepare*, step 3, from Windows first.
+   If it says `not enough room` / `Not copied`, the old layer was not touched
+   and the stick still boots as before: free some space on `E:` from Windows
+   (the new layer is about 161 MB, 53 MB more than the old one) and build again.
 4. Run `sudo bash /cdrom/make-als-layer.sh status`. `armed` must say `yes`.
 5. Restart.
 
@@ -373,9 +376,14 @@ packages), the Windows PC.
     much lower is not known yet: that is what this measures.)
   - Firefox start: `APP READY` minus `browser launched` is well under the
     old **13.6 s** (34.8 s -> 48.4 s on 2026-09-19). Write both numbers down.
-    Off the station this part went from 6.7 s to 1.05 s; how much of that
-    shows on the station is what this measures. The `grep -i template` line
-    must say `started from the template`.
+    `browser launched` is now logged *before* the profile template is
+    copied, so this number includes the copy as well as Firefox's own start.
+    The `grep -i template` line must say `started from the template ... in
+    N ms`: write N down too (the copy reads ~19 MB off the stick).
+    Off the station this part went from 6.7 s to 1.05 s, but those runs read
+    the layer from the PC's memory, not from a USB stick: reading from the
+    stick was never measured, and lz4 reads more off it than xz did. How much
+    of the gain shows on the station is what this measures.
   - The timeline has **no** `snap seeding finished` line. (A `firefox snap
     mounted` line can still appear: the image mounts its snap files at start,
     which is quick. Seeding them - the slow part - is what snapd being masked
