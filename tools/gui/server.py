@@ -677,19 +677,66 @@ def capture():
     # not the download that actually ran out of time.
     proc = subprocess.run(audit_cmd(env_vars={"AUDIT_DEBUG": "1"}),
                           capture_output=True, text=True, timeout=900)
-    out = proc.stdout or ""
-    profile, summary = None, []
-    for line in out.splitlines():
-        s = line.strip()
-        if s.startswith("{") and s.endswith("}"):
-            try:
-                profile = json.loads(s)
-                continue
-            except ValueError:
-                pass
-        summary.append(line)
-    if profile is None:
-        raise RuntimeError("Could not read the hardware profile from the engine.")
+    return parse_profile(proc.stdout or "")
+
+
+# The engine prints this line, then the profile on the line after it
+# (hardware-audit.sh, the AUDIT_DEBUG=1 exit). A line that starts with
+# AUDIT_PROFILE and a space carries the profile on the same line - the
+# engine may add that form later; both are accepted, the prefixed one first.
+PROFILE_HEADER = "--- captured JSON (debug; not uploaded) ---"
+PROFILE_PREFIX = "AUDIT_PROFILE "
+
+
+def parse_profile(out):
+    """Pick the hardware profile out of the engine's stdout. Returns
+    (profile, summary) or raises RuntimeError saying what was wrong.
+
+    This used to take the LAST line anywhere in the output that began with {
+    and ended with }. Everything the engine runs shares that stdout, so one
+    stray one-line object printed after the profile - a tool's JSON status, a
+    debug echo - silently became "the profile": no identification, serial None,
+    and every wipe after it was filed under a machine with no identity. The
+    profile is now read from exactly one place, the line the engine marks, and
+    it must look like a profile (a dict with an identification dict) or the
+    capture fails out loud instead of guessing."""
+    lines = out.split("\n")
+    raw, used = None, set()
+    for i, line in enumerate(lines):
+        if line.strip().startswith(PROFILE_PREFIX):
+            raw, used = line.strip()[len(PROFILE_PREFIX):].strip(), {i}
+            break
+    if raw is None:
+        for i, line in enumerate(lines):
+            if line.strip() == PROFILE_HEADER:
+                used = {i}
+                # The first non-blank line after the marker; a blank line is
+                # not a reason to give up, anything else is taken as-is and
+                # must parse.
+                for j in range(i + 1, len(lines)):
+                    if lines[j].strip():
+                        raw = lines[j].strip()
+                        used.add(j)
+                        break
+                break
+    if raw is None:
+        raise RuntimeError("Could not read the hardware profile from the engine: "
+                           "its output has no profile marker (the engine may have "
+                           "stopped early - check Show details, then Rescan).")
+    try:
+        profile = json.loads(raw)
+    except ValueError:
+        # Most likely cause: the profile came out pretty-printed or cut short,
+        # so the one line we read is only its first line ("{").
+        raise RuntimeError("Could not read the hardware profile from the engine: "
+                           "the line after the profile marker is not a complete "
+                           "JSON object (pretty-printed or truncated output?).")
+    if not isinstance(profile, dict) or \
+            not isinstance(profile.get("identification"), dict):
+        raise RuntimeError("Could not read the hardware profile from the engine: "
+                           "what it printed has no identification section, so "
+                           "this machine cannot be recorded.")
+    summary = [l for k, l in enumerate(lines) if k not in used]
     return profile, "\n".join(summary).strip()
 
 
@@ -721,7 +768,15 @@ def refresh(do_login=True):
         STATE["error"] = None
     try:
         STATE["conf"] = load_conf()
-        prof, summ = capture()
+        try:
+            prof, summ = capture()
+        except Exception:
+            # Forget the previous machine. Keeping it looked harmless - the
+            # screen still showed something - but every wipe started after a
+            # failed re-capture was then filed under whatever machine was on
+            # the bench LAST. No profile makes /api/wipe/start refuse instead.
+            STATE["profile"], STATE["summary"] = None, ""
+            raise
         STATE["profile"], STATE["summary"] = prof, summ
         # Attach SMART health to the profile so it is stored on the asset record
         # (profile is kept verbatim as JSONB, so this needs no API change).
@@ -2614,19 +2669,33 @@ class Handler(BaseHTTPRequestHandler):
                 if d not in offered:
                     return self._send(400, {"message": "%s is not an internal disk this "
                                                        "station can wipe" % d})
+            # No machine identity, no erase. This check used to live in
+            # record_wipe, AFTER the drive was already destroyed - so a wipe
+            # with no profile erased the data and then filed nothing, leaving
+            # no record that it ever happened. A capture in progress counts as
+            # no identity too: the profile on screen is about to be replaced.
+            if STATE.get("capturing"):
+                return self._send(409, {"message": "The hardware is still being read. "
+                                                   "Wait for it to finish, then start the wipe."})
+            profile = STATE["profile"]
+            if not profile:
+                return self._send(409, {"message": "No hardware profile - this machine has "
+                                                   "not been identified, so a wipe could not be "
+                                                   "recorded. Press Rescan and wait for the "
+                                                   "hardware to be read before wiping."})
 
             # After the erase, record it against the device/batch: upload the
-            # captured profile + the wipe status/method, the same shape the
-            # text-mode engine uses. This creates/updates the device record and
-            # produces the erasure certificate.
+            # captured profile + the wipe status/method. This creates/updates
+            # the device record and produces the erasure certificate. The
+            # profile is the one checked above, captured here and not re-read
+            # at the end: a wipe can take hours, and a Rescan in that time
+            # (failed, or of a different machine) must not change what this
+            # erase is filed under.
             def record_wipe(result):
                 if result.get("status") not in ("wiped", "failed"):
                     return
-                if not STATE["profile"]:
-                    result["recordError"] = "no hardware profile captured — run once from the menu first"
-                    return
                 payload = {
-                    "profile": STATE["profile"],
+                    "profile": profile,
                     "dataWipeStatus": result.get("status"),
                     "dataWipeMethod": result.get("method"),
                 }

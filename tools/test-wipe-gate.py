@@ -52,6 +52,10 @@ srv.list_drives = lambda: OFFERED
 srv.start_job = fake_start_job
 srv.SCRIPT = "/fake/hardware-audit.sh"      # the handler 500s without an engine
 srv.audit_cmd = lambda *a, **k: ["true"]
+# The handler refuses to erase anything on a machine it has not identified
+# (test-capture.py covers that); these cases are about WHICH disk, so give it
+# an identified machine.
+srv.STATE["profile"] = {"identification": {"serialNumber": "HOST-1"}, "storage": []}
 
 
 class Fake(srv.Handler):
