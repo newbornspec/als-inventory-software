@@ -2321,8 +2321,15 @@ def drive_health_lines(p):
     for d in (p.get("storage") or []):
         if not isinstance(d, dict):
             continue
+        # Capacity and type alone are not an identity: a desktop with two
+        # 500 GB HDDs gave two identical rows with opposite verdicts, and
+        # nothing to say which disk to pull. The kernel name is what the wipe
+        # panel shows too, so the two surfaces name the same drive the same way.
         name = " ".join(str(x) for x in [d.get("capacity"), d.get("type")] if x)
-        lines.append(dict(health_view(d.get("health")), drive=name or d.get("device") or "Drive"))
+        dev = str(d.get("device") or "").strip()
+        if name and dev:
+            name = "%s (%s)" % (name, dev)
+        lines.append(dict(health_view(d.get("health")), drive=name or dev or "Drive"))
     for x in (p.get("hiddenStorage") or []):
         if not isinstance(x, dict):
             continue

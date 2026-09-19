@@ -127,7 +127,11 @@
   /* Wraps rather than truncates: the serial sits at the END of the label, and
      it is the part the operator checks against the sticker on the disk. */
   .dchk .dn{flex:1;min-width:0;overflow-wrap:anywhere}
-  .dchk .dh{font-size:11px;padding:2px 8px;border-radius:99px;flex:none}
+  /* The badge carries the server's exact words, which for a drive that could
+     not be measured is a sentence, not two words - so it wraps instead of
+     shoving the drive's name off the row. */
+  .dchk .dh{font-size:11px;padding:2px 8px;border-radius:99px;flex:none;max-width:48%;
+            text-align:right;overflow-wrap:anywhere}
   .dchk .dh.ok{background:#f0fdf4;color:#15803d}
   .dchk .dh.warn{background:#fffbeb;color:var(--amber)}
   .dchk .dh.bad{background:#fef2f2;color:#b91c1c}
@@ -892,11 +896,13 @@ function fillWipeDrives(){
                        .filter(c=>c.checked).map(c=>c.value));
     const had=document.querySelectorAll('.wchk').length>0;
     const html=DRIVES.map(d=>{
-      // The drive's health as the capture measured it (contract C5); the
-      // server supplies the words and the colour (healthView).
-      const h=d.health, v=d.healthView||{}, cls=v.cls||'na';
-      const lab=h&&h.measured===true?(h.percent+'% '+h.status):
-                (h&&h.measured===false?'not measurable':'not scanned');
+      // The drive's health as the capture measured it (contract C5). The
+      // WORDS and the colour both come from the server (healthView), so this
+      // badge, the hardware panel and the banner say the same thing about the
+      // same drive - this used to re-derive "74% caution" while the panel two
+      // clicks away said "74% · Caution", and shortened a not-measurable
+      // drive to "not measurable", dropping the reason.
+      const v=d.healthView||{}, cls=v.cls||'na', lab=v.title||'Not scanned yet — press Rescan';
       return '<label class="dchk"><input type="checkbox" class="wchk" value="'+esc(d.device)+
         '" onchange="estimate()" checked><span class="dn">'+esc(driveLabel(d))+
         '</span><span class="dh '+cls+'">'+esc(lab)+'</span></label>';}).join('');

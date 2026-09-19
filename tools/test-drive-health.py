@@ -756,8 +756,8 @@ dev = srv.ident()
 lines = dev.get("driveHealth") or []
 check("ident: one Drive health line per drive plus the two controllers", len(lines) == 6, lines)
 if len(lines) == 6:
-    check("ident line 1: NVMe 97% Good", lines[0]["drive"] == "512GB NVMe" and lines[0]["cls"] == "ok"
-          and lines[0]["title"] == u"97% · Good", lines[0])
+    check("ident line 1: NVMe 97% Good", lines[0]["drive"] == "512GB NVMe (nvme0n1)"
+          and lines[0]["cls"] == "ok" and lines[0]["title"] == u"97% · Good", lines[0])
     check("ident line 2: HDD 74% Caution", lines[1]["title"] == u"74% · Caution"
           and lines[1]["cls"] == "warn", lines[1])
     check("ident line 3: RAID volume says why and what to do",
@@ -774,6 +774,26 @@ if len(lines) == 6:
           and lines[5]["title"].startswith(u"Not measurable — behind a RAID"), lines[5])
 check("ident: the Storage line no longer carries a second, probed health note",
       "Health" not in dev["hw"]["storage"], dev["hw"]["storage"])
+# Two drives of the same size and type: the rows must say WHICH one is bad,
+# or the operator cannot tell which disk to pull.
+twins = copy.deepcopy(PROFILE)
+twins["storage"] = [{"model": "WDC WD5000", "capacity": "500GB", "type": "HDD", "device": "sda",
+                     "serialNumber": "A1", "health": H_HDD},
+                    {"model": "WDC WD5000", "capacity": "500GB", "type": "HDD", "device": "sdb",
+                     "serialNumber": "A2", "health": dict(H_NVME, percent=12, status="bad")}]
+twins["hiddenStorage"] = []
+srv.STATE["profile"] = twins
+tl = srv.ident().get("driveHealth") or []
+check("two drives of the same size and type are told apart on the panel",
+      [x["drive"] for x in tl] == ["500GB HDD (sda)", "500GB HDD (sdb)"], tl)
+# An older profile with no device name still gets the best label available.
+noname = copy.deepcopy(twins)
+for d in noname["storage"]:
+    d.pop("device")
+srv.STATE["profile"] = noname
+check("a profile with no device name still labels the row",
+      [x["drive"] for x in (srv.ident().get("driveHealth") or [])] == ["500GB HDD", "500GB HDD"])
+srv.STATE["profile"] = copy.deepcopy(PROFILE)
 
 LSBLK = ('NAME="nvme0n1" SIZE="512110190592" MODEL="SAMSUNG MZVLB512" TRAN="nvme" RM="0" ROTA="0" '
          'TYPE="disk" SERIAL="S4ENNX0N123456"\n'
@@ -900,6 +920,8 @@ run(`BOOT={capturing:true}; fillHardware();`);
 out.capturing = document.getElementById('hwGrid').innerHTML;
 run(`BOOT={device:IN.device}; fillHardware();`);
 out.after = document.getElementById('hwGrid').innerHTML;
+run(`DRIVES=IN.drives; fillWipeDrives();`);
+out.chks = document.getElementById('wDriveBox').innerHTML;
 run(`DRIVES=IN.drives; selectedWipeDrives=()=>[IN.drives[0].device]; renderHealth();`);
 out.banner = document.getElementById('wHealth').innerHTML;
 out.bannerCls = document.getElementById('wHealth').className;
@@ -945,6 +967,20 @@ process.stdout.write(JSON.stringify(out));
     check("page: wipe banner (one drive) shows its profile health",
           u"Drive health: 74% · Caution" in o.get("single", "") and "warn" in o.get("singleCls", ""),
           o.get("single"))
+    # The same drive must read the same on every surface: the wipe list's
+    # badge used to build its own lower-case wording ("74% caution",
+    # "not measurable", "not scanned") while the panel two clicks away said
+    # "74% · Caution".
+    chks = o.get("chks", "")
+    check("page: the wipe list badge uses the server's words, exactly as the panel does",
+          u'<span class="dh warn">74% · Caution</span>' in chks
+          and u'<span class="dh ok">97% · Good</span>' in chks, chks)
+    check("page: a drive with no measurement gives the badge the reason, not one lower-case word",
+          u"Not measurable — behind a RAID/Intel RST controller" in chks
+          and u"Not scanned yet — press Rescan" in chks, chks)
+    check("page: no lower-case verdicts left in the wipe list",
+          "% good" not in chks and "% caution" not in chks and "% bad" not in chks
+          and ">not scanned<" not in chks and ">not measurable<" not in chks, chks)
 
 shutil.rmtree(TMP, True)
 print("\n%d passed, %d failed" % (PASS[0], len(FAIL)))
