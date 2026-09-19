@@ -322,6 +322,17 @@ UseFirmwareBackground=false
 # written, so a theme that would silently fall back to Ubuntu's never ships.
 TWO_STEP_REQUIRES = ('lock.png', 'entry.png', 'bullet.png')
 
+# The line under the wordmark. The BOOT splash is drawn from als-splash.img
+# (the initramfs cpio); the SHUTDOWN and reboot splash from the copy of the
+# theme in the layer (dist/theme -> make-als-layer.sh), which is never shown
+# at boot - plymouthd keeps the images it loaded from the initramfs until the
+# desktop takes over. So the two copies can say different things, and the
+# layer copy (--theme-only) says what is actually happening: the owner saw
+# "STARTING" while the station powered off, 2026-09-19. Two-step has only one
+# watermark image per theme, so this is the only way to word the two apart.
+BOOT_SUBTITLE = 'STARTING'
+LAYER_SUBTITLE = 'SHUTTING DOWN'
+
 # For the LAYER only: our theme under the name plymouthd falls back to. If als
 # ever fails to load in the real root, the fallback is still ours rather than
 # Ubuntu's. make-als-layer.sh copies themes/bgrt when it finds it here.
@@ -425,7 +436,10 @@ def main():
     here = os.path.dirname(os.path.abspath(__file__))
     ap.add_argument('--out', default=os.path.join(here, 'dist'))
     ap.add_argument('--text', default='ALS AUDIT STATION')
-    ap.add_argument('--sub', default='STARTING')
+    ap.add_argument('--sub', default=None,
+                    help='line under the wordmark (default: %s for the boot '
+                         'archive, %s with --theme-only)'
+                         % (BOOT_SUBTITLE, LAYER_SUBTITLE))
     ap.add_argument('--frames', type=int, default=12)
     ap.add_argument('--verify', action='store_true')
     ap.add_argument('--theme-only', action='store_true',
@@ -440,7 +454,9 @@ def main():
 
     theme_out = os.path.join(args.out, 'theme', THEME_DIR)
     os.makedirs(theme_out, exist_ok=True)
-    made = build_images(theme_out, args.text, args.sub, args.frames)
+    sub = args.sub if args.sub is not None else (
+        LAYER_SUBTITLE if args.theme_only else BOOT_SUBTITLE)
+    made = build_images(theme_out, args.text, sub, args.frames)
     missing = [f for f in TWO_STEP_REQUIRES if f not in dict(made)]
     if missing:
         raise SystemExit('two-step will not load a theme without %s - refusing '

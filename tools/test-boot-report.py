@@ -280,6 +280,19 @@ mk = importlib.util.module_from_spec(spec2)
 spec2.loader.exec_module(mk)
 check("server and builder agree on what two-step requires", tuple(mk.TWO_STEP_REQUIRES) == tuple(srv.TWO_STEP_REQUIRES))
 
+print("the shutdown splash says SHUTTING DOWN, not STARTING")
+# The layer copy of the theme (--theme-only) is only ever shown at shutdown and
+# reboot; the owner photographed "STARTING" on a powering-off station.
+def watermark_for(*extra):
+    d = tempfile.mkdtemp()
+    subprocess.run([sys.executable, os.path.join(HERE, "boot", "make-splash.py"), "--theme-only", "--out", d] + list(extra),
+                   capture_output=True, text=True, check=True)
+    return open(os.path.join(d, "theme", "usr", "share", "plymouth", "themes", "als", "watermark.png"), "rb").read()
+layer_default = open(os.path.join(als, "watermark.png"), "rb").read()
+check("layer theme is worded for shutdown by default", mk.LAYER_SUBTITLE == "SHUTTING DOWN"
+      and layer_default == watermark_for("--sub", "SHUTTING DOWN"))
+check("and it is not the boot wording", layer_default != watermark_for("--sub", mk.BOOT_SUBTITLE))
+
 print("")
 print("%d passed, %d failed" % (PASS[0], len(FAIL)))
 sys.exit(1 if FAIL else 0)
