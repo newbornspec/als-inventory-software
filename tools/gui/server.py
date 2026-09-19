@@ -814,6 +814,23 @@ def current_workflow():
     return ""   # dual-permission account that has not chosen yet
 
 
+def workflow_refusal(noun, nothing_done):
+    """Why a job that files a record (a wipe, a restore) must not start with
+    the workflow as it is now, or "" when it may. Asked BEFORE the disk is
+    touched: a record made with no workflow carries no auditKind, the API
+    files it as Goods In, finds no lot and answers 400 "No audit lot
+    selected" - after the disk was already written. See /api/wipe/start."""
+    if current_workflow():
+        return ""
+    if not allowed_workflows():
+        return ("This account has no audit permission, so a %s could not be recorded. Ask "
+                "an administrator to grant Perform Amazon Audit or Perform Goods In Audit. "
+                "%s" % (noun, nothing_done))
+    return ("Choose Amazon / General audit or Goods In audit at the top of the screen "
+            "first - the %s record is filed under that workflow, and without one the "
+            "server cannot accept it. %s" % (noun, nothing_done))
+
+
 def stamp_provenance(payload):
     """Phase-5 provenance on every record this station files: the station IS
     the Amazon audit workflow (auditKind), and the operator field names the
@@ -4244,17 +4261,10 @@ class Handler(BaseHTTPRequestHandler):
             # A stricter check here would refuse wipes the API would accept.
             # The page applies the same "pick a batch" rule to Wipe as it does
             # to Start audit (wipeGate in index.html).
+            why = workflow_refusal("wipe", "Nothing was erased.")
+            if why:
+                return self._send(409, {"message": why})
             workflow = current_workflow()
-            if not workflow:
-                if not allowed_workflows():
-                    return self._send(409, {"message": (
-                        "This account has no audit permission, so a wipe could not be "
-                        "recorded. Ask an administrator to grant Perform Amazon Audit or "
-                        "Perform Goods In Audit. Nothing was erased.")})
-                return self._send(409, {"message": (
-                    "Choose Amazon / General audit or Goods In audit at the top of the "
-                    "screen first - the wipe record is filed under that workflow, and "
-                    "without one the server cannot accept it. Nothing was erased.")})
 
             # After the erase, record it against the device/batch: upload the
             # captured profile + the wipe status/method, ONE record per drive
@@ -4393,6 +4403,19 @@ class Handler(BaseHTTPRequestHandler):
             gate = operator_gate()
             if gate:
                 return self._send(gate[0], {"message": gate[1]})
+            # And a workflow, for the same reason as a wipe (workflow_refusal):
+            # a restore overwrites the disk and files its record through the
+            # same upload_audit, so a restore started before a dual-permission
+            # account chose Amazon or Goods In produced the same kind-less
+            # record the API refuses - after the disk was written.
+            why = workflow_refusal("restore", "Nothing was written to the disk.")
+            if why:
+                return self._send(409, {"message": why})
+            # Fixed NOW, like a wipe's: the record used to take the workflow
+            # on screen when the restore ENDED, so switching to Amazon for the
+            # next machine filed this Goods In restore as Amazon and dropped
+            # its lot.
+            install_wf = current_workflow()
             install_who = stamp_provenance({}) if operator_signin_on() else None
             # Point the driver at whichever library is active (server share or
             # the stick). This MUST be set before the job starts — it was
@@ -4422,10 +4445,13 @@ class Handler(BaseHTTPRequestHandler):
                 payload = {
                     "profile": STATE["profile"],
                     "restoreImageStatus": result.get("status"),
+                    # The workflow read when the restore started (above);
+                    # stamp_provenance keeps a workflow the payload names.
+                    "auditKind": install_wf,
                 }
                 if image_name:
                     payload["restoreImageName"] = image_name[:200]
-                if install_lot:
+                if install_lot and install_wf != "amazon":
                     payload["lotId"] = install_lot
                 stamp_provenance(payload)
                 if install_who is not None:

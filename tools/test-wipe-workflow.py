@@ -190,6 +190,63 @@ try:
     check("legacy server (no permissions sent): starts as goods_in",
           sent and sent[0] == 200 and len(JOBS) == 1, (sent, JOBS))
 
+    print("a restore files a record too: the same workflow gate, fixed at start")
+    # /api/os/install overwrites the internal disk and files its record
+    # through the same upload_audit. It had neither protection: a restore
+    # with no workflow chosen started, and its kind-less record got the same
+    # 400; and the workflow was read when the restore ENDED, so switching to
+    # Amazon for the next machine filed a Goods In restore as Amazon and
+    # dropped its lot.
+    srv.mount_image_server = lambda *a, **k: (TMP, "stick", "")
+    srv.INSTALL_SH = "/fake/install-image.sh"
+
+    def restore(lot=None, workflow=None):
+        JOBS.clear()
+        UPLOADS.clear()
+        body = {"device": "/dev/nvme0n1", "imageId": "win11", "imageName": "Windows 11"}
+        if lot:
+            body["lotId"] = lot
+        if workflow is not None:
+            body["workflow"] = workflow
+        return post("/api/os/install", body)
+
+    account(permissions=BOTH)
+    sent = restore(lot="lot-GOODSIN-7")
+    msg = (sent or (0, {}))[1].get("message", "")
+    check("restore, no workflow chosen: refused with 409", sent and sent[0] == 409, sent)
+    check("restore refusal asks for Amazon or Goods In", "Amazon" in msg and "Goods In" in msg,
+          msg)
+    check("restore refusal: the restore was never started", JOBS == [], JOBS)
+    account(permissions=["view_assets"])
+    sent = restore()
+    check("restore, no audit permission: refused, never started",
+          sent and sent[0] == 409 and JOBS == [], (sent, JOBS))
+
+    account(permissions=BOTH, workflow="goods_in")
+    sent = restore(lot="lot-GOODSIN-7")
+    check("restore under goods_in: starts", sent and sent[0] == 200 and len(JOBS) == 1,
+          (sent, JOBS))
+    srv.STATE["workflow"] = "amazon"         # next machine, while this one restores
+    JOBS[0]["on_done"]({"status": "installed", "device": "/dev/nvme0n1"})
+    rec = UPLOADS[-1] if UPLOADS else {}
+    check("switching workflow mid-restore: still filed as goods_in, lot kept",
+          rec.get("auditKind") == "goods_in" and rec.get("lotId") == "lot-GOODSIN-7", rec)
+
+    account(permissions=BOTH, workflow="amazon")
+    sent = restore()
+    check("restore under amazon: starts", sent and sent[0] == 200 and len(JOBS) == 1,
+          (sent, JOBS))
+    srv.STATE["workflow"] = "goods_in"
+    JOBS[0]["on_done"]({"status": "installed", "device": "/dev/nvme0n1"})
+    rec = UPLOADS[-1] if UPLOADS else {}
+    check("switching workflow mid-restore: an amazon restore stays amazon, no lot",
+          rec.get("auditKind") == "amazon" and "lotId" not in rec, rec)
+
+    account(permissions=["perform_goods_in_audit"])
+    sent = restore(lot="lot-1")
+    check("restore, goods-in-only account: starts without choosing",
+          sent and sent[0] == 200 and len(JOBS) == 1, (sent, JOBS))
+
     print("the page: Wipe says why it is not offered")
     with open(os.path.join(HERE, "gui", "index.html"), encoding="utf-8") as fh:
         page = fh.read()
@@ -200,6 +257,10 @@ try:
           and 'id="wGateMsg"' in page)
     check("confirmWipe refuses on the gate too (no request is sent)",
           "const gate=wipeGate();" in page)
+    check("Restore (Load OS Image) has the same gate: disabled with the reason shown",
+          "function installGate()" in page and 'id="iGateMsg"' in page
+          and "$('iStart').disabled=!!why" in page)
+    check("confirmInstall refuses on the gate too", "const gate=installGate();" in page)
 finally:
     shutil.rmtree(TMP, True)
 

@@ -449,6 +449,8 @@
               <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                 stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 21h16"/></svg>
               Load OS Image</button>
+            <!-- Why Load OS Image is not offered yet (installGate). -->
+            <div class="k hidden" id="iGateMsg" style="margin-top:8px"></div>
           </div>
           <div class="hidden" id="iRun">
             <div class="prow"><span id="iStat">Writing image</span><b id="iPct">0%</b></div>
@@ -747,19 +749,29 @@ function auditGate(){
    station service refuses that case too (/api/wipe/start); this says why up
    front instead of after a click. BOOT.workflows is unknown until the first
    bootstrap answers - the server still decides then. */
-function wipeGate(){
+function recordGate(noun){
   const wfs=BOOT.workflows;
   if(Array.isArray(wfs)&&!wfs.length)
-    return 'This account has no audit permission, so a wipe could not be recorded.';
+    return 'This account has no audit permission, so a '+noun+' could not be recorded.';
   if(Array.isArray(wfs)&&wfs.length>1&&!wf())
-    return 'Choose Amazon / General audit or Goods In audit at the top first — the wipe is recorded under that workflow.';
+    return 'Choose Amazon / General audit or Goods In audit at the top first — the '+noun+' is recorded under that workflow.';
   if(wf()==='goods_in'&&!$('batchSel').value)
-    return 'Select a batch first — a Goods In wipe is recorded into the batch.';
+    return 'Select a batch first — a Goods In '+noun+' is recorded into the batch.';
   return '';
 }
+function wipeGate(){ return recordGate('wipe'); }
+/* A restore overwrites the disk and files its record exactly like a wipe, so
+   it is gated the same way (the station service refuses it too). */
+function installGate(){ return recordGate('restore'); }
 function applyWipeGate(){
   const why=wipeGate(), msg=$('wGateMsg');
   $('wStart').disabled=!selectedWipeDrives().length||!!why;
+  msg.textContent=why; msg.classList.toggle('hidden',!why);
+  applyInstallGate();
+}
+function applyInstallGate(){
+  const why=installGate(), msg=$('iGateMsg');
+  $('iStart').disabled=!!why;
   msg.textContent=why; msg.classList.toggle('hidden',!why);
 }
 
@@ -1562,6 +1574,9 @@ function confirmInstall(){
   const img=$('iImage').value, dev=$('iDrive').value;
   if(!img){toast('No OS image selected.',false);return;}
   if(!dev){toast('No target drive.',false);return;}
+  const gate=installGate();
+  if(gate){openOv('The restore did not start',gate+'\n\nNothing was written to the disk.',
+    false,closeOv,'OK');return;}
   const io=$('iImage').selectedOptions[0], dobj=$('iDrive').selectedOptions[0];
   const imgName=io?io.textContent.trim():img;
   openOv('Install '+(io?io.textContent:img)+'?','This erases '+(dobj?dobj.textContent:dev)+
