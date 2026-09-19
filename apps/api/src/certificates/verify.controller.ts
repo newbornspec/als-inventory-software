@@ -44,7 +44,8 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export class VerifyController {
   // Per caller: 30 requests a minute across both routes.
   private perCaller = new RateLimiter(30, 60_000);
-  // All callers together: bounds the chain walks the route can be made to do.
+  // All callers together: bounds the chain walks the route can be made to do
+  // (counted only for certificates that exist - see check()).
   private overall = new RateLimiter(600, 60_000);
 
   constructor(private readonly ledger: CertificateLedger) {}
@@ -67,14 +68,21 @@ export class VerifyController {
     @Res({ passthrough: true }) res: Response,
   ): Promise<PublicResult | string> {
     this.admit(req);
+    if (!UUID.test(id)) throw new NotFoundException('Certificate not found');
+    const cert = await this.ledger.find(id.toLowerCase());
+    if (!cert) throw new NotFoundException('Certificate not found');
+    // The global budget is spent only here, on a certificate that exists -
+    // the chain walk is the expensive part. Taken before the id check (as it
+    // first was), 20 addresses spraying guessed ids at their own 30 a minute
+    // used up all 600 and every genuine QR-code scan got 429 for the rest of
+    // the minute. A guessed id costs one primary-key lookup and its caller's
+    // own budget; ids are random v4 UUIDs, so a caller cannot find real ones
+    // to spend the global budget with.
     if (!this.overall.take('*'))
       throw new HttpException(
         'Too many certificate checks - try again in a minute.',
         HttpStatus.TOO_MANY_REQUESTS,
       );
-    if (!UUID.test(id)) throw new NotFoundException('Certificate not found');
-    const cert = await this.ledger.find(id.toLowerCase());
-    if (!cert) throw new NotFoundException('Certificate not found');
     const result = publicResult(cert, await this.ledger.verify(cert));
     if (wantsHtml(req)) {
       res.type('html');
