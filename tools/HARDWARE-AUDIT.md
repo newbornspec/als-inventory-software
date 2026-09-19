@@ -20,6 +20,10 @@ no `jq` or other extras.
 > **`audit.conf.example`**: it has every setting, with a dedicated station
 > account rather than a person's login. **Wiping is done on the kiosk screen
 > only** — see "Secure data wipe" below.
+>
+> **Testing a new stick or a new release on real hardware:** follow
+> **`HARDWARE-TESTS.md`** — the owner's on-station checklist, most important
+> checks first.
 
 ## Workflow
 
