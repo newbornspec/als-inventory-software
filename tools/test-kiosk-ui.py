@@ -151,6 +151,8 @@ const hidden = (id) => document.getElementById(id).classList.contains('hidden');
   out.oFailed = run(`wipeOutcome({status:'failed',method:'none',reason:'drive stopped responding'})`);
   out.oRefused = run(`wipeOutcome({status:'refused',reason:'serial mismatch'})`);
   out.oQueued = run(`wipeOutcome({status:'wiped',method:'Zero pass',queued:true,recorded:false})`);
+  out.oHeld = run(`wipeOutcome({status:'wiped',method:'Zero pass',queued:true,recorded:false,
+    recordError:'the wipe record is saved on this machine; it was made by Ann Operator; it is sent only under their own sign-in'})`);
   out.oUnrec = run(`wipeOutcome({status:'wiped',method:'Zero pass',recordError:'HTTP 500'})`);
   out.cMixed = run(`certSummary([${W('x')},{status:'failed',reason:'r'}])`);
   out.cUnrecorded = run(`certSummary([${W('x')},{status:'wiped',method:'y',queued:true}])`);
@@ -363,6 +365,9 @@ def main():
           and "nothing was recorded" in o["oRefused"]["text"], o["oRefused"])
     check("outcome wiped but offline: not called recorded",
           "NOT recorded yet" in o["oQueued"]["text"], o["oQueued"])
+    check("outcome held for another operator: says whose, not 'no connection'",
+          "Ann Operator" in o["oHeld"]["text"] and "no connection" not in o["oHeld"]["text"]
+          and "NOT recorded yet" in o["oHeld"]["text"], o["oHeld"])
     check("outcome wiped but upload failed: NOT recorded, with why",
           "NOT recorded" in o["oUnrec"]["text"] and "HTTP 500" in o["oUnrec"]["text"], o["oUnrec"])
     check("cert: a failed drive in the run means no certificate",

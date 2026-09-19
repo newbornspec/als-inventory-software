@@ -3571,6 +3571,8 @@ class Handler(BaseHTTPRequestHandler):
             # The password is in `body` (the parsed request) and nowhere else.
             # It goes to the API once and is dropped here whatever happens; it
             # is never logged (log_message is silenced), never in an error.
+            if not isinstance(body, dict):
+                return self._send(400, {"message": "Enter your email and password."})
             try:
                 if not operator_signin_on():
                     return self._send(409, {"message": "Operator sign-in is not switched "

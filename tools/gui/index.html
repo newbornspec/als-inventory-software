@@ -1209,6 +1209,12 @@ function wipeOutcome(r){
     if(r.recorded)
       return{cls:(methodNote(r)||lim)?'warn':'ok',
         text:'Wiped — '+m+' — recorded'+(r.recordTag?' as '+r.recordTag:'')+lim};
+    /* Queued for another reason than the network: with operator sign-in, a
+       wipe whose operator signed out before it finished waits for THEIR next
+       sign-in (the server says so in recordError). "no connection" would
+       send the operator hunting for a network fault that is not there. */
+    if(r.queued&&r.recordError&&!/^no connection/.test(r.recordError))
+      return{cls:'warn',text:'Wiped — '+m+' — NOT recorded yet: '+r.recordError+'.'+lim};
     if(r.queued)
       return{cls:'warn',text:'Wiped — '+m+' — NOT recorded yet: no connection. The record is '+
         'saved on this machine and uploads by itself when the network returns.'+lim};
@@ -1221,8 +1227,10 @@ function wipeOutcome(r){
     return{cls:'warn',text:'Refused — '+(r.reason||r.method||'the drive was refused')+
       '. Nothing was written to the drive and nothing was recorded.'};
   const why=r.reason||r.message||(r.method&&r.method!=='none'?r.method:'')||'reason not reported';
+  const heldWhy=r.queued&&r.recordError&&!/^no connection/.test(r.recordError);
   return{cls:'bad',text:'FAILED — '+why+(r.recorded?' (the failure is recorded)':
-    (r.queued?' (the failure is saved on this machine and uploads automatically)':''))+
+    (heldWhy?' (the failure is not recorded yet: '+r.recordError+')':
+    (r.queued?' (the failure is saved on this machine and uploads automatically)':'')))+
     limitsNote(r)};
 }
 
