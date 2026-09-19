@@ -96,8 +96,11 @@ the Windows registry at all.
   there was, and it was wrong. Images come from the network image server
   configured in `audit.conf`, or from `images/` at the root of the stick if you
   have the space for them.
-- **Wiping** works the same — `hardware-audit.sh` uses `hdparm`/`nvme`/`shred`,
-  all present or apt-installable.
+- **Wiping** is done from the **kiosk screen only**, one record per drive; the
+  text-mode `AUDIT_WIPE=1` wipe is retired (owner decision D9). The engine uses
+  `hdparm`/`nvme`/`shred`, all present, baked into the layer, or
+  apt-installable. How a wipe runs, and what Wiped / Failed / Refused mean, is
+  in `HARDWARE-AUDIT.md`, "Secure data wipe".
 
 ## Boot speed: Firefox ESR in the layer, snapd off
 
@@ -138,6 +141,11 @@ on every boot too, because the layer's `/usr` is newer than the image's
 `gui/als-autostart.sh` picks `firefox-esr` first, so the kiosk opens it with
 its own profile (`~/als-kiosk-profile-esr`); on a layer without ESR it opens the
 snap `firefox` exactly as before. Nothing on the FAT32 side has to change.
+
+**Doing it on the stick** — once, from the live session, with internet: the
+step-by-step (sync first, keep a copy of the old layer, what the output should
+say, `status`, reboot) is in `HARDWARE-AUDIT.md`, "Rebuild the layer once for
+the pending boot changes".
 
 **How to go back** — any one of these:
 

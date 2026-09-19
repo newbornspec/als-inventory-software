@@ -28,27 +28,52 @@ AUDIT_URL="https://als-inventory-software-production.up.railway.app"
 AUDIT_EMAIL="station@your-domain"
 AUDIT_PASSWORD=""
 
+# --- operator (who did the wipe) -----------------------------------------------
+# The operator types their name on the kiosk screen. Wipes are filed with the
+# station account above, and the certificate prints that name as
+# "Operator (self-declared)" next to the filing account.
+#
+# Planned, NOT YET IMPLEMENTED: operators signing in on the kiosk with their
+# own ALS Inventory login (owner decision D27, to be switched by an
+# AUDIT_OPERATOR_SIGNIN setting). No kiosk reads that setting yet - adding it
+# to audit.conf has NO effect: wipes do not wait for a sign-in and are still
+# filed under the station account. It will be documented here when it ships.
+
+# --- admin PIN ----------------------------------------------------------------
+# Guards the kiosk's Settings screen. WITHOUT one, the server address, image
+# server and wipe method cannot be changed from the screen at all (Wi-Fi still
+# can). Pick one, and keep it off the stick's label.
+AUDIT_ADMIN_PIN=""
+
 # Wi-Fi to connect to automatically at the start of each run.
 # Leave WIFI_SSID blank if you use a wired/Ethernet connection.
 WIFI_SSID=""
 WIFI_PASSWORD=""
 
-# DESTRUCTIVE. Set AUDIT_WIPE="1" to securely erase the machine's INTERNAL drives
-# during the audit (you still have to type WIPE to confirm on each machine).
-# Leave "0" (or blank) for audit-only runs — nothing is erased. The USB you boot
-# from is never touched.
-AUDIT_WIPE="0"
-
-# Wipe method (when AUDIT_WIPE=1):
-#   auto      = cryptographic erase if supported, else firmware secure erase,
-#               else single-pass overwrite (default)
-#   crypto    = cryptographic erase only (self-encrypting / NVMe), else overwrite
-#   secure    = firmware secure erase (ATA/NVMe), else overwrite
-#   overwrite = single-pass overwrite + zero (slowest, most compatible)
+# --- data wipe ----------------------------------------------------------------
+# Wiping is done ON THE KIOSK SCREEN ONLY, one record per drive: pick the
+# drive(s), check the model and serial, confirm. See HARDWARE-AUDIT.md,
+# "Secure data wipe".
+#
+# AUDIT_WIPE is RETIRED (owner decision D9, 19 Sep 2026). It used to switch on
+# a wipe in the text-mode script that erased every internal drive and filed
+# them all as ONE result. It now does nothing but print "wiping is done from
+# the kiosk screen" - no drive is erased by the text-mode script whatever it
+# is set to. Delete the line from old audit.conf files; leaving it is harmless.
+#
+# Default method the kiosk pre-selects (the operator can still change it per
+# wipe; changing the DEFAULT from the Settings screen needs the admin PIN):
+#   auto      = the drive's own cryptographic erase if supported, else its
+#               firmware secure erase, else overwrite (default)
+#   crypto    = cryptographic erase (self-encrypting / NVMe), else overwrite
+#   secure    = firmware secure erase (ATA / NVMe), else overwrite
+#   overwrite = random pass + zero pass, read back (slowest, most compatible)
+#   zero      = single zero pass, read back (NIST Clear, half the time)
 AUDIT_WIPE_METHOD="auto"
 # SATA drives are usually "frozen" by the BIOS after boot, which blocks ATA
 # secure erase. Set to "1" to briefly suspend/resume to unfreeze — but some
 # machines don't resume from suspend, so leave "0" unless you've tested it.
+# (Owner decision D42: stays off; a frozen drive is overwritten instead.)
 AUDIT_WIPE_UNFREEZE="0"
 
 # --- OS image library -------------------------------------------------------
