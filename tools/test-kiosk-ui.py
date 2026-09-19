@@ -273,6 +273,18 @@ const hidden = (id) => document.getElementById(id).classList.contains('hidden');
   run(`BOOT={device:{name:'x'},workflow:'amazon'}; auditGate()`);
   out.auditFlagOff = document.getElementById('aStart').disabled;
 
+  // "Already audited" banner: the machine's roll-up verdict (contract C4),
+  // or - from an older API - the newest record, labelled as a record.
+  out.pwRollup = run(`priorWipeBits({wipeVerdict:'failed',lastWipeStatus:'failed'})`);
+  out.pwIncomplete = run(`priorWipeBits({wipeVerdict:'incomplete'})`);
+  out.pwLegacy = run(`priorWipeBits({lastWipeStatus:'wiped',wipeSource:'last-record'})`);
+  out.pwNothing = run(`priorWipeBits({})`);
+  run(`BOOT={workflow:'goods_in',device:{name:'x'}};
+       jget=async()=>({found:true,tag:'ALS-9',auditCount:2,lastAuditAt:'2026-09-19T10:01:30Z',
+         lastWipeStatus:'failed',wipeVerdict:'failed',wipeSource:'rollup'});`);
+  await run(`checkPrior()`);
+  out.priorHtml = document.getElementById('aPrior').innerHTML;
+
   process.stdout.write(JSON.stringify(out));
 })().catch((e) => { process.stdout.write(JSON.stringify({ error: String(e && e.stack || e) })); });
 """
@@ -468,6 +480,17 @@ def main():
           o["auditOffWhenSignedOut"] is True and o["auditOnWhenSignedIn"] is False
           and o["auditFlagOff"] is False,
           (o["auditOffWhenSignedOut"], o["auditOnWhenSignedIn"], o["auditFlagOff"]))
+
+    check("prior banner: the roll-up verdict names the machine's state",
+          o["pwRollup"] == ["wipe: a drive FAILED its wipe"], o["pwRollup"])
+    check("prior banner: incomplete is said in words",
+          o["pwIncomplete"] == ["wipe: not every drive wiped yet"], o["pwIncomplete"])
+    check("prior banner: without C4 the newest row is labelled as a record, not the machine",
+          o["pwLegacy"] == ["last wipe record: wiped"], o["pwLegacy"])
+    check("prior banner: nothing known, nothing said", o["pwNothing"] == [], o["pwNothing"])
+    check("prior banner end to end: shows the failed roll-up, never 'wipe: wiped'",
+          "a drive FAILED its wipe" in o["priorHtml"] and "wipe: wiped" not in o["priorHtml"]
+          and "ALS-9" in o["priorHtml"], o["priorHtml"])
 
 
 main()

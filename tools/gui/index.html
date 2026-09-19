@@ -924,6 +924,18 @@ function fillHardware(){
    serial, the same key the upload uses, so the warning matches what would
    actually happen. Silent when offline or when there is no serial. */
 let PRIOR=null;
+/* The machine's wipe state for the banner. wipeVerdict is the server's
+   per-drive roll-up (contract C4): the machine, every drive. Without it (an
+   API older than C4, or offline) only the newest record is known - one
+   drive's event, which said "wiped" for a laptop whose other drive had just
+   failed - so it is labelled as that, never as the machine's state. */
+function priorWipeBits(p){
+  const V={wiped:'every drive wiped',failed:'a drive FAILED its wipe',
+    incomplete:'not every drive wiped yet',none:'no wipe on record'};
+  if(p.wipeVerdict&&V[p.wipeVerdict])return['wipe: '+V[p.wipeVerdict]];
+  if(p.lastWipeStatus)return['last wipe record: '+esc(String(p.lastWipeStatus))];
+  return[];
+}
 async function checkPrior(){
   const el=$('aPrior'); if(!el)return;
   if(wf()!=='goods_in') return;
@@ -940,9 +952,9 @@ async function checkPrior(){
         year:'numeric',hour:'2-digit',minute:'2-digit'})
     : 'previously';
   const bits=[];
-  if(p.tag)bits.push('as '+p.tag);
+  if(p.tag)bits.push('as '+esc(p.tag));
   if(p.auditCount)bits.push(p.auditCount+(p.auditCount===1?' audit':' audits')+' on record');
-  if(p.lastWipeStatus)bits.push('wipe: '+p.lastWipeStatus);
+  bits.push(...priorWipeBits(p));
   const html='<span class="hd"></span><span><b>Already audited in this batch</b> — '+
     when+(bits.length?' · '+bits.join(' · '):'')+
     '. Running the audit again updates that record rather than creating a new one.</span>';

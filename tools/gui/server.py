@@ -2429,9 +2429,23 @@ def prior_audit(lot_id):
         "auditCount": len(audits) if isinstance(audits, list) else 0,
         "lastAuditAt": (last or {}).get("createdAt"),
         "lastWipeStatus": (last or {}).get("dataWipeStatus"),
+        "wipeSource": "last-record",
         "grade": match.get("conditionGrade"),
         "auditStatus": match.get("auditStatus"),
     }
+    # The machine's wipe state is the per-drive roll-up (contract C4), not the
+    # newest audit row. The newest row is one DRIVE's event: a laptop whose
+    # NVMe failed at 10:00 and whose SATA disk wiped at 10:01 read "wipe:
+    # wiped" here, while the asset, the certificate and C4 all said failed.
+    # An API older than C4 (404), or no answer, keeps the old behaviour -
+    # labelled as the last record, so the screen does not present one drive's
+    # event as the machine's state.
+    elig = certificate_eligibility(match.get("id") or "")
+    if elig.get("known") and elig.get("verdict") in ("wiped", "failed", "incomplete", "none"):
+        data["wipeVerdict"] = elig["verdict"]
+        data["wipeSource"] = "rollup"
+        if elig["verdict"] != "none":
+            data["lastWipeStatus"] = elig["verdict"]
     PRIOR_CACHE.update(key=key, ts=now, data=data)
     return data
 
