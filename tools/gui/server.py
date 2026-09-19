@@ -2459,7 +2459,6 @@ class Handler(BaseHTTPRequestHandler):
                 "lots": STATE["lots"],
                 "drives": list_drives(),
                 "osImages": list_os_images(),
-                "wipeEnabled": STATE["conf"].get("AUDIT_WIPE", "0") == "1",
                 "wipeMethod": STATE["conf"].get("AUDIT_WIPE_METHOD", "auto"),
                 "server": STATE["conf"].get("AUDIT_URL", ""),
                 "currentUser": (STATE.get("userName")
@@ -2543,7 +2542,6 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, {
                 "wifiSsid": c.get("WIFI_SSID", ""),
                 "serverUrl": c.get("AUDIT_URL", ""),
-                "wipeEnabled": c.get("AUDIT_WIPE", "0") == "1",
                 "wipeMethod": c.get("AUDIT_WIPE_METHOD", "auto"),
                 "imageServer": c.get("IMAGE_SERVER", ""),
             })
@@ -2830,9 +2828,12 @@ class Handler(BaseHTTPRequestHandler):
             if body.get("wipeMethod") and \
                     norm(body["wipeMethod"]) != norm(c.get("AUDIT_WIPE_METHOD") or "auto"):
                 risky.append("wipe method")
-            if "wipeEnabled" in body and \
-                    ("1" if body["wipeEnabled"] else "0") != (c.get("AUDIT_WIPE") or "0"):
-                risky.append("wipe on/off")
+            # No "wipeEnabled" here any more, on purpose. AUDIT_WIPE switched on
+            # the text-mode (non-kiosk) wipe, which is retired (owner decision
+            # D9, reversible): it duplicated the whole erase ladder and merged
+            # every drive into one result, so it could not say which drive was
+            # wiped how. Wiping is done from this screen, one record per drive.
+            # A stale page that still sends the field is ignored, not obeyed.
 
             if pin_want and not pin_ok:
                 return self._send(403, {"message": "Admin PIN required."})
@@ -2852,8 +2853,8 @@ class Handler(BaseHTTPRequestHandler):
                 updates["WIFI_PASSWORD"] = body["wifiPassword"]
             if "serverUrl" in body and body["serverUrl"]:
                 updates["AUDIT_URL"] = body["serverUrl"]
-            if "wipeEnabled" in body:
-                updates["AUDIT_WIPE"] = "1" if body["wipeEnabled"] else "0"
+            # AUDIT_WIPE_METHOD stays: it is the default method /api/wipe/start
+            # uses when the screen does not name one.
             if body.get("wipeMethod"):
                 updates["AUDIT_WIPE_METHOD"] = body["wipeMethod"]
             if "imageServer" in body:
