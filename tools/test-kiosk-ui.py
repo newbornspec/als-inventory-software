@@ -215,6 +215,37 @@ const hidden = (id) => document.getElementById(id).classList.contains('hidden');
   out.e2eElig = run(`ELIG`);
   out.e2eSummary = document.getElementById('wSummary').innerHTML;
 
+  // Operator sign-in (plan step 27). Flag off: the typed-name control stays,
+  // the sign-in button is hidden. Flag on, nobody signed in: Sign in, and
+  // the panel opens by itself - once. Signed in: Sign out.
+  const vis = (id) => !hidden(id);
+  document.getElementById('hSign').className = 'linklike hidden';
+  run(`renderSignin({required:false})`);
+  out.siOff = { op: vis('hOperator'), sign: vis('hSign') };
+  run(`renderSignin({required:true,signedIn:false,message:'Your sign-in has expired - sign in again.'})`);
+  out.siOn = { op: vis('hOperator'), sign: vis('hSign'), label: document.getElementById('hSign').textContent,
+    panel: document.getElementById('ovSign').style.display, msg: document.getElementById('signMsg').textContent };
+  run(`closeSign(); renderSignin({required:true,signedIn:false})`);
+  out.siNoNag = document.getElementById('ovSign').style.display;
+  run(`renderSignin({required:true,signedIn:true,name:'Ann Operator'})`);
+  out.siIn = { label: document.getElementById('hSign').textContent,
+    title: document.getElementById('hSign').title };
+  // The password field is emptied before the request goes out.
+  run(`SIGNPOSTS=[]; jpost=async(u,b)=>{SIGNPOSTS.push({u,b,field:document.getElementById('signPass').value});
+         return {ok:true,status:200,data:{name:'Ann Operator'}};}; bootstrap=()=>{};`);
+  document.getElementById('signEmail').value = 'ann@example.test';
+  document.getElementById('signPass').value = 'pw-123456789';
+  await run(`doSignIn()`);
+  out.siPost = run(`SIGNPOSTS`);
+  out.siFieldAfter = document.getElementById('signPass').value;
+  // Audit button: disabled while sign-in is required and nobody is signed in.
+  run(`BOOT={device:{name:'x'},workflow:'amazon',signin:{required:true,signedIn:false}}; auditGate()`);
+  out.auditOffWhenSignedOut = document.getElementById('aStart').disabled;
+  run(`BOOT={device:{name:'x'},workflow:'amazon',signin:{required:true,signedIn:true}}; auditGate()`);
+  out.auditOnWhenSignedIn = document.getElementById('aStart').disabled;
+  run(`BOOT={device:{name:'x'},workflow:'amazon'}; auditGate()`);
+  out.auditFlagOff = document.getElementById('aStart').disabled;
+
   process.stdout.write(JSON.stringify(out));
 })().catch((e) => { process.stdout.write(JSON.stringify({ error: String(e && e.stack || e) })); });
 """
@@ -353,6 +384,29 @@ def main():
           o["e2eElig"] == ["/api/wipe/eligibility?assetId=a-1"], o["e2eElig"])
     check("end to end: server yes -> 'certificate available'",
           "certificate available" in o["e2eSummary"], o["e2eSummary"])
+
+    si = o["siOff"]
+    check("sign-in off: the typed operator control stays, no sign-in button",
+          si["op"] and not si["sign"], si)
+    si = o["siOn"]
+    check("sign-in on: the typed operator control is hidden, Sign in shown",
+          not si["op"] and si["sign"] and si["label"] == "Sign in", si)
+    check("sign-in on, nobody signed in: the panel opens by itself", si["panel"] == "flex", si)
+    check("sign-in on: the panel says why the session ended", "expired" in si["msg"], si)
+    check("sign-in on: closing the panel is not undone by the next poll", o["siNoNag"] == "none",
+          o["siNoNag"])
+    check("signed in: the button offers Sign out and names the person",
+          o["siIn"]["label"] == "Sign out" and "Ann Operator" in o["siIn"]["title"], o["siIn"])
+    sp = o["siPost"]
+    check("sign-in posts email and password to the station service only",
+          len(sp) == 1 and sp[0]["u"] == "/api/operator/signin" and
+          sp[0]["b"] == {"email": "ann@example.test", "password": "pw-123456789"}, sp)
+    check("the password field is emptied before the request goes out",
+          sp and sp[0]["field"] == "" and o["siFieldAfter"] == "", (sp, o["siFieldAfter"]))
+    check("audit disabled while sign-in is required and nobody is signed in",
+          o["auditOffWhenSignedOut"] is True and o["auditOnWhenSignedIn"] is False
+          and o["auditFlagOff"] is False,
+          (o["auditOffWhenSignedOut"], o["auditOnWhenSignedIn"], o["auditFlagOff"]))
 
 
 main()
