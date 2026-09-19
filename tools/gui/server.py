@@ -1066,6 +1066,40 @@ def lsblk_field(line, key):
     return m.group(1) if m else ""
 
 
+_LSBLK_ESC = re.compile(rb"\\x([0-9a-fA-F]{2})")
+
+
+def drive_serial(value):
+    """A drive serial in the ONE form the station and the engine agree on
+    (contract C1's expected-serial argument): lsblk's escapes decoded, NULs
+    dropped, surrounding whitespace trimmed.
+
+    `lsblk -P` prints a quote, backslash, `$`, backtick or any non-printable
+    byte inside a value as \\xNN (a backslash itself is \\x5c, so every
+    backslash in its output starts one of these). The engine's als_lsblk_val
+    decodes them with printf %b before it compares the drive's own serial with
+    the one it was given, and bash cannot hold a NUL at all. This side used to
+    pass the serial still escaped, so a drive whose serial contained any such
+    character - "ABC$123" arrives as ABC\\x24123 - was refused by the engine as
+    an identity mismatch every time and could never be wiped here.
+
+    Applied to BOTH sides of the profile check too: the profile's
+    storage[].serialNumber is the raw lsblk value (the engine's pval does not
+    decode), so decoding only one side would refuse the same drive here instead.
+
+    surrogateescape keeps a byte that is not valid UTF-8 as itself, so the
+    value handed to the engine as an argument is exactly the drive's bytes."""
+    if not isinstance(value, str):
+        return ""
+    if "\\x" in value:
+        raw = _LSBLK_ESC.sub(lambda m: bytes([int(m.group(1), 16)]),
+                             value.encode("utf-8", "surrogateescape"))
+        value = raw.decode("utf-8", "surrogateescape")
+    # POSIX [[:space:]] - what the engine's sed trims - not str.strip()'s
+    # wider Unicode idea of whitespace.
+    return value.replace("\x00", "").strip(" \t\n\r\v\f")
+
+
 DRIVES_CACHE = {"ts": 0.0, "data": []}
 
 
@@ -1133,10 +1167,10 @@ def list_drives(force=False):
             "bytes": nbytes,
             "rotational": rota == "1",
             "model": lsblk_field(line, "MODEL") or "Unknown model",
-            # Raw, exactly as lsblk -P prints it - the engine builds the
-            # profile's storage[].serialNumber from the same column, so the two
-            # compare equal without any unescaping. "" = the drive reported none.
-            "serial": lsblk_field(line, "SERIAL").strip(),
+            # Decoded (see drive_serial): the form the engine compares against
+            # when it is handed this as the expected serial. "" = the drive
+            # reported none.
+            "serial": drive_serial(lsblk_field(line, "SERIAL")),
             "transport": tran,
             "method": method,
             "health": smart_health("/dev/" + name),
@@ -2912,10 +2946,12 @@ class Handler(BaseHTTPRequestHandler):
             # saw. A drive that reports NO serial is allowed (owner decision
             # D18, reversible) and recorded as identity unknown - refusing it
             # would leave such drives unwipeable at this station.
-            known = {(s.get("serialNumber") or "").strip()
+            # Both sides through drive_serial: the profile holds the raw lsblk
+            # value, list_drives the decoded one.
+            known = {drive_serial(s.get("serialNumber"))
                      for s in (profile.get("storage") or []) if isinstance(s, dict)} - {""}
             for d in devices:
-                serial = (offered[d].get("serial") or "").strip()
+                serial = drive_serial(offered[d].get("serial"))
                 if serial and serial not in known:
                     return self._send(409, {"message": (
                         "%s (serial %s) was not in the hardware profile captured for "
@@ -2977,7 +3013,7 @@ class Handler(BaseHTTPRequestHandler):
 
             started, busy = [], []
             for d in devices:
-                serial = (offered[d].get("serial") or "").strip()
+                serial = drive_serial(offered[d].get("serial"))
                 # The expected serial goes to the engine as gui_wipe_one's 3rd
                 # argument (contract C1): it re-reads the drive's own serial
                 # immediately before writing and refuses on a mismatch, which

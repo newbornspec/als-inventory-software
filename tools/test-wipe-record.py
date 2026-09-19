@@ -65,6 +65,7 @@ def fake_upload(payload):
     return {"assetId": "asset-1", "tag": "T1"}, False, ""
 
 
+REAL_LIST_DRIVES = srv.list_drives
 srv.SCRIPT = "/fake/hardware-audit.sh"
 srv.audit_cmd = lambda *a, **k: list(a)
 srv.list_drives = lambda *a, **k: OFFERED
@@ -274,6 +275,59 @@ try:
     check("network time: synced", srv.CLOCK["network"] is True)
     srv._sync_clock = real_inner
     srv.CLOCK["network"] = False
+
+    print("a serial lsblk escapes is passed the way the engine reads it")
+
+    # lsblk -P prints '$' as \x24 (and '"', '\', '`', control bytes likewise).
+    # The engine decodes its own reading with printf %b before comparing, so
+    # the expected serial it is handed must be decoded too.
+    check("drive_serial: \\x24 decoded", srv.drive_serial(r"ABC\x24123") == "ABC$123",
+          srv.drive_serial(r"ABC\x24123"))
+    check("drive_serial: \\x5c is one backslash", srv.drive_serial(r"A\x5cB") == "A\\B")
+    check("drive_serial: \\x22 is a quote", srv.drive_serial(r"A\x22B") == 'A"B')
+    check("drive_serial: trimmed like the engine's sed", srv.drive_serial("  S1 \t") == "S1")
+    check("drive_serial: a NUL is dropped (bash cannot hold one)",
+          srv.drive_serial(r"A\x00B") == "AB", repr(srv.drive_serial(r"A\x00B")))
+    check("drive_serial: plain serial unchanged", srv.drive_serial("S5H2NS0N") == "S5H2NS0N")
+    check("drive_serial: None -> ''", srv.drive_serial(None) == "")
+    nonutf = srv.drive_serial(r"A\xffB")
+    check("drive_serial: a non-UTF-8 byte reaches the engine as that byte",
+          nonutf.encode("utf-8", "surrogateescape") == b"A\xffB", repr(nonutf))
+
+    LSBLK = ('NAME="sdd" SIZE="256060514304" MODEL="Odd SSD" TRAN="sata" RM="0" '
+             'ROTA="0" TYPE="disk" SERIAL="ABC\\x24123"\n')
+
+    class _R:
+        stdout = LSBLK
+
+    real_run, real_smart = srv.subprocess.run, srv.smart_health
+    srv.subprocess.run = lambda *a, **k: _R()
+    srv.smart_health = lambda *a, **k: None
+    try:
+        listed = REAL_LIST_DRIVES(force=True)
+    finally:
+        srv.subprocess.run, srv.smart_health = real_run, real_smart
+    check("list_drives: serial decoded", listed and listed[0].get("serial") == "ABC$123", listed)
+
+    # The profile holds the RAW lsblk value (the engine's pval does not decode).
+    srv.STATE["profile"]["storage"].append({"model": "Odd SSD", "serialNumber": r"ABC\x24123"})
+    OFFERED.append(dict(listed[0]) if listed else {})
+    try:
+        sent = start(["/dev/sdd"])
+        check("escaped serial: the drive in the profile is allowed", sent[0] == 200, sent)
+        check("escaped serial: the engine is handed the decoded serial",
+              JOBS and JOBS[0]["argv"] == ["--wipe-drive", "/dev/sdd", "auto", "ABC$123"], JOBS)
+        if JOBS:
+            JOBS[0]["on_done"]({"status": "wiped", "method": "m", "device": "/dev/sdd",
+                                "drive": {"serialNumber": "ABC$123"}})
+        p = UPLOADS[-1] if UPLOADS else {}
+        check("escaped serial: no spurious 'reported serial X, expected Y' note",
+              "expected" not in (p.get("notes") or ""), p.get("notes"))
+        check("escaped serial: recorded decoded",
+              (p.get("wipedDrive") or {}).get("serialNumber") == "ABC$123", p.get("wipedDrive"))
+    finally:
+        srv.STATE["profile"]["storage"].pop()
+        OFFERED.pop()
 
     print("a queued record keeps the date it was wiped")
 
