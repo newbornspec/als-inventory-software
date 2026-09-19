@@ -871,6 +871,76 @@ nvme_sanitize() {
   done
 }
 
+# Which NVMe CONTROLLER a namespace block device belongs to (plan step 36).
+#
+# A sanitize is a controller command, so it goes to /dev/nvmeY, not to the
+# namespace. This used to be guessed from the name - nvme0n1 -> /dev/nvme0 -
+# but the number in a namespace's name is the SUBSYSTEM's instance, not the
+# controller's. On a machine with two NVMe drives, or with native multipath,
+# they can differ: nvme0n1 can sit on controller nvme1 while /dev/nvme0 is the
+# OTHER drive, which then got the sanitize meant for this one.
+#
+# So ask the kernel, in this order, and accept only ONE answer:
+#   1. a per-path name nvmeXcYnZ names its controller: nvmeY;
+#   2. a multipath head (/sys/block/<ns>/multipath/ lists its paths
+#      nvmeXcYnZ): the controllers of those paths;
+#   3. /sys/block/<ns>/device is the controller itself: its "dev" (major:minor
+#      of the controller's character device) is matched against every
+#      /sys/class/nvme/nvme*/dev - no symlink has to be read;
+#   4. /sys/block/<ns>/device is the subsystem: the nvme* controllers in it;
+#   5. sysfs said nothing: `nvme list-subsys -o json /dev/<ns>`, every "Name"
+#      of a path/controller in it.
+# More than one controller, or none, is AMBIGUOUS: no firmware command is sent
+# (the caller falls back to an overwrite of the namespace itself, which the
+# block device names without doubt). Sets NV_CTRL (/dev/nvmeY) and NV_WHY.
+# ALS_SYS_ROOT (tests only) is prefixed to /sys.
+als_nvme_ctrl() {
+  local d="$1" sys="${ALS_SYS_ROOT:-}/sys" c="" f v x j
+  NV_CTRL=""; NV_WHY=""
+  case "$d" in
+    nvme*c*n*)
+      x="${d#nvme*c}"; x="${x%%n*}"
+      case "$x" in ''|*[!0-9]*) ;; *) c="nvme$x" ;; esac ;;
+  esac
+  if [ -z "$c" ] && [ -d "$sys/block/$d/multipath" ]; then
+    for f in "$sys/block/$d/multipath"/nvme*c*n*; do
+      [ -e "$f" ] || continue
+      x="${f##*/}"; x="${x#nvme*c}"; x="${x%%n*}"
+      case "$x" in ''|*[!0-9]*) continue ;; esac
+      case " $c " in *" nvme$x "*) ;; *) c="$c nvme$x" ;; esac
+    done
+  fi
+  if [ -z "$c" ] && [ -r "$sys/block/$d/device/dev" ]; then
+    v=$(cat "$sys/block/$d/device/dev" 2>/dev/null)
+    for f in "$sys/class/nvme"/nvme*/dev; do
+      [ -r "$f" ] && [ -n "$v" ] || continue
+      [ "$(cat "$f" 2>/dev/null)" = "$v" ] || continue
+      x="${f%/dev}"; c="$c ${x##*/}"
+    done
+  fi
+  if [ -z "$c" ] && [ -d "$sys/block/$d/device" ]; then
+    for f in "$sys/block/$d/device"/nvme*; do
+      x="${f##*/}"
+      case "$x" in nvme|nvme*[!0-9]*) continue ;; esac
+      [ -e "$f" ] && c="$c $x"
+    done
+  fi
+  if [ -z "$c" ]; then
+    j=$(nvme list-subsys -o json "/dev/$d" 2>/dev/null)
+    for x in $(printf '%s' "$j" | grep -oE '"Name"[[:space:]]*:[[:space:]]*"nvme[0-9]+"' | grep -oE 'nvme[0-9]+'); do
+      case " $c " in *" $x "*) ;; *) c="$c $x" ;; esac
+    done
+  fi
+  # shellcheck disable=SC2086
+  set -- $c
+  case "$#" in
+    1) NV_CTRL="/dev/$1"; return 0 ;;
+    0) NV_WHY="could not tell which NVMe controller $d belongs to" ;;
+    *) NV_WHY="$d is reachable through more than one NVMe controller ($*) - ambiguous" ;;
+  esac
+  return 1
+}
+
 # Firmware crypto / secure erase for ONE drive per AUDIT_WIPE_METHOD
 # (auto|crypto|secure|overwrite). Sets M, returns 0 on success (else the caller
 # falls back to an overwrite - never TRIM, which is not an erase).
@@ -881,16 +951,84 @@ firmware_erase() {
   case "$d" in
     nvme*)
       command -v nvme >/dev/null 2>&1 || return 1
-      local ctrl="/dev/${d%%n[0-9]*}" err=""   # nvme0n1 -> nvme0
-      if [ "$want" = "crypto" ] || [ "$want" = "auto" ]; then
-        # Prefer format-based crypto, else the SANITIZE crypto-erase (widely supported).
-        err=$(nvme format "$dev" -s 2 --force 2>&1) && { M="NVMe cryptographic erase (nvme format -s2)"; FW_LEVEL=purge; return 0; }
-        nvme_sanitize "$ctrl" 4 && { M="NVMe cryptographic erase (sanitize)"; FW_LEVEL=purge; return 0; }
-        [ "$want" = "crypto" ] && { echo "    crypto erase unavailable — $(printf '%s' "$err" | head -n1)"; return 1; }
+      # NVMe (plan step 36). What used to happen: `nvme format` on the
+      # namespace FIRST, the sanitize only if format failed, the sanitize sent
+      # to a controller guessed from the name, and nobody asked how many
+      # namespaces the drive has. A format with FNA bit 1 clear erases only the
+      # namespace it is given, so a second namespace kept its data under a
+      # "Purge" for the drive. Now:
+      #   - the controller comes from the kernel (als_nvme_ctrl), or nothing
+      #     firmware-level is sent at all;
+      #   - SANITIZE first - crypto erase (-a 4), then block erase (-a 2) - as
+      #     the controller's SANICAP says it supports them. A sanitize erases
+      #     the whole NVM subsystem, every namespace, ticked or not: owner
+      #     decision D36 (reversible) accepts that, and the kiosk says so;
+      #   - `nvme format` last, and only when it is known to cover the whole
+      #     drive: exactly one namespace, or FNA bit 1 (a secure erase applies
+      #     to all namespaces). Otherwise it is not used, and the namespaces it
+      #     would have left are named.
+      # SANICAP bits: 0 crypto erase, 1 block erase. FNA bits: 1 secure erase
+      # covers all namespaces, 2 crypto erase is supported by format. Unreadable
+      # id-ctrl: the sanitize is still tried (an unsupported one just fails),
+      # FNA is taken as 0.
+      local err="" idc sanicap="" fna=0 nsl h own="" nsids="" others="" n=0 fmt_ok=0 onedrive
+      if ! als_nvme_ctrl "$d"; then
+        echo "    $NV_WHY — no NVMe firmware command is sent to a guessed controller."
+        return 1
       fi
-      err=$(nvme format "$dev" -s 1 --force 2>&1) && { M="NVMe secure erase (nvme format -s1)"; FW_LEVEL=purge; return 0; }
-      nvme_sanitize "$ctrl" 2 && { M="NVMe block-erase sanitize"; FW_LEVEL=purge; return 0; }
-      echo "    NVMe firmware erase unavailable — $(printf '%s' "$err" | head -n1)"
+      local ctrl="$NV_CTRL"
+      idc=$(nvme id-ctrl "$ctrl" -o json 2>/dev/null)
+      sanicap=$(printf '%s' "$idc" | grep -oE '"sanicap"[[:space:]]*:[[:space:]]*[0-9]+' | grep -oE '[0-9]+$' | head -n1)
+      h=$(printf '%s' "$idc" | grep -oE '"fna"[[:space:]]*:[[:space:]]*[0-9]+' | grep -oE '[0-9]+$' | head -n1)
+      [ -n "$h" ] && fna="$h"
+      # Every namespace the controller has, attached or not ("[   0]:0x1").
+      nsl=$(nvme list-ns "$ctrl" --all 2>/dev/null)
+      for h in $(printf '%s\n' "$nsl" | sed -n 's/^[[:space:]]*\[[[:space:]]*[0-9]*\][[:space:]]*:[[:space:]]*0x\([0-9a-fA-F][0-9a-fA-F]*\).*/\1/p'); do
+        h=$(( 16#$h )); [ "$h" -gt 0 ] || continue
+        nsids="$nsids $h"; n=$(( n + 1 ))
+      done
+      own=$(cat "${ALS_SYS_ROOT:-}/sys/block/$d/nsid" 2>/dev/null)
+      case "$own" in ''|*[!0-9]*) own="${d##*n}" ;; esac
+      onedrive="${d%n*}"; onedrive="${onedrive%c*}"   # nvme0c1n2 / nvme0n2 -> nvme0
+      for h in $nsids; do
+        [ "$h" = "$own" ] || others="$others ${onedrive}n$h"
+      done
+      others="${others# }"
+      if [ "$n" -ge 1 ] && [ -z "$others" ]; then fmt_ok=1
+      elif [ $(( fna & 2 )) -ne 0 ]; then fmt_ok=1
+      fi
+      local can4=1 can2=1
+      if [ -n "$sanicap" ]; then
+        [ $(( sanicap & 1 )) -ne 0 ] || can4=0
+        [ $(( sanicap & 2 )) -ne 0 ] || can2=0
+      fi
+      if [ "$want" = "crypto" ] || [ "$want" = "auto" ]; then
+        if [ "$can4" = 1 ]; then
+          nvme_sanitize "$ctrl" 4 && { M="NVMe cryptographic erase (sanitize)"; FW_LEVEL=purge; return 0; }
+        else
+          echo "    the controller does not support a sanitize crypto erase (SANICAP $sanicap)"
+        fi
+      fi
+      if [ "$want" = "secure" ] || [ "$want" = "auto" ]; then
+        if [ "$can2" = 1 ]; then
+          nvme_sanitize "$ctrl" 2 && { M="NVMe block-erase sanitize"; FW_LEVEL=purge; return 0; }
+        else
+          echo "    the controller does not support a sanitize block erase (SANICAP $sanicap)"
+        fi
+      fi
+      if [ "$fmt_ok" = 1 ]; then
+        if [ "$want" != "secure" ] && [ $(( fna & 4 )) -ne 0 ]; then
+          err=$(nvme format "$dev" -s 2 --force 2>&1) && { M="NVMe cryptographic erase (nvme format -s2)"; FW_LEVEL=purge; return 0; }
+        fi
+        if [ "$want" != "crypto" ]; then
+          err=$(nvme format "$dev" -s 1 --force 2>&1) && { M="NVMe secure erase (nvme format -s1)"; FW_LEVEL=purge; return 0; }
+        fi
+      elif [ -n "$others" ]; then
+        echo "    nvme format not used: it would erase only $d, not the drive's other namespace(s) $others (FNA $fna)."
+      else
+        echo "    nvme format not used: the drive's namespaces could not be listed, so it is not known to cover the whole drive."
+      fi
+      echo "    NVMe firmware erase unavailable${err:+ — $(printf '%s' "$err" | head -n1)}"
       return 1
       ;;
     *)

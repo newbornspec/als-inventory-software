@@ -140,6 +140,160 @@ nvme_sanitize_limit $1"; }
 # estimate is what set the deadline.
 san 4 "$L/stale2"; [ "$POLLS" -eq 62 ] && ok "the deadline actually used is the estimate's (61 reads for 300 s, plus the snapshot)" || bad "the deadline actually used is the estimate's (61 reads for 300 s, plus the snapshot)" "polls=$POLLS"
 
+# ---------------------------------------------------------------------------
+# Plan step 36 (D-2): which controller gets the sanitize, in what order the
+# NVMe methods are tried, and whether a format covers every namespace.
+#
+# firmware_erase used to run `nvme format` on the namespace FIRST, try the
+# sanitize only when format failed, send that sanitize to /dev/nvme<N> guessed
+# from the namespace's name (nvme0n1 -> nvme0; on a two-drive or multipath
+# machine that can be the OTHER drive), and never ask how many namespaces the
+# drive has - so a format with FNA bit 1 clear left a second namespace intact.
+#
+# SAFETY. firmware_erase and als_nvme_ctrl are extracted and run with `nvme`
+# a shell FUNCTION that only logs and answers from the test's variables, and
+# nvme_sanitize a stub that only logs (its real logic is tested above). The
+# /dev/nvme* paths are strings in the log - nothing opens them: PATH holds only
+# read-only wrappers. sysfs is a fixture tree under ALS_SYS_ROOT, plain files
+# and directories only (no symlink has to work, so Git Bash runs it too).
+FE="$(extract "$SRC" als_nvme_ctrl)
+$(extract "$SRC" firmware_erase)"
+case "$FE" in *'als_nvme_ctrl() {'*'firmware_erase() {'*) ;; *) echo "could not extract firmware_erase - refusing to run"; exit 1 ;; esac
+for t in sed head; do
+  real=$(command -v "$t") || { echo "missing $t"; exit 1; }
+  printf '#!/bin/sh\nexec "%s" "$@"\n' "$real" > "$SAFE/$t"
+  chmod +x "$SAFE/$t"
+done
+
+R="$T/root"
+mkfs() {   # a fresh sysfs fixture
+  rm -rf "$R"; mkdir -p "$R/sys/block" "$R/sys/class/nvme"
+  local c
+  for c in 0 1 2 3; do mkdir -p "$R/sys/class/nvme/nvme$c"; echo "243:$c" > "$R/sys/class/nvme/nvme$c/dev"; done
+}
+# ns NAME CTRL_DEV NSID: a namespace whose device is the controller with that dev
+ns() { mkdir -p "$R/sys/block/$1/device"; echo "$2" > "$R/sys/block/$1/device/dev"; echo "$3" > "$R/sys/block/$1/nsid"; }
+
+# fe NAME WANT <env...> -> RC, OUT, CALLS, MLAB
+#   SANICAP / FNA: the id-ctrl answer (unset SANICAP: id-ctrl fails)
+#   NSL: the namespace ids list-ns reports, e.g. "1 2"
+#   SAN4_RC / SAN2_RC: how each sanitize ends (default 0 = done)
+#   FMT_RC: how nvme format ends (default 0)
+#   SUBSYS: what `nvme list-subsys -o json` prints
+fe() {
+  local name="$1" want="$2"; shift 2
+  : > "$LOG"
+  OUT=$(env -i PATH="$SAFE" LOG="$LOG" ALS_SYS_ROOT="$R" NAME="$name" AUDIT_WIPE_METHOD="$want" "$@" "$BASH" -c "$FE
+nvme() {
+  echo \"nvme \$*\" >> \"\$LOG\"
+  case \"\$1\" in
+    id-ctrl) [ -n \"\${SANICAP:-}\" ] || return 1
+             printf '{\"vid\":5197,\"sn\":\"S5H2\",\"sanicap\":%s,\"fna\":%s,\"nn\":32}\n' \"\$SANICAP\" \"\${FNA:-0}\" ;;
+    list-ns) i=0; for n in \${NSL-1}; do printf '[%4d]:0x%x\n' \"\$i\" \"\$n\"; i=\$((i+1)); done ;;
+    list-subsys) printf '%s\n' \"\${SUBSYS:-}\" ;;
+    format) return \"\${FMT_RC:-0}\" ;;
+    *) echo \"UNEXPECTED nvme \$*\" >> \"\$LOG\"; return 1 ;;
+  esac
+}
+nvme_sanitize() { echo \"sanitize \$1 -a \$2\" >> \"\$LOG\"; case \"\$2\" in 4) return \"\${SAN4_RC:-0}\" ;; 2) return \"\${SAN2_RC:-0}\" ;; esac; return 1; }
+firmware_erase \"/dev/\$NAME\" \"\$NAME\"; rc=\$?
+echo \"M=\$M\"
+exit \$rc" 2>&1)
+  RC=$?
+  CALLS=$(command cat "$LOG")
+  MLAB=$(printf '%s\n' "$OUT" | command sed -n 's/^M=//p')
+}
+# first LINE-PATTERN: the line number of the first call matching it (999 = none)
+first() { printf '%s\n' "$CALLS" | command grep -n -e "$1" | head -n1 | cut -d: -f1 | command grep . || echo 999; }
+for t in cut; do
+  real=$(command -v "$t") || { echo "missing $t"; exit 1; }
+  printf '#!/bin/sh\nexec "%s" "$@"\n' "$real" > "$SAFE/$t"; chmod +x "$SAFE/$t"
+done
+
+echo "step 36: the sanitize goes to the namespace's OWN controller"
+mkfs; ns nvme0n1 243:1 1
+fe nvme0n1 auto SANICAP=3 FNA=0 NSL=1
+case "$CALLS" in *"sanitize /dev/nvme1 -a 4"*) ok "nvme0n1 on controller nvme1: the sanitize targets /dev/nvme1" ;; *) bad "nvme0n1 on controller nvme1: the sanitize targets /dev/nvme1" "$CALLS" ;; esac
+case "$CALLS" in *"/dev/nvme0 "*|*"/dev/nvme0") bad "  ... and nothing is sent to /dev/nvme0 (the other drive)" "$CALLS" ;; *) ok "  ... and nothing is sent to /dev/nvme0 (the other drive)" ;; esac
+case "$CALLS" in *"id-ctrl /dev/nvme1"*"list-ns /dev/nvme1 --all"*) ok "  ... SANICAP/FNA and the namespace list are read from that controller" ;; *) bad "  ... SANICAP/FNA and the namespace list are read from that controller" "$CALLS" ;; esac
+
+mkfs; mkdir -p "$R/sys/block/nvme0c1n1"
+fe nvme0c1n1 auto SANICAP=3 NSL=1
+case "$CALLS" in *"sanitize /dev/nvme1 -a 4"*) ok "a per-path name nvme0c1n1: controller nvme1" ;; *) bad "a per-path name nvme0c1n1: controller nvme1" "$CALLS" ;; esac
+
+mkfs; mkdir -p "$R/sys/block/nvme0n1/multipath/nvme0c2n1" "$R/sys/block/nvme0n1/device"; echo 1 > "$R/sys/block/nvme0n1/nsid"
+fe nvme0n1 auto SANICAP=3 NSL=1
+case "$CALLS" in *"sanitize /dev/nvme2 -a 4"*) ok "a native-multipath head with one path (nvme0c2n1): controller nvme2" ;; *) bad "a native-multipath head with one path (nvme0c2n1): controller nvme2" "$CALLS" ;; esac
+
+mkfs; mkdir -p "$R/sys/block/nvme0n1/multipath/nvme0c0n1" "$R/sys/block/nvme0n1/multipath/nvme0c1n1"
+fe nvme0n1 auto SANICAP=3 NSL=1
+[ "$RC" -ne 0 ] && ok "a multipath head with TWO controllers: ambiguous, no firmware erase" || bad "a multipath head with TWO controllers: ambiguous, no firmware erase" "rc=0 $CALLS"
+case "$CALLS" in *sanitize*|*format*|*id-ctrl*) bad "  ... and no command is sent to either controller" "$CALLS" ;; *) ok "  ... and no command is sent to either controller" ;; esac
+case "$OUT" in *"more than one NVMe controller (nvme0 nvme1)"*) ok "  ... and it says why, naming both" ;; *) bad "  ... and it says why, naming both" "$OUT" ;; esac
+
+mkfs; mkdir -p "$R/sys/block/nvme0n1/device/nvme3" "$R/sys/block/nvme0n1/device/nvme0n1"; echo 1 > "$R/sys/block/nvme0n1/nsid"
+fe nvme0n1 auto SANICAP=3 NSL=1
+case "$CALLS" in *"sanitize /dev/nvme3 -a 4"*) ok "device is the subsystem, holding controller nvme3: nvme3" ;; *) bad "device is the subsystem, holding controller nvme3: nvme3" "$CALLS" ;; esac
+
+mkfs
+fe nvme0n1 auto SANICAP=3 NSL=1 'SUBSYS={"Subsystems":[{"Name":"nvme-subsys0","Paths":[{"Name":"nvme2","Transport":"pcie","State":"live"}]}]}'
+case "$CALLS" in *"list-subsys -o json /dev/nvme0n1"*"sanitize /dev/nvme2 -a 4"*) ok "no sysfs: nvme list-subsys -o json names nvme2" ;; *) bad "no sysfs: nvme list-subsys -o json names nvme2" "$CALLS" ;; esac
+fe nvme0n1 auto SANICAP=3 NSL=1 'SUBSYS=[{"Subsystems":[{"Name":"nvme-subsys0","Paths":[{"Name":"nvme0"},{"Name":"nvme1"}]}]}]'
+[ "$RC" -ne 0 ] && case "$CALLS" in *sanitize*|*format*) false ;; *) true ;; esac \
+  && ok "no sysfs, list-subsys names two controllers: ambiguous, nothing sent" || bad "no sysfs, list-subsys names two controllers: ambiguous, nothing sent" "rc=$RC $CALLS"
+fe nvme0n1 auto SANICAP=3 NSL=1
+[ "$RC" -ne 0 ] && case "$CALLS" in *sanitize*|*format*) false ;; *) true ;; esac \
+  && ok "nothing says which controller: no guess, nothing sent" || bad "nothing says which controller: no guess, nothing sent" "rc=$RC $CALLS"
+
+echo "step 36: sanitize first, as SANICAP allows; format last"
+mkfs; ns nvme0n1 243:0 1
+fe nvme0n1 auto SANICAP=3 FNA=4 NSL=1
+[ "$RC" -eq 0 ] && [ "$(first 'sanitize .* -a 4')" -lt "$(first 'format')" ] \
+  && ok "SANICAP 0x3: sanitize -a 4 is issued before any format" || bad "SANICAP 0x3: sanitize -a 4 is issued before any format" "$CALLS"
+case "$CALLS" in *format*) bad "  ... and when it works, no format at all" "$CALLS" ;; *) ok "  ... and when it works, no format at all" ;; esac
+[ "$MLAB" = "NVMe cryptographic erase (sanitize)" ] && ok "  ... recorded as the sanitize crypto erase" || bad "  ... recorded as the sanitize crypto erase" "$MLAB"
+fe nvme0n1 auto SANICAP=3 FNA=4 NSL=1 SAN4_RC=1
+[ "$(first 'sanitize .* -a 4')" -lt "$(first 'sanitize .* -a 2')" ] && [ "$(first 'sanitize .* -a 2')" -lt 999 ] && [ "$MLAB" = "NVMe block-erase sanitize" ] \
+  && ok "crypto sanitize fails: block-erase sanitize next, still before any format" || bad "crypto sanitize fails: block-erase sanitize next, still before any format" "$CALLS / $MLAB"
+case "$CALLS" in *format*) bad "  ... no format while a sanitize worked" "$CALLS" ;; *) ok "  ... no format while a sanitize worked" ;; esac
+fe nvme0n1 auto SANICAP=3 FNA=4 NSL=1 SAN4_RC=1 SAN2_RC=1
+[ "$RC" -eq 0 ] && [ "$(first 'sanitize .* -a 2')" -lt "$(first 'format /dev/nvme0n1 -s 2')" ] && [ "$MLAB" = "NVMe cryptographic erase (nvme format -s2)" ] \
+  && ok "both sanitizes fail, one namespace: format -s2 last" || bad "both sanitizes fail, one namespace: format -s2 last" "$CALLS / $MLAB"
+fe nvme0n1 auto SANICAP=0 FNA=0 NSL=1
+case "$CALLS" in *sanitize*) bad "SANICAP 0: no sanitize is sent" "$CALLS" ;; *) ok "SANICAP 0: no sanitize is sent" ;; esac
+[ "$RC" -eq 0 ] && [ "$MLAB" = "NVMe secure erase (nvme format -s1)" ] && case "$CALLS" in *"-s 2"*) false ;; *) true ;; esac \
+  && ok "  ... one namespace, FNA without crypto: format -s1 only" || bad "  ... one namespace, FNA without crypto: format -s1 only" "$CALLS / $MLAB"
+fe nvme0n1 crypto SANICAP=2 FNA=0 NSL=1
+[ "$RC" -ne 0 ] && case "$CALLS" in *"-a 2"*|*"-s 1"*) false ;; *) true ;; esac \
+  && ok "crypto asked, only block erase supported: no block erase, no -s1 format passed off as crypto" || bad "crypto asked, only block erase supported: no block erase, no -s1 format passed off as crypto" "$CALLS"
+fe nvme0n1 secure SANICAP=3 FNA=4 NSL=1
+case "$CALLS" in *"-a 4"*|*"-s 2"*) bad "secure asked: block erase / -s1 only, no crypto" "$CALLS" ;; *) ok "secure asked: block erase / -s1 only, no crypto" ;; esac
+fe nvme0n1 auto FNA=0 NSL=1
+[ "$(first 'sanitize .* -a 4')" = 3 ] && ok "id-ctrl unreadable: the sanitize is still tried first (an unsupported one just fails)" || bad "id-ctrl unreadable: the sanitize is still tried first" "$CALLS"
+
+echo "step 36: a format must cover every namespace"
+mkfs; ns nvme0n1 243:0 1
+fe nvme0n1 auto SANICAP=0 FNA=0 NSL="1 2"
+[ "$RC" -ne 0 ] && ok "two namespaces, FNA 0, no sanitize: the firmware erase fails" || bad "two namespaces, FNA 0, no sanitize: the firmware erase fails" "rc=0 $MLAB"
+case "$CALLS" in *format*) bad "  ... no format that would erase only nvme0n1" "$CALLS" ;; *) ok "  ... no format that would erase only nvme0n1" ;; esac
+case "$OUT" in *"other namespace(s) nvme0n2"*) ok "  ... and it names the namespace not covered (nvme0n2)" ;; *) bad "  ... and it names the namespace not covered (nvme0n2)" "$OUT" ;; esac
+fe nvme0n1 auto SANICAP=0 FNA=2 NSL="1 2"
+[ "$RC" -eq 0 ] && case "$CALLS" in *"format /dev/nvme0n1 -s 1"*) true ;; *) false ;; esac \
+  && ok "two namespaces, FNA bit 1 (secure erase covers all): format is used" || bad "two namespaces, FNA bit 1 (secure erase covers all): format is used" "$CALLS"
+fe nvme0n1 auto SANICAP=3 FNA=0 NSL="1 2"
+[ "$RC" -eq 0 ] && [ "$MLAB" = "NVMe cryptographic erase (sanitize)" ] \
+  && ok "two namespaces with a sanitize: the sanitize is used (it erases every namespace - D36)" || bad "two namespaces with a sanitize: the sanitize is used" "$CALLS"
+mkfs; ns nvme0n2 243:0 2
+fe nvme0n2 auto SANICAP=0 FNA=0 NSL="1 2 3"
+case "$OUT" in *"other namespace(s) nvme0n1 nvme0n3"*) ok "wiping nvme0n2 of three: names nvme0n1 and nvme0n3, not itself" ;; *) bad "wiping nvme0n2 of three: names nvme0n1 and nvme0n3, not itself" "$OUT" ;; esac
+mkfs; ns nvme0n1 243:0 1
+fe nvme0n1 auto SANICAP=0 FNA=0 NSL=""
+case "$CALLS" in *format*) bad "the namespace list cannot be read: no format (coverage unknown)" "$CALLS" ;; *) ok "the namespace list cannot be read: no format (coverage unknown)" ;; esac
+
+echo "the whole engine"
+live=$(grep -n 'ctrl="/dev/\${d%%n' "$SRC")
+[ -z "$live" ] && ok "the controller is never guessed from the namespace's name" || bad "the controller is never guessed from the namespace's name" "$live"
+
 echo
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
