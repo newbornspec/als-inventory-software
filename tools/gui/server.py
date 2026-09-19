@@ -29,6 +29,7 @@ import signal
 import subprocess
 import threading
 import time
+import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import urllib.parse
@@ -1799,6 +1800,39 @@ def prior_audit(lot_id):
     return data
 
 
+ELIGIBILITY_KEYS = ("available", "reason", "verdict", "drives")
+
+
+def certificate_eligibility(asset_id):
+    """Does this asset have a Certificate of Data Erasure now? Asked of the API
+    (contract C4, GET /assets/:id/certificate-eligibility) rather than worked
+    out here: the rule - every drive of the machine wiped, the D11 mixed-result
+    guard, legacy rows - lives on the server, and a second copy in the kiosk
+    would drift from it. The screen used to announce "certificate available"
+    after ANY recorded wipe, including one where another drive of the same
+    machine had just failed.
+
+    Always answers 200 with {"known": bool, ...}. known=False means "cannot
+    tell" - no asset id, offline, or an API older than C4 (a 404) - and the
+    screen then says only what it saw itself, never "available"."""
+    if not re.match(r"^[A-Za-z0-9-]{1,64}$", asset_id or ""):
+        return {"known": False, "why": "no asset id"}
+    try:
+        out = api("/assets/%s/certificate-eligibility" % asset_id, token=ensure_token(),
+                  timeout=10)
+    except urllib.error.HTTPError as exc:
+        # 404 = an API that predates C4 (or an asset this account cannot see).
+        # Both are "unknown", by contract - not "no certificate".
+        return {"known": False, "why": "server did not answer (HTTP %s)" % exc.code}
+    except Exception as exc:  # noqa: BLE001 - offline, timeout, bad JSON
+        return {"known": False, "why": str(exc) or "server unreachable"}
+    if not isinstance(out, dict) or not isinstance(out.get("available"), bool):
+        return {"known": False, "why": "unexpected answer from the server"}
+    ans = {k: out.get(k) for k in ELIGIBILITY_KEYS}
+    ans["known"] = True
+    return ans
+
+
 # --------------------------------------------------------------- boot timing --
 # Nobody has ever measured this stick's boot. Every opinion about why it is slow
 # - including mine - has been a guess, because the operator has no terminal and
@@ -2927,6 +2961,10 @@ class Handler(BaseHTTPRequestHandler):
             # can be opened, so it must never touch hardware or the network.
             return self._send(200, {"ok": True})
 
+        if u.path == "/api/wipe/eligibility":
+            asset = (parse_qs(u.query).get("assetId") or [""])[0]
+            return self._send(200, certificate_eligibility(asset))
+
         if u.path == "/api/priorAudit":
             lot = (parse_qs(u.query).get("lotId") or [""])[0]
             return self._send(200, prior_audit(lot) or {"found": False, "unknown": True})
@@ -3148,6 +3186,10 @@ class Handler(BaseHTTPRequestHandler):
                     result["recorded"] = bool(out and out.get("assetId"))
                     result["recordName"] = (out or {}).get("name")
                     result["recordTag"] = (out or {}).get("tag")
+                    # The asset the record landed on: the screen asks the API
+                    # (contract C4, /api/wipe/eligibility) whether THAT asset
+                    # now has a certificate, instead of assuming it does.
+                    result["recordAssetId"] = (out or {}).get("assetId")
                 return record_wipe
 
             started, busy = [], []
