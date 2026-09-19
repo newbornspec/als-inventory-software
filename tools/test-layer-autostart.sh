@@ -38,7 +38,7 @@ BASE="$T/base"; mkdir -p "$BASE"
 # cannot find its DLLs on Git Bash); anything not listed here - notably any
 # real firefox on the machine running the test - is unreachable.
 REAL_BASH=$(command -v bash)
-for t in sed tr date mkdir cat seq sleep id; do
+for t in sed tr date mkdir cat seq sleep id cp mv rm; do
   p=$(command -v "$t") || { echo "missing $t"; exit 1; }
   printf '#!/bin/sh\nexec "%s" "$@"\n' "$p" > "$BASE/$t"; chmod +x "$BASE/$t"
 done
@@ -49,7 +49,9 @@ run() {  # run <mode> <browsers...>
   for b in "$@"; do mkstub "$b"; done
   rm -rf "$T/home"; mkdir -p "$T/home"
   echo "$mode" > "$T/home/als-autostart.mode"
-  env -i HOME="$T/home" PATH="$STUB:$BASE" ALS_SETTLE=0 \
+  [ -n "${PRE_HOME:-}" ] && eval "$PRE_HOME"
+  # shellcheck disable=SC2086
+  env -i HOME="$T/home" PATH="$STUB:$BASE" ALS_SETTLE=0 ${RUN_ENV:-} \
     "$REAL_BASH" "$HERE/gui/als-autostart.sh" "$MEDIA" >/dev/null 2>&1
   settle
 }
@@ -127,6 +129,29 @@ nopw "full firefox-esr" "$T/home/als-full-profile-esr/user.js"
 run full firefox
 l=$(browser_line)
 case "$l" in "xdg-open http://127.0.0.1:8800") ok "without ESR: xdg-open, as before" ;; *) bad "full without esr" "$l" ;; esac
+
+echo "no background network chatter from a brand-new profile"
+# A fresh profile fetches ~50 MB right after the page loads (remote settings,
+# Suggest, OpenH264, Safe Browsing lists) - measured; none of it serves a
+# one-page local kiosk.
+run kiosk firefox-esr
+UJ="$T/home/als-kiosk-profile-esr/user.js"
+miss=""
+for p in 'browser.safebrowsing.malware.enabled", false' 'browser.safebrowsing.phishing.enabled", false' \
+         'browser.safebrowsing.provider.google4.updateURL", ""' 'app.normandy.enabled", false' \
+         'toolkit.telemetry.enabled", false' 'datareporting.healthreport.uploadEnabled", false' \
+         'extensions.update.enabled", false' 'extensions.systemAddon.update.enabled", false' \
+         'network.captive-portal-service.enabled", false' 'network.connectivity-service.enabled", false' \
+         'media.gmp-gmpopenh264.enabled", false' 'browser.region.update.enabled", false' \
+         'browser.search.update", false' 'extensions.pocket.enabled", false' 'dom.push.connection.enabled", false'; do
+  grep -q "$p" "$UJ" 2>/dev/null || miss="$miss [$p]"
+done
+[ -z "$miss" ] && ok "kiosk user.js turns off the background fetches" || bad "network prefs" "missing$miss"
+grep -q 'network.proxy.type' "$UJ" && bad "proxy left alone" "network.proxy.type is set" \
+  || ok "network.proxy.type NOT set (a station behind a proxy keeps it)"
+run full firefox-esr
+grep -q 'app.normandy.enabled", false' "$T/home/als-full-profile-esr/user.js" 2>/dev/null \
+  && ok "the 'full' profile gets them too" || bad "full network prefs" "missing"
 
 echo "start-gui.sh (the older launcher) writes the same password prefs"
 # kiosk_args writes the profile and prints the flags; run just that function

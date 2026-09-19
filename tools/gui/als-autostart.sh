@@ -227,6 +227,18 @@ fi
 # Firefox Terms of Use on behalf of the station's users - which operators were
 # already doing by clicking Continue. dataSubmissionPolicyBypassNotification
 # stops the older data-reporting info bar for the same reason.
+#
+# No background network chatter. A brand-new profile - every boot, here - goes
+# on to fetch ~50 MB right after the kiosk page loads: remote settings
+# (34 MB), the Suggest database (17 MB), the OpenH264 plugin and the Safe
+# Browsing lists, plus Normandy, telemetry, add-on and search updates, region
+# lookups and captive-portal/connectivity probes. The kiosk loads one page on
+# 127.0.0.1 and has no URL bar, so none of it serves anything, and all of it
+# competes with the operator's first minutes on a 2-core machine. Measured
+# off the station: ~0.1 s earlier to the first request, and those downloads
+# gone. Safe Browsing off is a trade-off only for pages other than the local
+# kiosk, which it never shows. network.proxy.type is deliberately NOT set,
+# so a station that needs the system proxy keeps it.
 write_ff_prefs() {  # write_ff_prefs <profile dir>
     mkdir -p "$1"
     cat > "$1/user.js" <<'PREFS'
@@ -244,8 +256,38 @@ user_pref("signon.autofillForms", false);
 user_pref("signon.formlessCapture.enabled", false);
 user_pref("signon.generation.enabled", false);
 user_pref("browser.formfill.enable", false);
+user_pref("browser.safebrowsing.malware.enabled", false);
+user_pref("browser.safebrowsing.phishing.enabled", false);
+user_pref("browser.safebrowsing.downloads.enabled", false);
+user_pref("browser.safebrowsing.blockedURIs.enabled", false);
+user_pref("browser.safebrowsing.provider.mozilla.updateURL", "");
+user_pref("browser.safebrowsing.provider.google4.updateURL", "");
+user_pref("browser.safebrowsing.provider.google5.updateURL", "");
+user_pref("app.normandy.enabled", false);
+user_pref("app.shield.optoutstudies.enabled", false);
+user_pref("messaging-system.rsexperimentloader.enabled", false);
+user_pref("datareporting.healthreport.uploadEnabled", false);
+user_pref("datareporting.usage.uploadEnabled", false);
+user_pref("toolkit.telemetry.enabled", false);
+user_pref("toolkit.telemetry.unified", false);
+user_pref("toolkit.telemetry.archive.enabled", false);
+user_pref("extensions.update.enabled", false);
+user_pref("extensions.getAddons.cache.enabled", false);
+user_pref("extensions.systemAddon.update.enabled", false);
+user_pref("network.captive-portal-service.enabled", false);
+user_pref("network.connectivity-service.enabled", false);
+user_pref("browser.region.update.enabled", false);
+user_pref("browser.region.network.url", "");
+user_pref("media.gmp-manager.url", "");
+user_pref("media.gmp-gmpopenh264.enabled", false);
+user_pref("browser.search.update", false);
+user_pref("browser.topsites.contile.enabled", false);
+user_pref("browser.urlbar.quicksuggest.enabled", false);
+user_pref("extensions.pocket.enabled", false);
+user_pref("dom.push.connection.enabled", false);
 PREFS
 }
+
 write_chromium_prefs() {  # write_chromium_prefs <user-data-dir>
     mkdir -p "$1/Default"
     printf '%s\n' '{"credentials_enable_service":false,"credentials_enable_autosignin":false,"profile":{"password_manager_enabled":false},"autofill":{"profile_enabled":false,"credit_card_enabled":false}}' \
