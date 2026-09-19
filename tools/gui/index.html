@@ -805,18 +805,35 @@ function estimate(){
   const picked=selectedWipeDrives(), m=$('wMethod').value;
   $('wStart').disabled=!picked.length;
   if(!picked.length){$('wEst').textContent='—';return;}
-  if(m==='crypto'||m==='secure'){$('wEst').textContent='≈ 1–3 min';return;}
-  let worst=0, anyBytes=false;
+  // The worst case is always an OVERWRITE. A drive's own erase takes minutes -
+  // when it works. When it is refused (a BIOS-frozen SATA SSD, usually), the
+  // wipe falls back to a real overwrite, which on a 512 GB SSD is ~40 minutes.
+  // It used to fall back to TRIM, which was quick and was not an erase; now
+  // that it is honest it is slower, and an operator told "3 minutes" who is
+  // still waiting at minute 20 reasonably decides it has hung. So say both.
+  // best  = every fast erase works; worst = every drive ends up overwritten.
+  // Only FLASH has a fast path: a hard disk's own "secure erase" writes every
+  // sector, so it takes as long as an overwrite and is never counted as quick.
+  // Drives run in parallel, so each bound is the slowest drive's - and a hard
+  // disk in the set sets the minimum, whatever the SSD next to it does.
+  let best=0, worst=0, anyBytes=false, anyFast=false;
   for(const dev of picked){
     const d=DRIVES.find(x=>x.device===dev); if(!d||!d.bytes)continue;
     anyBytes=true;
-    if(m==='auto'&&!d.rotational){worst=Math.max(worst,300);continue;} // firmware erase
     const rate=d.rotational?100e6:400e6;          // bytes/sec, conservative
     const passes=(m==='zero')?1:2;                // zero-only vs random+zero
-    worst=Math.max(worst,(d.bytes*passes)/rate);
+    const overwrite=(d.bytes*passes)/rate;
+    const fast=!d.rotational&&m!=='overwrite'&&m!=='zero';  // firmware tried first
+    if(fast) anyFast=true;
+    best=Math.max(best, fast?300:overwrite);
+    worst=Math.max(worst, overwrite);
   }
+  const par=picked.length>1?' (drives run in parallel)':'';
   if(!anyBytes){$('wEst').textContent='—';return;}
-  $('wEst').textContent='≈ '+fmtEta(worst)+(picked.length>1?' (drives run in parallel)':'');
+  const lo=best<=300?'1–5 min':fmtEta(best);
+  $('wEst').textContent=(anyFast&&worst>best)
+    ? '≈ '+lo+', or ≈ '+fmtEta(worst)+' if a drive refuses its own erase'+par
+    : '≈ '+fmtEta(worst)+par;
 }
 
 const HWDEF=[

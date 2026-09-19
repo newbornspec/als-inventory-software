@@ -883,7 +883,9 @@ def list_drives(force=False):
         elif rota == "1":
             method = "ATA secure erase / overwrite (HDD)"
         else:
-            method = "TRIM / secure erase (SSD)"
+            # Not "TRIM": TRIM is not an erase and is no longer used. An SSD
+            # whose own erase is refused (usually a BIOS freeze) is overwritten.
+            method = "ATA secure erase, else overwrite (SSD)"
         raw = lsblk_field(line, "SIZE")
         try:
             nbytes = int(raw)
@@ -1775,7 +1777,7 @@ def tool_check():
         ("OS install (fallback engine)",
          ["partclone.restore", "partclone.ntfs", "partclone.dd", "sfdisk", "ntfsresize"]),
         ("Compression", ["zstd", "pigz", "gzip"]),
-        ("Wipe + audit", ["shred", "smartctl", "hdparm", "nvme", "blkdiscard"]),
+        ("Wipe + audit", ["shred", "smartctl", "hdparm", "nvme"]),
         ("Kiosk display", ["cage", "xdotool", "xrandr", "firefox-esr", "firefox"]),
         ("Network shares", ["mount.nfs", "mount.cifs"]),
     ]

@@ -92,7 +92,8 @@ AUDIT_ADMIN_PIN                          # optional; gates Settings-save + power
 The GUI lists internal drives only (the boot USB is excluded by the engine),
 shows the auto-selected method per drive, requires a typed confirmation, and
 streams progress. Each drive runs `hardware-audit.sh --wipe-drive /dev/xxx`,
-reusing the tested firmware-erase / TRIM / shred + verify logic.
+reusing the tested firmware-erase / shred + verify logic. (TRIM is not used:
+it is a hint to the drive, not an erase.)
 
 ## Install OS (Clonezilla restore)
 

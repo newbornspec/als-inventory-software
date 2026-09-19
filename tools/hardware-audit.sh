@@ -414,8 +414,7 @@ ensure_tools() {
 
 # --- OPTIONAL, DESTRUCTIVE: securely erase the machine's INTERNAL drives ---
 # Runs ONLY when AUDIT_WIPE=1 in audit.conf, AND the operator types WIPE to
-# confirm. Every command targets ONE specific device (nvme format / blkdiscard /
-# shred) — none can touch another drive — and USB/removable disks are excluded,
+# confirm. Every command targets ONE specific device (nvme / hdparm / shred) — none can touch another drive — and USB/removable disks are excluded,
 # so the boot stick is never at risk. Sets WIPE_STATUS + WIPE_METHOD for the
 # upload so the wipe lands on the audit record and the erasure certificate.
 WIPE_STATUS=""; WIPE_METHOD=""
@@ -503,7 +502,7 @@ nvme_sanitize() {
 
 # Firmware crypto / secure erase for ONE drive per AUDIT_WIPE_METHOD
 # (auto|crypto|secure|overwrite). Sets M, returns 0 on success (else the caller
-# falls back to TRIM/overwrite).
+# falls back to an overwrite - never TRIM, which is not an erase).
 firmware_erase() {
   local dev="$1" d="$2" want="${AUDIT_WIPE_METHOD:-auto}"
   M=""
@@ -641,7 +640,7 @@ WIPEEOF
 # ---- GUI single-drive wipe entrypoint --------------------------------------
 # Called as:  hardware-audit.sh --wipe-drive /dev/sdX [auto|crypto|secure|overwrite]
 # Wipes ONE explicitly named internal drive, reusing the same tested erase
-# helpers as the batch flow (firmware_erase / TRIM / shred + verify_zero).
+# helpers as the batch flow (firmware_erase / shred + verify_zero).
 # Emits human-readable progress on stdout and a final machine-readable line:
 #   WIPE_RESULT {"status":"wiped|failed","method":"…","device":"/dev/sdX"}
 # Refuses removable devices, USB-attached devices, and the disk the system

@@ -96,7 +96,7 @@ the Windows registry at all.
   there was, and it was wrong. Images come from the network image server
   configured in `audit.conf`, or from `images/` at the root of the stick if you
   have the space for them.
-- **Wiping** works the same — `hardware-audit.sh` uses `hdparm`/`nvme`/`blkdiscard`,
+- **Wiping** works the same — `hardware-audit.sh` uses `hdparm`/`nvme`/`shred`,
   all present or apt-installable.
 
 ## Verifying the stick is actually signed
