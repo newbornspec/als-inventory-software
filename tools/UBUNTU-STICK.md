@@ -137,6 +137,16 @@ on every boot too, because the layer's `/usr` is newer than the image's
    boot. If the layer ever ships something those jobs would need (an
    `ld.so.conf.d` entry, hwdb or sysusers files, a journal catalog), the stamp
    is left out and they run exactly as before.
+5. Switches cloud-init off with its own documented marker file,
+   `/etc/cloud/cloud-init.disabled` (a comment-only file; cloud-init checks
+   only that it exists). The kiosk never uses cloud-init, and after the ESR
+   rebuild it still sat on the chain the desktop waited for: `cloud-init-local`
+   (5.5 s, before every normal service), `cloud-init.service` (1.8 s), and the
+   login screen waited for `cloud-config`, which waits for the network to be
+   "online" - the gap between 17 s and 27 s in the boot timeline. It is not a
+   mask: nothing that depends on cloud-init fails, its units are simply not
+   started. The build prints
+   `cloud-init: switched off (/etc/cloud/cloud-init.disabled)`.
 
 `gui/als-autostart.sh` picks `firefox-esr` first, so the kiosk opens it with
 its own profile (`~/als-kiosk-profile-esr`); on a layer without ESR it opens the
@@ -151,7 +161,8 @@ the pending boot changes".
 
 - Build without it: `sudo env ALS_ESR=0 bash /cdrom/make-als-layer.sh build --with-session`
   — no ESR, snapd untouched, snaps seed as before. `ALS_UPDATE_STAMPS=0` leaves
-  the update stamps out as well.
+  the update stamps out as well, and `ALS_CLOUD_INIT=1` leaves cloud-init
+  running as stock.
 - Put an older `casper/minimal.standard.live.als.squashfs` back on the stick
   from Windows (keep a copy of the current one before rebuilding). The layer
   file is the whole change; the next boot behaves like the old one.

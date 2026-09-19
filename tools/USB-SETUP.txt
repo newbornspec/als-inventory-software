@@ -225,7 +225,9 @@ changes live INSIDE that layer, so it has to be rebuilt ONCE:
     (a half-finished unpack, e.g. the stick ran out of RAM space, is
     removed again and snapd is left on) - so the
     ~1.4 GB of snaps are no longer copied into RAM on every boot (~95 s),
-  - stops ldconfig & co. re-running on every boot (~8 s).
+  - stops ldconfig & co. re-running on every boot (~8 s),
+  - switches cloud-init off (the file /etc/cloud/cloud-init.disabled in
+    the layer; the kiosk never uses it, and the desktop waited on it).
 
 1. On Windows: sync the stick (section B), so it has the current
    make-als-layer.sh.
@@ -237,7 +239,8 @@ changes live INSIDE that layer, so it has to be rebuilt ONCE:
       sudo bash /cdrom/make-als-layer.sh build --with-session
 
    Read the end of the output:
-     "firefox-esr baked in" and "masked: snapd..."
+     "firefox-esr baked in" and "masked: snapd..." and
+     "cloud-init: switched off (/etc/cloud/cloud-init.disabled)"
           = the full change went in.
      "ESR skipped, snapd left alone"
           = no internet, or the download/key did not check out. The
@@ -271,7 +274,7 @@ To go back, any one of:
       (the layer file is the whole change)
    sudo env ALS_ESR=0 bash /cdrom/make-als-layer.sh build --with-session
       (no ESR, snapd left alone; add ALS_UPDATE_STAMPS=0 to also drop
-       the ldconfig stamps)
+       the ldconfig stamps, and ALS_CLOUD_INIT=1 to keep cloud-init on)
    sudo bash /cdrom/make-als-layer.sh undo
       (removes the layer entirely and un-arms grub.cfg: plain Ubuntu,
        no kiosk session, until you build and arm again)
