@@ -91,6 +91,18 @@ pick "$T/garbage"
 pick "$T/missing"
 [ "$(result)" = "xz|-comp xz" ] && ok "no kernel image at all -> xz" || bad "missing" "$OUT"
 
+echo "the build log names the exact kernel image it read"
+# A layer built OFF the stick (Docker on the PC) was judged against a copy of
+# the ISO's vmlinuz, not the stick's own. The log must carry that image's
+# sha256 so it can be compared with E:\casper\vmlinuz before the layer goes on.
+want_sha=$(sha256sum "$T/proven" | cut -d' ' -f1)
+pick "$T/proven"
+printf '%s\n' "$OUT" | grep -q "kernel image sha256: $want_sha" \
+  && ok "the guard prints the sha256 of the vmlinuz it judged" || bad "vmlinuz sha256 in the log" "$OUT"
+pick "$T/missing"
+printf '%s\n' "$OUT" | grep -q "kernel image sha256: " && bad "no sha256 for a missing image" "$OUT" \
+  || ok "  and none for an image that is not there"
+
 echo "a /boot/config for that release is the authority"
 printf 'CONFIG_SQUASHFS=y\nCONFIG_SQUASHFS_XZ=y\nCONFIG_SQUASHFS_LZ4=y\n' > "$R/boot/config-6.8.0-31-generic"
 pick "$T/other"
@@ -154,8 +166,40 @@ else
   echo "  (mksquashfs not installed - real-image read-back skipped)"
 fi
 
+echo "room on the stick before the layer is copied over the old one"
+# lz4 makes the layer ~52 MB bigger. cp truncates the old file and then
+# writes: running out of space part-way leaves a truncated layer that grub.cfg
+# still names. The build must refuse BEFORE touching the old file.
+if command -v als_stick_room >/dev/null 2>&1; then
+  mkdir -p "$T/stick"
+  head -c 3000 /dev/zero > "$T/new.sqfs"         # the new layer: 3000 bytes
+  head -c 1000 /dev/zero > "$T/stick/layer"      # the old layer on the stick: 1000 bytes
+  room() {  # room <free KiB> [margin bytes] -> RC, OUT
+    FREE_K=$1
+    OUT=$( ( df() { printf 'Filesystem 1024-blocks Used Available Capacity Mounted\n/dev/x 1 1 %s 1%% /x\n' "$FREE_K"; }
+             ALS_STICK_MARGIN=${2:-0} als_stick_room "$T/stick/layer" "$T/new.sqfs" ) 2>&1 ); RC=$?
+  }
+  room 2; [ "$RC" = 0 ] && ok "2 KiB free + the old 1000 bytes >= 3000 bytes -> copy" || bad "enough room" "rc=$RC $OUT"
+  room 1; [ "$RC" != 0 ] && ok "1 KiB free + 1000 bytes < 3000 bytes -> refused" || bad "too little room" "rc=$RC $OUT"
+  printf '%s\n' "$OUT" | grep -q 'not enough room' && ok "  and it says so" || bad "room message" "$OUT"
+  room 2 4096; [ "$RC" != 0 ] && ok "the safety margin counts" || bad "margin" "rc=$RC $OUT"
+  rm -f "$T/stick/layer"
+  room 2; [ "$RC" != 0 ] && ok "no old layer to replace: 2 KiB free < 3000 bytes -> refused" || bad "no old layer" "rc=$RC $OUT"
+  room 3; [ "$RC" = 0 ] && ok "no old layer, 3 KiB free -> copy" || bad "no old layer, room" "rc=$RC $OUT"
+  room ""; [ "$RC" != 0 ] && ok "df unreadable -> refused, not guessed" || bad "df unreadable" "rc=$RC $OUT"
+else
+  bad "make-als-layer.sh defines als_stick_room" "missing"
+fi
+
 echo "do_build wiring"
 L=$HERE/make-als-layer.sh
+ln_room=$(grep -n '^  als_stick_room "\$CASPER/\$LAYER_FILE" "\$OUT"' "$L" | head -1 | cut -d: -f1)
+ln_cp=$(grep -n '^  cp "\$OUT" "\$CASPER/\$LAYER_FILE"' "$L" | head -1 | cut -d: -f1)
+# the media_rw that makes the stick writable for THAT copy (the last before it)
+ln_rw=$(grep -n '^  media_rw$' "$L" | awk -F: -v c="${ln_cp:-0}" '$1 < c {n = $1} END {print n}')
+[ -n "$ln_room" ] && [ -n "$ln_rw" ] && [ -n "$ln_cp" ] && [ "$ln_room" -lt "$ln_rw" ] && [ "$ln_rw" -lt "$ln_cp" ] \
+  && ok "the room check ($ln_room) runs before the stick is made writable and the copy ($ln_cp)" \
+  || bad "room check wiring" "room=$ln_room rw=$ln_rw cp=$ln_cp"
 grep -q -- '-comp xz -b 131072' "$L" && bad "no hard-coded xz" "$(grep -n -- '-comp xz -b 131072' "$L")" \
   || ok "mksquashfs no longer hard-codes -comp xz"
 grep -q '^  mksquashfs "\$STAGE" "\$OUT" -noappend -no-progress \$LAYER_COMP_ARGS -b "\$ALS_SQUASH_BLOCK"' "$L" \

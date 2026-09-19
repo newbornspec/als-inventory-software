@@ -33,6 +33,16 @@ sets (that is rewritten on top at every launch anyway), and no per-install
 identifiers (telemetry client/profile ids, Normandy user id, ...) - every
 station would otherwise share one.
 
+ONE shared value is kept on purpose: extensions.webextensions.uuids, the
+internal moz-extension:// origins of Firefox's BUILT-IN add-ons (formautofill,
+webcompat, pictureinpicture, ...). The startup caches this template exists to
+ship were built with those UUIDs in them (webext.sc.lz4, scriptCache.bin), so
+dropping the pref would hand Firefox caches that name origins it no longer
+has. They identify no user or install to anyone: nothing reports them, and the
+kiosk shows only its own page on 127.0.0.1, never a site that could probe
+them. The name filter below cannot catch it (the value is a JSON map, not a
+bare UUID), and the test pins that it is kept.
+
 Exit 0 with the template in --out, anything else = no template. The build
 treats every failure as "ship no template": the kiosk then starts from an
 empty profile exactly as before, so nothing here can cost a boot.

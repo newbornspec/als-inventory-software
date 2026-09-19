@@ -189,6 +189,17 @@ the pending boot changes".
 - Put an older `casper/minimal.standard.live.als.squashfs` back on the stick
   from Windows (keep a copy of the current one before rebuilding). The layer
   file is the whole change; the next boot behaves like the old one.
+
+**A layer built anywhere but on the stick** (for example in Docker on the PC)
+had its compressor chosen by reading a *copy* of a `casper/vmlinuz`, not the
+stick's own. Before putting such a layer on a stick, compare the build log's
+`kernel image sha256:` line with the stick's kernel:
+`Get-FileHash E:\casper\vmlinuz` (PowerShell). If they differ, do not copy the
+layer: rebuild it against that stick's vmlinuz, or with `ALS_LAYER_COMP=xz`.
+A kernel that cannot read the layer stops the boot. Also check `E:` has room
+for it (about 161 MB, less the old layer it replaces) - a copy that runs out
+of space part-way leaves a layer the stick cannot boot until the old one is
+put back. Built on the stick itself, the build checks both.
 - `sudo bash /cdrom/make-als-layer.sh undo` removes the layer entirely.
 
 **If the Mozilla key check fails**, do not work around it: it means the key

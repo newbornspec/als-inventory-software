@@ -723,11 +723,21 @@ als_disable_cloud_init() {
 #     warm cache, any of them                     1.23 s
 # The difference is the kernel decompressing xz at ~25 MB/s on ONE core -
 # casper mounts every layer threads=single - to pull ~143 MB of libxul.so and
-# the two omni.ja files into memory. It is CPU, not USB: sys time grew 5.3-6 s
-# for 4.1-5.2 s of wall time, and on the station it competes with the
-# backend's own start-up on the same two cores. lz4 costs 0.4 s there.
-# The price is size: the layer grows from ~108 MB to ~149 MB, and Firefox
-# reads 74 MB off the image instead of 56 MB before its first request.
+# the two omni.ja files into memory. That part is CPU and was measured: sys
+# time grew 5.3-6 s for 4.1-5.2 s of wall time, and the measuring kernel runs
+# the same squashfs code path as the station's (single decompressor,
+# FILE_DIRECT). On the station it also
+# competes with the backend's own start-up on the same two cores.
+# NOT measured: the cost of reading from the USB stick. The test images sat
+# in the Windows host's file cache (a plain copy read 250 MB in 0.13 s), so
+# every figure above is decompression with the reads nearly free. lz4 makes
+# Firefox read 74 MB off the image instead of 56 MB before its first request,
+# and the profile template adds ~19 MB more; on a slow stick that is maybe
+# ~1 s back. The net saving on the station is an estimate until its boot
+# report shows it (HARDWARE-TESTS.md, "Firefox start").
+# The price is size: the layer grows from ~108 MB to ~161 MB (160,563,200
+# bytes as built on 2026-09-19), which the copy step checks the stick has
+# room for (als_stick_room).
 #
 # WHY lz4 AND NOT zstd. zstd is smaller (116 MB) and nearly as fast, and the
 # stick's kernel has it too - but the layer is now built on the Windows PC in
@@ -798,6 +808,10 @@ als_pick_layer_comp() {
     *) die "ALS_LAYER_COMP='$want' is not a compressor this build knows. Use xz, lz4 or
       leave it unset (auto: lz4 when the stick's kernel is proven to read it)." ;;
   esac
+  # The exact file judged, by hash. A layer built OFF the stick (in Docker on
+  # the PC) is judged against a COPY of the ISO's vmlinuz; this line is what
+  # the stick's own E:\casper\vmlinuz must match before that layer goes on it.
+  [ -f "$vmlinuz" ] && say "  kernel image sha256: $(sha256sum "$vmlinuz" 2>/dev/null | cut -d' ' -f1)  ($vmlinuz)"
   id=$(als_kernel_release "$vmlinuz")
   rel=${id%%#*}
   if [ -z "$id" ]; then
@@ -821,7 +835,7 @@ als_pick_layer_comp() {
   fi
   if [ "$proven" = "yes" ]; then
     LAYER_COMP=lz4; LAYER_COMP_ARGS="-comp lz4 -Xhc"
-    say "  compressor: lz4 -Xhc (Firefox starts ~4 s sooner than from xz)"
+    say "  compressor: lz4 -Xhc (off the station, Firefox started ~4-5 s sooner than from xz)"
     return 0
   fi
   [ "$want" = "lz4" ] && die "ALS_LAYER_COMP=lz4 was asked for, but $proven.
@@ -842,6 +856,31 @@ als_squashfs_comp() {
   [ -n "$id" ] && [ -n "$bs" ] && printf '%s %s\n' "$id" "$bs"
 }
 als_comp_id() { case "$1" in xz) echo 4 ;; lz4) echo 5 ;; *) return 1 ;; esac; }
+
+# 0 when the filesystem holding <dest> can take <new> in place of <dest>.
+# cp truncates the old layer and then writes: if the stick fills up part-way,
+# the file grub.cfg names is left truncated and the next boot cannot mount it.
+# So check BEFORE the old file is touched: free space plus what the old file
+# frees when it is truncated must cover the new file plus a margin (the
+# manifest copied beside it, FAT cluster rounding). lz4 made the layer ~52 MB
+# bigger, which is what made this worth checking. df that cannot be read is a
+# refusal, not a guess.
+als_stick_room() {  # als_stick_room <dest file> <new file>
+  local dest="$1" new="$2" need old=0 avail_k margin="${ALS_STICK_MARGIN:-8388608}"
+  need=$(stat -c %s "$new" 2>/dev/null) || return 1
+  [ -f "$dest" ] && old=$(stat -c %s "$dest" 2>/dev/null)
+  avail_k=$(df -Pk "$(dirname "$dest")" 2>/dev/null | awk 'NR == 2 {print $4}')
+  case "$avail_k$need$old" in ''|*[!0-9]*)
+    say "  cannot read the free space on $(dirname "$dest") - not copying"; return 1 ;;
+  esac
+  [ -n "$avail_k" ] || { say "  cannot read the free space on $(dirname "$dest") - not copying"; return 1; }
+  if [ $((avail_k * 1024 + old)) -lt $((need + margin)) ]; then
+    say "  not enough room: the new layer is $((need / 1048576)) MB, the stick has $((avail_k / 1024)) MB free" \
+        "plus $((old / 1048576)) MB from the layer it replaces (and $((margin / 1048576)) MB kept spare)"
+    return 1
+  fi
+  return 0
+}
 
 # =============================================================================
 # KIOSK PROFILE TEMPLATE: Firefox's first-run work done once, at build time.
@@ -874,7 +913,9 @@ als_comp_id() { case "$1" in xz) echo 4 ;; lz4) echo 5 ;; *) return 1 ;; esac; }
 FF_SEED_DIR="usr/share/als/firefox-profile-esr"
 FF_SEED_FILES="startupCache compatibility.ini prefs.js extensions.json addonStartup.json.lz4 xulstore.json times.json"
 # Per-install identifiers that must not be in the template (every station
-# would share them) - the same expression ff-seed.py strips by.
+# would share them) - the same expression ff-seed.py strips by. The built-in
+# add-ons' extensions.webextensions.uuids is kept on purpose (the startup
+# caches embed those UUIDs; see ff-seed.py).
 FF_SEED_ID_RE='user_pref\("[^"]*(user_?id|client_?id|profile_?(group_?)?id|uuid|impression_?id|context_?id|agent_?id|store_?id)"'
 
 # Print the kiosk's user.js - the heredoc in write_ff_prefs - from $1
@@ -1484,6 +1525,9 @@ $(printf '%s' "$bad" | sed "s|^$MP|  |")"
   say "  mounts clean, autostart present, every directory traversable"
 
   step "Copying onto the stick"
+  als_stick_room "$CASPER/$LAYER_FILE" "$OUT" || die "Not copied - the layer on the stick is untouched.
+      Free some space on the stick (from Windows), or keep the backup of the
+      old layer on the PC rather than on the stick, then build again."
   media_rw
   cp "$OUT" "$CASPER/$LAYER_FILE" || die "copy failed"
   [ -f "$MANIFEST" ] && cp "$MANIFEST" "$CASPER/$LAYER_NAME.manifest" 2>/dev/null
