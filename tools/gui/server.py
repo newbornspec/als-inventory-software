@@ -2183,6 +2183,37 @@ def cancel_job(kind):
 
 
 # ---------------------------------------------------------------- server ----
+# ------------------------------------------------------- which server, and who
+# The kiosk may point AUDIT_URL at exactly two hosts: the production API, and
+# whatever audit.conf named when the station started. Changing audit.conf means
+# taking the stick to a Windows PC - that is the trust boundary. The kiosk
+# screen is not: anyone who walks up to it can type into it.
+#
+# This exists because the station logs in with a password stored on the stick.
+# Point AUDIT_URL at a server you control, and the next login hands you that
+# password. Before this, a stick with no admin PIN let anyone at the screen do
+# exactly that.
+PROD_API_HOST = "als-inventory-software-production.up.railway.app"
+BOOT_API_HOST = {"host": None}      # set once in main(), never on a reload
+
+
+def allowed_api_url(url):
+    """(True, "") if the kiosk may switch AUDIT_URL to this, else (False, why)."""
+    try:
+        p = urlparse((url or "").strip())
+    except ValueError:
+        return False, "That is not a valid server address."
+    if p.scheme != "https":
+        return False, "The server address must start with https://."
+    host = (p.hostname or "").lower()
+    allowed = {PROD_API_HOST, (BOOT_API_HOST["host"] or "").lower()} - {""}
+    if host not in allowed:
+        return False, ("This station can only be pointed at the ALS server (%s). "
+                       "To use a different one, edit audit.conf on the stick "
+                       "from Windows." % PROD_API_HOST)
+    return True, ""
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *_args):
         pass
@@ -2547,8 +2578,51 @@ class Handler(BaseHTTPRequestHandler):
                                     "imageWarning": img_err})
 
         if u.path == "/api/settings":
-            if not self._admin_ok(body.get("pin")):
+            # NOT every setting is equally dangerous, so this does not simply
+            # refuse everything when no PIN is set. Wi-Fi is what an operator
+            # legitimately changes at a new site. Three settings can do real
+            # harm from the screen, and those now FAIL CLOSED - no PIN on the
+            # stick means they cannot be changed here at all:
+            #   server address - point it anywhere and the stored login follows
+            #   image server   - the source of every OS installed on a machine
+            #                    you then sell; a rogue share ships someone
+            #                    else's Windows to your customers
+            #   wipe method    - quietly weakens every erasure after it
+            # Only a CHANGE counts. The form resubmits every field on each
+            # save, so an unchanged value must not trip the lock.
+            c = STATE["conf"]
+            pin_want = str(c.get("AUDIT_ADMIN_PIN") or "")
+            pin_ok = bool(pin_want) and body.get("pin") is not None \
+                and str(body.get("pin")) == pin_want
+
+            def norm(v):
+                return str(v or "").strip().rstrip("/")
+
+            risky = []
+            if body.get("serverUrl") and norm(body["serverUrl"]) != norm(c.get("AUDIT_URL")):
+                risky.append("server address")
+            if "imageServer" in body and norm(body["imageServer"]) != norm(c.get("IMAGE_SERVER")):
+                risky.append("image server")
+            # An unset method is shown on screen as "auto", so "auto" coming
+            # back against an empty setting is not a change.
+            if body.get("wipeMethod") and \
+                    norm(body["wipeMethod"]) != norm(c.get("AUDIT_WIPE_METHOD") or "auto"):
+                risky.append("wipe method")
+            if "wipeEnabled" in body and \
+                    ("1" if body["wipeEnabled"] else "0") != (c.get("AUDIT_WIPE") or "0"):
+                risky.append("wipe on/off")
+
+            if pin_want and not pin_ok:
                 return self._send(403, {"message": "Admin PIN required."})
+            if risky and not pin_want:
+                return self._send(403, {"message": (
+                    "Changing the %s needs an admin PIN, and this stick has none. "
+                    "Set AUDIT_ADMIN_PIN in audit.conf on the stick, from Windows."
+                    % " and ".join(risky))})
+            if "server address" in risky:
+                ok, why = allowed_api_url(body["serverUrl"])
+                if not ok:
+                    return self._send(400, {"message": why})
             updates = {}
             if "wifiSsid" in body:
                 updates["WIFI_SSID"] = body["wifiSsid"]
@@ -2571,6 +2645,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, {"saved": True})
 
         if u.path == "/api/power":
+            # Deliberately NOT fail-closed. Shutting down at the end of a job
+            # is an operator's normal action, and a stick with no PIN must keep
+            # its power button. The PIN here is only extra friction when one is
+            # configured - it is not the security boundary settings are.
             if not self._admin_ok(body.get("pin")):
                 return self._send(403, {"message": "Admin PIN required."})
             action = body.get("action")
@@ -2585,6 +2663,9 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     STATE["conf"] = load_conf()
+    # Once, here - never on the reloads after each save, or one allowed change
+    # would widen what the kiosk may switch to next.
+    BOOT_API_HOST["host"] = urlparse(STATE["conf"].get("AUDIT_URL", "") or "").hostname
     # Correct the clock BEFORE logging in (a wrong date breaks HTTPS), but do it
     # on a background thread: these are network calls with timeouts, and blocking
     # here would stop the web server from listening — the kiosk browser opens

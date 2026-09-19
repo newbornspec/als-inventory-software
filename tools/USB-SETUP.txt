@@ -36,8 +36,18 @@ A plain text file named exactly "audit.conf" in the USB root.
 Use straight quotes ("), no spaces around the = sign:
 
    AUDIT_URL="https://als-inventory-software-production.up.railway.app"
-   AUDIT_EMAIL="admin@als.com"
-   AUDIT_PASSWORD="YOUR_PASSWORD"
+
+   # A DEDICATED STATION ACCOUNT - never a person's login, NEVER an admin.
+   # This sits in plain text on a stick in a warehouse. Create it in ALS
+   # Inventory under Users -> New User: role Technician, untick everything,
+   # then tick only Goods In, Perform Amazon Audit, Perform Goods In Audit.
+   AUDIT_EMAIL="station@YOUR_DOMAIN"
+   AUDIT_PASSWORD="FROM_YOUR_PASSWORD_MANAGER"
+
+   # Admin PIN for the kiosk's Settings screen. WITHOUT one, the server
+   # address, image server and wipe method cannot be changed from the
+   # screen at all (Wi-Fi still can). Pick a PIN, keep it off the stick label.
+   AUDIT_ADMIN_PIN="YOUR_PIN"
 
    # Wi-Fi to connect to at the start of each run (blank = use Ethernet)
    WIFI_SSID="YOUR_WIFI_NAME"
