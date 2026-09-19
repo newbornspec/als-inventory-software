@@ -291,6 +291,15 @@ try:
               p.get("biosLocked") is False, p.get("biosLocked"))
         p = with_locks({"status": "WARNING", "checks": [{"key": "mdm", "status": "DETECTED"}]})
         check("WARNING, nothing locked: false", p.get("biosLocked") is False, p.get("biosLocked"))
+        # lock_status ranks WARNING above UNKNOWN, so a WARNING roll-up can
+        # hide a check that never finished (here the BIOS-password one).
+        p = with_locks({"status": "WARNING", "checks": [{"key": "mdm", "status": "DETECTED"},
+                                                        {"key": "bios_pw", "status": "UNKNOWN"}]})
+        check("WARNING hiding an UNKNOWN check: left out, never claimed unlocked",
+              "biosLocked" not in p, p.get("biosLocked"))
+        p = with_locks({"status": "CLEAR", "checks": [{"key": "bios_pw", "status": "unknown"}]})
+        check("an UNKNOWN check under any roll-up: left out", "biosLocked" not in p,
+              p.get("biosLocked"))
         p = with_locks({"status": "UNVERIFIED", "checks": [{"key": "bios_pw", "status": "UNKNOWN"}]})
         check("UNVERIFIED: left out, never claimed unlocked", "biosLocked" not in p, p)
         p = with_locks("garbage")

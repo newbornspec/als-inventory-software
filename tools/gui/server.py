@@ -886,7 +886,8 @@ def bios_locked(profile):
     merely contained "|LOCKED|" flipped the verdict.
 
     False only when the checks RAN and found nothing locked (roll-up CLEAR or
-    WARNING). UNVERIFIED - some checks could not complete - leaves the field
+    WARNING, and no check UNKNOWN). UNVERIFIED, or any single check UNKNOWN
+    - some checks could not complete - leaves the field
     out rather than asserting "not locked" on an unproven machine; the API
     derives lock_status from the same report and keeps that distinction."""
     locks = (profile or {}).get("locks") if isinstance(profile, dict) else None
@@ -897,6 +898,11 @@ def bios_locked(profile):
     roll = str(locks.get("status") or "").strip().upper()
     if "LOCKED" in sts or roll == "LOCKED":
         return True
+    if "UNKNOWN" in sts:
+        # A check that did not complete, whatever the roll-up says:
+        # lock_status ranks DETECTED/WARNING above UNKNOWN, so a WARNING
+        # roll-up can hide an unfinished BIOS-password check.
+        return None
     if roll in ("CLEAR", "WARNING"):
         return False
     return None
