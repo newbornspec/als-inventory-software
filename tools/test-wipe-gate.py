@@ -239,12 +239,11 @@ class _Run:
 
 # A fresh copy of the module: the one above has list_drives stubbed out. Its
 # lsblk call is answered by LSBLK (the subprocess module is shared, so the
-# real run is put back straight after), SMART is not probed, and sysfs points
+# real run is put back straight after), and sysfs points
 # at an empty folder so grouping is by name and the same on every OS.
 spec2 = importlib.util.spec_from_file_location("als_server2", os.path.join(HERE, "gui", "server.py"))
 srv2 = importlib.util.module_from_spec(spec2)
 spec2.loader.exec_module(srv2)
-srv2.smart_health = lambda dev: None
 srv2.SYS_ROOT = os.path.join(_TMP, "no-sys")
 real_run = srv2.subprocess.run
 srv2.subprocess.run = lambda *a, **k: _Run()

@@ -132,6 +132,15 @@
   .dchk .dh.warn{background:#fffbeb;color:var(--amber)}
   .dchk .dh.bad{background:#fef2f2;color:#b91c1c}
   .dchk .dh.na{background:#f1f5f9;color:var(--mut)}
+  /* Drive health rows in the hardware panel (contract C5): the status in
+     colour AND words, the basis underneath in smaller text. */
+  .dhl{margin:0 0 6px} .dhl:last-child{margin:0}
+  .dhl .dhp{display:inline-block;font-weight:700;padding:1px 8px;border-radius:99px;margin-left:4px}
+  .dhl .dhp.ok{background:#f0fdf4;color:#15803d}
+  .dhl .dhp.warn{background:#fffbeb;color:var(--amber)}
+  .dhl .dhp.bad{background:#fef2f2;color:#b91c1c}
+  .dhl .dhp.na{background:#f1f5f9;color:var(--mut)}
+  .dhl .dhb{display:block;font-size:.82em;color:var(--mut);font-weight:400;margin-top:2px}
   /* one progress block per drive being wiped, since they run concurrently */
   .wjob{border-top:1px solid var(--line2);padding-top:11px;margin-top:11px}
   .wjob:first-child{border-top:0;padding-top:0;margin-top:0}
@@ -883,12 +892,14 @@ function fillWipeDrives(){
                        .filter(c=>c.checked).map(c=>c.value));
     const had=document.querySelectorAll('.wchk').length>0;
     const html=DRIVES.map(d=>{
-      const h=d.health, cls=!h||h.status==='unknown'?'na':(h.status==='failing'?'bad':
-              (h.status==='caution'?'warn':'ok'));
-      const lab=(h===null||h===undefined)?'checking…':(h.status==='unknown'?'no SMART':h.status);
+      // The drive's health as the capture measured it (contract C5); the
+      // server supplies the words and the colour (healthView).
+      const h=d.health, v=d.healthView||{}, cls=v.cls||'na';
+      const lab=h&&h.measured===true?(h.percent+'% '+h.status):
+                (h&&h.measured===false?'not measurable':'not scanned');
       return '<label class="dchk"><input type="checkbox" class="wchk" value="'+esc(d.device)+
         '" onchange="estimate()" checked><span class="dn">'+esc(driveLabel(d))+
-        '</span><span class="dh '+cls+'">'+lab+'</span></label>';}).join('');
+        '</span><span class="dh '+cls+'">'+esc(lab)+'</span></label>';}).join('');
     if(setHTML(box,html)&&had){
       // untick what the operator had unticked before the redraw
       document.querySelectorAll('.wchk').forEach(c=>{c.checked=prev.has(c.value);});
@@ -979,28 +990,28 @@ async function saveImageName(){
 /* --- drive health (SMART) ------------------------------------------------
    Shown before the operator commits: a dying disk is worth knowing about
    BEFORE starting a wipe that can run for hours. */
+/* The SAME health the capture measured as root (profile storage[].health,
+   contract C5), matched to the drive by serial on the server. There is no
+   second probe here any more: the old one ran without root and blamed every
+   drive for its own missing privilege. Words and colour come from the server
+   (healthView) so the panel, this banner and the badges always agree. */
 function healthOf(dev){const d=DRIVES.find(x=>x.device===dev);return d?d.health:null;}
-function healthText(h){
-  // null = still being probed in the background; 'unknown' = probed, no SMART.
-  if(h===null||h===undefined)return['na','Checking drive health…',''];
-  if(h.status==='unknown')return['na','SMART not available for this drive',''];
-  const extra=[];
-  if(h.hours)extra.push(Number(h.hours).toLocaleString()+' hrs');
-  if(h.tempC)extra.push(h.tempC+'°C');
-  // Kept to one or two lines; the full advisory appears in the confirm dialog.
-  if(h.status==='failing')return['bad','Drive is FAILING',(h.reasons||[]).join(' · ')];
-  if(h.status==='caution')return['warn','Drive health: caution',(h.reasons||[]).join(' · ')];
-  return['ok','Drive health: good',extra.join(' · ')];
+function healthViewOf(dev){const d=DRIVES.find(x=>x.device===dev);
+  return (d&&d.healthView)||{cls:'na',title:'Not scanned yet — press Rescan',detail:''};}
+function healthText(dev){
+  const v=healthViewOf(dev);
+  return[v.cls||'na','Drive health: '+v.title,v.detail||''];
 }
+function inTrouble(h){return !!(h&&h.measured===true&&(h.status==='bad'||h.status==='caution'));}
 function renderHealth(){
   const el=$('wHealth'), picked=selectedWipeDrives();
   // With several drives the per-row badges carry the health, so only show the
   // banner in the single-drive case (or when a selected drive is in trouble).
-  const bad=picked.map(healthOf).filter(h=>h&&(h.status==='failing'||h.status==='caution'));
-  const h=(DRIVES.length>1?bad[0]:healthOf(picked[0]));
-  if(!picked.length||!h&&DRIVES.length>1){el.classList.add('hidden');el.__k=null;return;}
-  const [cls,title,detail]=healthText(h);
-  const html='<span class="hd"></span><span><b>'+title+'</b>'+(detail?' — '+detail:'')+'</span>';
+  const bad=picked.filter(dev=>inTrouble(healthOf(dev)));
+  const dev=(DRIVES.length>1?bad[0]:picked[0]);
+  if(!picked.length||!dev){el.classList.add('hidden');el.__k=null;return;}
+  const [cls,title,detail]=healthText(dev);
+  const html='<span class="hd"></span><span><b>'+esc(title)+'</b>'+(detail?' — '+esc(detail):'')+'</span>';
   const key=cls+'|'+html;
   if(el.__k===key)return;
   el.__k=key;el.className='health '+cls;el.innerHTML=html;
@@ -1052,15 +1063,29 @@ const HWDEF=[
   ['optical','Optical','<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="2.5"/>'],
   ['network','Network','<path d="M5 12.5a10 10 0 0 1 14 0M8.5 16a5.5 5.5 0 0 1 7 0M12 20h.01"/>'],
   ['batteryLine','Battery','<rect x="2" y="7" width="18" height="10" rx="2"/><path d="M22 11v2"/>'],
+  ['driveHealth','Drive health','<path d="M22 12h-4l-3 8-6-16-3 8H2"/>'],
   ['tpm','TPM','<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>']
 ];
+/* Drive health, one line per drive (contract C5): "512GB NVMe 94% · Good",
+   the basis and key numbers underneath. Before a capture there is nothing to
+   show yet, and it says so, in words the operator can act on. Drive names and the basis come
+   from the machine's firmware, so they are escaped. */
+function driveHealthHTML(){
+  if(!BOOT.device)return esc(BOOT.capturing?'Reading drive health…':'Not scanned yet — press Rescan');
+  const rows=BOOT.device.driveHealth||[];
+  if(!rows.length)return esc('No internal drive found — press Rescan');
+  return rows.map(r=>'<div class="dhl">'+esc(r.drive||'Drive')+
+    '<span class="dhp '+esc(r.cls||'na')+'">'+esc(r.title||'Not scanned yet — press Rescan')+'</span>'+
+    (r.detail?'<span class="dhb">'+esc(r.detail)+'</span>':'')+'</div>').join('');
+}
 function fillHardware(){
   const hw=(BOOT.device&&BOOT.device.hw)||{};
   setHTML($('hwGrid'),HWDEF.map(([k,label,path])=>
     '<div class="hwi"><div class="hwic"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" '+
     'stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">'+path+
     '</svg></div><div><div class="hwk">'+label+'</div><div class="hwv">'+
-    (hw[k]||(BOOT.device?'Not detected':'—'))+'</div></div></div>').join(''));
+    (k==='driveHealth'?driveHealthHTML():(hw[k]||(BOOT.device?'Not detected':'—')))+
+    '</div></div></div>').join(''));
 }
 
 /* ------------------------------------------------------------- audit --- */
@@ -1520,8 +1545,9 @@ function confirmWipe(){
   const warns=[];
   for(const d of devs){
     const h=healthOf(d);
-    if(h&&h.status==='failing')warns.push(d+' is FAILING ('+(h.reasons||[]).join(', ')+')');
-    else if(h&&h.status==='caution')warns.push(d+' reports faults ('+(h.reasons||[]).join(', ')+')');
+    const why=h&&(h.reasons||[]).length?' ('+h.reasons.join(', ')+')':'';
+    if(h&&h.measured===true&&h.status==='bad')warns.push(d+' health is '+h.percent+'% · Bad'+why);
+    else if(h&&h.measured===true&&h.status==='caution')warns.push(d+' health is '+h.percent+'% · Caution'+why);
   }
   const warn=(warns.length?'\n\n⚠ '+warns.join('; ')+' — the wipe may stall or fail.':'')+
     nsWarning(devs);
