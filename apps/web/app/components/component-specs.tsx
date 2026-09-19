@@ -65,6 +65,7 @@ export function ComponentSpecsTable({
                       </span>
                     )}
                   </div>
+                  {r.note && <div className="mt-0.5 text-xs text-neutral-600">{r.note}</div>}
                   {r.sub && (
                     <div className="mt-0.5 font-mono text-[11px] text-neutral-500">{r.sub}</div>
                   )}

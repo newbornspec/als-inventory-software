@@ -2,6 +2,12 @@
 // Deliberately generic: it walks whatever the audit tool sent, so new fields
 // added to the capture script show up here with no frontend change. Read-only —
 // this is machine-captured data, kept separate from the editable warehouse fields.
+//
+// One exception to "generic": each drive's health (contract C5) is shown up
+// front as a percentage and a status in words, worded by lib/drive-health.ts -
+// the same formatter the reports use - rather than dumped as a JSON blob.
+
+import { driveHealthView, type DriveHealthView } from '@/lib/drive-health';
 
 const CATEGORY_LABELS: Record<string, string> = {
   identification: 'Identification',
@@ -33,7 +39,6 @@ const KEY_LABELS: Record<string, string> = {
   macAddress: 'MAC address',
   vram: 'VRAM',
   smartStatus: 'SMART status',
-  healthPct: 'Health (%)',
   powerOnHours: 'Power-on hours',
   powerCycles: 'Power cycles',
   reallocatedSectors: 'Reallocated sectors',
@@ -79,8 +84,67 @@ function formatValue(v: unknown): string {
   return String(v);
 }
 
-function KVRows({ obj }: { obj: Record<string, unknown> }) {
-  const entries = Object.entries(obj).filter(([, v]) => v != null && v !== '');
+// Drive keys the walker must not print as-is:
+//   health     - shown by DriveHealthCard instead of as a JSON blob;
+//   healthPct  - the pre-C5 engine's single-attribute wear figure. It was
+//                computed differently, and printed next to the real percentage
+//                it would read as a second, contradicting health score.
+const DRIVE_HIDDEN = new Set(['health', 'healthPct']);
+
+// A legacy smartStatus of "unknown" is not a health result anyone can act on;
+// PASSED / FAILED (the drive's own verdict) still are.
+function driveEntryShown(k: string, v: unknown): boolean {
+  if (DRIVE_HIDDEN.has(k)) return false;
+  if (k === 'smartStatus') return typeof v === 'string' && /pass|fail/i.test(v);
+  return true;
+}
+
+const HEALTH_TONE: Record<DriveHealthView['tone'], string> = {
+  good: 'border-emerald-200 bg-emerald-50 text-emerald-900',
+  warn: 'border-amber-200 bg-amber-50 text-amber-900',
+  bad: 'border-red-200 bg-red-50 text-red-900',
+  neutral: 'border-neutral-200 bg-white text-neutral-800',
+};
+
+// The drive's health, prominently: "94% · Good" in words (never colour alone),
+// what it is based on, and the key numbers the station read.
+function DriveHealthCard({ drive }: { drive: unknown }) {
+  const v = driveHealthView(drive);
+  return (
+    <div className={`mb-2 rounded-md border p-2 ${HEALTH_TONE[v.tone]}`}>
+      <div className="text-[11px] font-semibold uppercase tracking-wide opacity-80">Drive health</div>
+      <div
+        className={
+          v.kind === 'measured'
+            ? 'text-lg font-semibold tabular-nums'
+            : 'text-sm font-semibold'
+        }
+      >
+        {v.headline}
+      </div>
+      {v.basis && <div className="text-xs">Based on: {v.basis}</div>}
+      {v.action && <div className="text-xs">What to do: {v.action}</div>}
+      {v.legacySmartFailed && (
+        <div className="text-xs font-semibold">An earlier scan reported SMART FAILED.</div>
+      )}
+      {v.facts.length > 0 && (
+        <div className="mt-1 text-xs tabular-nums">{v.facts.join(' · ')}</div>
+      )}
+      {v.reasons.length > 0 && (
+        <ul className="mt-1 list-disc pl-4 text-xs">
+          {v.reasons.map((r, i) => (
+            <li key={i}>{r}</li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function KVRows({ obj, drive = false }: { obj: Record<string, unknown>; drive?: boolean }) {
+  const entries = Object.entries(obj).filter(
+    ([k, v]) => v != null && v !== '' && (!drive || driveEntryShown(k, v)),
+  );
   if (entries.length === 0) return null;
   return (
     <dl className="space-y-1.5">
@@ -109,7 +173,8 @@ function CategoryCard({ name, value }: { name: string; value: unknown }) {
             <div className="mb-1 text-xs font-medium text-neutral-500">
               {itemLabel} {i + 1}
             </div>
-            <KVRows obj={el as Record<string, unknown>} />
+            {name === 'storage' && <DriveHealthCard drive={el} />}
+            <KVRows obj={el as Record<string, unknown>} drive={name === 'storage'} />
           </div>
         ))}
       </div>
@@ -139,9 +204,11 @@ export function HardwareSection({ profile }: { profile: Record<string, unknown> 
   const known = CATEGORY_ORDER.filter((k) => k in profile);
   // `locks` has its own section above. The generic walker would render it as a
   // nested blob of arrays, burying the one part of the profile someone makes a
-  // buying decision on.
+  // buying decision on. `driveHealth` is the old kiosk's unprivileged SMART
+  // probe, grafted onto profiles before C5: it ran without root, so it mostly
+  // reads "unknown" - superseded by each drive's own health above.
   const extra = Object.keys(profile).filter(
-    (k) => !CATEGORY_ORDER.includes(k) && k !== 'locks',
+    (k) => !CATEGORY_ORDER.includes(k) && k !== 'locks' && k !== 'driveHealth',
   );
   const ordered = [...known, ...extra];
 

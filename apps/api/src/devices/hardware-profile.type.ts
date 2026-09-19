@@ -1,3 +1,48 @@
+// Contract C5 - one drive's health, as the station engine computed it.
+// `percent` comes from the documented formula (life remaining for flash, an
+// error score from reallocated / pending / uncorrectable sectors or NVMe media
+// errors, capped by the drive's own failure alarms); the status is DERIVED from
+// it by the owner's bands (Good 90-100, Caution 50-89, Bad 0-49). There is no
+// "unknown": a drive whose health cannot be read carries measured:false with the
+// reason and what to do about it. Every field is optional at the type level
+// because this is stick-supplied JSONB - readers must check what they use
+// (drive-health.ts does).
+export type DriveHealthStatus = 'good' | 'caution' | 'bad';
+export type DriveHealthSource = 'nvme' | 'ata-ssd' | 'ata-hdd' | 'emmc';
+
+export interface DriveHealthMeasured {
+  measured: true;
+  percent: number; // integer 0-100
+  status: DriveHealthStatus;
+  basis?: string; // plain English: what the percentage came from
+  reasons?: string[]; // every deduction or cap applied; [] if none
+  source?: DriveHealthSource;
+  smartPassed?: boolean | null; // null when the drive gives no overall verdict (eMMC)
+  temperatureC?: number | null;
+  powerOnHours?: number | null;
+  powerCycles?: number | null;
+  lifeUsedPct?: number | null; // drive-reported wear; null for HDDs
+  availableSparePct?: number | null; // NVMe only
+  reallocatedSectors?: number | null; // ATA only
+  pendingSectors?: number | null;
+  uncorrectableSectors?: number | null;
+  mediaErrors?: number | null; // NVMe only
+  criticalWarning?: number | null;
+  selfTest?: 'passed' | 'failed' | 'none';
+  tool?: string; // "smartctl 7.4" | "mmc-utils"
+  [key: string]: unknown;
+}
+
+export interface DriveHealthNotMeasured {
+  measured: false;
+  reason?: string; // e.g. "behind a RAID/Intel RST controller"
+  action?: string; // e.g. "set the storage mode to AHCI in the BIOS, then press Rescan"
+  source?: DriveHealthSource;
+  [key: string]: unknown;
+}
+
+export type DriveHealth = DriveHealthMeasured | DriveHealthNotMeasured;
+
 // The full auto-captured hardware profile from the audit tool.
 //
 // Stored as JSONB (assets.hardware_profile + a snapshot per asset_audits row) so
@@ -62,6 +107,12 @@ export interface HardwareProfile {
     interface?: string; // SATA | NVMe
     smartStatus?: string; // PASSED | FAILED | unknown
     serialNumber?: string;
+    // Contract C5: the drive's health, worked out ONCE by the station engine
+    // from the drive's own SMART / eMMC data and stored here untouched. Absent
+    // on every profile captured before C5 - those read "Not scanned yet".
+    // The legacy healthPct next to it was computed differently (a single wear
+    // attribute) and is never shown as this percentage.
+    health?: DriveHealth;
     [key: string]: unknown;
   }>;
   graphics?: Array<{
