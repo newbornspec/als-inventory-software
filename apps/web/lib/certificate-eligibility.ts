@@ -96,13 +96,67 @@ export interface CertificateLinkState {
   drives: CertificateEligibility['drives'];
 }
 
-// What the asset page shows. `eligibility` is null when the API did not answer
-// (404 from an older API, or any error): "unknown", so the old local rule
-// decides, as it did before the endpoint existed.
+// What asking the API for C4 came to:
+//   - its answer;
+//   - null: "unknown" - an API that predates the endpoint (404), so the old
+//     local rule decides, as it did before the endpoint existed;
+//   - 'unavailable': an API that has the endpoint failed to answer (5xx, a
+//     network error, or no answer within ELIGIBILITY_TIMEOUT_MS). NOT the
+//     local fallback: the local rule knows nothing about per-drive
+//     completeness, so it offered a link for an incomplete machine that the
+//     certificate route then refused with a 400 (cross-check, wave 2);
+//   - 'denied': 401/403 - the download has the same permissions, so there is
+//     no link to offer.
+export type EligibilityAnswer = CertificateEligibility | null | 'unavailable' | 'denied';
+
+// C4 runs in the asset page's Promise.all, so a slow answer held up the whole
+// page for as long as the platform's own fetch timeout. The endpoint is one
+// indexed read of the asset's wipe rows; 3 s is far more than it needs.
+export const ELIGIBILITY_TIMEOUT_MS = 3000;
+
+// Ask for C4 with a time limit. `get` does the request with the signal it is
+// given (apiFetch in the page); the time limit holds even if it ignores it.
+// An error's `status` (ApiError's) tells a 404 from a failure.
+export async function fetchEligibility(
+  get: (signal: AbortSignal) => Promise<CertificateEligibility>,
+  timeoutMs: number = ELIGIBILITY_TIMEOUT_MS,
+): Promise<EligibilityAnswer> {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timedOut = new Promise<'unavailable'>((resolve) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      resolve('unavailable');
+    }, timeoutMs);
+  });
+  try {
+    return await Promise.race([get(controller.signal), timedOut]);
+  } catch (err) {
+    const status = (err as { status?: unknown } | null)?.status;
+    if (status === 404) return null;
+    if (status === 401 || status === 403) return 'denied';
+    return 'unavailable';
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+const UNAVAILABLE_MESSAGE =
+  'Whether an erasure certificate can be issued for this device could not be checked just now. Reload the page to try again.';
+
+// What the asset page shows, from the C4 answer (see EligibilityAnswer).
 export function certificateLinkState(
-  eligibility: CertificateEligibility | null,
+  eligibility: EligibilityAnswer,
   rows: WipeRowLike[],
 ): CertificateLinkState {
+  if (eligibility === 'denied') return { offer: false, message: null, drives: [] };
+  if (eligibility === 'unavailable')
+    return {
+      offer: false,
+      // Never wiped: nothing to explain, as before.
+      message: latestWipe(rows) ? UNAVAILABLE_MESSAGE : null,
+      drives: [],
+    };
   if (eligibility) {
     return {
       offer: eligibility.available,

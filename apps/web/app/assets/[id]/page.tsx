@@ -14,7 +14,11 @@ import { AssetEditForm } from './edit-form';
 import { SellAssetButton } from './sell-button';
 import { DeleteAssetButton } from './delete-asset-button';
 import { AuditSection, type AssetAuditRecord } from './audit-section';
-import type { CertificateEligibility } from '@/lib/certificate-eligibility';
+import {
+  fetchEligibility,
+  type CertificateEligibility,
+  type EligibilityAnswer,
+} from '@/lib/certificate-eligibility';
 import { PhotosSection } from './photos-section';
 import { HardwareSection } from './hardware-section';
 import { DeviceLocksSection, type DeviceLocks } from './device-locks-section';
@@ -59,15 +63,14 @@ async function loadAsset(
 }
 
 // The API's per-drive answer to "may this device be certified?" (contract
-// C4). null means unknown - an API that predates the endpoint answers 404, and
-// any other failure must not take the page down - and the audit section then
-// falls back to its local copy of the interim rule.
-async function loadEligibility(id: string): Promise<CertificateEligibility | null> {
-  try {
-    return await apiFetch<CertificateEligibility>(`/assets/${id}/certificate-eligibility`);
-  } catch {
-    return null;
-  }
+// C4), with a time limit so a slow answer cannot hold up the whole page.
+// null = unknown (an API that predates the endpoint answers 404): the audit
+// section then falls back to its local copy of the interim rule. Any other
+// failure is 'unavailable' and offers no link - see fetchEligibility.
+function loadEligibility(id: string): Promise<EligibilityAnswer> {
+  return fetchEligibility((signal) =>
+    apiFetch<CertificateEligibility>(`/assets/${id}/certificate-eligibility`, { signal }),
+  );
 }
 
 export default async function AssetDetailPage({

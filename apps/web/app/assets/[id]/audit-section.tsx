@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { AuditForm } from '@/app/components/audit-form';
-import { certificateLinkState, type CertificateEligibility } from '@/lib/certificate-eligibility';
+import { certificateLinkState, type EligibilityAnswer } from '@/lib/certificate-eligibility';
 
 export interface AssetAuditRecord {
   id: string;
@@ -38,8 +38,9 @@ export function AuditSection({
   audits: AssetAuditRecord[];
   // The API's own per-drive answer (GET /assets/:id/certificate-eligibility).
   // null = unknown (an API that predates it answers 404): the local copy of
-  // the interim rule decides instead, as before.
-  eligibility?: CertificateEligibility | null;
+  // the interim rule decides instead, as before. 'unavailable' (the API has
+  // it but did not answer in time) and 'denied' offer no link.
+  eligibility?: EligibilityAnswer;
   // Holds "Record Manual Wipe" - passed through to the form. See AuditForm.
   mayRecordWipe?: boolean;
   // Holds Perform Goods In/Amazon Audit - without it the button is not shown,

@@ -330,4 +330,66 @@ describe('web asset page: certificateLinkState', () => {
     expect(mixed.offer).toBe(false);
     expect(mixed.message).toMatch(/failed its wipe/);
   });
+
+  // Cross-check, wave 2: a C4 that fails on an API that HAS it is not
+  // "unknown". Falling back to the local interim rule (which knows nothing
+  // about per-drive completeness) offered a link for an incomplete machine
+  // that the certificate route then refused with 400.
+  it('an API that has C4 but failed to answer: no link, and says why', () => {
+    const wiped = { dataWipeStatus: 'wiped', createdAt: at(0) };
+    const out = web.certificateLinkState('unavailable', [wiped]);
+    expect(out.offer).toBe(false);
+    expect(out.message).toMatch(/could not be checked/);
+    // Never wiped: nothing to explain, as before.
+    expect(web.certificateLinkState('unavailable', [])).toMatchObject({
+      offer: false,
+      message: null,
+    });
+    // Not allowed to ask: the download is refused the same way, so no link
+    // and no message.
+    expect(web.certificateLinkState('denied', [wiped])).toMatchObject({
+      offer: false,
+      message: null,
+    });
+  });
+});
+
+describe('web asset page: fetchEligibility (C4 with a time limit)', () => {
+  const answer = {
+    available: true,
+    reason: null,
+    verdict: 'wiped' as const,
+    drives: [],
+  };
+  const fail = (status?: number) => () =>
+    Promise.reject(Object.assign(new Error('x'), { status }));
+
+  it('passes the answer through, and a 404 (API without C4) means unknown', async () => {
+    expect(await web.fetchEligibility(() => Promise.resolve(answer))).toBe(
+      answer,
+    );
+    expect(await web.fetchEligibility(fail(404))).toBeNull();
+  });
+
+  it('a 5xx or a network error is "unavailable", not the local fallback', async () => {
+    expect(await web.fetchEligibility(fail(500))).toBe('unavailable');
+    expect(await web.fetchEligibility(fail(undefined))).toBe('unavailable');
+    expect(await web.fetchEligibility(fail(403))).toBe('denied');
+    expect(await web.fetchEligibility(fail(401))).toBe('denied');
+  });
+
+  // A slow C4 held up the whole asset page (it runs in the page's
+  // Promise.all), for as long as the platform's own fetch timeout.
+  it('gives up after the time limit, and aborts the request', async () => {
+    let signal: AbortSignal | undefined;
+    const started = Date.now();
+    const out = await web.fetchEligibility((s) => {
+      signal = s;
+      return new Promise<never>(() => {});
+    }, 50);
+    expect(out).toBe('unavailable');
+    expect(Date.now() - started).toBeLessThan(2000);
+    expect(signal?.aborted).toBe(true);
+    expect(web.ELIGIBILITY_TIMEOUT_MS).toBeLessThanOrEqual(3000);
+  });
 });
