@@ -254,10 +254,17 @@ export function rollupWipe<R extends RollupRow>(
 
   const manual = rows.filter(isManualRow);
   const stationRows = rows.filter((r) => !isManualRow(r));
+  const identified = stationRows.filter((r) => driveKey(r));
+  const legacy = stationRows.filter((r) => !driveKey(r));
 
   // A manual record newer than every station record, on both clocks,
-  // speaks for the whole machine.
-  if (manual.length) {
+  // speaks for the whole machine - once per-drive records exist. While a
+  // machine has only rows with no drive identity (legacy station rows and
+  // manual rows), the wave-1 D11 rule below decides for all of them, exactly
+  // as it did before: a manual "wiped" typed within 24 hours after a legacy
+  // station failure stays refused, as it was. Letting the manual row win
+  // there would have quietly loosened the interim rule for old records.
+  if (manual.length && identified.length) {
     const m = latestOf(station, manual);
     const newest = stationRows.every(
       (s) => compare(station, m, s) > 0 && compare(received, m, s) > 0,
@@ -275,9 +282,6 @@ export function rollupWipe<R extends RollupRow>(
           };
     }
   }
-
-  const identified = stationRows.filter((r) => driveKey(r));
-  const legacy = stationRows.filter((r) => !driveKey(r));
 
   // Only rows with no drive identity: the interim D11 rule, exactly as in
   // wave 1 (manual rows included, as they were then).

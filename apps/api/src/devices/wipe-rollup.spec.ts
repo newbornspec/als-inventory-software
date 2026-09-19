@@ -278,6 +278,24 @@ describe('rollupWipe - manual records ("allow, but labelled")', () => {
     expect(r.basis).toBe('drives');
   });
 
+  it('with only legacy station rows, a manual wipe is judged by the D11 rule as before', () => {
+    const legacyFailed: RollupRow = {
+      id: `l${++seq}`,
+      dataWipeStatus: 'failed',
+      dataWipeMethod: 'NVMe crypto erase',
+      createdAt: at(0),
+      wipeSource: 'station',
+      hardwareProfile: {},
+    };
+    // Typed an hour after a legacy station failure: refused, as in wave 1.
+    const r = rollupWipe([legacyFailed, manual('wiped', 60)]);
+    expect(r).toMatchObject({ verdict: 'failed', reason: 'mixed', basis: 'legacy' });
+    // Two days later: the failure is history, the manual wipe stands.
+    expect(rollupWipe([legacyFailed, manual('wiped', 48 * 60)]).verdict).toBe(
+      'wiped',
+    );
+  });
+
   it('a manual record alone', () => {
     expect(rollupWipe([manual('wiped', 0)]).verdict).toBe('wiped');
     expect(rollupWipe([manual('failed', 0)]).verdict).toBe('failed');
