@@ -43,6 +43,27 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
 // Railway runs migrations pre-deploy, which gives that order as long as the
 // migration and the entity change ship together.
 //
+// LOCKING. TypeORM runs the whole chain in ONE transaction, and ADD COLUMN
+// takes an ACCESS EXCLUSIVE lock on asset_audits that is held until it
+// commits - while the old code is still serving (Railway pre-deploy), so
+// station ingests and audit reads wait for it. Keep the work under that lock
+// small:
+//   - ADD COLUMN of a nullable column with no default is catalogue-only.
+//   - The CHECK is added NOT VALID, so Postgres does not scan every row to
+//     prove it. Nothing needs proving: the column was created in this same
+//     statement set, so every existing value is NULL, and the constraint is
+//     still enforced on every INSERT and UPDATE from here on. (A later
+//     VALIDATE CONSTRAINT, outside this chain, would only mark it validated.)
+//   - The index is on a column that is NULL everywhere, but building it still
+//     reads the table once; plain CREATE INDEX, not CONCURRENTLY, because
+//     CONCURRENTLY refuses to run inside a transaction (same trade-off as
+//     1752570000000-AddAssetAuditFeedIndexes).
+//   - The backfill rewrites only rows whose profile carries a known lock
+//     verdict. At this table's size (thousands of rows) that is seconds; if
+//     asset_audits ever reaches hundreds of thousands of rows, run the same
+//     UPDATE by hand in batches BEFORE deploying, and this one then touches
+//     nothing (it skips rows whose lock_status is already set).
+//
 // BACKFILL lock_status for existing rows from hardware_profile, with the same
 // rule the ingest uses (devices/wipe-detail.ts lockStatusOf): locks.status,
 // else security.lockStatus, upper-cased, and only the four known values.
@@ -78,6 +99,7 @@ export class AddWipeRecordDetail1752650000000 implements MigrationInterface {
       ALTER TABLE "asset_audits"
       ADD CONSTRAINT "CHK_asset_audits_sanitisation_level"
       CHECK ("sanitisation_level" IS NULL OR "sanitisation_level" IN ('purge', 'clear', 'none'))
+      NOT VALID
     `);
     await queryRunner.query(`
       CREATE INDEX IF NOT EXISTS "IDX_asset_audits_wiped_drive_serial"
