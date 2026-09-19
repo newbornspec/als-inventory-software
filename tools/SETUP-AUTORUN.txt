@@ -2,6 +2,12 @@
   ALS Inventory - Hardware Audit USB: quick reference (SystemRescue)
 =====================================================================
 
+NOT FOR THE CURRENT STICK. This sheet is for the old SystemRescue
+stick, which is no longer in use (owner decision D41). The stick in
+use is the Ubuntu stick: see USB-SETUP.txt and UBUNTU-STICK.md. It has
+no autorun - the kiosk starts from its own boot session - and drives
+are wiped on the kiosk screen only.
+
 GOAL: boot a machine off the USB and have the audit start by itself,
 so you only pick the lot and press Y. No commands to type.
 
