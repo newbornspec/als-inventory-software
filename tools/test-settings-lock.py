@@ -55,6 +55,7 @@ class FakeThread:
         pass                     # never actually remount, never power off
 
 
+REAL_SAVE_CONF = srv.save_conf
 srv.save_conf = fake_save_conf
 srv.threading.Thread = FakeThread
 srv.subprocess.run = lambda cmd, *a, **k: POWER.append(cmd)
@@ -175,6 +176,85 @@ check("no PIN on stick: shutdown still works", r[0] == 200, r)
 conf(pin="4417")
 r = post("/api/power", {"action": "shutdown", "pin": "0000"})
 check("PIN set, wrong PIN: shutdown refused", r[0] == 403, r)
+
+print("a Wi-Fi name cannot add settings of its own (real save_conf, temp audit.conf)")
+# The Wi-Fi fields need no PIN on a stick without one, and save_conf writes
+# each value between quotes on its own line and reloads the conf at once. A
+# newline in the SSID used to start new lines: new settings, live at once -
+# AUDIT_URL past the allow-list, AUDIT_OPERATOR_SIGNIN off. Here the real
+# save_conf and load_conf run against a temp file; only the stick write
+# (remount + sudo) is replaced by a plain file write.
+import tempfile                                   # noqa: E402
+_tmp = tempfile.mkdtemp(prefix="als-settings-")
+CONF_FILE = os.path.join(_tmp, "audit.conf")
+ORIGINAL = ('AUDIT_URL="%s"\nAUDIT_EMAIL="station@x.example"\nAUDIT_ADMIN_PIN=""\n'
+            'AUDIT_OPERATOR_SIGNIN="1"\nWIFI_SSID="Warehouse"\nWIFI_PASSWORD="pw"\n' % PROD)
+
+
+def reset_conf_file():
+    with open(CONF_FILE, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write(ORIGINAL)
+    srv.CONF_PATH = CONF_FILE
+    srv.STATE["conf"] = srv.load_conf()
+    srv.BOOT_API_HOST["host"] = srv.urlparse(PROD).hostname
+
+
+def conf_text():
+    with open(CONF_FILE, encoding="utf-8") as fh:
+        return fh.read()
+
+
+def plain_write(path, text):
+    with open(path, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write(text)
+    return None
+
+
+srv.save_conf = REAL_SAVE_CONF
+srv.write_boot_file = plain_write
+try:
+    reset_conf_file()
+    check("setup: the temp conf has sign-in on", srv.operator_signin_on(), srv.STATE["conf"])
+    evil = 'Warehouse\nAUDIT_URL="https://evil.example"\nAUDIT_OPERATOR_SIGNIN="0"'
+    r = post("/api/settings", {"wifiSsid": evil, "serverUrl": PROD, "wipeMethod": "auto",
+                               "imageServer": ""})
+    check("SSID with newlines: refused with 400 and a reason",
+          r[0] == 400 and "line break" in r[1].get("message", ""), r)
+    check("... the file is unchanged", conf_text() == ORIGINAL, conf_text())
+    check("... AUDIT_URL in use is still production", srv.STATE["conf"].get("AUDIT_URL") == PROD,
+          srv.STATE["conf"].get("AUDIT_URL"))
+    check("... operator sign-in is still on", srv.operator_signin_on(), srv.STATE["conf"])
+
+    for label, body in (("carriage return in the SSID", {"wifiSsid": 'x\rAUDIT_URL="https://e.example"'}),
+                        ("newline in the Wi-Fi password", {"wifiPassword": 'p\nAUDIT_OPERATOR_SIGNIN="0"'}),
+                        ("NUL in the SSID", {"wifiSsid": "x\x00y"}),
+                        ("newline in the image server", {"imageServer": '1.2.3.4:/x\nAUDIT_URL="h"'})):
+        reset_conf_file()
+        r = post("/api/settings", body)
+        check("%s: refused, file unchanged" % label,
+              r[0] in (400, 403) and conf_text() == ORIGINAL, (r, conf_text()))
+
+    reset_conf_file()
+    odd = 'Cafe "5G" $HOME `x` \\ end'
+    r = post("/api/settings", {"wifiSsid": odd, "wifiPassword": 'p"a$$w\\o`rd"'})
+    check("quotes, $, backticks, backslashes: a legal SSID/password is saved", r[0] == 200, r)
+    c = srv.load_conf()
+    check("... and reads back exactly", c.get("WIFI_SSID") == odd and c.get("WIFI_PASSWORD") == 'p"a$$w\\o`rd"',
+          (c.get("WIFI_SSID"), c.get("WIFI_PASSWORD")))
+    check("... every other setting untouched",
+          c.get("AUDIT_URL") == PROD and c.get("AUDIT_OPERATOR_SIGNIN") == "1"
+          and c.get("AUDIT_EMAIL") == "station@x.example", c)
+
+    reset_conf_file()
+    err = srv.save_conf({"WIFI_SSID": 'a\nAUDIT_URL="https://evil.example"'})
+    check("save_conf itself refuses a line break (any caller)", bool(err) and conf_text() == ORIGINAL,
+          (err, conf_text()))
+    err = srv.save_conf({"BAD KEY\nAUDIT_URL": "x"})
+    check("save_conf refuses a malformed key", bool(err) and conf_text() == ORIGINAL, (err, conf_text()))
+finally:
+    srv.CONF_PATH = None
+    import shutil                                 # noqa: E402
+    shutil.rmtree(_tmp, True)
 
 print("")
 print("%d passed, %d failed" % (PASS[0], len(FAIL)))
