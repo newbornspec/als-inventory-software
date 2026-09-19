@@ -6,7 +6,13 @@ import { Asset } from './asset.entity';
 import { AssetAudit, DataWipeStatus } from './asset-audit.entity';
 import { Batch } from '../batches/batch.entity';
 import { COMPANY } from '../common/company';
-import { lotAttestation, sourceOf, wipeAttestation } from './manual-wipe';
+import {
+  lotAttestation,
+  sourceOf,
+  wipeAttestation,
+  type WipeAttestation,
+  type WipeSource,
+} from './manual-wipe';
 import { DISCARD_REFUSAL, discardedNotice, isNotAnErase } from './wipe-method';
 import {
   MIXED_REFUSAL,
@@ -21,6 +27,37 @@ import {
 } from '../common/ownership';
 
 
+
+// Who the certificate names, and as what (remediation spec C-1).
+//
+// The station signs in as ONE shared account, so the account on a station
+// record is not the person who wiped the drive - yet the certificate printed
+// it as "Performed by", naming e.g. the admin account for every wipe ever
+// done. The name the operator typed at the station (operator_name) was never
+// printed at all. Now:
+//   - the typed name prints as "Operator (self-declared)": nothing verifies
+//     it, and the label says so;
+//   - the account prints as what it is, "Filed by account";
+//   - an older station record with no typed name prints only the account,
+//     still labelled as the account, never as the performer.
+// A manual record keeps "Recorded by" (manual-wipe.ts): there the account is
+// a personal web login, and the person behind it did record the wipe.
+export function erasurePeople(
+  source: WipeSource,
+  att: WipeAttestation,
+  operatorName: string | null | undefined,
+  accountName: string | null | undefined,
+): [string, string][] {
+  const operator = operatorName?.trim();
+  const account = accountName?.trim() || '—';
+  const rows: [string, string][] = [];
+  if (operator) rows.push(['Operator (self-declared)', operator]);
+  rows.push([
+    source === 'manual' ? att.performerLabel : 'Filed by account',
+    account,
+  ]);
+  return rows;
+}
 
 function pretty(value: string | null | undefined): string {
   if (!value) return '—';
@@ -220,11 +257,12 @@ export class CertificatesService {
         month: 'long',
         year: 'numeric',
       });
-      const technician = (wipe.auditedBy as any)?.name ?? '—';
+      const account = wipe.auditedBy?.name ?? null;
       // What this certificate may truthfully claim depends on who recorded
       // the wipe - the station, which erased and read back the drive, or a
       // person typing an outcome. See manual-wipe.ts.
-      const att = wipeAttestation(sourceOf(wipe));
+      const source = sourceOf(wipe);
+      const att = wipeAttestation(source);
       const method = (wipe.dataWipeMethod?.trim() || 'Not specified') + att.methodSuffix;
       const d = new Date(wipe.createdAt);
       const certNo = `ERA-${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(
@@ -288,7 +326,7 @@ export class CertificatesService {
         ['Method', method],
         ['Result', att.result],
         [att.dateLabel, wipedOn],
-        [att.performerLabel, technician],
+        ...erasurePeople(source, att, wipe.operatorName, account),
       ]);
 
       const extra: [string, string][] = [];
