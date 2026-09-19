@@ -227,7 +227,13 @@ changes live INSIDE that layer, so it has to be rebuilt ONCE:
     ~1.4 GB of snaps are no longer copied into RAM on every boot (~95 s),
   - stops ldconfig & co. re-running on every boot (~8 s),
   - switches cloud-init off (the file /etc/cloud/cloud-init.disabled in
-    the layer; the kiosk never uses it, and the desktop waited on it).
+    the layer; the kiosk never uses it, and the desktop waited on it),
+  - packs the layer with lz4 instead of xz, ONLY when the stick's own
+    casper/vmlinuz is the proven 24.04.2 kernel (Firefox started in
+    6.7 s from xz, 1.8 s from lz4, measured off the station; the layer
+    grows to about 160 MB). Anything else: xz, as before, and it says why,
+  - ships a ready-made Firefox profile, so the kiosk's Firefox skips its
+    first-run work on every boot (1.8 s -> 1.05 s, measured).
 
 1. On Windows: sync the stick (section B), so it has the current
    make-als-layer.sh.
@@ -273,6 +279,8 @@ To go back, any one of:
       E:\casper\minimal.standard.live.als.squashfs  from Windows
       (the layer file is the whole change)
    sudo env ALS_ESR=0 bash /cdrom/make-als-layer.sh build --with-session
+   (ALS_LAYER_COMP=xz after env: xz as before; ALS_FF_SEED=0: no
+   ready-made Firefox profile)
       (no ESR, snapd left alone; add ALS_UPDATE_STAMPS=0 to also drop
        the ldconfig stamps, and ALS_CLOUD_INIT=1 to keep cloud-init on)
    sudo bash /cdrom/make-als-layer.sh undo

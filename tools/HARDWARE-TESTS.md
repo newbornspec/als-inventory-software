@@ -329,7 +329,11 @@ packages), the Windows PC.
    ```
 3. Read the end of the output. You want `firefox-esr baked in` and
    `masked: snapd…`, `cloud-init: switched off (/etc/cloud/cloud-init.disabled)`,
+   `compressor: lz4 -Xhc`, `superblock: compression id 5 (lz4)`,
+   `profile template: /usr/share/als/firefox-profile-esr`,
    and **no** `WARNING: themes/als has no …` line.
+   (`compressor: xz - …` is safe, it just means the faster Firefox start is
+   not in this build. Photograph the reason it gives.)
    If it says `copy failed`, do **not** boot the stick again. Put back the
    copy you made in *Prepare*, step 3, from Windows first.
 4. Run `sudo bash /cdrom/make-als-layer.sh status`. `armed` must say `yes`.
@@ -344,6 +348,7 @@ packages), the Windows PC.
    journalctl -b -t als-autostart --no-pager | grep -i -E 'kiosk:|firefox'
    systemctl is-enabled snapd.service
    ls -l /etc/cloud/cloud-init.disabled
+   grep -i template ~/als-autostart.log
    systemd-analyze blame | head -15
    systemd-analyze blame | grep -c cloud-
    ```
@@ -366,6 +371,11 @@ packages), the Windows PC.
 - In `boot-report.txt`:
   - `APP READY` is lower than the old **82 s**. Write the number down. (How
     much lower is not known yet: that is what this measures.)
+  - Firefox start: `APP READY` minus `browser launched` is well under the
+    old **13.6 s** (34.8 s -> 48.4 s on 2026-09-19). Write both numbers down.
+    Off the station this part went from 6.7 s to 1.05 s; how much of that
+    shows on the station is what this measures. The `grep -i template` line
+    must say `started from the template`.
   - The timeline has **no** `snap seeding finished` line. (A `firefox snap
     mounted` line can still appear: the image mounts its snap files at start,
     which is quick. Seeding them - the slow part - is what snapd being masked
@@ -406,6 +416,8 @@ Try these in order. Each one is safe.
 5. **Build without ESR:**
    `sudo env ALS_ESR=0 bash /cdrom/make-als-layer.sh build --with-session`.
    Snaps seed as before, but it boots the old way.
+6. **Build the old way for Firefox only:** add `ALS_LAYER_COMP=xz` (xz as
+   before) and/or `ALS_FF_SEED=0` (no profile template) after `env` above.
 
 ---
 
