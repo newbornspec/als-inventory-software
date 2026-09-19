@@ -60,8 +60,9 @@ the ones that matter:
    #         filed with the station account above.
    #   "1" = on: a wipe cannot start until someone has signed in, and
    #         signing in needs the network. The sign-in is kept in memory
-   #         only, never written to the stick. Leave it "0" until it has
-   #         been tested on the station.
+   #         only, never written to the stick. A record queued offline
+   #         is only sent once the same operator is signed in again.
+   #         Leave it "0" until it has been tested on the station.
    AUDIT_OPERATOR_SIGNIN="0"
 
    # Admin PIN for the kiosk's Settings screen. WITHOUT one, the server

@@ -40,6 +40,9 @@ AUDIT_PASSWORD=""
 #       * a wipe cannot be started until someone is signed in, and
 #       * signing in needs the network, so a station with no connection cannot
 #         start a wipe at all.
+#     A record queued while the network dropped is tagged with the operator
+#     who made it and is only sent once that same person is signed in again -
+#     never under someone else's sign-in.
 #     Records are then filed under the signed-in person, so the certificate
 #     names a real account holder instead of the shared station account.
 # Leave AUDIT_EMAIL / AUDIT_PASSWORD above in place until sign-in has been
