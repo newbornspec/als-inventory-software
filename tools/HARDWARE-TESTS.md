@@ -348,7 +348,10 @@ packages), the Windows PC.
    systemd-analyze blame | grep -c cloud-
    ```
 3. Go back to the kiosk. Open **Settings** → **Run network check**. It also
-   shows the boot timing and the shutdown-splash checks.
+   shows the boot timing and the shutdown-splash checks. If the station has an
+   Ethernet port, plug in a network cable once and run the network check again:
+   with cloud-init off, the wired connection comes from NetworkManager alone,
+   and it must still say it is connected.
 4. Press **Shutdown** on the kiosk. **Watch the screen** as it powers off.
 5. On Windows, open `E:\boot-report.txt`.
 
@@ -363,8 +366,13 @@ packages), the Windows PC.
 - In `boot-report.txt`:
   - `APP READY` is lower than the old **82 s**. Write the number down. (How
     much lower is not known yet: that is what this measures.)
-  - The timeline has **no** `firefox snap mounted` and no
-    `snap seeding finished` line.
+  - The timeline has **no** `snap seeding finished` line. (A `firefox snap
+    mounted` line can still appear: the image mounts its snap files at start,
+    which is quick. Seeding them - the slow part - is what snapd being masked
+    removes. Seen on the station, 2026-09-19: mounted at 10.6 s, no seeding,
+    APP READY 82 s -> 52 s.)
+  - With cloud-init off, the network check still says connected (Wi-Fi, and
+    Ethernet if you tried a cable).
   - `stage` says `final`. (If it says `EARLY`, the machine was not left on
     long enough. That is fine for APP READY, but leave it on longer next time.)
   - Under `shutdown splash`: `theme: present and complete - two-step can load

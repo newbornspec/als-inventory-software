@@ -140,9 +140,12 @@ on every boot too, because the layer's `/usr` is newer than the image's
 5. Switches cloud-init off with its own documented marker file,
    `/etc/cloud/cloud-init.disabled` (a comment-only file; cloud-init checks
    only that it exists). The kiosk never uses cloud-init, and after the ESR
-   rebuild it still sat on the chain the desktop waited for (`cloud-init.service`
-   and `cloud-init-local` together ~7 s). It is not a mask: nothing that
-   depends on cloud-init fails, its units are simply skipped. The build prints
+   rebuild it still sat on the chain the desktop waited for: `cloud-init-local`
+   (5.5 s, before every normal service), `cloud-init.service` (1.8 s), and the
+   login screen waited for `cloud-config`, which waits for the network to be
+   "online" - the gap between 17 s and 27 s in the boot timeline. It is not a
+   mask: nothing that depends on cloud-init fails, its units are simply not
+   started. The build prints
    `cloud-init: switched off (/etc/cloud/cloud-init.disabled)`.
 
 `gui/als-autostart.sh` picks `firefox-esr` first, so the kiosk opens it with
