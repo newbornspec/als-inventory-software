@@ -595,6 +595,111 @@ def stamp_tool(payload, result=None):
     return payload
 
 
+ISO_UTC = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,6})?Z$")
+
+
+def utc_iso(epoch=None):
+    """'2026-09-19T10:01:07Z' - the station clock, UTC, second precision."""
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ",
+                         time.gmtime(time.time() if epoch is None else epoch))
+
+
+def _text(v, limit=255):
+    """A non-empty, trimmed string, or None. The engine omits a field rather
+    than send an empty one (contract C1), and so does this side."""
+    if isinstance(v, str) and v.strip():
+        return v.strip()[:limit]
+    return None
+
+
+def wipe_record_fields(result, device, drive=None, method=None,
+                       started_epoch=None, clock_at_start=False):
+    """The per-drive fields of a wipe record (contract C2), from the engine's
+    WIPE_RESULT plus what the station itself saw when it started the job.
+
+    Every C1 field is OPTIONAL: an engine that predates them sends only
+    status/method/device/reason, and then the station's own observations fill
+    in what they can - the job's start and end on this clock, and the drive as
+    lsblk showed it at start. Where the engine does report something it wins,
+    because the engine is what touched the drive.
+
+    Built BEFORE upload_audit on purpose: a record that cannot upload is queued
+    as-is, so wipedAt has to be in it already. Before this, a record queued
+    offline and flushed hours later took the upload time as its wipe date.
+
+    Returns (fields, notes) - notes are human-readable lines for the record."""
+    result = result or {}
+    drive = drive or {}
+    out, notes = {}, []
+
+    fin, st = result.get("finishedAt"), result.get("startedAt")
+    out["wipedAt"] = fin if isinstance(fin, str) and ISO_UTC.match(fin) else utc_iso()
+    if isinstance(st, str) and ISO_UTC.match(st):
+        out["wipeStartedAt"] = st
+    elif started_epoch:
+        out["wipeStartedAt"] = utc_iso(started_epoch)
+    # "network" only when the clock was network-set for the WHOLE job: a
+    # correction that lands mid-wipe leaves the start time on the old clock.
+    out["wipedAtClock"] = "network" if (clock_at_start and CLOCK["network"]) else "unsynced"
+
+    # The drive: the station's view at start, overlaid by the engine's report.
+    wd = {}
+    if _text(drive.get("serial"), 128):
+        wd["serialNumber"] = _text(drive.get("serial"), 128)
+    model = _text(drive.get("model"), 128)
+    if model and model != "Unknown model":      # list_drives' placeholder
+        wd["model"] = model
+    if isinstance(drive.get("bytes"), int) and drive["bytes"] > 0:
+        wd["sizeBytes"] = drive["bytes"]
+    if _text(drive.get("transport"), 32):
+        wd["transport"] = _text(drive.get("transport"), 32)
+    if isinstance(drive.get("rotational"), bool):
+        wd["rotational"] = drive["rotational"]
+    eng = result.get("drive") if isinstance(result.get("drive"), dict) else {}
+    eng_serial = _text(eng.get("serialNumber"), 128)
+    if eng_serial and wd.get("serialNumber") and eng_serial != wd["serialNumber"]:
+        # A new engine refuses this before writing anything, so seeing it on a
+        # wiped/failed result means the engine did not check. Record both.
+        notes.append("The drive reported serial %s; the station expected %s."
+                     % (eng_serial, wd["serialNumber"]))
+    for key, limit in (("serialNumber", 128), ("model", 128), ("transport", 32), ("wwn", 128)):
+        v = _text(eng.get(key), limit)
+        if v:
+            wd[key] = v
+    size = eng.get("sizeBytes")
+    if isinstance(size, int) and not isinstance(size, bool) and size > 0:
+        wd["sizeBytes"] = size
+    if isinstance(eng.get("rotational"), bool):
+        wd["rotational"] = eng["rotational"]
+    wd["devicePath"] = device
+    out["wipedDrive"] = wd
+    if not wd.get("serialNumber"):
+        # Owner decision D18 (reversible): a drive with no readable serial is
+        # still wiped, and recorded as identity unknown - keyed by device path.
+        notes.append("Drive %s did not report a serial number; recorded by device "
+                     "path (identity unknown)." % device)
+
+    req = _text(result.get("methodRequested"), 32) or _text(method, 32)
+    if req:
+        out["methodRequested"] = req
+    for key, limit in (("methodAttempted", 255), ("fallbackReason", 255),
+                       ("sanitisationLevel", 16), ("verification", 16),
+                       ("hiddenAreas", 32)):
+        v = _text(result.get(key), limit)
+        if v:
+            out[key] = v
+    lim = result.get("limitations")
+    if isinstance(lim, list):
+        out["wipeLimitations"] = [x.strip()[:500] for x in lim
+                                  if isinstance(x, str) and x.strip()][:50]
+    smart = result.get("smart")
+    if isinstance(smart, dict):
+        out["wipeSmart"] = {k: v for k, v in smart.items()
+                            if isinstance(k, str) and (v is None or (
+                                isinstance(v, (int, float)) and not isinstance(v, bool)))}
+    return out, notes
+
+
 def upload_audit(payload):
     """Send a device record. On failure, queue it for automatic retry.
     Returns (response_or_None, queued_bool, error_message).
@@ -625,14 +730,31 @@ def _queue_flush():
     items = queue_load()
     if not items:
         return 0
-    kept, sent = [], 0
+    done, sent = [], 0
     for it in items:
         try:
-            api("/devices/hardware-audit", "POST", it, ensure_token())
+            # UPLOAD_LOCK, the same lock upload_audit holds: a queued record and
+            # a live one for the same machine (a second drive finishing while
+            # the first drive's queued record flushes) otherwise race past the
+            # API's find-by-serial and create the device twice.
+            with UPLOAD_LOCK:
+                api("/devices/hardware-audit", "POST", it, ensure_token())
             sent += 1
+            done.append(it)
         except Exception:  # noqa: BLE001
-            kept.append(it)
-    queue_write(kept)
+            pass
+    # Remove what was sent from the queue AS IT IS NOW, rather than writing
+    # back the list read before the uploads. A record queued while this flush
+    # was running (upload_audit failing in another thread) was not in `items`,
+    # and writing `items minus sent` back would have deleted it silently.
+    with QUEUE_LOCK:
+        current = _queue_load_unlocked()
+        for it in done:
+            try:
+                current.remove(it)
+            except ValueError:
+                pass
+        _queue_write_unlocked(current)
     return sent
 
 
@@ -962,7 +1084,10 @@ def list_drives(force=False):
         # -b gives SIZE in bytes, so the UI can estimate how long a wipe takes.
         # TYPE lets us drop pseudo-devices (see the filter below).
         out = subprocess.run(
-            ["lsblk", "-dPb", "-o", "NAME,SIZE,MODEL,TRAN,RM,ROTA,TYPE"],
+            # SERIAL is what /api/wipe/start checks against the captured
+            # profile, so a drive that was not there at capture is never wiped
+            # under this machine's name.
+            ["lsblk", "-dPb", "-o", "NAME,SIZE,MODEL,TRAN,RM,ROTA,TYPE,SERIAL"],
             capture_output=True, text=True, timeout=8).stdout
     except Exception:
         return drives
@@ -1008,6 +1133,11 @@ def list_drives(force=False):
             "bytes": nbytes,
             "rotational": rota == "1",
             "model": lsblk_field(line, "MODEL") or "Unknown model",
+            # Raw, exactly as lsblk -P prints it - the engine builds the
+            # profile's storage[].serialNumber from the same column, so the two
+            # compare equal without any unescaping. "" = the drive reported none.
+            "serial": lsblk_field(line, "SERIAL").strip(),
+            "transport": tran,
             "method": method,
             "health": smart_health("/dev/" + name),
         })
@@ -1127,8 +1257,24 @@ def smart_health(dev, block=False):
 OPTICAL_CACHE = []   # single-item cache; hardware cannot change mid-session
 
 
+# Whether the station clock has been set from a network time source this boot
+# (HTTP Date header or a LAN time server) - as opposed to never, or only lifted
+# to the boot media's file date, which is "late enough for HTTPS" but can be
+# weeks out. Every wipe record says which (wipedAtClock), because its wipedAt
+# is only as good as this clock.
+CLOCK = {"network": False}
+
+
 def sync_clock():
-    """Set the system clock from the network.
+    ok, msg, network = _sync_clock()
+    if network:
+        CLOCK["network"] = True
+    return ok, msg
+
+
+def _sync_clock():
+    """Set the system clock from the network. Returns (ok, message, network):
+    network is True only when the clock is now right by a network source.
 
     A live-booted machine with no working RTC can be months out of date, and a
     wrong clock breaks HTTPS: the server's certificate looks "not yet valid",
@@ -1191,36 +1337,36 @@ def sync_clock():
                 try:
                     r = subprocess.run(cmd, capture_output=True, timeout=12)
                     if r.returncode == 0:
-                        return True, "synced with the time server at %s" % host
+                        return True, "synced with the time server at %s" % host, True
                 except Exception:  # noqa: BLE001
                     pass
 
     if true_epoch is None:
         if floor_applied:
             return True, ("no time source reachable — set from the boot media date "
-                          "(approximate, but late enough for HTTPS)")
-        return False, "no time source reachable"
+                          "(approximate, but late enough for HTTPS)"), False
+        return False, "no time source reachable", False
 
     drift = true_epoch - time.time()
     if abs(drift) < 120:
-        return True, "clock already correct"
+        return True, "clock already correct", True
 
     # Set it explicitly rather than trusting an NTP daemon to have worked: an
     # earlier version inferred success from elapsed wall time, so NTP tools that
     # merely hung looked like a successful sync and the real fix never ran.
     if not shutil.which("date"):
-        return False, "clock is out by %d days but `date` is unavailable" % (abs(drift) // 86400)
+        return False, "clock is out by %d days but `date` is unavailable" % (abs(drift) // 86400), False
     stamp = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(true_epoch))
     try:
         r = subprocess.run(["date", "-u", "-s", stamp], capture_output=True,
                            text=True, timeout=10)
         if r.returncode != 0:
             return False, "could not set clock: %s" % ((r.stderr or r.stdout).strip()
-                                                       or "permission denied?")
+                                                       or "permission denied?"), False
     except Exception as exc:  # noqa: BLE001
-        return False, str(exc)
+        return False, str(exc), False
     subprocess.run(["hwclock", "-w"], capture_output=True, timeout=10)   # persist it
-    return True, "clock corrected (was out by %d days)" % (abs(drift) // 86400)
+    return True, "clock corrected (was out by %d days)" % (abs(drift) // 86400), True
 
 
 def _dns_query(name):
@@ -2334,14 +2480,22 @@ def image_complete(path):
 
 
 def start_job(kind, argv, result_prefix, device="", on_done=None,
-              watch_writes=False, noun="process", hint=""):
+              watch_writes=False, noun="process", hint="",
+              record_on_no_result=False):
     """Run a long command in the background, streaming its stdout into a rolling
     log and parsing the final `<PREFIX> {json}` line into `result`. `on_done`
     (given the parsed result) runs after the process ends and before the job is
     marked finished — used to upload the wipe record. `watch_writes` adds a
     kernel-level disk-write heartbeat for engines that go quiet (see
     _write_watchdog); `noun`/`hint` word the message shown if it dies without
-    a verdict."""
+    a verdict.
+
+    `record_on_no_result` (wipes only): if the job ends with no result line at
+    all - the engine crashed, was killed, was cancelled, printed an unreadable
+    result - on_done still runs, with a synthesized status "failed" result.
+    Before this a wipe whose job died filed NOTHING: a drive that may be half
+    overwritten left no trace on the asset, which kept whatever wipe status it
+    had before. A failed record is the honest one."""
     now = time.time()
     with LOCK:
         cur = JOBS.get(kind)
@@ -2377,8 +2531,16 @@ def start_job(kind, argv, result_prefix, device="", on_done=None,
                 job["updatedAt"] = time.time()
                 if line.startswith(result_prefix):
                     try:
-                        job["result"] = json.loads(line[len(result_prefix):].strip())
+                        parsed = json.loads(line[len(result_prefix):].strip())
                     except ValueError:
+                        parsed = None
+                    # Only an object is a verdict. Anything else (a bare
+                    # string, a list) would crash on_done's .get() and the
+                    # recordError write below it, in a finally: that must
+                    # always clear `running`.
+                    if isinstance(parsed, dict):
+                        job["result"] = parsed
+                    else:
                         job["error"] = "could not parse result line"
                 elif line:
                     with LOG_LOCK:
@@ -2402,6 +2564,10 @@ def start_job(kind, argv, result_prefix, device="", on_done=None,
             job["error"] = str(exc)
         finally:
             stop_watch.set()             # stop the disk-write heartbeat
+            if on_done and record_on_no_result and not job.get("result"):
+                job["result"] = {"status": "failed", "method": "none", "device": device,
+                                 "reason": job.get("error") or
+                                 "the %s ended without a result" % noun}
             # Post-step (e.g. upload the wipe record). Its own failures attach to
             # the result so the UI can show "wiped but not saved".
             if on_done and job.get("result"):
@@ -2717,7 +2883,10 @@ class Handler(BaseHTTPRequestHandler):
             # offered list the gate rather than just the dropdown. Device names
             # also shift when something is plugged or unplugged, so a name the
             # screen showed a minute ago is not proof of anything now.
-            offered = {x.get("device") for x in (list_drives() or [])}
+            #
+            # force=True: re-read lsblk now, not a list cached up to 5 s ago -
+            # the serial check below is only as fresh as this read.
+            offered = {x.get("device"): x for x in (list_drives(force=True) or [])}
             for d in devices:
                 if d not in offered:
                     return self._send(400, {"message": "%s is not an internal disk this "
@@ -2736,50 +2905,89 @@ class Handler(BaseHTTPRequestHandler):
                                                    "not been identified, so a wipe could not be "
                                                    "recorded. Press Rescan and wait for the "
                                                    "hardware to be read before wiping."})
+            # Only drives that were IN that profile. A drive hot-plugged (or
+            # swapped) after the capture used to be wiped and filed under this
+            # machine's serial, so its certificate named a laptop it was never
+            # in. Every drive that reports a serial must match one the capture
+            # saw. A drive that reports NO serial is allowed (owner decision
+            # D18, reversible) and recorded as identity unknown - refusing it
+            # would leave such drives unwipeable at this station.
+            known = {(s.get("serialNumber") or "").strip()
+                     for s in (profile.get("storage") or []) if isinstance(s, dict)} - {""}
+            for d in devices:
+                serial = (offered[d].get("serial") or "").strip()
+                if serial and serial not in known:
+                    return self._send(409, {"message": (
+                        "%s (serial %s) was not in the hardware profile captured for "
+                        "this machine - it may have been plugged in or swapped since. "
+                        "Press Rescan so the station re-reads the hardware, then try "
+                        "again." % (d, serial))})
 
             # After the erase, record it against the device/batch: upload the
-            # captured profile + the wipe status/method. This creates/updates
-            # the device record and produces the erasure certificate. The
-            # profile is the one checked above, captured here and not re-read
-            # at the end: a wipe can take hours, and a Rescan in that time
-            # (failed, or of a different machine) must not change what this
-            # erase is filed under.
-            def record_wipe(result):
-                if result.get("status") not in ("wiped", "failed"):
-                    return
-                payload = {
-                    "profile": profile,
-                    "dataWipeStatus": result.get("status"),
-                    "dataWipeMethod": result.get("method"),
-                }
-                # Record WHY a wipe failed, so the audit trail explains itself
-                # instead of just saying "Failed".
-                reason = (result.get("reason") or "").strip()
-                if reason and result.get("status") == "failed":
-                    payload["notes"] = "Wipe failed on %s: %s" % (
-                        result.get("device") or "drive", reason)
-                if lot_id:
-                    payload["lotId"] = lot_id
-                if sub_lot_id:
-                    payload["subLotId"] = sub_lot_id
-                stamp_tool(payload, result)
-                stamp_provenance(payload)
-                out, queued, err = upload_audit(payload)
-                if queued:
-                    # The erase itself succeeded; only the upload is pending.
-                    result["queued"] = True
-                    result["waiting"] = queue_count()
-                    result["recordError"] = ("no connection — the wipe record is saved "
-                                             "on this machine and will upload automatically")
-                    return
-                result["recorded"] = bool(out and out.get("assetId"))
-                result["recordName"] = (out or {}).get("name")
-                result["recordTag"] = (out or {}).get("tag")
+            # captured profile + the wipe status/method, ONE record per drive
+            # with that drive's identity and dates. This creates/updates the
+            # device record and produces the erasure certificate. The profile
+            # is the one checked above, captured here and not re-read at the
+            # end: a wipe can take hours, and a Rescan in that time must not
+            # change what this erase is filed under.
+            clock_at_start = CLOCK["network"]
+
+            def make_recorder(dev, drive, started_epoch):
+                def record_wipe(result):
+                    # "refused" = the engine wrote nothing to the drive (wrong
+                    # serial, USB, boot disk...). Filing it would put a failed
+                    # wipe on an asset whose drive was never touched.
+                    if result.get("status") not in ("wiped", "failed"):
+                        return
+                    fields, notes = wipe_record_fields(
+                        result, dev, drive=drive, method=method,
+                        started_epoch=started_epoch, clock_at_start=clock_at_start)
+                    payload = {
+                        "profile": profile,
+                        "dataWipeStatus": result.get("status"),
+                        "dataWipeMethod": result.get("method") or "none",
+                    }
+                    payload.update(fields)
+                    # Record WHY a wipe failed, so the audit trail explains
+                    # itself instead of just saying "Failed".
+                    reason = (result.get("reason") or "").strip()
+                    if reason and result.get("status") == "failed":
+                        notes.insert(0, "Wipe failed on %s: %s" % (dev, reason))
+                    if notes:
+                        payload["notes"] = "\n".join(notes)
+                    if lot_id:
+                        payload["lotId"] = lot_id
+                    if sub_lot_id:
+                        payload["subLotId"] = sub_lot_id
+                    stamp_tool(payload, result)
+                    stamp_provenance(payload)
+                    out, queued, err = upload_audit(payload)
+                    if queued:
+                        # Only the upload is pending; the record, dates and
+                        # all, is on disk and uploads itself later.
+                        result["queued"] = True
+                        result["waiting"] = queue_count()
+                        result["recordError"] = ("no connection — the wipe record is saved "
+                                                 "on this machine and will upload automatically")
+                        return
+                    result["recorded"] = bool(out and out.get("assetId"))
+                    result["recordName"] = (out or {}).get("name")
+                    result["recordTag"] = (out or {}).get("tag")
+                return record_wipe
 
             started, busy = [], []
             for d in devices:
-                ok = start_job(wipe_kind(d), audit_cmd("--wipe-drive", d, method),
-                               "WIPE_RESULT ", d, on_done=record_wipe, noun="wipe",
+                serial = (offered[d].get("serial") or "").strip()
+                # The expected serial goes to the engine as gui_wipe_one's 3rd
+                # argument (contract C1): it re-reads the drive's own serial
+                # immediately before writing and refuses on a mismatch, which
+                # closes the gap between this check and the erase. An engine
+                # that predates the argument ignores it. No serial, no argument.
+                argv = audit_cmd("--wipe-drive", d, method, *([serial] if serial else []))
+                ok = start_job(wipe_kind(d), argv,
+                               "WIPE_RESULT ", d,
+                               on_done=make_recorder(d, dict(offered[d]), time.time()),
+                               noun="wipe", record_on_no_result=True,
                                hint="The drive may be failing or was disconnected.")
                 (started if ok else busy).append(d)
             if not started:

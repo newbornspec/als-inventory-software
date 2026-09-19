@@ -48,7 +48,7 @@ def fake_start_job(kind, cmd, marker, device, **kw):
     return True
 
 
-srv.list_drives = lambda: OFFERED
+srv.list_drives = lambda *a, **k: OFFERED
 srv.start_job = fake_start_job
 srv.SCRIPT = "/fake/hardware-audit.sh"      # the handler 500s without an engine
 srv.audit_cmd = lambda *a, **k: ["true"]
@@ -109,7 +109,7 @@ check("injection attempt: refused before anything else", sent and sent[0] == 400
 
 # 6. Nothing offered at all (list_drives() found no disks, or failed): nothing
 #    can be wiped, rather than everything.
-srv.list_drives = lambda: None
+srv.list_drives = lambda *a, **k: None
 sent, started = post({"devices": ["/dev/nvme0n1"]})
 check("no disks enumerated: refuses, does not fail open", sent and sent[0] == 400 and started == [], (sent, started))
 
