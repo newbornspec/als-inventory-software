@@ -79,9 +79,9 @@ with open(HELPER, "w", encoding="utf-8", newline="\n") as fh:
     fh.write(SRC)
 
 
-def run_helper(args, stdin=""):
+def run_helper(args, stdin="", cwd=None):
     r = subprocess.run([sys.executable, HELPER] + [str(a) for a in args],
-                       input=stdin.encode("utf-8"), capture_output=True)
+                       input=stdin.encode("utf-8"), capture_output=True, cwd=cwd)
     return r.stdout.decode("utf-8"), r.returncode, r.stderr.decode("utf-8", "replace")
 
 
@@ -657,8 +657,21 @@ check("RAID-class controller with no disk under it is reported",
       A("0000:00:0e.0") in by and by[A("0000:00:0e.0")]["health"]["measured"] is False, hid)
 check("a RAID controller that shows its volume, AHCI and NVMe are not reported",
       set(by) == {A("0000:00:17.0"), A("0000:00:0e.0")}, sorted(by))
+# Nothing is under that controller, so nothing can be counted: the scan may
+# not invent a number. Only remapped_nvme gives a count the kernel vouches for.
+check("a RAID-class controller with no disk under it does not invent a drive count",
+      "count" not in by.get(A("0000:00:0e.0"), {"count": 1}), by.get(A("0000:00:0e.0")))
 out, _, _ = run_helper(["hidden", os.path.join(TMP, "no-such-root")])
 check("no sysfs: an empty list, not an error", out.strip() == "[]", out)
+# ALS_SYS_ROOT is a test-only variable: on the station the engine passes an
+# EMPTY root, which must mean the real /sys. It used to mean "./sys", relative
+# to whatever directory the kiosk happened to start the engine in, so on a
+# real Intel RST machine the scan found nothing at all.
+decoy = os.path.join(TMP, "decoy")
+pci(decoy, "0000:DE:CO.Y", "0x010400")
+out, code, err = run_helper(["hidden", ""], cwd=decoy)
+check("an empty root means the real /sys, not a ./sys under the current directory",
+      code == 0 and A("0000:DE:CO.Y") not in out, out + err)
 
 # ------------------------------------------------------------- 3. kiosk -----
 print("3. the kiosk shows the captured health")
@@ -684,7 +697,11 @@ PROFILE = {"identification": {"manufacturer": "Dell", "model": "Latitude 7490", 
                 "serialNumber": "OLD1", "device": "sdc", "smartStatus": "PASSED"}],
            "hiddenStorage": [{"controller": "0000:00:17.0", "count": 1, "health": {
                "measured": False, "reason": "behind a RAID/Intel RST controller",
-               "action": "set the storage mode to AHCI in the BIOS, then press Rescan", "source": "nvme"}}]}
+               "action": "set the storage mode to AHCI in the BIOS, then press Rescan", "source": "nvme"}},
+               # No count: a RAID-mode controller with nothing visible under it.
+               {"controller": "0000:00:0e.0", "health": {
+                   "measured": False, "reason": "behind a RAID/Intel RST controller",
+                   "action": "set the storage mode to AHCI in the BIOS, then press Rescan"}}]}
 
 v = srv.health_view(H_NVME)
 check("health_view measured: '97% · Good', ok, basis + key numbers",
@@ -707,8 +724,8 @@ check("a status that disagrees with its percent is not shown as measured",
 srv.STATE["profile"] = copy.deepcopy(PROFILE)
 dev = srv.ident()
 lines = dev.get("driveHealth") or []
-check("ident: one Drive health line per drive plus the hidden one", len(lines) == 5, lines)
-if len(lines) == 5:
+check("ident: one Drive health line per drive plus the two controllers", len(lines) == 6, lines)
+if len(lines) == 6:
     check("ident line 1: NVMe 97% Good", lines[0]["drive"] == "512GB NVMe" and lines[0]["cls"] == "ok"
           and lines[0]["title"] == u"97% · Good", lines[0])
     check("ident line 2: HDD 74% Caution", lines[1]["title"] == u"74% · Caution"
@@ -720,6 +737,11 @@ if len(lines) == 5:
           lines[3]["title"] == u"Not scanned yet — press Rescan", lines[3])
     check("ident line 5: the hidden drive", lines[4]["drive"] == "1 drive hidden by the storage controller"
           and lines[4]["title"].startswith(u"Not measurable — behind a RAID"), lines[4])
+    # Nothing is known to be behind it, so the row says what IS known - the
+    # controller's mode - instead of claiming a drive that may not exist.
+    check("ident line 6: a controller with no count does not claim a drive",
+          lines[5]["drive"] == "Storage controller in RAID mode"
+          and lines[5]["title"].startswith(u"Not measurable — behind a RAID"), lines[5])
 check("ident: the Storage line no longer carries a second, probed health note",
       "Health" not in dev["hw"]["storage"], dev["hw"]["storage"])
 

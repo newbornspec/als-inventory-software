@@ -2779,8 +2779,14 @@ def hidden(root):
     read at all: an Intel RST 'RAID On' controller that remaps NVMe drives
     (the kernel counts them in the ahci device's remapped_nvme), or a RAID
     class controller (PCI class 0x0104, which is also how Intel VMD shows)
-    with no disk underneath it. One entry per controller; [] when none."""
-    base = os.path.join(root, "sys", "bus", "pci", "devices")
+    with no disk underneath it. One entry per controller; [] when none.
+
+    `root` is the test-only ALS_SYS_ROOT; EMPTY means the real /sys. It has to
+    be spelt out: os.path.join("", "sys", ...) is the RELATIVE "sys/bus/...",
+    so with an empty root this read whatever ./sys happened to be under the
+    directory the kiosk started the engine in - i.e. nothing, on every real
+    Intel RST machine."""
+    base = os.path.join(root or "/", "sys", "bus", "pci", "devices")
     found = []
     try:
         names = sorted(os.listdir(base))
@@ -2811,7 +2817,13 @@ def hidden(root):
                 has = True
                 break
         if not has:
-            found.append({"controller": n, "count": 1, "health": not_measured(R_RAID, None)})
+            # NOTHING is visible under it, so nothing can be counted either:
+            # this may be a RAID-mode controller hiding three disks, or the
+            # chipset SATA controller of an NVMe-only laptop with nothing
+            # plugged in. Only remapped_nvme above gives a count the kernel
+            # vouches for; here we report the controller and let the kiosk
+            # say what is actually known.
+            found.append({"controller": n, "health": not_measured(R_RAID, None)})
     out(json.dumps(found, ensure_ascii=True, separators=(",", ":")))
 
 
@@ -2980,7 +2992,7 @@ if command -v python3 >/dev/null 2>&1; then
   HIDDEN_STORAGE=$(python3 -c "$(als_health_py)" hidden "${ALS_SYS_ROOT:-}" 2>/dev/null)
   case "$HIDDEN_STORAGE" in "["*"]") ;; *) HIDDEN_STORAGE="[]" ;; esac
 fi
-[ "$HIDDEN_STORAGE" != "[]" ] && SMART_SUMMARY="${SMART_SUMMARY}hidden drive: Not measurable — behind a RAID/Intel RST controller — set the storage mode to AHCI in the BIOS, then press Rescan
+[ "$HIDDEN_STORAGE" != "[]" ] && SMART_SUMMARY="${SMART_SUMMARY}storage controller in RAID mode: Not measurable — behind a RAID/Intel RST controller — set the storage mode to AHCI in the BIOS, then press Rescan
 "
 
 # --- graphics ---

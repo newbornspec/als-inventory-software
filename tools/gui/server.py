@@ -2326,9 +2326,16 @@ def drive_health_lines(p):
     for x in (p.get("hiddenStorage") or []):
         if not isinstance(x, dict):
             continue
-        n = x.get("count") if isinstance(x.get("count"), int) else 1
+        # A count only exists when the kernel vouched for one (Intel RST says
+        # how many NVMe drives it remapped). A RAID-mode controller with
+        # nothing visible under it may be hiding disks or may simply be empty,
+        # so that row says what is known - the controller's mode - rather than
+        # sending the operator into the BIOS for a drive that may not exist.
+        n = x.get("count")
+        n = n if isinstance(n, int) and not isinstance(n, bool) and n > 0 else None
         lines.append(dict(health_view(x.get("health")),
-                          drive="%d drive%s hidden by the storage controller" % (n, "" if n == 1 else "s")))
+                          drive="%d drive%s hidden by the storage controller" % (n, "" if n == 1 else "s")
+                          if n else "Storage controller in RAID mode"))
     return lines
 
 
