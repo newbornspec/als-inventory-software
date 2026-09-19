@@ -485,6 +485,9 @@
               <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                 stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg>
               Wipe</button>
+            <!-- Why Wipe is not offered yet (wipeGate): shown under the button
+                 instead of leaving a greyed-out control with no explanation. -->
+            <div class="k hidden" id="wGateMsg" style="margin-top:8px"></div>
           </div>
           <div class="hidden" id="wRun"><div id="wRuns"></div>
             <div class="health hidden" id="wSummary"></div>
@@ -689,6 +692,32 @@ function auditGate(){
   const si=BOOT.signin||{};
   $('aStart').disabled=!(BOOT.device&&wf()&&(!needBatch||$('batchSel').value)&&
     (!si.required||si.signedIn));
+  applyWipeGate();
+}
+
+/* Why a wipe may not start yet, or '' when it may. A wipe is filed exactly like
+   an audit - under the chosen workflow, and for Goods In into the selected
+   batch - so it needs what Start audit needs (auditGate), decided BEFORE the
+   drive is erased. An account allowed both workflows has chosen neither until
+   the operator taps one: a wipe started then produced a record the server
+   refused ("No audit lot selected") after the drive was already erased. The
+   station service refuses that case too (/api/wipe/start); this says why up
+   front instead of after a click. BOOT.workflows is unknown until the first
+   bootstrap answers - the server still decides then. */
+function wipeGate(){
+  const wfs=BOOT.workflows;
+  if(Array.isArray(wfs)&&!wfs.length)
+    return 'This account has no audit permission, so a wipe could not be recorded.';
+  if(Array.isArray(wfs)&&wfs.length>1&&!wf())
+    return 'Choose Amazon / General audit or Goods In audit at the top first — the wipe is recorded under that workflow.';
+  if(wf()==='goods_in'&&!$('batchSel').value)
+    return 'Select a batch first — a Goods In wipe is recorded into the batch.';
+  return '';
+}
+function applyWipeGate(){
+  const why=wipeGate(), msg=$('wGateMsg');
+  $('wStart').disabled=!selectedWipeDrives().length||!!why;
+  msg.textContent=why; msg.classList.toggle('hidden',!why);
 }
 
 function fillBatches(){
@@ -877,7 +906,7 @@ function renderHealth(){
 function estimate(){
   renderHealth();
   const picked=selectedWipeDrives(), m=$('wMethod').value;
-  $('wStart').disabled=!picked.length;
+  applyWipeGate();
   if(!picked.length){$('wEst').textContent='—';return;}
   // The worst case is always an OVERWRITE. A drive's own erase takes minutes -
   // when it works. When it is refused (a BIOS-frozen SATA SSD, usually), the
@@ -1371,6 +1400,8 @@ let RUN=null;                        // the wipe run on screen: {devs, results}
 function confirmWipe(){
   const devs=selectedWipeDrives();
   if(!devs.length){toast('No drive selected.',false);return;}
+  const gate=wipeGate();
+  if(gate){openOv('The wipe did not start',gate+'\n\nNothing was erased.',false,closeOv,'OK');return;}
   // Labels frozen now: DRIVES is re-read by every poll, and the run panel must
   // keep naming the disks the operator confirmed.
   const labels={}; for(const d of devs)labels[d]=driveLabel(driveById(d))||d;

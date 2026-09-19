@@ -718,8 +718,17 @@ def stamp_provenance(payload):
     human the shared login cannot. Servers that predate these fields reject
     unknown properties is NOT a concern here -- the API's DTOs ignore extras
     only after validation, so these two are validated, optional fields there.
+
+    A payload that already names its workflow keeps it. A wipe fixes its
+    workflow when it STARTS (/api/wipe/start puts auditKind in the record's
+    base); stamping the one on screen when it ends - hours later, after the
+    operator may have switched to the other workflow for the next machine -
+    would file this machine's erasure as a different kind of audit (an Amazon
+    record loses its lot; a Goods In one is refused for having none).
     """
-    wf = current_workflow()
+    wf = payload.get("auditKind")
+    if wf not in ("amazon", "goods_in"):
+        wf = current_workflow()
     if wf in ("amazon", "goods_in"):
         payload["auditKind"] = wf
     if wf == "amazon":
@@ -4026,6 +4035,37 @@ class Handler(BaseHTTPRequestHandler):
                         "this machine - it may have been plugged in or swapped since. "
                         "Press Rescan so the station re-reads the hardware, then try "
                         "again." % (d, serial))})
+            # No WORKFLOW, no erase. An account holding both audit
+            # permissions has none until the operator picks Amazon or Goods
+            # In at the top of the screen (current_workflow() is ""), and a
+            # record made then carries no auditKind: the API files a
+            # kind-less record as Goods In, finds no lot, and answers 400 "No
+            # audit lot selected". That happened on the station: an NVMe
+            # drive was sanitized and verified clean, and its record sat in
+            # the queue retrying forever while nobody was told. The drive is
+            # erased either way, so the only safe place to ask is here,
+            # before anything is written - exactly like the missing profile
+            # above. An account with no audit permission at all has nothing
+            # to file the record as, and is refused the same way.
+            #
+            # The lot is NOT checked here, on purpose. /api/audit (the capture
+            # upload) sends whatever lotId the page chose and leaves the rest
+            # to the API, which also accepts the account's own active lot
+            # (users.activeAuditLotId) - something this station cannot see.
+            # A stricter check here would refuse wipes the API would accept.
+            # The page applies the same "pick a batch" rule to Wipe as it does
+            # to Start audit (wipeGate in index.html).
+            workflow = current_workflow()
+            if not workflow:
+                if not allowed_workflows():
+                    return self._send(409, {"message": (
+                        "This account has no audit permission, so a wipe could not be "
+                        "recorded. Ask an administrator to grant Perform Amazon Audit or "
+                        "Perform Goods In Audit. Nothing was erased.")})
+                return self._send(409, {"message": (
+                    "Choose Amazon / General audit or Goods In audit at the top of the "
+                    "screen first - the wipe record is filed under that workflow, and "
+                    "without one the server cannot accept it. Nothing was erased.")})
 
             # After the erase, record it against the device/batch: upload the
             # captured profile + the wipe status/method, ONE record per drive
@@ -4036,10 +4076,13 @@ class Handler(BaseHTTPRequestHandler):
             # change what this erase is filed under.
             clock_at_start = CLOCK["network"]
 
-            base = {"profile": profile}
-            if lot_id:
+            # The workflow is part of the record from the start (see
+            # stamp_provenance): switching workflow while this wipe runs must
+            # not change what it is filed as. Amazon: no lot, ever.
+            base = {"profile": profile, "auditKind": workflow}
+            if lot_id and workflow != "amazon":
                 base["lotId"] = lot_id
-            if sub_lot_id:
+            if sub_lot_id and workflow != "amazon":
                 base["subLotId"] = sub_lot_id
             # With operator sign-in, WHO wiped is fixed when the wipe starts:
             # the person signed in now. Stamping at the end (as the free-text

@@ -294,6 +294,30 @@ const hidden = (id) => document.getElementById(id).classList.contains('hidden');
   out.rescanPosts = run(`RSC`);
   out.rescanBoots = run(`BOOTS`);
 
+  // Wipe gate: a dual-permission account that has not chosen a workflow gets
+  // no Wipe button, with the reason beside it, and confirmWipe sends nothing.
+  run(`closeOv(); selectedWipeDrives=()=>['/dev/sda']; WG=[];
+       jpost=async(u,b)=>{WG.push(u);return {ok:true,status:200,data:{started:['/dev/sda']}};};
+       BOOT={device:{name:'x'},workflows:['amazon','goods_in'],workflow:''}; applyWipeGate();`);
+  out.wgNoWf = { disabled: document.getElementById('wStart').disabled,
+    msg: document.getElementById('wGateMsg').textContent, shown: !hidden('wGateMsg') };
+  run(`confirmWipe()`);
+  out.wgConfirmTitle = document.getElementById('ovTitle').textContent;
+  out.wgConfirmMsg = document.getElementById('ovMsg').textContent;
+  await run(`ovGo()`);
+  out.wgPosts = run(`WG`);
+  run(`closeOv(); BOOT.workflow='amazon'; applyWipeGate();`);
+  out.wgAmazon = { disabled: document.getElementById('wStart').disabled, shown: !hidden('wGateMsg') };
+  document.getElementById('batchSel').value = '';
+  run(`BOOT.workflow='goods_in'; applyWipeGate();`);
+  out.wgNoBatch = { disabled: document.getElementById('wStart').disabled,
+    msg: document.getElementById('wGateMsg').textContent };
+  document.getElementById('batchSel').value = 'lot-1';
+  run(`applyWipeGate();`);
+  out.wgBatch = document.getElementById('wStart').disabled;
+  run(`BOOT={device:{name:'x'},workflows:[],workflow:''}; applyWipeGate();`);
+  out.wgNoPerm = document.getElementById('wGateMsg').textContent;
+
   process.stdout.write(JSON.stringify(out));
 })().catch((e) => { process.stdout.write(JSON.stringify({ error: String(e && e.stack || e) })); });
 """
@@ -509,6 +533,20 @@ def main():
     check("Rescan: re-runs the capture on the station (POST /api/rescan)",
           o["rescanPosts"] == ["/api/rescan"], o["rescanPosts"])
     check("Rescan: the screen re-reads the state afterwards", o["rescanBoots"] >= 1, o["rescanBoots"])
+    g = o["wgNoWf"]
+    check("wipe gate: no workflow chosen - Wipe disabled, reason shown",
+          g["disabled"] is True and g["shown"] and "Choose Amazon" in g["msg"], g)
+    check("wipe gate: confirmWipe says the wipe did not start, and why",
+          "did not start" in o["wgConfirmTitle"] and "Choose Amazon" in o["wgConfirmMsg"]
+          and "Nothing was erased" in o["wgConfirmMsg"], (o["wgConfirmTitle"], o["wgConfirmMsg"]))
+    check("wipe gate: nothing was posted to /api/wipe/start", o["wgPosts"] == [], o["wgPosts"])
+    check("wipe gate: workflow chosen - Wipe enabled, no reason",
+          o["wgAmazon"]["disabled"] is False and not o["wgAmazon"]["shown"], o["wgAmazon"])
+    check("wipe gate: Goods In with no batch - disabled, asks for a batch",
+          o["wgNoBatch"]["disabled"] is True and "batch" in o["wgNoBatch"]["msg"], o["wgNoBatch"])
+    check("wipe gate: Goods In with a batch - enabled", o["wgBatch"] is False, o["wgBatch"])
+    check("wipe gate: no audit permission - says so", "no audit permission" in o["wgNoPerm"],
+          o["wgNoPerm"])
     check("prior banner: the roll-up verdict names the machine's state",
           o["pwRollup"] == ["wipe: a drive FAILED its wipe"], o["pwRollup"])
     check("prior banner: incomplete is said in words",

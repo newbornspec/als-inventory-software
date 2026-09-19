@@ -250,6 +250,12 @@ def settle():
 def wipe():
     """Start a wipe of /dev/sda; returns (http code, message, job or None)."""
     JOBS.clear()
+    # The accounts here are admins (both workflows), and a sign-out forgets
+    # the workflow: pick Goods In the way the operator would at the top of
+    # the screen, or the wipe is refused for having none (that refusal is
+    # tested in test-wipe-workflow.py; this file is about WHO files).
+    if not srv.current_workflow() and "goods_in" in srv.allowed_workflows():
+        post("/api/workflow", {"workflow": "goods_in"})
     sent = post("/api/wipe/start", {"devices": ["/dev/sda"]})
     return sent[0], (sent[1] or {}).get("message", ""), (JOBS[0] if JOBS else None)
 
