@@ -1257,16 +1257,30 @@ def api(path, method="GET", body=None, token=None, timeout=25):
     return json.loads(raw) if raw else None
 
 
+# HTTP errors from the API root that still prove the ALS app itself answered:
+# it is there, it just wants a sign-in (401/403) or is rate limiting (429).
+# This asks "is the server there", not "am I allowed in".
+SERVER_ANSWER_CODES = (401, 403, 429)
+
+
 def server_reachable(timeout=15):
-    """Raise unless the API answers at all. Any HTTP status counts as an
-    answer - this asks "is the server there", not "am I allowed in"."""
+    """Raise unless the ALS API itself answers. The root answers 200 without
+    auth, so a 2xx (after redirects) is the normal answer and the codes in
+    SERVER_ANSWER_CODES are still the app. Anything else is NOT: when the API
+    has crashed or is redeploying, Railway's edge still completes TLS with a
+    valid certificate and answers 502/503 (404 "Application not found" for a
+    removed service), and an intercepting proxy's error page looks the same.
+    Counting those as an answer kept the header chip green "Connected" for a
+    whole server outage - the exact case it exists to show."""
     base = STATE["conf"].get("AUDIT_URL", "").rstrip("/")
     if not base:
         raise RuntimeError("AUDIT_URL is not set in audit.conf")
     try:
         urllib.request.urlopen(urllib.request.Request(base + "/"), timeout=timeout).close()
-    except urllib.error.HTTPError:
-        pass
+    except urllib.error.HTTPError as exc:
+        if exc.code in SERVER_ANSWER_CODES:
+            return
+        raise RuntimeError("The server is not answering (HTTP %d from %s)." % (exc.code, base))
 
 
 class StationSignInFailed(RuntimeError):
@@ -2623,9 +2637,10 @@ def net_check():
 # to report.
 #
 # What decides "connected" is the same thing net_check() says decides whether
-# the station is usable: the ALS server answering (server_reachable - any
-# HTTP status counts, no token needed, so it works with operator sign-in on or
-# off). NetworkManager only explains a failure: no active link at all is
+# the station is usable: the ALS server answering (server_reachable - a 2xx,
+# or a 401/403/429 from the app itself; a 5xx or 404 from Railway's edge or a
+# proxy is NOT the server; no token needed, so it works with operator sign-in
+# on or off). NetworkManager only explains a failure: no active link at all is
 # "no-network"; a link with a silent server is "server-unreachable" - a
 # different fix (the server or the site's firewall, not the cable), so the
 # chip says different words for it.

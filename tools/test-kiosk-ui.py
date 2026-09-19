@@ -362,6 +362,18 @@ const hidden = (id) => document.getElementById(id).classList.contains('hidden');
   run(`jget=async()=>({error:'old failure',server:'',lots:[],drives:[]});`);
   try { await run(`REAL_BOOT()`); } catch (e) {}
   out.netAfterBoot = chip();
+  // Before the station's first probe has answered (/api/net says 'checking'),
+  // a bootstrap with no error must NOT paint "Connected": refresh() clears
+  // the error at the start of every capture, so "no error" there proves
+  // nothing about the network. Only its failure verdict may be shown.
+  run(`jget=async(u)=>{ NETASK.push(u); if(NETANS instanceof Error) throw NETANS; return NETANS; };`);
+  out.netChecking = await poll(`{state:'checking',via:null,ssid:null,checkedAt:0,since:0}`);
+  run(`jget=async()=>({error:null,server:'https://api.example',capturing:false,lots:[],drives:[]});`);
+  try { await run(`REAL_BOOT()`); } catch (e) {}
+  out.netBootNoError = chip();
+  run(`jget=async()=>({error:'Could not reach the server',server:'https://api.example',capturing:false,lots:[],drives:[]});`);
+  try { await run(`REAL_BOOT()`); } catch (e) {}
+  out.netBootError = chip();
   // Page visible again: asks at once.
   run(`NETASK=[]; jget=async(u)=>{NETASK.push(u); return {state:'no-network'};};`);
   for (const f of (LISTEN.visibilitychange || [])) f();
@@ -640,6 +652,15 @@ def main():
           o["netOpened"] == 2, o["netOpened"])
     check("chip: a later bootstrap does not paint over the live state",
           o["netAfterBoot"]["text"] == "Connected", o["netAfterBoot"])
+    check("chip: /api/net 'checking' shows 'Checking…'",
+          o["netChecking"]["text"] == "Checking…", o["netChecking"])
+    check("chip: while the first probe is still checking, a bootstrap without an error "
+          "does not paint an unchecked 'Connected'",
+          o["netBootNoError"]["text"] == "Checking…" and "wait" in o["netBootNoError"]["dot"],
+          o["netBootNoError"])
+    check("chip: while checking, a bootstrap WITH an error still says 'Not connected'",
+          o["netBootError"]["text"] == "Not connected" and "bad" in o["netBootError"]["dot"],
+          o["netBootError"])
     check("chip: the page becoming visible asks at once",
           o["netOnVisible"]["asked"] == ["/api/net"]
           and o["netOnVisible"]["chip"]["text"] == "Not connected", o["netOnVisible"])

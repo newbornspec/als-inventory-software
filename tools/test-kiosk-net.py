@@ -403,6 +403,19 @@ API["code"] = 401
 srv.net_refresh_once()
 check("API answers 401 (an answer, no token needed) -> connected",
       srv.net_status()["state"] == "connected", srv.net_status())
+# The API crashed or is redeploying: Railway's edge still completes TLS and
+# answers 502/503 (or 404 "Application not found" for a removed service), and
+# a proxy's error page looks the same. None of that is the ALS server, so the
+# chip must not stay green through the outage it exists to show.
+for code in (500, 502, 503, 504, 404):
+    API["code"] = code
+    srv.net_refresh_once()
+    check("API root answers %d (edge/proxy error, not the app) -> server-unreachable" % code,
+          srv.net_status()["state"] == "server-unreachable", srv.net_status())
+API["code"] = 200
+srv.net_refresh_once()
+check("API back to 200 -> connected again", srv.net_status()["state"] == "connected",
+      srv.net_status())
 api_srv.shutdown()
 api_srv.server_close()
 s = socket.socket()
