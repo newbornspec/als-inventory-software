@@ -1257,16 +1257,30 @@ def api(path, method="GET", body=None, token=None, timeout=25):
     return json.loads(raw) if raw else None
 
 
+# HTTP errors from the API root that still prove the ALS app itself answered:
+# it is there, it just wants a sign-in (401/403) or is rate limiting (429).
+# This asks "is the server there", not "am I allowed in".
+SERVER_ANSWER_CODES = (401, 403, 429)
+
+
 def server_reachable(timeout=15):
-    """Raise unless the API answers at all. Any HTTP status counts as an
-    answer - this asks "is the server there", not "am I allowed in"."""
+    """Raise unless the ALS API itself answers. The root answers 200 without
+    auth, so a 2xx (after redirects) is the normal answer and the codes in
+    SERVER_ANSWER_CODES are still the app. Anything else is NOT: when the API
+    has crashed or is redeploying, Railway's edge still completes TLS with a
+    valid certificate and answers 502/503 (404 "Application not found" for a
+    removed service), and an intercepting proxy's error page looks the same.
+    Counting those as an answer kept the header chip green "Connected" for a
+    whole server outage - the exact case it exists to show."""
     base = STATE["conf"].get("AUDIT_URL", "").rstrip("/")
     if not base:
         raise RuntimeError("AUDIT_URL is not set in audit.conf")
     try:
         urllib.request.urlopen(urllib.request.Request(base + "/"), timeout=timeout).close()
-    except urllib.error.HTTPError:
-        pass
+    except urllib.error.HTTPError as exc:
+        if exc.code in SERVER_ANSWER_CODES:
+            return
+        raise RuntimeError("The server is not answering (HTTP %d from %s)." % (exc.code, base))
 
 
 class StationSignInFailed(RuntimeError):
@@ -1941,6 +1955,10 @@ def refresh(do_login=True):
     finally:
         with LOCK:
             STATE["capturing"] = False
+        # A Rescan / reconnect / settings save may just have brought the
+        # network up (or found it down): re-probe now, so the header chip
+        # does not wait up to NET_EVERY seconds to say so.
+        NET_KICK.set()
 
 
 def launch_info():
@@ -2605,6 +2623,193 @@ def net_check():
                        "advisory": bool(api_ok and not o)} for n, o, d in steps],
             "verdict": verdict, "ok": bool(api_ok),
             "interfaces": ifaces, "routes": routes}
+
+
+# ------------------------------------------------------ live connectivity ----
+# The header chip ("Connected" / "Not connected") used to be set ONCE, from
+# /api/bootstrap when the page loaded, and bootstrap is not re-polled once the
+# page has settled. So a Wi-Fi drop or a server outage after start-up never
+# reached the screen: the owner saw "Connected" on a station that was not.
+# This keeps a live answer instead, refreshed by a background thread
+# (net_worker) every NET_EVERY seconds. GET /api/net only ever reads the cached
+# result - a request from the kiosk never waits on nmcli, DNS or the API, any
+# of which can hang for tens of seconds on exactly the bad network this exists
+# to report.
+#
+# What decides "connected" is the same thing net_check() says decides whether
+# the station is usable: the ALS server answering (server_reachable - a 2xx,
+# or a 401/403/429 from the app itself; a 5xx or 404 from Railway's edge or a
+# proxy is NOT the server; no token needed, so it works with operator sign-in
+# on or off). NetworkManager only explains a failure: no active link at all is
+# "no-network"; a link with a silent server is "server-unreachable" - a
+# different fix (the server or the site's firewall, not the cable), so the
+# chip says different words for it.
+NET_EVERY = 10          # seconds between probes
+NET_API_TIMEOUT = 5     # the server probe; short - the next probe is 10 s away
+NET_STALE = 30          # a probe still running after this long = not reachable
+NET_LOCK = threading.Lock()
+NET_KICK = threading.Event()        # set to probe now instead of at the next tick
+NET = {"state": "checking", "via": None, "ssid": None, "checkedAt": None,
+       "since": int(time.time()), "probingSince": None}
+
+
+def _nmcli(args, timeout=5):
+    """stdout of `nmcli -t <args>`, or None when nmcli is missing or fails.
+    Its own function so tests can stand in for NetworkManager."""
+    try:
+        r = subprocess.run(["nmcli", "-t"] + list(args), capture_output=True,
+                           text=True, timeout=timeout)
+    except Exception:  # noqa: BLE001 - missing binary, timeout: "don't know"
+        return None
+    return r.stdout if r.returncode == 0 else None
+
+
+def _nm_split(line):
+    """One `nmcli -t` line into its fields. Terse mode escapes a ':' inside a
+    value as '\\:' (and '\\' as '\\\\') - an SSID may contain either, and a
+    plain split(':') would cut it in two."""
+    out, cur, i = [], [], 0
+    while i < len(line):
+        c = line[i]
+        if c == "\\" and i + 1 < len(line):
+            cur.append(line[i + 1])
+            i += 2
+            continue
+        if c == ":":
+            out.append("".join(cur))
+            cur = []
+        else:
+            cur.append(c)
+        i += 1
+    out.append("".join(cur))
+    return out
+
+
+def nm_link():
+    """(up, via, ssid) from NetworkManager.
+
+    up:   True  - a Wi-Fi or Ethernet device is connected;
+          False - NetworkManager answered and none is;
+          None  - nmcli missing or failing (not this station's normal state).
+    via:  "wifi" | "ethernet" | None. Ethernet wins when both are up: it is
+          the route the kernel prefers, so it is the one actually in use.
+    ssid: the Wi-Fi network's NAME only. Nothing here ever asks nmcli for
+          secrets (no --show-secrets, no 802-11-wireless-security fields)."""
+    out = _nmcli(["-f", "TYPE,STATE,CONNECTION", "device", "status"])
+    if out is None:
+        return None, None, None
+    wifi = eth = None
+    for line in out.splitlines():
+        f = _nm_split(line)
+        if len(f) < 3:
+            continue
+        kind, state, conn = f[0], f[1], f[2]
+        # "connected", or "connected (externally)" for a link NetworkManager
+        # did not bring up itself. "connecting ..." is not connected yet.
+        if not state.startswith("connected"):
+            continue
+        if kind == "ethernet" and eth is None:
+            eth = conn
+        elif kind == "wifi" and wifi is None:
+            wifi = conn
+    if eth is not None:
+        return True, "ethernet", None
+    if wifi is None:
+        return False, None, None
+    # The SSID itself. The connection NAME is usually the SSID (the engine's
+    # `nmcli device wifi connect` names it so) but need not be, so ask for the
+    # active network, from the cached list: --rescan no, never a fresh scan
+    # every 10 s.
+    ssid = None
+    lst = _nmcli(["-f", "ACTIVE,SSID", "device", "wifi", "list", "--rescan", "no"])
+    for line in (lst or "").splitlines():
+        f = _nm_split(line)
+        if len(f) >= 2 and f[0] == "yes" and f[1]:
+            ssid = f[1]
+            break
+    return True, "wifi", (ssid or wifi or None)
+
+
+def net_state(up, api_ok):
+    """The chip's state from the two facts. The server answering always means
+    connected - even when NetworkManager says otherwise (a link it does not
+    manage), because reaching the server is what the station needs. nmcli
+    unavailable (up None) and a silent server: nothing shows there is a
+    network, so "no-network" - the chip must never claim more than it knows."""
+    if api_ok:
+        return "connected"
+    return "server-unreachable" if up else "no-network"
+
+
+def start_queue_flush():
+    """The existing back-online flush (the same call refresh() makes after a
+    successful login): on a thread, only when something is waiting. Two of
+    these cannot overlap - queue_flush takes FLUSH_LOCK without waiting and
+    returns at once when another flush holds it."""
+    if queue_count():
+        threading.Thread(target=queue_flush, daemon=True).start()
+        return True
+    return False
+
+
+def net_refresh_once():
+    """Probe once and store the answer. Runs on the worker thread only."""
+    with NET_LOCK:
+        NET["probingSince"] = time.time()
+    try:
+        try:
+            up, via, ssid = nm_link()
+        except Exception:  # noqa: BLE001
+            up, via, ssid = None, None, None
+        try:
+            server_reachable(timeout=NET_API_TIMEOUT)
+            api_ok = True
+        except Exception:  # noqa: BLE001 - timeout, DNS, TLS, no AUDIT_URL
+            api_ok = False
+        state = net_state(up, api_ok)
+        now = int(time.time())
+        with NET_LOCK:
+            prev = NET["state"]
+            NET.update(state=state, via=via if up else None,
+                       ssid=ssid if (up and via == "wifi") else None, checkedAt=now)
+            if state != prev:
+                NET["since"] = now
+        # Back online: send what was held while offline, once per transition
+        # (a station that stays connected does not re-trigger it every 10 s;
+        # queue_worker's 45 s retry covers the rest, as before).
+        if state == "connected" and prev != "connected":
+            try:
+                start_queue_flush()
+            except Exception:  # noqa: BLE001
+                pass
+        return state
+    finally:
+        with NET_LOCK:
+            NET["probingSince"] = None
+
+
+def net_status():
+    """What GET /api/net answers: the cached result, never a probe. A probe
+    still running after NET_STALE seconds (a DNS lookup hanging on a dead
+    network is the usual one) means the server is not answering NOW, so the
+    last "connected" is not repeated as if it were still true."""
+    with NET_LOCK:
+        snap = {k: NET[k] for k in ("state", "via", "ssid", "checkedAt", "since")}
+        probing = NET["probingSince"]
+    if (probing is not None and time.time() - probing > NET_STALE
+            and snap["state"] in ("connected", "checking")):
+        snap["state"] = "server-unreachable" if snap["via"] else "no-network"
+    return snap
+
+
+def net_worker():
+    while True:
+        try:
+            net_refresh_once()
+        except Exception:  # noqa: BLE001
+            pass
+        NET_KICK.wait(NET_EVERY)
+        NET_KICK.clear()
 
 
 PRIOR_CACHE = {"key": None, "ts": 0.0, "data": None}
@@ -4018,6 +4223,11 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/api/netcheck":
             return self._send(200, net_check())
 
+        if u.path == "/api/net":
+            # The header chip's live state (net_status): cached, never a probe,
+            # no token - polled every ~10 s by the page.
+            return self._send(200, net_status())
+
         if u.path == "/api/settings":
             c = STATE["conf"]
             return self._send(200, {
@@ -4643,6 +4853,7 @@ def main():
     threading.Thread(target=boot, daemon=True).start()
     threading.Thread(target=write_boot_report, daemon=True).start()
     threading.Thread(target=queue_worker, daemon=True).start()
+    threading.Thread(target=net_worker, daemon=True).start()
     srv = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     print("ALS Audit Station GUI on http://127.0.0.1:%d  (engine: %s)" % (PORT, SCRIPT))
     srv.serve_forever()

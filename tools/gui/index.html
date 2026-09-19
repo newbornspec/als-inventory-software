@@ -30,6 +30,8 @@
   .chip.act{cursor:pointer}
   .dot{width:9px;height:9px;border-radius:50%;background:var(--green);flex:none}
   .dot.bad{background:var(--red)}
+  .dot.warn{background:var(--amber)}
+  .dot.wait{background:var(--mut2)}
   .iconbtn{width:36px;height:36px;border-radius:9px;border:1px solid var(--line);background:#fff;
            color:var(--mut);display:grid;place-items:center;cursor:pointer}
   .iconbtn:hover{background:var(--line2);color:var(--ink)}
@@ -239,8 +241,11 @@
       <span class="chip"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
         stroke-width="2" stroke-linecap="round"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M8 3v4M16 3v4M3 11h18"/></svg>
         <span id="hDate">—</span></span>
-      <span class="chip act" id="hConnWrap" onclick="connClick()"><span class="dot" id="hDot"></span>
-        <span id="hConn">Checking…</span></span>
+      <!-- Live: driven by /api/net every ~10 s (pollNet), not only at load.
+           The dot starts grey - it used to start green, so the chip looked
+           "connected" before anything had been checked. -->
+      <span class="chip act" id="hConnWrap" onclick="connClick()" title="Checking the connection…"><span class="dot wait" id="hDot" aria-hidden="true"></span>
+        <span id="hConn" aria-live="polite">Checking…</span></span>
       <span class="chip hidden" id="hQueue" style="color:var(--amber)">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
           stroke-linecap="round"><path d="M12 7v5l3 2"/><circle cx="12" cy="12" r="9"/></svg>
@@ -632,7 +637,48 @@ function clock(){$('hDate').textContent=new Date().toLocaleDateString('en-GB',
   {day:'2-digit',month:'short',year:'numeric'});}
 setInterval(clock,30000);clock();
 
-function connClick(){ if(BOOT.error) openSettings(); }
+/* The connection chip. It was set only by bootstrap() when the page loaded,
+   and bootstrap is not re-polled once the page has settled - so a Wi-Fi drop
+   or a server outage after start-up never showed, and the owner saw
+   "Connected" on a station that was not. Now /api/net (the station's own
+   cached probe, refreshed every ~10 s, never a network call per request) is
+   polled and drives it. The words change with the state, not only the dot's
+   colour, and #hConn is aria-live so the change is announced. */
+let NET_STATE='checking';
+const NET_LOOK={
+  connected:['Connected','','var(--green)'],
+  'no-network':['Not connected','bad','var(--red)'],
+  'server-unreachable':['Server unreachable','warn','var(--amber)'],
+  checking:['Checking…','wait','var(--mut)']};
+function renderNet(n){
+  // null = /api/net itself failed: the station's own service is down, and
+  // nothing it said before can be trusted any more.
+  const st=(n&&NET_LOOK[n.state])?n.state:'no-network';
+  const [txt,cls,col]=NET_LOOK[st];
+  NET_STATE=st;
+  $('hDot').className='dot'+(cls?' '+cls:'');
+  $('hConn').textContent=txt;
+  $('hConn').style.color=col;
+  const via=n&&n.via==='wifi'?'Wi-Fi'+(n.ssid?' ('+n.ssid+')':'')
+    :n&&n.via==='ethernet'?'Ethernet':'';
+  $('hConnWrap').title=
+    st==='connected'?'Connected'+(via?' · '+via:'')+' - the ALS server is answering.'
+    :st==='server-unreachable'?'The network is up'+(via?' over '+via:'')+
+      ' but the ALS server is not answering. Tap to open Settings.'
+    :st==='checking'?'Checking the connection…'
+    :'Not connected - no working Wi-Fi or Ethernet link. Tap to open Settings.';
+}
+async function pollNet(){
+  let n=null;
+  try{ n=await jget('/api/net'); }catch(e){ n=null; }
+  renderNet(n);
+}
+setInterval(pollNet,10000);
+// Coming back to the page (screen woken, tab switched back): ask at once
+// rather than showing an answer up to 10 s old.
+document.addEventListener('visibilitychange',()=>{ if(!document.hidden) pollNet(); });
+
+function connClick(){ if(BOOT.error||NET_STATE!=='connected') openSettings(); }
 
 /* --------------------------------------------------------- bootstrap --- */
 async function bootstrap(){
@@ -641,10 +687,14 @@ async function bootstrap(){
   catch(e){ setTimeout(bootstrap,3000); return; }
   BOOT=b; LOTS=b.lots||[]; DRIVES=b.drives||[];
 
-  const bad=!!b.error||!b.server;
-  $('hDot').className='dot'+(bad?' bad':'');
-  $('hConn').textContent=bad?'Not connected':'Connected';
-  $('hConn').style.color=bad?'var(--red)':'var(--green)';
+  // Only until the station's own probe has answered; from then on pollNet
+  // owns the chip (bootstrap re-runs on Rescan and while capturing, and must
+  // not paint an older verdict over a live one). And only the FAILURE
+  // verdict: "no error" here proves nothing - refresh() clears the error at
+  // the start of every capture and b.server is just the configured address -
+  // so painting "Connected" from it showed an unchecked green chip every
+  // 1.5 s through a slow first probe. "Connected" comes from /api/net only.
+  if(NET_STATE==='checking'&&(b.error||!b.server)) renderNet({state:'no-network'});
   $('hUser').textContent=b.currentUser||'Operator';
   $('hOperator').textContent='Operator: '+(b.operator||'— tap to set');
   renderSignin(b.signin);
@@ -1764,5 +1814,6 @@ function closeOv(){$('ov').style.display='none';ovCb=null;}
 function ovGo(){const c=ovCb;if(c)c();}
 
 bootstrap();
+pollNet();
 </script>
 </html>
