@@ -88,6 +88,10 @@ $(extract "$SRC" wipe_result)
 $(extract "$SRC" clear_label)
 $(extract "$SRC" als_disk_is_usb)
 $(extract "$SRC" als_boot_disk)
+$(extract "$SRC" als_json_array)
+$(extract "$SRC" wr_limit)
+$(extract "$SRC" ata_hidden_areas)
+$(extract "$SRC" ata_hpa_remove)
 $(extract "$SRC" gui_wipe_one | sed 's/\[ ! -b "\$dev" \]/[ ! -e "$dev" ]/')"
 case "$FUNCS" in *'[ ! -e "$dev" ]'*) ;; *) echo "could not relax the -b check - refusing to run"; exit 1 ;; esac
 

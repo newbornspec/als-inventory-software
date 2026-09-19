@@ -90,6 +90,15 @@ o_n() { [ -n "$2" ] || return 0; case "$2" in ''|*[!0-9]*) return 0;; esac; OB="
 o_s0() { OB="$OB,\"$1\":\"$(esc "$2")\""; }
 o_raw() { [ -n "$2" ] || return 0; OB="$OB,\"$1\":$2"; }
 o_end() { printf '{%s}' "${OB#,}"; }
+# A JSON array of strings from newline-separated text (empty lines skipped),
+# each escaped by esc(). Empty input gives []. Pass the result to o_raw.
+als_json_array() {
+  local out="" l
+  while IFS= read -r l; do
+    [ -n "$l" ] && out="$out,\"$(esc "$l")\""
+  done <<< "$1"
+  printf '[%s]' "${out#,}"
+}
 
 # Reachability, with enough patience for a cold boot.
 #
@@ -777,6 +786,121 @@ ata_secure_erase() {
   return 1
 }
 
+# --- hidden areas: HPA and DCO (plan step 34, D-2) ---------------------------
+#
+# An ATA drive can be told to report FEWER sectors than it has. A Host
+# Protected Area (HPA) hides the end of the drive behind a lowered "max
+# address"; a Device Configuration Overlay (DCO) lowers the native maximum
+# itself. Vendors use them for recovery partitions, and they are also a
+# well-known place to leave data. Neither the kernel's size nor an overwrite
+# nor (on many drives) a secure erase reaches past them. This engine used to
+# wipe up to the visible size and certify the drive - with the hidden sectors
+# untouched and never mentioned.
+#
+# ata_hidden_areas asks the drive, reading only:
+#   hdparm -N              " max sectors   = 976771055/976773168, HPA is enabled"
+#                          current/native: current < native is an HPA.
+#   hdparm -I              whether the drive has the HPA / DCO feature sets at all
+#                          (no DCO feature set = no DCO can exist).
+#   hdparm --dco-identify  "Real max sectors: N": above the native max is a DCO.
+# Sets HA_HPA and HA_DCO (none | present | unknown), HA_CUR / HA_NATIVE /
+# HA_REAL (sector counts, when read) and HA_WHY, and sets HA_STATE and prints
+# the combined state (call it WITHOUT $(...) when the HA_* values are needed):
+#   dco-present > hpa-present > unknown > none
+# Anything it cannot parse - a RAID/RST controller that does not pass ATA
+# commands through, a driver that answers "HPA setting seems invalid", an
+# unexpected layout - is UNKNOWN, never none.
+# It never changes anything; --dco-restore / --dco-setmax are never run by this
+# engine at all (a DCO restore is permanent and has bricked drives).
+ata_hidden_areas() {
+  local dev="$1" info n x real
+  HA_STATE=unknown; HA_HPA=unknown; HA_DCO=unknown; HA_CUR=""; HA_NATIVE=""; HA_REAL=""; HA_WHY=""
+  if ! command -v hdparm >/dev/null 2>&1; then
+    HA_WHY="hdparm is not installed"; echo unknown; return 0
+  fi
+  info=$(hdparm -I "$dev" 2>/dev/null | tr '\t' ' ' | tr -s ' ')
+  n=$(hdparm -N "$dev" 2>/dev/null | tr '\t' ' ')
+  x=$(printf '%s\n' "$n" | sed -n 's/.*max sectors *= *\([0-9][0-9]*\)\/\([0-9][0-9]*\).*/\1 \2/p' | head -n1)
+  if [ -n "$x" ] && ! printf '%s\n' "$n" | grep -qi 'seems invalid'; then
+    HA_CUR="${x% *}"; HA_NATIVE="${x#* }"
+    if [ "$HA_NATIVE" -le 0 ]; then HA_WHY="hdparm -N reported a native max of 0"; HA_CUR=""; HA_NATIVE=""
+    elif [ "$HA_CUR" -eq "$HA_NATIVE" ]; then HA_HPA=none
+    elif [ "$HA_CUR" -lt "$HA_NATIVE" ]; then HA_HPA=present
+    else HA_WHY="hdparm -N reported a current max above the native max"
+    fi
+  elif printf '%s\n' "$info" | grep -q 'Commands/features' \
+       && ! printf '%s\n' "$info" | grep -qi 'Host Protected Area'; then
+    HA_HPA=none     # the drive has no HPA feature set
+  else
+    HA_WHY="the drive's max sectors could not be read (hdparm -N)"
+  fi
+  if printf '%s\n' "$info" | grep -q 'Commands/features' \
+     && ! printf '%s\n' "$info" | grep -qi 'Device Configuration Overlay'; then
+    HA_DCO=none     # the drive has no DCO feature set
+  else
+    real=$(hdparm --dco-identify "$dev" 2>/dev/null | tr '\t' ' ' \
+           | sed -n 's/.*Real max sectors: *\([0-9][0-9]*\).*/\1/p' | head -n1)
+    if [ -n "$real" ] && [ -n "$HA_NATIVE" ]; then
+      HA_REAL="$real"
+      # hdparm prints the DCO maximum as a sector COUNT; accept the max LBA
+      # (one less) as well, so a version that prints the address is not read
+      # as an overlay of one sector. Only MORE than the native max is hidden.
+      if [ "$real" -gt "$HA_NATIVE" ]; then HA_DCO=present
+      elif [ "$real" -eq "$HA_NATIVE" ] || [ "$real" -eq $(( HA_NATIVE - 1 )) ]; then HA_DCO=none
+      else HA_WHY="${HA_WHY:+$HA_WHY; }the DCO maximum ($real) is below the native maximum ($HA_NATIVE)"
+      fi
+    else
+      HA_WHY="${HA_WHY:+$HA_WHY; }the DCO could not be read (hdparm --dco-identify)"
+    fi
+  fi
+  if [ "$HA_DCO" = present ]; then HA_STATE=dco-present
+  elif [ "$HA_HPA" = present ]; then HA_STATE=hpa-present
+  elif [ "$HA_HPA" = unknown ] || [ "$HA_DCO" = unknown ]; then HA_STATE=unknown
+  else HA_STATE=none
+  fi
+  echo "$HA_STATE"
+}
+
+# Remove an HPA TEMPORARILY: `hdparm -N <native>` with no "p" prefix sets the
+# VOLATILE max address, which the drive forgets at its next hardware reset or
+# power cycle - the customer's drive is not permanently reconfigured (owner
+# decision D34, reversible). Then make the kernel re-read the size and require
+# that BOTH the drive (hdparm -N again) and the kernel (the block device's size)
+# now report the full native size - an overwrite only reaches what the kernel
+# thinks the drive holds. $1 = /dev/sdX, $2 = kernel name. Uses HA_NATIVE.
+# Returns 0 when the whole drive is visible; else 1 with HR_WHY.
+ata_hpa_remove() {
+  local dev="$1" d="$2" nat="$HA_NATIVE" n x cur ss sz i
+  HR_WHY=""
+  case "$nat" in ''|*[!0-9]*) HR_WHY="the native size is not known"; return 1 ;; esac
+  # hdparm's own manual: setting the max takes two back-to-back commands the
+  # kernel can interleave with others, "so if it fails initially, just try
+  # again". Once.
+  if ! hdparm -N "$nat" "$dev" >/dev/null 2>&1; then
+    sleep 1
+    hdparm -N "$nat" "$dev" >/dev/null 2>&1 || { HR_WHY="hdparm -N $nat was rejected by the drive"; return 1; }
+  fi
+  n=$(hdparm -N "$dev" 2>/dev/null | tr '\t' ' ')
+  x=$(printf '%s\n' "$n" | sed -n 's/.*max sectors *= *\([0-9][0-9]*\)\/\([0-9][0-9]*\).*/\1 \2/p' | head -n1)
+  cur="${x% *}"
+  if [ -z "$x" ] || [ "$cur" != "$nat" ]; then
+    HR_WHY="the drive still reports ${cur:-an unreadable} of $nat sectors after the removal"
+    return 1
+  fi
+  # The kernel keeps the size it read at probe time until told to look again.
+  for i in 1 2 3; do
+    { echo 1 > "${ALS_SYS_ROOT:-}/sys/block/$d/device/rescan"; } 2>/dev/null
+    ss=$(blockdev --getss "$dev" 2>/dev/null)
+    sz=$(blockdev --getsize64 "$dev" 2>/dev/null)
+    case "$ss" in ''|*[!0-9]*) ss="" ;; esac
+    case "$sz" in ''|*[!0-9]*) sz="" ;; esac
+    [ -n "$ss" ] && [ -n "$sz" ] && [ "$sz" = $(( nat * ss )) ] && return 0
+    sleep 1
+  done
+  HR_WHY="the kernel still sees ${sz:-an unreadable number of} bytes, not the whole drive ($nat sectors of ${ss:-unknown size})"
+  return 1
+}
+
 # Read the NVMe Sanitize Status log page (log 81h) as NUMBERS.
 #
 # This used to grep `nvme sanitize-log -H` for the English words "completed
@@ -1305,6 +1429,15 @@ als_drive_identity() {
   return 0
 }
 
+# Add one line to WR_LIMITS, the wipe's limitations (WIPE_RESULT "limitations").
+# One line of code on purpose: the tests extract functions up to the first line
+# that starts with "}", which a multi-line string would produce.
+wr_limit() {
+  [ -n "$1" ] && WR_LIMITS="${WR_LIMITS}${WR_LIMITS:+$'
+'}$1"
+  return 0
+}
+
 # UTC, ISO-8601, second precision: 2026-09-19T10:01:07Z
 als_utc_now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
@@ -1324,10 +1457,14 @@ wipe_result() {
   case "$DRV_ROTA" in 1) o_raw rotational true ;; 0) o_raw rotational false ;; esac
   o_s wwn "$DRV_WWN"
   drv=$(o_end)
+  # What was found in the drive's hidden areas (step 34) is part of the method:
+  # "…; hidden areas: none". Only when the check ran (not on a refusal).
+  local meth="$2"
+  case "$1" in wiped|failed) [ -n "${WR_HIDDEN_TXT:-}" ] && meth="$meth; hidden areas: $WR_HIDDEN_TXT" ;; esac
   o_begin
   o_s0 status "$1"
   o_s0 device "$WR_DEV"
-  o_s0 method "$2"
+  o_s0 method "$meth"
   o_s0 reason "$3"
   o_s toolVersion "$ALS_TOOL_VERSION"
   o_s startedAt "$WR_STARTED"
@@ -1342,12 +1479,22 @@ wipe_result() {
     failed) o_s sanitisationLevel none ;;
   esac
   o_s verification "$WR_VERIFY"
+  # hiddenAreas: none | hpa-removed | unknown | dco-present | hpa-present (the
+  # last two only on a failure). limitations: always an array once something
+  # was attempted - [] when there is nothing to say.
+  case "$1" in
+    wiped|failed)
+      o_s hiddenAreas "${WR_HIDDEN:-}"
+      o_raw limitations "$(als_json_array "${WR_LIMITS:-}")"
+      ;;
+  esac
   echo "WIPE_RESULT $(o_end)"
 }
 
 gui_wipe_one() {
   local dev="$1" want="${2:-auto}" expect="${3:-}" d rota m verified fw
   WR_DEV="$dev"; WR_WANT="$want"; WR_STARTED=$(als_utc_now); WR_VERIFY=""; WR_LEVEL=""
+  WR_HIDDEN=""; WR_HIDDEN_TXT=""; WR_LIMITS=""; WR_HPA_REMOVED=0
   DRV_SERIAL=""; DRV_MODEL=""; DRV_SIZE=""; DRV_TRAN=""; DRV_ROTA=""; DRV_WWN=""
   if [ -z "$dev" ] || [ ! -b "$dev" ]; then
     echo "Refusing: ${dev:-(no device given)} is not a block device."
@@ -1408,6 +1555,59 @@ gui_wipe_one() {
   rota=$(cat "/sys/block/$d/queue/rotational" 2>/dev/null)
   m=""; verified=0; fw=0
   local reason="" sz gb p
+
+  # Hidden areas (plan step 34), checked BEFORE anything is written: an HPA or
+  # DCO hides sectors from the kernel, so neither the firmware erase on many
+  # drives nor an overwrite would reach them - and the drive used to be
+  # certified all the same. Owner decision D34 (reversible):
+  #   HPA only    -> removed TEMPORARILY and verified, or the wipe fails
+  #   DCO present -> the wipe fails, naming it (never --dco-restore)
+  #   unknown     -> the wipe goes ahead, with the limitation recorded - an
+  #                  unreadable answer is common behind RAID/RST controllers,
+  #                  and blocking would fail every such drive
+  # NVMe and eMMC have no HPA/DCO.
+  case "${d##*/}" in
+    nvme*|mmcblk*) ;;
+    *)
+      echo "Checking $dev for hidden areas (HPA / DCO) …"
+      ata_hidden_areas "$dev" >/dev/null
+      case "$HA_STATE" in
+        none)
+          WR_HIDDEN=none; WR_HIDDEN_TXT="none" ;;
+        dco-present)
+          WR_HIDDEN=dco-present
+          WR_HIDDEN_TXT="DCO present (drive reports ${HA_REAL} sectors, native max ${HA_NATIVE})"
+          echo "✗ $dev has a Device Configuration Overlay hiding sectors ($HA_REAL real, $HA_NATIVE visible)."
+          echo "  It is not removed here (a DCO restore is permanent). Nothing has been written."
+          wipe_result failed "none" "a hidden area (DCO) hides $(( HA_REAL - HA_NATIVE )) sectors of this drive; the wipe would not reach them"
+          return 1
+          ;;
+        hpa-present)
+          echo "  Host Protected Area: $HA_CUR of $HA_NATIVE sectors visible - removing it temporarily …"
+          if ata_hpa_remove "$dev" "$d"; then
+            WR_HIDDEN=hpa-removed; WR_HPA_REMOVED=1
+            WR_HIDDEN_TXT="HPA removed temporarily ($HA_CUR -> $HA_NATIVE sectors)"
+            echo "  HPA removed until the next power cycle: the whole drive ($HA_NATIVE sectors) is visible."
+            if [ "$HA_DCO" != none ]; then
+              wr_limit "hidden areas could not be checked for a DCO (device configuration overlay)"
+            fi
+          else
+            WR_HIDDEN=hpa-present
+            WR_HIDDEN_TXT="HPA present ($HA_CUR of $HA_NATIVE sectors visible), could not be removed"
+            echo "✗ The hidden area (HPA) could not be removed: $HR_WHY. Nothing has been erased."
+            wipe_result failed "none" "a hidden area (HPA) of $(( HA_NATIVE - HA_CUR )) sectors could not be removed: $HR_WHY"
+            return 1
+          fi
+          ;;
+        *)
+          WR_HIDDEN=unknown; WR_HIDDEN_TXT="could not be checked"
+          wr_limit "hidden areas could not be checked${HA_WHY:+ ($HA_WHY)}"
+          echo "  Hidden areas could not be checked (${HA_WHY:-no answer}) - recorded as a limitation."
+          ;;
+      esac
+      ;;
+  esac
+
   sz=$(blockdev --getsize64 "$dev" 2>/dev/null)
   case "$sz" in ''|*[!0-9]*) gb="" ;; *) gb=$(( sz / 1000000000 )) ;; esac
   echo "Erasing $dev  (method: $want) …"
@@ -1486,6 +1686,19 @@ gui_wipe_one() {
         1) WR_VERIFY=found; reason="verification failed: $VE_WHY" ;;
         *) WR_VERIFY=unverified; reason="could not verify the overwrite: $VE_WHY" ;;
       esac
+    fi
+  fi
+
+  # A temporarily removed HPA comes back at the drive's next hardware reset (a
+  # bus reset after an error, a suspend). If that happened during the erase,
+  # the end of the drive may have been out of reach for part of it - and there
+  # is no telling which part. So the drive must STILL show every sector now.
+  if [ "$WR_HPA_REMOVED" = 1 ] && [ -n "$m" ] && [ "$verified" = "1" ] && [ -z "$reason" ]; then
+    local cur_now
+    cur_now=$(hdparm -N "$dev" 2>/dev/null | tr '\t' ' ' | sed -n 's/.*max sectors *= *\([0-9][0-9]*\)\/.*/\1/p' | head -n1)
+    if [ "$cur_now" != "$HA_NATIVE" ]; then
+      verified=0
+      reason="the hidden area (HPA) came back during the wipe (the drive now shows ${cur_now:-an unreadable number of} of $HA_NATIVE sectors) - the end of the drive may not have been erased"
     fi
   fi
 
