@@ -19,16 +19,17 @@ import type { WipedDrive } from './wipe-detail';
 // last, and the certificate printed "data unrecoverable" for a machine whose
 // second drive still held data. The interim guard (certificate-eligibility.ts,
 // owner decision D11) could only guess from time which rows belonged
-// together. Now every record names its drive (wiped_drive_serial, else
-// wiped_drive.devicePath - owner decision D18: a drive that reports no serial
-// is keyed by its device path), so:
+// together. Now every record names its drive (wiped_drive_serial, and
+// wiped_drive's model, size, WWN and device path - owner decision D18: a
+// drive that reports no serial is still wiped and recorded), so:
 //
-//   1. rows are grouped by drive;
+//   1. rows are grouped by drive - see "Which records belong to which
+//      drive" below for how, and for drives the records cannot tell apart;
 //   2. each drive's CURRENT state is its latest row - a re-wipe of a drive
 //      that failed supersedes the failure;
 //   3. the machine is wiped only if EVERY drive's current state is wiped -
 //      worst-first, so the order the rows arrived in cannot change the answer;
-//   4. every internal drive the wipe-time hardware profile lists must have a
+//   4. every internal drive any wipe-time hardware profile lists must have a
 //      wiped record, or the machine is 'incomplete' (a drive nobody tried to
 //      wipe is not an erased drive).
 //
@@ -71,6 +72,8 @@ export interface RollupRow extends WipeRowLike {
 export interface ExpectedDrive {
   serialNumber: string | null;
   model: string | null;
+  // The profile's "512GB", in GB; null when not given or not readable.
+  capacityGB?: number | null;
 }
 
 export type WipeVerdict = 'wiped' | 'failed' | 'incomplete' | 'none';
@@ -94,6 +97,10 @@ export interface DriveOutcome<R extends RollupRow = RollupRow> {
   discard: boolean;
   // No drive identity on the record: legacy or manual.
   unidentified: boolean;
+  // A 'missing' drive the profile lists alongside another it cannot be told
+  // apart from (same serial, or no serial and the same model and size), so
+  // the records cannot show which of them was wiped.
+  ambiguous?: boolean;
 }
 
 export interface WipeRollup<R extends RollupRow = RollupRow> {
@@ -124,8 +131,8 @@ export function isManualRow(r: RollupRow): boolean {
 const clean = (v: unknown): string | null =>
   typeof v === 'string' && v.trim() ? v.trim() : null;
 
-// The key a row is grouped by: its drive's serial, else its device path.
-// Null for a row that names no drive.
+// Does this row name its drive at all (serial or device path)? Null for a
+// legacy or manual row. Grouping itself is done by perDrive below.
 export function driveKey(r: RollupRow): string | null {
   const serial = clean(r.wipedDriveSerial) ?? clean(r.wipedDrive?.serialNumber);
   if (serial) return `serial:${serial.toUpperCase()}`;
@@ -157,11 +164,38 @@ function latestOf<R extends RollupRow>(clock: Clock, rows: R[]): R {
 const isErase = (r: RollupRow) =>
   r.dataWipeStatus === 'wiped' && !isNotAnErase(r.dataWipeMethod);
 
+// A model name compared across records: case, spaces and punctuation vary
+// between lsblk and the engine's own read, the drive does not.
+const modelKey = (v: unknown): string | null => {
+  const s = clean(v);
+  return s ? s.toUpperCase().replace(/[^A-Z0-9]+/g, '') || null : null;
+};
+
+// "512GB" (what tools/hardware-audit.sh writes), "1TB", "476.9G" -> GB.
+export function capacityGBOf(v: unknown): number | null {
+  const m = /^(\d+(?:\.\d+)?)\s*([KMGT])(?:I?B)?$/i.exec(clean(v) ?? '');
+  if (!m) return null;
+  const unit: Record<string, number> = { K: 1e-6, M: 1e-3, G: 1, T: 1e3 };
+  return parseFloat(m[1]) * unit[m[2].toUpperCase()];
+}
+
 // The internal drives a hardware profile lists. tools/hardware-audit.sh
 // already leaves USB and removable media (the boot stick among them) out of
 // storage[]; the same exclusions are applied here anyway, so a profile from
 // another tool - or an older engine - cannot make the boot stick a drive
 // that "was never wiped".
+//
+// Two more kinds of entry are not drives anyone can wipe, and the engine's
+// profile loop does not drop them (it keeps every lsblk TYPE=disk that is
+// not USB or removable; the kiosk's drive list and the engine's wipe refuse
+// them by NAME, which storage[] does not carry). Counted as expected drives,
+// each would hold its machine at 'incomplete' forever:
+//   - pseudo-devices of the live session (zram swap, ram disks): no model,
+//     no serial and no bus;
+//   - an eMMC's hardware boot partitions (mmcblk0boot0/boot1): a few MB,
+//     "0GB" in the profile, and the parent's serial - so with drives now
+//     counted per serial they would read as two more drives of that serial.
+// Nothing under 1 GB is user storage in any machine this station audits.
 export function expectedDrivesOf(profile: unknown): ExpectedDrive[] {
   const storage = (profile as { storage?: unknown } | null | undefined)
     ?.storage;
@@ -170,34 +204,64 @@ export function expectedDrivesOf(profile: unknown): ExpectedDrive[] {
   for (const d of storage as unknown[]) {
     if (!d || typeof d !== 'object') continue;
     const drive = d as Record<string, unknown>;
-    const bus = [drive.interface, drive.transport, drive.type]
+    const bus = [drive.interface, drive.transport]
       .filter((v): v is string => typeof v === 'string')
       .join(' ');
-    if (/\busb\b/i.test(bus)) continue;
+    if (/\busb\b/i.test(`${bus} ${clean(drive.type) ?? ''}`)) continue;
     if (
       drive.removable === true ||
       drive.removable === 1 ||
       drive.removable === '1'
     )
       continue;
-    out.push({
-      serialNumber: clean(drive.serialNumber),
-      model: clean(drive.model),
-    });
+    const serialNumber = clean(drive.serialNumber);
+    const model = clean(drive.model);
+    if (!serialNumber && !model && !clean(bus)) continue;
+    const capacityGB = capacityGBOf(drive.capacity);
+    if (capacityGB !== null && capacityGB < 1) continue;
+    out.push({ serialNumber, model, capacityGB });
   }
   return out;
 }
 
-// The wipe-time profile the expected drives come from: the snapshot on the
-// latest station row that names its drive (each station record carries the
-// profile captured for that wipe session). Not asset.hardware_profile, which
-// a later capture overwrites.
+// Which listed drives are the same kind of drive as far as a record can
+// tell: the same serial, or - with no serial - the same model and size.
+const expectedType = (e: ExpectedDrive) =>
+  e.serialNumber
+    ? `serial:${e.serialNumber.toUpperCase()}`
+    : `noserial:${modelKey(e.model) ?? '?'}|${
+        e.capacityGB == null ? '?' : Math.round(e.capacityGB)
+      }`;
+
+// The drives that must each have a wipe: every internal drive listed by ANY
+// wipe-time profile since per-drive records began (the snapshot each station
+// record carries - not asset.hardware_profile, which a later capture
+// overwrites). A drive listed N times (two drives that report the same
+// serial) must be there N times.
+//
+// The union, not just the latest profile: a drive that drops off the bus -
+// a dying drive, an unseated cable - is missing from the next session's
+// profile, and a re-wipe of the others then read as "every drive wiped"
+// while that drive, never erased, was still in the machine (review, wave 2).
+// A drive that really was taken out stays expected; the way past that is a
+// hand record for the whole machine, which the certificate labels as manual.
 export function expectedDrivesFromRows(rows: RollupRow[]): ExpectedDrive[] {
   const identified = rows.filter(
     (r) => isOutcome(r) && !isManualRow(r) && driveKey(r) && r.hardwareProfile,
   );
-  if (!identified.length) return [];
-  return expectedDrivesOf(latestOf(station, identified).hardwareProfile);
+  // Newest first, so a tie keeps the newest profile's description.
+  identified.sort((a, b) => compare(station, b, a));
+  const best = new Map<string, ExpectedDrive[]>();
+  for (const r of identified) {
+    const byType = new Map<string, ExpectedDrive[]>();
+    for (const e of expectedDrivesOf(r.hardwareProfile)) {
+      const t = expectedType(e);
+      byType.set(t, [...(byType.get(t) ?? []), e]);
+    }
+    for (const [t, list] of byType)
+      if (list.length > (best.get(t)?.length ?? 0)) best.set(t, list);
+  }
+  return [...best.keys()].sort().flatMap((t) => best.get(t)!);
 }
 
 function outcomeFor<R extends RollupRow>(
@@ -322,12 +386,6 @@ export function rollupWipe<R extends RollupRow>(
     };
   }
 
-  // Per drive.
-  const groups = new Map<string, R[]>();
-  for (const r of identified) {
-    const k = driveKey(r)!;
-    groups.set(k, [...(groups.get(k) ?? []), r]);
-  }
   // Legacy rows older (on both clocks) than the first per-drive record are
   // history; any later one is one more "drive" that can only make it worse.
   const eraStart = Math.min(
@@ -336,26 +394,195 @@ export function rollupWipe<R extends RollupRow>(
   const lateLegacy = legacy.filter(
     (r) => station(r) >= eraStart || received(r) >= eraStart,
   );
-  const keys = [...groups.keys()].sort();
-  const drives: DriveOutcome<R>[] = keys.map((k) =>
-    outcomeFor(k, groups.get(k)!),
-  );
+  const drives = perDrive(identified, expectedDrives);
   if (lateLegacy.length) drives.push(outcomeFor(MACHINE_KEY, lateLegacy));
+  return worst(drives);
+}
 
-  // Every internal drive the wipe-time profile lists must have a record.
-  // With a serial: matched by serial. Without one (owner decision D18), the
-  // drive was keyed by its device path at wipe time, so each unserialled
-  // listed drive needs one path-keyed record.
-  const recorded = new Set(
-    drives.map((d) => d.serialNumber?.toUpperCase()).filter(Boolean),
+// --- Which records belong to which drive -------------------------------------
+//
+// A serial is a drive's identity, and a device path is not: /dev/sdX names
+// are handed out in probe order at every boot, so the same drive can be sda
+// in one session and sdb in the next, and a different drive can take its
+// name (the kiosk's own comments on gui_wipe_one say the same). Keying
+// unserialled drives by path (the first cut of D18) let a re-wipe of drive Y
+// at X's old name hide X's failure, and let one drive wiped at two names
+// count as two drives. And a serial is only an identity while it is unique:
+// cheap drives can share a placeholder serial, and grouping by serial alone
+// let a later wipe of one hide the other's failure (review, wave 2).
+//
+// So records are grouped by what the drive itself reports:
+//   - its serial (with no serial: one group, "noserial");
+//   - within that, its model (and, with no serial, its size to the GB), when
+//     every record in the group carries it - a different model is a
+//     different drive;
+//   - its WWN, when every record in the group carries one: a WWN is unique
+//     to the drive, so records with a WWN are told apart exactly.
+// A group's latest record decides the drive only while the group is known
+// to be ONE drive: it has a WWN; or it has a serial the wipe-time profiles
+// list at most once; or, with no serial, exactly one listed drive matches
+// it. Otherwise it may be several drives, and each device path's latest
+// record counts - worst-first, so a failure at any path stands until that
+// path is wiped again. Such a group covers ONE listed drive whatever it
+// holds, because two paths do not prove two drives; a machine with two
+// drives the records cannot tell apart is therefore never 'wiped' from the
+// station's records alone (it stays 'incomplete', and the refusal says why).
+// Owner-reversible policy: the way past it is a hand record for the whole
+// machine, which the certificate labels as manual.
+
+interface Identity {
+  serial: string | null;
+  model: string | null;
+  gb: number | null;
+  wwn: string | null;
+}
+
+function identityOf(r: RollupRow): Identity {
+  const wd = r.wipedDrive ?? {};
+  const serial = clean(r.wipedDriveSerial) ?? clean(wd.serialNumber);
+  const size = typeof wd.sizeBytes === 'number' ? wd.sizeBytes : NaN;
+  return {
+    serial: serial ? serial.toUpperCase() : null,
+    model: modelKey(wd.model),
+    gb: size > 0 ? size / 1e9 : null,
+    wwn: clean(wd.wwn)?.toLowerCase() ?? null,
+  };
+}
+
+// Could this listed drive be the drive these records name? Anything either
+// side does not report is no evidence against it.
+function fits(e: ExpectedDrive, id: Identity): boolean {
+  if (id.serial && e.serialNumber?.toUpperCase() !== id.serial) return false;
+  if (!id.serial && e.serialNumber) return false;
+  const m = modelKey(e.model);
+  if (m && id.model && m !== id.model) return false;
+  // The profile rounds to the GB ("%.0fGB").
+  if (e.capacityGB != null && id.gb !== null)
+    if (Math.abs(e.capacityGB - id.gb) > 0.51) return false;
+  return true;
+}
+
+// Several drives may be behind these records: each device path's latest
+// record, worst-first.
+function perPathOutcome<R extends RollupRow>(
+  key: string,
+  rows: R[],
+): DriveOutcome<R> {
+  const byPath = new Map<string, R[]>();
+  for (const r of rows) {
+    const p = clean(r.wipedDrive?.devicePath) ?? '';
+    byPath.set(p, [...(byPath.get(p) ?? []), r]);
+  }
+  const outcomes = [...byPath.keys()]
+    .sort()
+    .map((p) => outcomeFor(key, byPath.get(p)!));
+  return (
+    outcomes.find((o) => o.status === 'failed') ??
+    outcomes.reduce((a, b) => (compare(station, b.row!, a.row!) > 0 ? b : a))
   );
-  const pathKeyed = drives.filter((d) => d.key.startsWith('path:')).length;
-  let unserialled = 0;
-  for (const e of expectedDrives) {
-    if (e.serialNumber) {
-      if (recorded.has(e.serialNumber.toUpperCase())) continue;
+}
+
+function perDrive<R extends RollupRow>(
+  identified: R[],
+  expectedDrives: ExpectedDrive[],
+): DriveOutcome<R>[] {
+  const classOf = (id: Identity) =>
+    id.serial ? `serial:${id.serial}` : 'noserial';
+  const classes = new Map<string, R[]>();
+  for (const r of identified) {
+    const c = classOf(identityOf(r));
+    classes.set(c, [...(classes.get(c) ?? []), r]);
+  }
+  const expectedIn = (c: string) =>
+    expectedDrives.filter((e) =>
+      c === 'noserial'
+        ? !e.serialNumber
+        : `serial:${e.serialNumber?.toUpperCase()}` === c,
+    );
+  const allClasses = new Set([
+    ...classes.keys(),
+    ...expectedDrives.map((e) =>
+      e.serialNumber ? `serial:${e.serialNumber.toUpperCase()}` : 'noserial',
+    ),
+  ]);
+
+  const drives: DriveOutcome<R>[] = [];
+  let unlisted = 0;
+  for (const c of [...allClasses].sort()) {
+    const rows = classes.get(c) ?? [];
+    const listed = expectedIn(c);
+    const ids = rows.map(identityOf);
+    const every = (f: (i: Identity) => unknown) =>
+      ids.length > 0 && ids.every((i) => f(i) !== null);
+    const useWwn = every((i) => i.wwn);
+    const useModel = every((i) => i.model);
+    const useSize = c === 'noserial' && every((i) => i.gb);
+
+    const clusters = new Map<string, { id: Identity; rows: R[] }>();
+    rows.forEach((r, n) => {
+      const i = ids[n];
+      const id: Identity = {
+        serial: i.serial,
+        model: useModel ? i.model : null,
+        gb: useSize && i.gb !== null ? Math.round(i.gb) : null,
+        wwn: useWwn ? i.wwn : null,
+      };
+      const sub = [
+        id.model && `model:${id.model}`,
+        id.gb !== null && `size:${Math.round(id.gb)}`,
+        id.wwn && `wwn:${id.wwn}`,
+      ]
+        .filter(Boolean)
+        .join('|');
+      const cl = clusters.get(sub) ?? { id, rows: [] };
+      cl.rows.push(r);
+      clusters.set(sub, cl);
+    });
+
+    // Each cluster is a drive outcome; then each listed drive is matched to
+    // at most one cluster that fits it (a cluster covers one drive at most).
+    const outcomes: Array<{ id: Identity; d: DriveOutcome<R> }> = [];
+    for (const sub of [...clusters.keys()].sort()) {
+      const { id, rows: rs } = clusters.get(sub)!;
+      const key =
+        c === 'noserial'
+          ? `drive:${sub || '?'}`
+          : clusters.size === 1
+            ? c
+            : `${c}|${sub}`;
+      const one =
+        id.wwn !== null ||
+        (c === 'noserial'
+          ? listed.filter((e) => fits(e, id)).length === 1
+          : listed.length <= 1);
+      outcomes.push({
+        id,
+        d: one ? outcomeFor(key, rs) : perPathOutcome(key, rs),
+      });
+    }
+    drives.push(...outcomes.map((o) => o.d));
+
+    const used = new Set<number>();
+    for (const e of listed) {
+      // A serial listed once is matched by the serial alone, as before.
+      const n = outcomes.findIndex(
+        (o, i) =>
+          !used.has(i) &&
+          (c !== 'noserial' && listed.length === 1 ? true : fits(e, o.id)),
+      );
+      if (n >= 0) {
+        used.add(n);
+        continue;
+      }
+      const ambiguous =
+        listed.filter((x) => expectedType(x) === expectedType(e)).length > 1 &&
+        outcomes.some((o) => fits(e, o.id));
       drives.push({
-        key: `serial:${e.serialNumber.toUpperCase()}`,
+        key: e.serialNumber
+          ? outcomes.length === 0 && listed.length === 1
+            ? c
+            : `${c}#missing:${used.size + ++unlisted}`
+          : `unlisted:${++unlisted}`,
         serialNumber: e.serialNumber,
         model: e.model,
         status: 'missing',
@@ -363,21 +590,11 @@ export function rollupWipe<R extends RollupRow>(
         manual: false,
         discard: false,
         unidentified: false,
-      });
-    } else if (++unserialled > pathKeyed) {
-      drives.push({
-        key: `unlisted:${unserialled}`,
-        serialNumber: null,
-        model: e.model,
-        status: 'missing',
-        row: null,
-        manual: false,
-        discard: false,
-        unidentified: false,
+        ambiguous,
       });
     }
   }
-  return worst(drives);
+  return drives;
 }
 
 // How a drive is named in a sentence.
@@ -414,9 +631,14 @@ export function refusalFor(r: WipeRollup): string | null {
           .map(driveLabel)
           .join(
             '; ',
-          )} ${missing.length === 1 ? 'is' : 'are'} listed in its hardware profile with no wipe on record, ` +
+          )} ${missing.length === 1 ? 'is' : 'are'} listed in a hardware profile captured when it was wiped, with no wipe on record, ` +
         'so the device may still hold data. No erasure certificate can be issued until every internal drive ' +
-        'has been wiped with the ALS audit station.'
+        'has been wiped with the ALS audit station.' +
+        (missing.some((d) => d.ambiguous)
+          ? ' Some of its drives cannot be told apart (they report the same serial number, or no serial number ' +
+            'and the same model and size, and no WWN), so the station’s records cannot show that each of them ' +
+            'was wiped. If they all were, record the erasure of this device manually; the certificate will say it was entered manually.'
+          : '')
       );
     }
     case 'failed': {
