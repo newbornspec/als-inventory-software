@@ -19,6 +19,12 @@ import { normaliseHardwareProfile } from './normalise-profile';
 import { screenSizeFor, standardiseRamGb } from '../common/spec-normalise';
 import { ActivityService } from '../activity/activity.service';
 import { downgradeDiscardClaim } from '../assets/wipe-method';
+import {
+  lockStatusOf,
+  normaliseWipeDetail,
+  wipeDetailNote,
+} from './wipe-detail';
+import { hostTag } from './host-identity';
 
 // What a capture proves on its own, for the normal case where the tool sends no
 // explicit call. Deliberately the floor rather than a guess: nothing here claims a
@@ -200,7 +206,9 @@ export class DevicesService {
     const ramGb = standardiseRamGb(profile?.memory?.totalGb ?? dto.ramGb ?? null);
     const screenSize = screenSizeFor(deviceType, profile?.display?.size ?? dto.screenSize ?? null);
 
-    const tag = serial || `HW-${Date.now()}`;
+    // Serial, else the SMBIOS system UUID, else (no identity at all) a fresh
+    // HW-<timestamp> asset as before. See host-identity.ts (owner decision D24).
+    const tag = hostTag(serial, ident.biosUuid) ?? `HW-${Date.now()}`;
     const name = [manufacturer, model].filter(Boolean).join(' ').trim() || 'Audited device';
     const category = deviceType || 'Uncategorised';
 
@@ -278,6 +286,13 @@ export class DevicesService {
     // Derive the legacy audit-summary columns from the profile where present so
     // existing audit views keep working; the full detail lives in hardware_profile.
     const firstDrive = profile?.storage?.[0];
+
+    // The per-drive wipe detail. Anything unusable is stored NULL and said in
+    // the notes - never a 400, which the stick would retry forever. See
+    // wipe-detail.ts.
+    const { detail: wipeDetail, notes: detailNotes } = normaliseWipeDetail(dto);
+    const detailNote = wipeDetailNote(detailNotes);
+    const notes = [dto.notes, detailNote].filter(Boolean).join('\n') || null;
     await this.audits.save(
       this.audits.create({
         assetId: asset.id,
@@ -321,7 +336,10 @@ export class DevicesService {
         // the append-only trail, so it records what was judged at this moment,
         // including "not judged".
         screenGrade: dto.screenGrade ?? null,
-        notes: dto.notes ?? null,
+        ...wipeDetail,
+        // From the profile, not the payload, so old sticks get it too.
+        lockStatus: lockStatusOf(normalisedProfile),
+        notes,
         auditedById: userId,
       }),
     );

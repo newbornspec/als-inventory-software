@@ -1,4 +1,5 @@
 import {
+  Allow,
   IsBoolean,
   IsEnum,
   IsIn,
@@ -84,4 +85,31 @@ export class IngestAuditDto {
   @IsOptional() @IsIn(['installed', 'failed']) restoreImageStatus?: string;
 
   @IsOptional() @IsString() @MaxLength(200) restoreImageName?: string;
+
+  // --- per-drive wipe detail (remediation contract C2). ALL optional forever.
+  //
+  // Deliberately NOT validated here. @Allow only admits them past the global
+  // whitelist; devices/wipe-detail.ts normaliseWipeDetail decides what to
+  // keep. The reason is the retry loop: a 400 makes the stick queue the
+  // record and retry it forever, so a value this server does not recognise
+  // (a newer engine's enum, a station clock set to next year) must be stored
+  // as NULL with a note, never refused. Typed unknown so nothing downstream
+  // can use them without going through the normaliser.
+  @Allow() wipedAt?: unknown; // ISO-8601, the station's finishedAt
+  @Allow() wipeStartedAt?: unknown;
+  @Allow() wipedAtClock?: unknown; // 'network' | 'unsynced'
+  // { serialNumber, model, sizeBytes, transport, rotational, wwn, devicePath }
+  @Allow() wipedDrive?: unknown;
+  @Allow() toolName?: unknown;
+  @Allow() toolVersion?: unknown;
+  @Allow() toolCommit?: unknown;
+  @Allow() methodRequested?: unknown; // auto | crypto | secure | overwrite | zero
+  @Allow() methodAttempted?: unknown;
+  @Allow() fallbackReason?: unknown;
+  @Allow() sanitisationLevel?: unknown; // purge | clear | none
+  @Allow() verification?: unknown; // clean | found | unverified
+  @Allow() hiddenAreas?: unknown; // none | hpa-removed | unknown | dco-present | hpa-present
+  @Allow() wipeLimitations?: unknown; // string[]
+  // { reallocatedBefore, pendingBefore, reallocatedAfter, pendingAfter }
+  @Allow() wipeSmart?: unknown;
 }

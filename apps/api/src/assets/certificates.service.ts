@@ -6,8 +6,20 @@ import { Asset } from './asset.entity';
 import { AssetAudit, DataWipeStatus } from './asset-audit.entity';
 import { Batch } from '../batches/batch.entity';
 import { COMPANY } from '../common/company';
-import { lotAttestation, sourceOf, wipeAttestation } from './manual-wipe';
-import { DISCARD_REFUSAL, discardedNotice, isNotAnErase } from './wipe-method';
+import {
+  lotAttestation,
+  sourceOf,
+  wipeAttestation,
+  type WipeAttestation,
+  type WipeSource,
+} from './manual-wipe';
+import { DISCARD_REFUSAL, discardedNotice } from './wipe-method';
+import {
+  MIXED_REFUSAL,
+  certificateBlock,
+  latestWipe,
+  mixedNotice,
+} from './certificate-eligibility';
 import {
   assertOwnsBatch,
   isScopedManager,
@@ -16,6 +28,37 @@ import {
 } from '../common/ownership';
 
 
+
+// Who the certificate names, and as what (remediation spec C-1).
+//
+// The station signs in as ONE shared account, so the account on a station
+// record is not the person who wiped the drive - yet the certificate printed
+// it as "Performed by", naming e.g. the admin account for every wipe ever
+// done. The name the operator typed at the station (operator_name) was never
+// printed at all. Now:
+//   - the typed name prints as "Operator (self-declared)": nothing verifies
+//     it, and the label says so;
+//   - the account prints as what it is, "Filed by account";
+//   - an older station record with no typed name prints only the account,
+//     still labelled as the account, never as the performer.
+// A manual record keeps "Recorded by" (manual-wipe.ts): there the account is
+// a personal web login, and the person behind it did record the wipe.
+export function erasurePeople(
+  source: WipeSource,
+  att: WipeAttestation,
+  operatorName: string | null | undefined,
+  accountName: string | null | undefined,
+): [string, string][] {
+  const operator = operatorName?.trim();
+  const account = accountName?.trim() || '—';
+  const rows: [string, string][] = [];
+  if (operator) rows.push(['Operator (self-declared)', operator]);
+  rows.push([
+    source === 'manual' ? att.performerLabel : 'Filed by account',
+    account,
+  ]);
+  return rows;
+}
 
 function pretty(value: string | null | undefined): string {
   if (!value) return '—';
@@ -50,24 +93,44 @@ export class CertificatesService {
       .where('asset.batchId = :id', { id: batchId })
       .getMany();
 
-    const wipes = assets.length
+    // FAILED rows too: the mixed-result guard below needs them.
+    const outcomes = assets.length
       ? await this.audits.find({
-          where: { assetId: In(assets.map((a) => a.id)), dataWipeStatus: DataWipeStatus.WIPED },
+          where: {
+            assetId: In(assets.map((a) => a.id)),
+            dataWipeStatus: In([DataWipeStatus.WIPED, DataWipeStatus.FAILED]),
+          },
           order: { createdAt: 'DESC' },
         })
       : [];
-    const latest = new Map<string, AssetAudit>();
-    for (const w of wipes) if (!latest.has(w.assetId)) latest.set(w.assetId, w);
-
+    const byAsset = new Map<string, AssetAudit[]>();
+    for (const o of outcomes) {
+      const list = byAsset.get(o.assetId) ?? [];
+      list.push(o);
+      byAsset.set(o.assetId, list);
+    }
+    // Per device: the wipe on record (the latest by the station's clock), or
+    // why none can be certified - one rule, certificateBlock in
+    // certificate-eligibility.ts, applied on both the station's and the
+    // server's clocks.
+    //
     // A device whose latest recorded wipe was a block discard (TRIM) is left
     // off: that was never an erase - see wipe-method.ts. The LATEST wipe
     // decides, not any wipe: an older proper wipe says nothing about the drive
-    // after it was used and discarded again. The certificate counts what it
-    // left off, so nobody reads a short list as the whole lot.
-    const discarded = [...latest.values()].filter((w) =>
-      isNotAnErase(w.dataWipeMethod),
-    );
-    for (const w of discarded) latest.delete(w.assetId);
+    // after it was used and discarded again. A device where a drive failed its
+    // wipe close to (or after) the wipe on record is left off the same way:
+    // another drive of it may still hold data (owner decision D11, interim).
+    // The certificate counts what it left off, so nobody reads a short list as
+    // the whole lot.
+    const latest = new Map<string, AssetAudit>();
+    const discarded: string[] = [];
+    const mixed: string[] = [];
+    for (const [id, list] of byAsset) {
+      const block = certificateBlock(list);
+      if (block === 'discard') discarded.push(id);
+      else if (block === 'mixed') mixed.push(id);
+      else if (block === null) latest.set(id, latestWipe(list) as AssetAudit);
+    }
 
     const rows = assets
       .filter((a) => latest.has(a.id))
@@ -94,14 +157,28 @@ export class CertificatesService {
       });
 
     if (rows.length === 0) {
+      const why: string[] = [];
+      if (discarded.length)
+        why.push(
+          `${discarded.length} recorded wipe${discarded.length === 1 ? ' was a block discard' : 's were block discards'} (TRIM), which ${discarded.length === 1 ? 'is' : 'are'} not an erase`,
+        );
+      if (mixed.length)
+        why.push(
+          `${mixed.length} device${mixed.length === 1 ? ' has' : 's have'} a drive that failed its wipe close to (or after) the wipe on record`,
+        );
       throw new BadRequestException(
-        discarded.length
-          ? `No device in this lot can be certified: the only wipes recorded (${discarded.length}) were block discards (TRIM), which are not an erase. Wipe those drives again with the ALS audit station.`
+        why.length
+          ? `No device in this lot can be certified: ${why.join('; ')}. Wipe those drives again with the ALS audit station.`
           : 'No wiped devices in this lot — record data-wipe audits with status "Wiped" first.',
       );
     }
 
-    const buffer = await this.renderLot(batch, rows, discarded.length);
+    const buffer = await this.renderLot(
+      batch,
+      rows,
+      discarded.length,
+      mixed.length,
+    );
     return { buffer, filename: `erasure-certificate-${batch.batchNumber}.pdf` };
   }
 
@@ -123,18 +200,28 @@ export class CertificatesService {
       throw new NotFoundException(`Asset ${assetId} not found`);
     }
 
-    const wipe = await this.audits.findOne({
-      where: { assetId, dataWipeStatus: DataWipeStatus.WIPED },
+    // Every WIPED and FAILED row: the wipe on record is the latest by the
+    // station's clock, and the mixed-result guard needs the failures - any
+    // FAILED row for the device newer than the wipe, or within 24 hours
+    // before it, on either clock, and there is no certificate. See
+    // certificate-eligibility.ts (owner decision D11, interim).
+    const outcomes = await this.audits.find({
+      where: {
+        assetId,
+        dataWipeStatus: In([DataWipeStatus.WIPED, DataWipeStatus.FAILED]),
+      },
       order: { createdAt: 'DESC' },
       relations: ['auditedBy'],
     });
-    if (!wipe) {
+    const block = certificateBlock(outcomes);
+    if (block === 'none') {
       throw new BadRequestException(
         'No completed data erasure on record for this device — record an audit with data-wipe status "Wiped" first.',
       );
     }
-    if (isNotAnErase(wipe.dataWipeMethod))
-      throw new BadRequestException(DISCARD_REFUSAL);
+    if (block === 'discard') throw new BadRequestException(DISCARD_REFUSAL);
+    if (block === 'mixed') throw new BadRequestException(MIXED_REFUSAL);
+    const wipe = latestWipe(outcomes) as AssetAudit;
 
     const buffer = await this.render(asset, wipe);
     return { buffer, filename: `erasure-certificate-${asset.tag}.pdf` };
@@ -171,11 +258,12 @@ export class CertificatesService {
         month: 'long',
         year: 'numeric',
       });
-      const technician = (wipe.auditedBy as any)?.name ?? '—';
+      const account = wipe.auditedBy?.name ?? null;
       // What this certificate may truthfully claim depends on who recorded
       // the wipe - the station, which erased and read back the drive, or a
       // person typing an outcome. See manual-wipe.ts.
-      const att = wipeAttestation(sourceOf(wipe));
+      const source = sourceOf(wipe);
+      const att = wipeAttestation(source);
       const method = (wipe.dataWipeMethod?.trim() || 'Not specified') + att.methodSuffix;
       const d = new Date(wipe.createdAt);
       const certNo = `ERA-${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(
@@ -239,7 +327,7 @@ export class CertificatesService {
         ['Method', method],
         ['Result', att.result],
         [att.dateLabel, wipedOn],
-        [att.performerLabel, technician],
+        ...erasurePeople(source, att, wipe.operatorName, account),
       ]);
 
       const extra: [string, string][] = [];
@@ -273,6 +361,7 @@ export class CertificatesService {
     batch: Batch,
     rows: Array<{ serial: string; device: string; storage: string; method: string; manual: boolean; date: Date }>,
     discarded = 0,
+    mixed = 0,
   ): Promise<Buffer> {
     return new Promise((resolve, reject) => {
       const doc = new PDFDocument({ size: 'A4', margin: 40 });
@@ -324,6 +413,14 @@ export class CertificatesService {
           .fontSize(9.5)
           .fillColor('#222222')
           .text(discardedNotice(discarded), { width: right - left });
+      }
+      if (mixed > 0) {
+        doc.moveDown(0.4);
+        doc
+          .font('Helvetica')
+          .fontSize(9.5)
+          .fillColor('#222222')
+          .text(mixedNotice(mixed), { width: right - left });
       }
       doc.moveDown(0.6);
 
