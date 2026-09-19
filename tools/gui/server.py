@@ -3499,6 +3499,64 @@ def allowed_api_url(url):
     return True, ""
 
 
+def local_hosts(port=None):
+    """The Host header values a request to THIS server carries: the kiosk
+    opens http://127.0.0.1:PORT (als-autostart.sh, start-gui.sh), and
+    localhost:PORT is what a person would type."""
+    port = PORT if port is None else port
+    hosts = {"127.0.0.1:%d" % port, "localhost:%d" % port}
+    if port == 80:
+        hosts |= {"127.0.0.1", "localhost"}
+    return hosts
+
+
+def request_problem(headers, method):
+    """(code, message) when a request did not come from this station's own
+    page, else None.
+
+    The server listens on 127.0.0.1 only, which keeps other MACHINES out but
+    not other WEB PAGES: any page the station's browser loads can send a
+    request to http://127.0.0.1:8800. Two ways that mattered:
+      - a "simple" cross-origin POST (Content-Type text/plain, no preflight)
+        to /api/wipe/start, /api/settings or /api/operator/signin. do_POST
+        parses the body as JSON whatever the Content-Type, so a hostile page
+        could start a wipe with no confirmation dialog, filed under whoever is
+        signed in, or rewrite settings. The 'full' autostart mode is a normal
+        browser window with an address bar, so such a page is one mistyped
+        address away;
+      - DNS rebinding: a page on attacker.example whose name then resolves to
+        127.0.0.1 is "same origin" with itself and can READ our answers -
+        /api/wipe/eligibility (drive serials fetched with the operator's
+        token), /api/bootstrap (the signed-in operator's email).
+    So:
+      - Host must be this server's own (127.0.0.1:PORT or localhost:PORT). A
+        rebinding page's requests carry ITS hostname. Every browser sends
+        Host; a request without one is not from a browser and is let through.
+      - Origin, when present, must be this server's own. Browsers send it on
+        every cross-origin request and on every POST; our own page's fetches
+        are same-origin.
+      - a POST's Content-Type, when present, must be application/json, which
+        is all index.html ever sends (jpost) and which a cross-origin page
+        cannot send without a CORS preflight this server never answers.
+    `headers` is the request's header mapping (anything with .get)."""
+    get = getattr(headers, "get", None)
+    if get is None:
+        return None
+    host = (get("Host") or "").strip().lower()
+    if host and host not in local_hosts():
+        return 403, "This station's service answers only its own screen (Host %s refused)." % host[:80]
+    origin = get("Origin")
+    if origin is not None:
+        o = origin.strip().lower().rstrip("/")
+        if o not in {"http://" + h for h in local_hosts()}:
+            return 403, "This station's service answers only its own screen (Origin %s refused)." % o[:80]
+    if method == "POST":
+        ctype = get("Content-Type")
+        if ctype is not None and ctype.split(";")[0].strip().lower() != "application/json":
+            return 415, "Requests to this station's service must be JSON."
+    return None
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *_args):
         pass
@@ -3517,6 +3575,9 @@ class Handler(BaseHTTPRequestHandler):
         return not want or (pin is not None and str(pin) == str(want))
 
     def do_GET(self):  # noqa: N802
+        bad = request_problem(self.headers, "GET")
+        if bad:
+            return self._send(bad[0], {"message": bad[1]})
         u = urlparse(self.path)
         if u.path in ("/", "/index.html"):
             mark_app_ready()
@@ -3638,6 +3699,18 @@ class Handler(BaseHTTPRequestHandler):
         return self._send(404, {"message": "not found"})
 
     def do_POST(self):  # noqa: N802
+        bad = request_problem(self.headers, "POST")
+        if bad:
+            # Read (and drop) the body first: closing a socket with unread
+            # bytes in it makes the OS reset the connection, and the sender
+            # then gets a reset instead of the refusal.
+            try:
+                n = min(int(self.headers.get("Content-Length") or 0), 1 << 20)
+                if n > 0:
+                    self.rfile.read(n)
+            except (ValueError, OSError):
+                pass
+            return self._send(bad[0], {"message": bad[1]})
         u = urlparse(self.path)
         length = int(self.headers.get("Content-Length") or 0)
         try:
