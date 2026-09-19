@@ -216,6 +216,17 @@ fi
 # Chromium's equivalents live in its profile's Preferences file
 # (credentials_enable_service = the "Offer to save passwords" setting,
 # profile.password_manager_enabled on older builds).
+#
+# No "Welcome to Firefox" Terms of Use modal. The live session forgets its
+# profile at every power-off, so every boot is a brand-new profile, and Firefox
+# 138+ puts its Terms of Use / Privacy Notice modal over the kiosk page until
+# someone clicks Continue - seen on the station, 2026-09-19, over the audit
+# screen. termsofuse.bypassNotification is Mozilla's documented switch for
+# managed installs (the pref behind the SkipTermsOfUse enterprise policy). The
+# OWNER approved it on 2026-09-19, knowing it means the business accepts the
+# Firefox Terms of Use on behalf of the station's users - which operators were
+# already doing by clicking Continue. dataSubmissionPolicyBypassNotification
+# stops the older data-reporting info bar for the same reason.
 write_ff_prefs() {  # write_ff_prefs <profile dir>
     mkdir -p "$1"
     cat > "$1/user.js" <<'PREFS'
@@ -226,6 +237,8 @@ user_pref("browser.aboutwelcome.enabled", false);
 user_pref("toolkit.telemetry.reportingpolicy.firstRun", false);
 user_pref("app.update.auto", false);
 user_pref("browser.startup.upgradeDialog.enabled", false);
+user_pref("termsofuse.bypassNotification", true);
+user_pref("datareporting.policy.dataSubmissionPolicyBypassNotification", true);
 user_pref("signon.rememberSignons", false);
 user_pref("signon.autofillForms", false);
 user_pref("signon.formlessCapture.enabled", false);

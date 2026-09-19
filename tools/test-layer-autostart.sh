@@ -74,6 +74,12 @@ case "$l" in *"http://127.0.0.1:8800"*) ok "onto the local backend" ;; *) bad "u
 [ -f "$T/home/als-kiosk-profile-esr/user.js" ] && ok "user.js written into that profile" || bad "user.js" "missing"
 grep -q 'browser.aboutwelcome.enabled", false' "$T/home/als-kiosk-profile-esr/user.js" 2>/dev/null \
   && ok "first-run welcome suppressed" || bad "prefs" "$(cat "$T/home/als-kiosk-profile-esr/user.js" 2>&1)"
+# The Terms of Use modal a brand-new profile shows on every live boot (seen on
+# the station over the audit screen). Owner-approved bypass, 2026-09-19.
+grep -q 'termsofuse.bypassNotification", true' "$T/home/als-kiosk-profile-esr/user.js" 2>/dev/null \
+  && ok "Terms of Use modal suppressed" || bad "termsofuse pref" "missing from user.js"
+grep -q 'datareporting.policy.dataSubmissionPolicyBypassNotification", true' "$T/home/als-kiosk-profile-esr/user.js" 2>/dev/null \
+  && ok "data-reporting info bar suppressed" || bad "datareporting pref" "missing from user.js"
 
 
 # The browser must never keep or fill an operator's password (sign-in with
