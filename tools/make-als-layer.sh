@@ -370,23 +370,122 @@ als_fetch_esr() {
   return 0
 }
 
-# Mask snapd in the stage - but ONLY if the ESR binary is really in it.
+# "Is ESR in the layer?" has to mean "is ALL of it in the layer", not "does
+# the binary exist". A HALF-UNPACKED ESR IS WORSE THAN NONE, and it is the
+# likely way this goes wrong: the build runs on the live station, the stage is
+# on the RAM-backed casper overlay that already holds ~1.4 GB of seeded snaps,
+# and the ESR .deb unpacks to ~311 MB. The .deb's tar order puts
+# usr/lib/firefox-esr/firefox at entry 31 of 99 and libxul.so (185 MB) at
+# entry 90, so an overlay that fills up mid-unpack leaves an executable
+# `firefox` next to a truncated libxul.so. A review reproduced exactly that
+# (200 MB tmpfs stage, the real 153.3.0esr .deb): dpkg -x failed, the old
+# `dpkg -x ... 2>/dev/null && ...` swallowed it, the old `-x firefox` gate
+# masked snapd, and the staged binary died with "Couldn't load XPCOM". That
+# station boots to NO browser at all: ESR is broken and the snap Firefox can
+# no longer seed.
+#
+# So the proof is the .deb's own file list: every regular file it ships must be
+# in the stage at exactly the size the .deb says.
+
+# List a .deb's contents, one entry per line: "<type> <size> <path>", where
+# type is dpkg-deb's first mode character (- d l h ...) and path has no
+# leading "./" and no " -> target" / " link to target" suffix.
+als_deb_entries() {
+  dpkg-deb -c "$1" 2>/dev/null | awk '{
+    t = substr($1, 1, 1); s = $3; p = $0
+    for (i = 1; i <= 5; i++) sub(/^[^ ]+ +/, "", p)
+    if (t == "l") sub(/ -> .*$/, "", p)
+    if (t == "h") sub(/ link to .*$/, "", p)
+    sub(/^\.\//, "", p); sub(/\/$/, "", p)
+    if (p != "" && p != ".") print t, s, p
+  }'
+}
+
+# 0 only if $1 (a stage, or the mounted layer) holds a COMPLETE firefox-esr:
+# $2 is the list als_deb_entries wrote for its .deb, it names ESR_BIN, and
+# every regular file in it is present, regular, and exactly the listed size.
+# No list, or an empty one, is "not complete" - never guess.
+als_esr_complete() {
+  local root="$1" list="$2" t s p n=0
+  [ -n "$list" ] && [ -s "$list" ] || return 1
+  [ -x "$root/$ESR_BIN" ] && [ ! -L "$root/$ESR_BIN" ] || return 1
+  grep -q "^- [0-9]* $ESR_BIN\$" "$list" || return 1
+  while read -r t s p; do
+    [ "$t" = "-" ] || continue
+    [ -f "$root/$p" ] && [ ! -L "$root/$p" ] || return 1
+    [ "$(stat -c %s "$root/$p" 2>/dev/null)" = "$s" ] || return 1
+    n=$((n + 1))
+  done < "$list"
+  [ "$n" -gt 0 ]
+}
+
+# Take every trace of a firefox-esr unpack back out of the stage: each
+# non-directory entry the .deb lists, then its private directory. Used when the
+# unpack failed or came out incomplete, so the layer carries no half browser -
+# als-autostart prefers firefox-esr, and Mozilla's /usr/bin/firefox (a script
+# that execs firefox-esr) would shadow Ubuntu's snap wrapper. With all of it
+# gone, the stage is as if ESR had never been fetched: snap Firefox, snapd on.
+als_remove_esr() {
+  local stage="$1" list="$2" t s p
+  if [ -n "$list" ] && [ -f "$list" ]; then
+    while read -r t s p; do
+      [ "$t" = "d" ] && continue
+      rm -f "$stage/$p"
+    done < "$list"
+  fi
+  rm -rf "$stage/usr/lib/firefox-esr"
+  rm -f "$stage/usr/bin/firefox-esr" "$stage/usr/share/applications/firefox-esr.desktop"
+}
+
+# Unpack the firefox-esr .deb $1 into stage $2, writing its entry list to $3
+# (OUTSIDE the stage - it must not land in the layer; the mount-time check
+# reads it again). 0 = complete and in place. Anything else - a list that
+# cannot be read, dpkg -x failing (ENOSPC on the RAM overlay is the likely
+# one), or a result that does not match the list - removes what did land and
+# returns 1, and the build carries on WITHOUT ESR and with snapd untouched.
+als_unpack_esr() {
+  local deb="$1" stage="$2" list="$3" rc
+  if ! als_deb_entries "$deb" > "$list" || ! grep -q "^- [0-9]* $ESR_BIN\$" "$list"; then
+    say "  could not read the file list of $(basename "$deb") - ESR skipped, snapd left alone"
+    als_remove_esr "$stage" ""; rm -f "$list"
+    return 1
+  fi
+  dpkg -x "$deb" "$stage"; rc=$?
+  if [ "$rc" != "0" ]; then
+    say "  dpkg -x $(basename "$deb") FAILED (exit $rc - out of space on the live"
+    say "  overlay?). Removing the partial unpack; ESR skipped, snapd left alone."
+    als_remove_esr "$stage" "$list"; rm -f "$list"
+    return 1
+  fi
+  if ! als_esr_complete "$stage" "$list"; then
+    say "  $(basename "$deb") unpacked INCOMPLETE (a file is missing or the wrong"
+    say "  size). Removing it; ESR skipped, snapd left alone."
+    als_remove_esr "$stage" "$list"; rm -f "$list"
+    return 1
+  fi
+  return 0
+}
+
+# Mask snapd in the stage - but ONLY if a COMPLETE ESR is really in it.
 #
 # That condition is the whole safety of this change. Masking snapd without a
 # replacement browser would leave the kiosk with no browser at all (the stock
 # /usr/bin/firefox is a wrapper that exits with "requires the firefox snap").
 # So this looks at the stage itself, after unpacking, rather than at whether a
-# download "succeeded".
+# download "succeeded" - and at every file of the package, not just the binary
+# (see als_esr_complete: a binary with a truncated libxul.so is no browser).
+#
+# $1 = stage, $2 = the entry list als_unpack_esr wrote. No list, no mask.
 #
 # The masks go in /etc/systemd/system (and /etc/systemd/user), which outranks
 # /usr/lib/systemd - and, for the record, is NOT under /lib, so the merged-/usr
 # trap in the fold step cannot bite here. Directory modes are normalised to
 # 0755 with the rest of the stage, matching stock.
 als_mask_snapd() {
-  local stage="$1" u
-  if [ ! -x "$stage/$ESR_BIN" ]; then
-    say "  firefox-esr is NOT in the layer - snapd left alone (the snap Firefox is"
-    say "  still the only browser, and it needs snapd to seed)"
+  local stage="$1" list="${2:-}" u
+  if ! als_esr_complete "$stage" "$list"; then
+    say "  a complete firefox-esr is NOT in the layer - snapd left alone (the snap"
+    say "  Firefox is still the only browser, and it needs snapd to seed)"
     return 1
   fi
   mkdir -p "$stage/etc/systemd/system" "$stage/etc/systemd/user" || die "mkdir for the snapd masks failed"
@@ -556,7 +655,8 @@ do_build() {
 
   STAGE=$(mktemp -d) || die "mktemp failed"
   MOZ_WORK=""
-  trap 'rm -rf "$STAGE"; [ -n "$MOZ_WORK" ] && rm -rf "$MOZ_WORK"; media_ro' EXIT
+  ESR_LIST="$STAGE.esr-files"
+  trap 'rm -rf "$STAGE" "$ESR_LIST"; [ -n "$MOZ_WORK" ] && rm -rf "$MOZ_WORK"; media_ro' EXIT
 
   # 0755, and this is not cosmetic. mktemp -d creates the directory 0700, and
   # mksquashfs faithfully preserves that as the ROOT directory of the layer.
@@ -777,9 +877,20 @@ do_build() {
     als_fetch_esr "$MOZ_WORK" "$DEBS" || true
     rm -rf "$MOZ_WORK"; MOZ_WORK=""
   fi
+  # firefox-esr is unpacked on its own and its exit status is CHECKED: a
+  # partial unpack is removed again rather than left for the snapd mask to
+  # mistake for a browser (see als_esr_complete). ESR_LIST is its file list,
+  # kept beside the stage for the mount-time re-check.
   got=0
+  ESR_LIST="$STAGE.esr-files"; rm -f "$ESR_LIST"
   for deb in "$DEBS"/*.deb; do
     [ -f "$deb" ] || continue
+    case "$(basename "$deb")" in
+      firefox-esr_*.deb)
+        als_unpack_esr "$deb" "$STAGE" "$ESR_LIST" \
+          && { got=$((got+1)); say "  unpacked $(basename "$deb") (complete: every file at its packaged size)"; }
+        continue ;;
+    esac
     dpkg -x "$deb" "$STAGE" 2>/dev/null && { got=$((got+1)); say "  unpacked $(basename "$deb")"; }
   done
   rm -rf "$DEBS"
@@ -854,10 +965,10 @@ do_build() {
   # Before the permission pass, so the /etc/systemd directories it creates are
   # normalised with everything else.
   step "Kiosk browser and snapd"
-  if [ -x "$STAGE/$ESR_BIN" ]; then
+  if als_esr_complete "$STAGE" "$ESR_LIST"; then
     say "  firefox-esr baked in (/$ESR_BIN)"
   fi
-  als_mask_snapd "$STAGE" || true
+  als_mask_snapd "$STAGE" "$ESR_LIST" || true
 
   # Every directory 0755 root:root, matching the stock layers - EXCEPT the ones
   # that are deliberately NOT 0755 in stock. /tmp is 1777 and /root is 0700 in
@@ -962,10 +1073,11 @@ $(printf '%s' "$bad" | sed "s|^$MP|  |")"
       [ "$s_t" -ge "$usr_t" ] || fail="/$s ($s_t) is older than the layer's /usr ($usr_t)"
     done
   fi
-  # And never a masked snapd without the browser that replaces it.
+  # And never a masked snapd without the browser that replaces it - ALL of it,
+  # every file at its packaged size, read back from the squashfs itself.
   if [ -z "$fail" ] && [ -L "$MP/etc/systemd/system/snapd.seeded.service" ] \
-     && [ ! -x "$MP/$ESR_BIN" ]; then
-    fail="snapd is masked but firefox-esr is not in the layer - the kiosk would have no browser"
+     && ! als_esr_complete "$MP" "$ESR_LIST"; then
+    fail="snapd is masked but firefox-esr is not in the layer complete - the kiosk would have no browser"
   fi
   umount "$MP"; rmdir "$MP"
   [ -n "$fail" ] && die "The layer mounted but $fail"

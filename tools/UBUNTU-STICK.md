@@ -119,7 +119,12 @@ on every boot too, because the layer's `/usr` is newer than the image's
    `/etc/apt`, and nothing but the package itself goes into the layer.
 2. Bakes Mozilla's `firefox-esr` .deb into the layer, next to nvme-cli & co.
    Every library it needs is already on the stock image.
-3. **Only if** `firefox-esr` really ended up in the layer, masks snapd's units
+   If the unpack fails or comes out incomplete (the live overlay running out
+   of space mid-unpack is the likely cause), every ESR file is taken back out
+   and the build carries on as if ESR had never been fetched.
+3. **Only if** `firefox-esr` really ended up in the layer — every file the
+   package ships, each at its packaged size, checked against the .deb's own
+   list and checked again inside the finished squashfs — masks snapd's units
    in the layer (`/etc/systemd/system/snapd.* -> /dev/null`). No snap is seeded
    any more — the snap Firefox, Thunderbird and the "Install Ubuntu" app are
    gone from that boot; the audit tools never used them. `firefox` on the

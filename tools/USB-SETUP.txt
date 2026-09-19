@@ -134,7 +134,9 @@ above describe the old SystemRescue stick.
 Rebuilding the layer on the station now also:
   - bakes in Mozilla's Firefox ESR (key fingerprint checked; the build
     STOPS if it does not match 35BAA0B33E9EB396F59CA838C0BA5CE6DC6315A3),
-  - turns snapd off in the layer - ONLY when ESR really went in - so the
+  - turns snapd off in the layer - ONLY when ESR really went in, ALL of it
+    (a half-finished unpack, e.g. the stick ran out of RAM space, is
+    removed again and snapd is left on) - so the
     ~1.4 GB of snaps are no longer copied into RAM on every boot (~95 s),
   - stops ldconfig & co. re-running on every boot (~8 s).
 
