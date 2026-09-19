@@ -13,6 +13,7 @@ import { sanitizeUser, type SafeUser } from '../users/sanitize-user';
 import { ActivityService } from '../activity/activity.service';
 import { assertOwnsBatch, accessibleBatchWhere, type RequestUser } from '../common/ownership';
 import { cleanCpuModel, screenSizeFor, standardiseRamGb } from '../common/spec-normalise';
+import { driveHealthSummary } from '../devices/drive-health';
 import { UserRole } from '../users/user.entity';
 
 export interface BatchWithCount extends Omit<Batch, 'receivedBy' | 'owner' | 'createdBy'> {
@@ -131,11 +132,15 @@ export class BatchesService {
       'Display',
       'Operating system',
       'Battery health',
+      // Next to battery health on purpose: both are the "how worn is it" facts
+      // a buyer prices on. One cell per device, worst drive first
+      // ("2 drives: 45% Bad, 94% Good") - see devices/drive-health.ts.
+      'Drive health',
       'Unit cost (£)',
     ];
     // One entry per header, in the same order — ws.columns is positional, and
     // lastCol/the total row are both derived from headers.length.
-    const widths = [12, 16, 22, 12, 18, 14, 16, 14, 10, 16, 30, 20, 26, 22, 18, 18, 14, 13];
+    const widths = [12, 16, 22, 12, 18, 14, 16, 14, 10, 16, 30, 20, 26, 22, 18, 18, 14, 30, 13];
     ws.columns = widths.map((w) => ({ width: w }));
     const lastCol = ws.getColumn(headers.length).letter;
 
@@ -253,6 +258,7 @@ export class BatchesService {
         displayStr,
         hp?.system?.os ?? '',
         hp?.battery?.health ?? '',
+        driveHealthSummary(hp?.storage),
         cost != null ? cost : '',
       ];
       dataRow += 1;

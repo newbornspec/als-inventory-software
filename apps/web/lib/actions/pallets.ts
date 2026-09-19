@@ -62,6 +62,10 @@ export interface PalletAssetRow {
   storage: string | null;
   screenSize: string | null;
   batteryHealth: string | null;
+  // One-line drive health summary ("2 drives: 45% Bad, 94% Good"), worded by
+  // the API's devices/drive-health.ts. Optional: an API deployed before the
+  // field existed does not send it.
+  driveHealth?: string | null;
   conditionGrade: string | null;
   auditStatus: string | null;
   movedToPalletAt: string | null;
