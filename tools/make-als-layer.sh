@@ -710,6 +710,139 @@ als_disable_cloud_init() {
   return 0
 }
 
+# =============================================================================
+# LAYER COMPRESSION: lz4 when the stick's kernel is PROVEN to read it, else xz.
+#
+# MEASURED (2026-09-19). On the station, Firefox took 13.6 s from launch to its
+# first request (boot report: browser launched 34.8 s, APP READY 48.4 s). Off
+# the station, same ESR build, station-class cores (i5-10210U, same Skylake
+# core as the i3-8145U), a brand-new profile every run, cold page cache:
+#     layer tree on xz squashfs (what shipped)    5.9 - 6.75 s
+#     the same tree on lz4 -Xhc squashfs          1.74 s
+#     a plain directory (the upper bound)         1.58 s
+#     warm cache, any of them                     1.23 s
+# The difference is the kernel decompressing xz at ~25 MB/s on ONE core -
+# casper mounts every layer threads=single - to pull ~143 MB of libxul.so and
+# the two omni.ja files into memory. It is CPU, not USB: sys time grew 5.3-6 s
+# for 4.1-5.2 s of wall time, and on the station it competes with the
+# backend's own start-up on the same two cores. lz4 costs 0.4 s there.
+# The price is size: the layer grows from ~108 MB to ~149 MB, and Firefox
+# reads 74 MB off the image instead of 56 MB before its first request.
+#
+# WHY lz4 AND NOT zstd. zstd is smaller (116 MB) and nearly as fast, and the
+# stick's kernel has it too - but the layer is now built on the Windows PC in
+# Docker, whose WSL2 kernel has "# CONFIG_SQUASHFS_ZSTD is not set", so the
+# build's own mount check below would refuse a zstd layer. lz4 mounts on both.
+#
+# WHY THIS IS NOT A GUESS - a layer the kernel cannot decompress does not
+# degrade, casper's mount fails and the boot panics. Every ALS boot entry in
+# tools/boot/grub.cfg boots /casper/vmlinuz. The one on the stick is Ubuntu's
+# 24.04.2 kernel, "6.11.0-17-generic #17~24.04.2-Ubuntu" (read out of the
+# ISO's casper/vmlinuz). Its config, from the matching linux-modules
+# 6.11.0-17.17~24.04.2 .deb, has CONFIG_SQUASHFS=y and CONFIG_SQUASHFS_LZ4=y
+# (and LZ4_DECOMPRESS=y) - BUILT IN, so no initrd module can be missing. That
+# exact kernel was booted under QEMU and mounted an lz4 -Xhc repack of the real
+# layer the way casper does (losetup; mount -t squashfs -o ro,noatime):
+# libxul.so came back byte-identical, and an lz4 layer over the three stock xz
+# layers stacked under overlayfs. Casper has no compressor setting anywhere -
+# each layer is its own squashfs mount, and its fstype check reads only the
+# magic - so mixing compressors between layers is fine.
+#
+# THE GUARD. The build reads the release string out of the stick's own
+# casper/vmlinuz and uses lz4 only when that kernel is one of the proven ones
+# below, or its /boot/config-<release> on the build host says both options are
+# =y. Anything else - a stick rewritten from another ISO, an unreadable
+# vmlinuz - builds xz exactly as before and says so. And the build host's
+# mount check still runs on the finished file.
+#
+# Opt-out: ALS_LAYER_COMP=xz (the old layer, bit for bit the same settings).
+# ALS_LAYER_COMP=lz4 insists, and stops the build rather than fall back.
+# Anything else is refused. Rollback on the stick: put the previous xz layer
+# file back (UBUNTU-STICK.md).
+# =============================================================================
+ALS_LZ4_PROVEN_KERNELS="6.11.0-17-generic#17~24.04.2-Ubuntu"
+ALS_SQUASH_BLOCK=131072
+
+# Print "<release>#<build>" (e.g. 6.11.0-17-generic#17~24.04.2-Ubuntu) of an
+# x86 bzImage, from its setup header: "HdrS" at 0x202, and at 0x20E a pointer
+# (+0x200) to the version string. No tool needed beyond od/tail/head.
+als_kernel_release() {
+  local f="$1" off
+  [ -f "$f" ] || return 1
+  [ "$(tail -c +515 "$f" 2>/dev/null | head -c 4 | tr -d '\000')" = "HdrS" ] || return 1
+  off=$(od -An -tu2 -j 526 -N 2 "$f" 2>/dev/null | tr -d ' ')
+  case "$off" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$off" -gt 0 ] || return 1
+  tail -c +$((off + 513)) "$f" 2>/dev/null | head -c 256 | tr '\0' '\n' | head -1 \
+    | awk '{ r = $1; b = ""; for (i = 2; i <= NF; i++) if ($i ~ /^#/) { b = $i; break }
+             if (r ~ /^[0-9]+\.[0-9]+/) print r b }' | grep .
+}
+
+# 0 when a kernel config file has squashfs AND its lz4 decompressor BUILT IN.
+# =m is not enough: the layer is mounted from the initrd, before any module
+# that is not in it could load.
+als_kconfig_lz4() {
+  [ -f "$1" ] && grep -qx 'CONFIG_SQUASHFS=y' "$1" && grep -qx 'CONFIG_SQUASHFS_LZ4=y' "$1"
+}
+
+# Choose the compressor. $1 = the stick's casper/vmlinuz, $2 = the host root
+# whose /boot/config-* to read. Sets LAYER_COMP (lz4|xz) and LAYER_COMP_ARGS.
+als_pick_layer_comp() {
+  local vmlinuz="$1" root="${2:-/}" want="${ALS_LAYER_COMP:-auto}" id rel proven="" k
+  case "$want" in
+    xz)
+      LAYER_COMP=xz; LAYER_COMP_ARGS="-comp xz"
+      say "  compressor: xz (ALS_LAYER_COMP=xz)"
+      return 0 ;;
+    lz4|auto) : ;;
+    *) die "ALS_LAYER_COMP='$want' is not a compressor this build knows. Use xz, lz4 or
+      leave it unset (auto: lz4 when the stick's kernel is proven to read it)." ;;
+  esac
+  id=$(als_kernel_release "$vmlinuz")
+  rel=${id%%#*}
+  if [ -z "$id" ]; then
+    proven="cannot read a kernel version out of $vmlinuz"
+  elif [ -f "$root/boot/config-$rel" ]; then
+    # The config, when present, is the authority - also over the list below.
+    if als_kconfig_lz4 "$root/boot/config-$rel"; then
+      proven=yes; say "  kernel $rel: /boot/config-$rel has SQUASHFS=y and SQUASHFS_LZ4=y"
+    else
+      proven="/boot/config-$rel does not have SQUASHFS and SQUASHFS_LZ4 built in (=y)"
+    fi
+  else
+    for k in $ALS_LZ4_PROVEN_KERNELS; do
+      [ "$k" = "$id" ] && proven=yes
+    done
+    if [ "$proven" = "yes" ]; then
+      say "  kernel $id: proven to mount an lz4 layer (see LAYER COMPRESSION)"
+    else
+      proven="kernel $id is not one proven to read lz4, and no /boot/config-$rel to check"
+    fi
+  fi
+  if [ "$proven" = "yes" ]; then
+    LAYER_COMP=lz4; LAYER_COMP_ARGS="-comp lz4 -Xhc"
+    say "  compressor: lz4 -Xhc (Firefox starts ~4 s sooner than from xz)"
+    return 0
+  fi
+  [ "$want" = "lz4" ] && die "ALS_LAYER_COMP=lz4 was asked for, but $proven.
+      A layer this kernel cannot decompress panics the boot. Build xz instead:
+          sudo env ALS_LAYER_COMP=xz bash $0 build ..."
+  LAYER_COMP=xz; LAYER_COMP_ARGS="-comp xz"
+  say "  compressor: xz - $proven"
+  return 0
+}
+
+# Print "<compression id> <block size>" from a squashfs superblock (id 4 = xz,
+# 5 = lz4; block size at byte 12, compression at byte 20, little-endian).
+als_squashfs_comp() {
+  local id bs
+  [ "$(head -c 4 "$1" 2>/dev/null | tr -d '\000')" = "hsqs" ] || return 1
+  bs=$(od -An -tu4 -j 12 -N 4 "$1" 2>/dev/null | tr -d ' ')
+  id=$(od -An -tu2 -j 20 -N 2 "$1" 2>/dev/null | tr -d ' ')
+  [ -n "$id" ] && [ -n "$bs" ] && printf '%s %s\n' "$id" "$bs"
+}
+als_comp_id() { case "$1" in xz) echo 4 ;; lz4) echo 5 ;; *) return 1 ;; esac; }
+
 # Test hook: stop here when sourced by tools/test-layer-*.sh.
 if [ "${ALS_LAYER_LIB:-0}" = "1" ]; then
   return 0 2>/dev/null || exit 0
@@ -750,6 +883,10 @@ do_build() {
     apt-get install -y -qq squashfs-tools >/dev/null 2>&1
   }
   command -v mksquashfs >/dev/null 2>&1 || die "mksquashfs is still missing - connect to the network and retry."
+
+  # First, so a refused ALS_LAYER_COMP stops the build before any download.
+  step "Layer compressor (see LAYER COMPRESSION at the top)"
+  als_pick_layer_comp "$CASPER/vmlinuz" "${ALS_HOST_ROOT:-/}"
 
   STAGE=$(mktemp -d) || die "mktemp failed"
   MOZ_WORK=""
@@ -999,12 +1136,6 @@ do_build() {
     say "  $got package(s) baked in"
   fi
 
-  # xz at 128K blocks, because that is what the three layers already on the
-  # stick use - their superblocks all read compression id 4, block_size 131072.
-  # This is not cosmetic: squashfs decompressor support is per-compressor in the
-  # kernel config, and xz is the only one PROVEN present here, since the running
-  # system is mounted from it. A layer the kernel cannot decompress does not
-  # degrade, it panics the boot.
   # MERGED-/usr: fold /lib back into /usr/lib, and refuse any other alias dir.
   #
   # THIS IS THE ONE THAT COST FIVE BOOTS, and it is invisible unless you look.
@@ -1142,15 +1273,25 @@ do_build() {
       -o -printf 'f %04m %p\n' \) | LC_ALL=C sort ) > "$MANIFEST" 2>/dev/null
   say "  manifest: $(wc -l < "$MANIFEST" 2>/dev/null || echo 0) entries"
 
-  step "Building $LAYER_FILE (xz, 128K blocks, matching the stock layers)"
+  # 128K blocks whatever the compressor, as in the stock layers: Firefox
+  # page-faults libxul.so in at random, and every fault decompresses a whole
+  # block - bigger blocks would make each one dearer. The compressor was chosen
+  # (and proven for this stick's kernel) at the start of the build.
+  step "Building $LAYER_FILE ($LAYER_COMP, 128K blocks)"
   OUT="$STAGE.squashfs"
-  mksquashfs "$STAGE" "$OUT" -noappend -no-progress -comp xz -b 131072 >/dev/null 2>&1 \
+  # shellcheck disable=SC2086
+  mksquashfs "$STAGE" "$OUT" -noappend -no-progress $LAYER_COMP_ARGS -b "$ALS_SQUASH_BLOCK" >/dev/null 2>&1 \
     || die "mksquashfs failed"
+  # Read the superblock back: the file must be exactly what the guard allowed.
+  sb=$(als_squashfs_comp "$OUT")
+  [ "$sb" = "$(als_comp_id "$LAYER_COMP") $ALS_SQUASH_BLOCK" ] \
+    || die "the built layer's superblock reads '$sb', not $LAYER_COMP with $ALS_SQUASH_BLOCK-byte blocks - refusing it"
+  say "  superblock: compression id ${sb% *} ($LAYER_COMP), block size ${sb#* }"
 
   # Prove it mounts BEFORE putting it anywhere near the boot chain.
   step "Verifying the layer mounts"
   MP=$(mktemp -d)
-  mount -t squashfs -o loop,ro "$OUT" "$MP" 2>/dev/null || { rmdir "$MP"; die "The layer does not mount - refusing to install it."; }
+  mount -t squashfs -o loop,ro "$OUT" "$MP" 2>/dev/null || { rmdir "$MP"; die "The layer ($LAYER_COMP) does not mount on this kernel - refusing to install it. To build the old xz layer:  sudo env ALS_LAYER_COMP=xz bash $0 build ..."; }
   fail=""
   if [ "$WANT_AUTOSTART" != "0" ]; then
     [ -f "$MP/etc/xdg/autostart/als-audit-station.desktop" ] || fail="the autostart entry is missing"
