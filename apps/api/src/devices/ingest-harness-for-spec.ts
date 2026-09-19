@@ -3,7 +3,8 @@ import { DevicesService } from './devices.service';
 
 // An in-memory DevicesService for ingest specs: just enough of each
 // repository for ingest() to run end to end, recording what it saved.
-// Not a spec itself (no .spec suffix) so it can be shared.
+// Not a spec itself (jest runs only *.spec.ts), so both ingest specs share it;
+// the name ends in "spec.ts" so tsconfig.build.json keeps it out of dist.
 
 export interface StoredAsset {
   id: string;

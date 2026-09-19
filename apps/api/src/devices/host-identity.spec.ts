@@ -1,7 +1,7 @@
 import { DataWipeStatus } from '../assets/asset-audit.entity';
 import type { IngestAuditDto } from './dto/ingest-audit.dto';
 import { hostTag, usableBiosUuid } from './host-identity';
-import { ingestHarness } from './ingest-harness';
+import { ingestHarness } from './ingest-harness-for-spec';
 
 // Remediation spec D-6, owner decision D24: a machine with no serial became a
 // new asset for every drive it wiped.

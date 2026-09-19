@@ -2,7 +2,7 @@ import { ValidationPipe } from '@nestjs/common';
 import { DataWipeStatus } from '../assets/asset-audit.entity';
 import { IngestAuditDto } from './dto/ingest-audit.dto';
 import type { HardwareProfile } from './hardware-profile.type';
-import { ingestHarness } from './ingest-harness';
+import { ingestHarness } from './ingest-harness-for-spec';
 import {
   lockStatusOf,
   normaliseWipeDetail,
