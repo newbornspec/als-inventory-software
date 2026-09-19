@@ -18,6 +18,8 @@ import {
 import {
   buildDeviceCertificate,
   driveSerialsOf,
+  isQualified,
+  limitationsNotice,
   storageFittedOf,
   unfinishedNotice,
   type DeviceCertificate,
@@ -155,7 +157,15 @@ export class CertificatesService {
           // What was fitted when it was wiped, not what a later capture saw.
           storage: storageFittedOf(rollup, w),
           drives: driveSerialsOf(rollup),
-          method: methods.join('; '),
+          // Limitations on any drive: the lot's "unrecoverable" sentence
+          // must not be read as covering this row (step 39).
+          method:
+            methods.join('; ') +
+            (drives.some(
+              (d) => sourceOf(d.row!) === 'station' && isQualified(d.row!),
+            )
+              ? ' (limitations recorded)'
+              : ''),
           manual: drives.every((d) => sourceOf(d.row!) === 'manual'),
           date: new Date(w.createdAt),
         };
@@ -188,6 +198,7 @@ export class CertificatesService {
       discarded.length,
       mixed.length,
       unfinished.length,
+      rows.filter((r) => r.method.endsWith(' (limitations recorded)')).length,
     );
     return { buffer, filename: `erasure-certificate-${batch.batchNumber}.pdf` };
   }
@@ -376,6 +387,7 @@ export class CertificatesService {
     discarded = 0,
     mixed = 0,
     unfinished = 0,
+    limited = 0,
   ): Promise<Buffer> {
     return new Promise((resolve, reject) => {
       const doc = new PDFDocument({ size: 'A4', margin: 40 });
@@ -443,6 +455,14 @@ export class CertificatesService {
           .fontSize(9.5)
           .fillColor('#222222')
           .text(unfinishedNotice(unfinished), { width: right - left });
+      }
+      if (limited > 0) {
+        doc.moveDown(0.4);
+        doc
+          .font('Helvetica')
+          .fontSize(9.5)
+          .fillColor('#222222')
+          .text(limitationsNotice(limited), { width: right - left });
       }
       doc.moveDown(0.6);
 

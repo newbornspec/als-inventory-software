@@ -154,11 +154,127 @@ function dateRows(r: AssetAudit): Row[] {
   return [['Date recorded', longDate(r.createdAt)]];
 }
 
+// --- What the erasure achieved (plan step 39) -------------------------------
+//
+// Wave 1 stores, per drive, the NIST SP 800-88 level reached, what was asked
+// for and what was tried, why a stronger method was not used, the read-back
+// result, the hidden-area (HPA/DCO) outcome, the limitations the engine
+// reported and the device-lock state. The certificate prints them. A field the
+// record does not carry (an older stick, a legacy row) prints "Not assessed" -
+// never a guess.
+export const NOT_ASSESSED = 'Not assessed';
+
+const LEVELS: Record<string, string> = {
+  purge: 'Purge (NIST SP 800-88)',
+  clear: 'Clear (NIST SP 800-88)',
+  none: 'None — not sanitised to a NIST SP 800-88 level',
+};
+const REQUESTED: Record<string, string> = {
+  auto: 'Automatic (the strongest the drive supports)',
+  crypto: 'Cryptographic erase',
+  secure: 'Firmware secure erase',
+  overwrite: 'Overwrite',
+  zero: 'Zero fill',
+};
+const FALLBACKS: Record<string, string> = {
+  frozen: 'The drive was security-frozen by the firmware',
+  unsupported: 'Not supported by the drive',
+  tool_missing: 'The erase tool was not available on the station',
+  verify_failed: 'The read-back check of the stronger method failed',
+};
+const VERIFICATIONS: Record<string, string> = {
+  clean: 'Read back — no residual data found',
+  found: 'Read back — data was still found',
+  unverified: 'Not verified by read-back',
+};
+const HIDDEN: Record<string, string> = {
+  none: 'None present',
+  'hpa-removed':
+    'Host Protected Area found, removed for the erase (temporarily) and erased',
+  unknown: 'Could not be checked',
+  'dco-present': 'Device Configuration Overlay present',
+  'hpa-present': 'Host Protected Area present',
+};
+const LOCKS: Record<string, string> = {
+  CLEAR: 'No lock detected',
+  LOCKED: 'LOCKED — see the note below',
+  WARNING: 'Possible lock — check before resale',
+  UNVERIFIED: 'Could not be fully checked',
+};
+
+// Owner decision D39: a LOCKED device may still be certified as erased; the
+// lock is printed on it, because the buyer needs to know.
+export const LOCK_NOTICE =
+  'Device lock: this device reported an ownership or firmware lock (for example a firmware password, a ' +
+  'remote-management enrolment or an anti-theft service) when it was audited. The lock is separate from the ' +
+  'data erasure certified here: the erasure did not remove it, and the device may not be usable by a new owner ' +
+  'until it is released.';
+
+export const QUALIFIED_RESULT =
+  'Wiped — with limitations (see the limitations recorded below)';
+
+export const UNQUALIFIED_DRIVE_RESULT =
+  'Wiped — no limitations recorded for this drive';
+
+const known = (map: Record<string, string>, v: string | null | undefined) =>
+  v ? (map[v] ?? v) : NOT_ASSESSED;
+
+// Did the engine record ANY reason to doubt "unrecoverable" for this drive?
+// Any limitation does (spec step 39); so does a level of 'none' or a
+// read-back that still found data - which should never come with 'wiped', but
+// if it ever does, the certificate must not say unrecoverable.
+export function isQualified(r: AssetAudit): boolean {
+  return (
+    (Array.isArray(r.wipeLimitations) && r.wipeLimitations.length > 0) ||
+    r.sanitisationLevel === 'none' ||
+    r.wipeVerification === 'found'
+  );
+}
+
+function achievedRows(r: AssetAudit): Row[] {
+  // A record from an engine that reports these fields at all: there, "no
+  // fallback reason" means no fallback, not "not assessed".
+  const reporting = !!(r.wipeMethodRequested || r.toolVersion);
+  const limitations = Array.isArray(r.wipeLimitations)
+    ? r.wipeLimitations.length
+      ? r.wipeLimitations.join('\n')
+      : 'None reported'
+    : NOT_ASSESSED;
+  return [
+    ['Sanitisation level', known(LEVELS, r.sanitisationLevel)],
+    ['Method requested', known(REQUESTED, r.wipeMethodRequested)],
+    [
+      'Fallback reason',
+      r.wipeFallbackReason
+        ? known(FALLBACKS, r.wipeFallbackReason)
+        : reporting
+          ? 'None'
+          : NOT_ASSESSED,
+    ],
+    ['Verification', known(VERIFICATIONS, r.wipeVerification)],
+    ['Hidden areas (HPA/DCO)', known(HIDDEN, r.hiddenAreas)],
+    ['Limitations', limitations],
+  ];
+}
+
+// The lot certificate's line when some listed devices carry limitations: the
+// lot's lead sentence (manual-wipe.ts) says "unrecoverable" for station
+// wipes, and must not be read as covering those rows.
+export function limitationsNotice(n: number): string {
+  return `${n} listed device${n === 1 ? ' is' : 's are'} marked "(limitations recorded)": limitations were recorded for ${
+    n === 1 ? 'its' : 'their'
+  } erasure, so ${n === 1 ? 'it is' : 'they are'} not covered by the statement that previously stored data is unrecoverable. ${
+    n === 1 ? 'Its' : 'Their'
+  } individual certificate${n === 1 ? ' lists' : 's list'} the limitations.`;
+}
+
 function driveSection(
   d: DriveOutcome<AssetAudit>,
   index: number,
   count: number,
   snapshot: Obj,
+  // Limitations were recorded on some drive of this machine.
+  qualified: boolean,
 ): CertificateSection {
   const r = d.row!;
   const source = sourceOf(r);
@@ -191,7 +307,19 @@ function driveSection(
       'Method',
       (r.dataWipeMethod?.trim() || 'Not specified') + att.methodSuffix,
     ],
-    ['Result', att.result],
+    [
+      'Result',
+      source !== 'station'
+        ? att.result
+        : isQualified(r)
+          ? QUALIFIED_RESULT
+          : qualified
+            ? // Any limitation on the machine removes "unrecoverable" from
+              // the whole certificate, this drive's line included.
+              UNQUALIFIED_DRIVE_RESULT
+            : att.result,
+    ],
+    ...(source === 'station' ? achievedRows(r) : []),
     ...dateRows(r),
     ...erasurePeople(source, att, r.operatorName, r.auditedBy?.name ?? null),
   ];
@@ -247,12 +375,26 @@ export function buildDeviceCertificate(
   // erasure now certifies the storage media it names, not "the data-storage
   // media contained in the device" - which on a legacy record, or a machine
   // with a drive fitted after the wipe, claimed drives nobody had erased.
+  // Any limitation on any drive removes "unrecoverable" from the whole
+  // certificate (spec step 39), not just from that drive's section.
+  const qualified =
+    !manual &&
+    drives.some((d) => sourceOf(d.row!) === 'station' && isQualified(d.row!));
+  const which = many ? 'each storage medium' : 'the storage medium';
   const intro = manual
     ? att.intro
-    : `This certifies that ${many ? 'each storage medium' : 'the storage medium'} identified below, in the device identified below, has been sanitised using the method stated, rendering previously stored data unrecoverable by generally available means.`;
+    : qualified
+      ? `This certifies that ${which} identified below, in the device identified below, has been sanitised using the method stated. Limitations were recorded for this erasure and are listed below; this certificate therefore makes no claim that previously stored data cannot be recovered.`
+      : `This certifies that ${which} identified below, in the device identified below, has been sanitised using the method stated, rendering previously stored data unrecoverable by generally available means.`;
+
+  // The device-lock state as the station found it when it wiped (D39).
+  const lockStatus =
+    snap?.lockStatus ??
+    drives.map((d) => d.row!.lockStatus).find(Boolean) ??
+    null;
 
   const erasure: Row[] = [
-    ['Result', att.result],
+    ['Result', qualified ? QUALIFIED_RESULT : att.result],
     ['Storage media erased', String(drives.length)],
   ];
 
@@ -281,10 +423,13 @@ export function buildDeviceCertificate(
       ],
       ['Asset tag', asset.tag],
       ['Storage fitted', storage],
+      ['Device lock', known(LOCKS, lockStatus)],
     ],
     erasure,
-    drives: drives.map((d, i) => driveSection(d, i, drives.length, snapshot)),
-    notices: [],
+    drives: drives.map((d, i) =>
+      driveSection(d, i, drives.length, snapshot, qualified),
+    ),
+    notices: lockStatus === 'LOCKED' ? [LOCK_NOTICE] : [],
     extra,
     footer: `This certificate relates solely to the storage ${
       many ? 'media' : 'medium'
