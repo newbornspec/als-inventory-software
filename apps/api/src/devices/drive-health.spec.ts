@@ -200,7 +200,11 @@ describe.each(COPIES)('drive health wording (%s copy)', (_name, m) => {
     expect(v.action).toBe(
       'set the storage mode to AHCI in the BIOS, then press Rescan',
     );
-    expect(v.cell).toBe('Not measurable — behind a RAID/Intel RST controller');
+    // The report cell carries the action too: a reader of the xlsx must learn
+    // what to do, not just that the drive could not be read.
+    expect(v.cell).toBe(
+      'Not measurable — behind a RAID/Intel RST controller — set the storage mode to AHCI in the BIOS, then press Rescan',
+    );
     expect(v.percent).toBeNull();
     expect(v.status).toBeNull();
     expect(v.tone).toBe('warn');
@@ -215,6 +219,9 @@ describe.each(COPIES)('drive health wording (%s copy)', (_name, m) => {
     });
     expect(u.headline).toBe('Not measurable — the station did not record why');
     expect(u.action).toBe('press Rescan on the station');
+    expect(u.cell).toBe(
+      'Not measurable — the station did not record why — press Rescan on the station',
+    );
   });
 
   it('a percentage that is not a real 0-100 reading is not turned into one', () => {
@@ -260,7 +267,7 @@ describe.each(COPIES)('drive health wording (%s copy)', (_name, m) => {
     it('one drive', () => {
       expect(m.driveHealthSummary([NVME_GOOD])).toBe('94% Good');
       expect(m.driveHealthSummary([RAID])).toBe(
-        'Not measurable — behind a RAID/Intel RST controller',
+        'Not measurable — behind a RAID/Intel RST controller — set the storage mode to AHCI in the BIOS, then press Rescan',
       );
       expect(m.driveHealthSummary([OLD])).toBe(
         'Not scanned yet — rescan on the station',
@@ -278,10 +285,18 @@ describe.each(COPIES)('drive health wording (%s copy)', (_name, m) => {
 
     it('several drives: unmeasured ones after the measured, each saying why', () => {
       expect(m.driveHealthSummary([OLD, RAID, NVME_GOOD])).toBe(
-        '3 drives: 94% Good, not measurable (behind a RAID/Intel RST controller), not scanned yet',
+        '3 drives: 94% Good, not measurable (behind a RAID/Intel RST controller — set the storage mode to AHCI in the BIOS, then press Rescan), not scanned yet',
       );
-      expect(m.driveHealthSummary([OLD_FAILED, NVME_GOOD])).toBe(
-        '2 drives: 94% Good, not scanned yet (earlier scan: SMART FAILED)',
+    });
+
+    it('several drives: a drive whose own SMART verdict was FAILED comes first', () => {
+      // The drive itself said it is failing: that is the worst news in the
+      // cell, even though an old scan gives it no percentage.
+      expect(m.driveHealthSummary([NVME_GOOD, OLD_FAILED])).toBe(
+        '2 drives: not scanned yet (earlier scan: SMART FAILED), 94% Good',
+      );
+      expect(m.driveHealthSummary([HDD_BAD, RAID, OLD_FAILED])).toBe(
+        '3 drives: not scanned yet (earlier scan: SMART FAILED), 45% Bad, not measurable (behind a RAID/Intel RST controller — set the storage mode to AHCI in the BIOS, then press Rescan)',
       );
     });
 

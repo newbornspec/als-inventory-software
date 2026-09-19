@@ -41,7 +41,8 @@ export interface DriveHealthView {
   kind: 'measured' | 'not-measurable' | 'not-scanned';
   // "94% · Good" | "Not measurable — <reason>" | "Not scanned yet — rescan on the station"
   headline: string;
-  // One report cell for this drive alone: "94% Good" | "Not measurable — <reason>" | NOT_SCANNED
+  // One report cell for this drive alone:
+  // "94% Good" | "Not measurable — <reason> — <action>" | NOT_SCANNED
   cell: string;
   percent: number | null;
   status: HealthStatus | null;
@@ -153,7 +154,9 @@ function notMeasurable(
   return {
     kind: 'not-measurable',
     headline,
-    cell: headline,
+    // The report cell carries the action as well: an xlsx reader has no other
+    // place to learn what to do about the drive.
+    cell: `${headline} — ${action}`,
     percent: null,
     status: null,
     tone: 'warn',
@@ -238,19 +241,23 @@ function drivesOf(storage: unknown): unknown[] {
 }
 
 // A drive's token inside a several-drive cell. Lower-case after the first,
-// e.g. "2 drives: 45% Bad, not measurable (behind a RAID/Intel RST controller)".
+// e.g. "2 drives: 45% Bad, not measurable (behind a RAID/Intel RST controller
+// — set the storage mode to AHCI in the BIOS, then press Rescan)".
 function token(v: DriveHealthView): string {
   if (v.kind === 'measured') return v.cell;
   if (v.kind === 'not-measurable')
-    return `not measurable (${v.headline.slice('Not measurable — '.length)})`;
+    return `not measurable (${v.cell.slice('Not measurable — '.length)})`;
   return v.legacySmartFailed
     ? 'not scanned yet (earlier scan: SMART FAILED)'
     : 'not scanned yet';
 }
 
-// Worst first: measured drives from the lowest percentage up, then drives that
-// could not be measured, then drives never scanned for health.
+// Worst first: a drive whose own (legacy) SMART verdict was FAILED - the drive
+// itself said it is failing, the worst news there is - then measured drives
+// from the lowest percentage up, then drives that could not be measured, then
+// drives never scanned for health.
 function rank(v: DriveHealthView): number {
+  if (v.legacySmartFailed) return -1;
   if (v.kind === 'measured') return v.percent as number;
   return v.kind === 'not-measurable' ? 1000 : 2000;
 }

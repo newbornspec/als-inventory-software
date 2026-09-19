@@ -118,7 +118,7 @@ describe('Lot report: Drive health column', () => {
       'Not scanned yet — rescan on the station',
     );
     expect(cell(3, 'Drive health')).toBe(
-      'Not measurable — behind a RAID/Intel RST controller',
+      'Not measurable — behind a RAID/Intel RST controller — set the storage mode to AHCI in the BIOS, then press Rescan',
     );
     // No drives on record: blank, like a missing battery.
     expect(cell(4, 'Drive health') ?? '').toBe('');
