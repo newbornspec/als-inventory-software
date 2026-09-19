@@ -2338,6 +2338,10 @@ LIFE_ATTRS = [(231, "ssd_life_left"), (233, "media_wearout_indicator"),
 ERR_ATTRS = {5: r"realloc|retired", 197: r"pending", 198: r"uncorrect|offline",
              187: r"uncorrect", 10: r"spin.?retry", 199: r"crc"}
 
+# Attributes whose failure flag must NOT be read as "the drive is failing":
+# 199 is a cable fault, 190/194 are temperatures. Same id+name guard.
+NO_FAIL_CAP = {199: r"crc", 190: r"temperature|airflow", 194: r"temperature|airflow"}
+
 CW_BITS = [(0x01, "available spare below threshold"), (0x02, "temperature out of range"),
            (0x04, "reliability degraded"), (0x08, "media is read-only"),
            (0x10, "volatile memory backup failed"),
@@ -2509,6 +2513,7 @@ def smart(raw, rc, kind, tried):
     L = None
     deductions, caps, notes = [], [], []
     E = 100
+    hot_attr = None      # a temperature attribute the drive flags right now
     fields = {"smartPassed": passed, "temperatureC": None, "powerOnHours": None,
               "powerCycles": None, "lifeUsedPct": None, "availableSparePct": None,
               "reallocatedSectors": None, "pendingSectors": None,
@@ -2606,9 +2611,31 @@ def smart(raw, rc, kind, tried):
                          % plural(crc, "cable/connection (CRC) error"))
         if passed is False:
             caps.append((20, "the drive's own SMART self-check FAILED"))
+        # The failure flags are the drive's own alarms - but three attributes
+        # must not raise one. 199 is a CABLE fault (the contract says so, and
+        # it is already noted as one above), and 190/194 are TEMPERATURE
+        # counters: their "In_the_past" flag is set for good by one warm
+        # afternoon and never clears, so a drive with zero reallocated, zero
+        # pending and zero uncorrectable sectors and SMART PASSED was coming
+        # out 49% Bad. Heat is judged from the CURRENT reading below; a
+        # temperature attribute failing NOW joins that judgement (cap 89),
+        # it does not mean the drive is damaged.
         for a in table:
+            i = num(a.get("id"))
             wf = str(a.get("when_failed") or "")
             name = str(a.get("name") or "attribute %s" % a.get("id"))
+            if not wf:
+                continue
+            guard = NO_FAIL_CAP.get(i)
+            if guard and re.search(guard, name, re.I):
+                if i == 199:
+                    continue
+                if wf == "now":
+                    hot_attr = name
+                else:
+                    notes.append("%s went over the drive's temperature threshold in the past — "
+                                 "a temperature, not damage to the drive" % name)
+                continue
             if wf == "now":
                 caps.append((20, "%s is below the drive's failure threshold now" % name))
             elif wf == "past":
@@ -2659,6 +2686,10 @@ def smart(raw, rc, kind, tried):
         return emit(not_measured(R_UNSUP, source))
     if temp is not None and temp >= limit:
         caps.append((89, "running hot: %d °C (the drive's limit is %d °C)" % (temp, limit)))
+    elif hot_attr:
+        # Over the drive's OWN threshold (often stricter than ours) but below
+        # ours: still heat, still the same cap, never counted twice.
+        caps.append((89, "%s is over the drive's own temperature threshold now" % hot_attr))
 
     finish(source, L, E, deductions, caps, notes, fields, tool, flat, clean)
 

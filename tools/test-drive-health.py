@@ -374,6 +374,39 @@ past[1] = attr(3, "Spin_Up_Time", 20, 20, 21, 9000, when_failed="past", prefailu
 expect("attribute failed in the past", keep(smart(ata(7200, past), kind="ata-hdd")), 49, "bad",
        HDD_CLEAN + "; Spin_Up_Time fell below the drive's failure threshold in the past; SMART passed",
        ["Spin_Up_Time fell below the drive's failure threshold in the past"])
+# The failure flags are the drive's own alarms - but three attributes must not
+# raise one. 199 is a CABLE fault (the contract says so, and the helper already
+# says so in the same breath), and 190/194 are TEMPERATURE counters whose
+# "In_the_past" flag is set for good by one warm afternoon. Before this, a
+# spotless drive that once ran warm was graded 49% Bad.
+past_temp = [attr(5, "Reallocated_Sector_Ct", 100, 100, 36, 0, prefailure=True),
+             attr(190, "Airflow_Temperature_Cel", 62, 45, 45, 38, when_failed="past"),
+             attr(197, "Current_Pending_Sector", 100, 100, 0, 0),
+             attr(198, "Offline_Uncorrectable", 100, 100, 0, 0)]
+expect("a warm afternoon recorded in 190 Airflow_Temperature_Cel is not damage",
+       keep(smart(ata(7200, past_temp, temp=38), kind="ata-hdd")), 100, "good",
+       HDD_CLEAN + "; SMART passed",
+       ["Airflow_Temperature_Cel went over the drive's temperature threshold in the past — "
+        "a temperature, not damage to the drive"])
+expect("a flagged 199 UDMA_CRC_Error_Count is a cable fault, not a failing drive",
+       keep(smart(ata(0, [attr(5, "Reallocated_Sector_Ct", 100, 100, 10, 0, prefailure=True),
+                          attr(177, "Wear_Leveling_Count", 97, 97, 0, 60),
+                          attr(199, "UDMA_CRC_Error_Count", 99, 99, 0, 7, when_failed="now")]))),
+       97, "good", "life remaining 97% reported by the drive",
+       [u"7 cable/connection (CRC) errors — a cable or connector fault, not counted against the drive"])
+now_temp = [attr(5, "Reallocated_Sector_Ct", 100, 100, 36, 0, prefailure=True),
+            attr(194, "Temperature_Celsius", 40, 40, 45, 45, when_failed="now"),
+            attr(197, "Current_Pending_Sector", 100, 100, 0, 0),
+            attr(198, "Offline_Uncorrectable", 100, 100, 0, 0)]
+expect("a temperature attribute failing NOW is treated as heat (cap 89), not as damage",
+       keep(smart(ata(7200, now_temp, temp=45), kind="ata-hdd")), 89, "caution",
+       HDD_CLEAN + "; Temperature_Celsius is over the drive's own temperature threshold now; "
+       "SMART passed",
+       ["Temperature_Celsius is over the drive's own temperature threshold now"])
+expect("a drive that is hot now is not charged for heat twice",
+       keep(smart(ata(7200, now_temp, temp=58), kind="ata-hdd")), 89, "caution",
+       HDD_CLEAN + "; " + HOT % (58, 55) + "; SMART passed", [HOT % (58, 55)])
+
 res = keep(smart(ata(0, ssd_attrs([attr(177, "Wear_Leveling_Count", 96, 96, 0, 40)]), selftests=[
     st("Completed: read failure", False, 121, "Extended offline", 5000),
     st("Completed without error", True, 0, "Short offline", 4000)])))
