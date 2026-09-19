@@ -554,19 +554,43 @@ def classify(c):
         return "random"
     return None
 
-def fill(data, r, n):
+def waived(data, r, magic):
     # A 4 KiB block that is one uniform fill cannot hold a boot sector or a
     # superblock. Without this a vendor fill of 55 AA 55 AA ... would "hold"
     # the 0x55AA boot signature at byte 510.
-    # A TWO-byte magic (0x55AA, the ext 0xEF53) inside a block of ciphertext is
-    # chance: 1 in 65536 per place looked, so a genuine crypto erase would be
-    # sent to an hours-long overwrite now and then for nothing. A real boot
-    # sector or superblock is mostly zeros and small fields - it never reads as
-    # 7.8 bits/byte - so a 2-byte hit inside a random-looking block is ignored.
-    # Every longer magic (EFI PART, NTFS, -FVE-FS-, LUKS...) still counts there.
     o = r // 4096 * 4096
     k = classify(data[o:o + 4096])
-    return k in ("zeros", "0xFF", "pattern") or (k == "random" and n <= 2)
+    if k in ("zeros", "0xFF", "pattern"):
+        return True
+    # A TWO-byte magic (0x55AA, the ext 0xEF53) inside a block of ciphertext
+    # can be chance: 1 in 65536 per place looked, so a genuine crypto erase
+    # would be sent to an hours-long overwrite now and then for nothing.
+    # But "the block reads as random" is NOT enough to call it chance. This
+    # used to waive every 2-byte hit in a random-looking block, and a real MBR
+    # (0x55AA, a real partition table) followed by seven sectors of compressed
+    # boot loader or ciphertext reads as 7.8+ bits/byte - so a controller that
+    # said "done" and erased nothing passed as "random" when the partitions
+    # were headerless full-disk encryption with no longer magic to catch it.
+    # So the hit is waived only when the structure AROUND it is not real:
+    #   - 0x55AA: every one of the four MBR partition entries has a status byte
+    #     of 0x00 or 0x80. A real MBR always does (an empty table is all
+    #     zeros); ciphertext does 1 time in ~270 million.
+    #   - ext 0xEF53: s_rev_level (20 bytes after the magic) is 0 or 1. A real
+    #     superblock always is; ciphertext 1 time in ~2 billion.
+    # Every longer magic (EFI PART, NTFS, -FVE-FS-, LUKS...) always counts.
+    if k != "random" or len(magic) > 2:
+        return False
+    if magic == b"\x55\xaa":
+        st = [r - 64 + 16 * i for i in range(4)]
+        if st[0] < 0:
+            return False
+        return not all(data[x] in (0, 0x80) for x in st)
+    if magic == b"\x53\xef":
+        rev = data[r + 20:r + 24]
+        if len(rev) < 4:
+            return False
+        return u32(rev, 0) not in (0, 1)
+    return False
 
 def check(mode, base, want, size, starts, data):
     if len(data) < want:
@@ -577,12 +601,12 @@ def check(mode, base, want, size, starts, data):
         for name, off, magic in SIGS:
             a = s + off
             if base <= a and a + len(magic) <= end and data[a - base:a - base + len(magic)] == magic \
-                    and not fill(data, a - base, len(magic)):
+                    and not waived(data, a - base, magic):
                 return 1, "%s at byte %d" % (name, a)
     for ss in (512, 4096):
         a = size - ss
         if a > 0 and base <= a and a + 8 <= end and data[a - base:a - base + 8] == b"EFI PART" \
-                and not fill(data, a - base, 8):
+                and not waived(data, a - base, b"EFI PART"):
             return 1, "backup GPT header (EFI PART) at byte %d" % a
     if mode == "overwrite":
         z = len(data) - len(data.lstrip(b"\0"))

@@ -204,6 +204,20 @@ def main():
         sb[0:4] = struct.pack("<I", 65536)   # inode count
         sb[56:58] = b"\x53\xef"              # s_magic 0xEF53
         put(path, o + 1024, bytes(sb))
+    elif op == "mbr":                     # mbr FILE: a real MBR in sector 0 only
+        # Boot code (x86, the usual low-entropy mix of opcodes and text), one
+        # NTFS/BitLocker-type (0x07) partition at LBA 2048, three empty
+        # entries, 0x55AA. The seven sectors after it are left as they are.
+        m = bytearray(512)
+        code = b"\xfa\x33\xc0\x8e\xd0\xbc\x00\x7c\x8e\xc0\x8e\xd8\xbe\x00\x7c\xbf\x00\x06" \
+            + b"Invalid partition table\0Error loading operating system\0Missing operating system\0"
+        m[0:440] = (code * (440 // len(code) + 1))[:440]
+        m[446] = 0x80
+        m[446 + 4] = 0x07
+        m[446 + 8:446 + 12] = struct.pack("<I", 2048)
+        m[446 + 12:446 + 16] = struct.pack("<I", 409600)
+        m[510:512] = b"\x55\xaa"
+        put(path, 0, bytes(m))
     elif op == "bytes":                   # bytes FILE OFFSET HEX
         put(path, int(a[0]), bytes.fromhex(a[1]))
     else:
@@ -408,6 +422,33 @@ wipe "$D" auto STUB_FW=random STUB_FW_LEVEL=clear
 fx new "$D" "$MIB" random; fx bytes "$D" 510 55aa
 ve "$D" firmware "0"
 [ "$VRC" = 0 ] && ok "random data that happens to hold 55 AA at byte 510: still clean" || bad "random data that happens to hold 55 AA at byte 510: still clean" "rc=$VRC $VWHY"
+# ...but a REAL MBR in a random-looking block is not chance. A real partition
+# table followed by seven sectors of compressed boot loader or ciphertext reads
+# as 7.8+ bits/byte over the 4 KiB block; with headerless full-disk encryption
+# on the partitions there is no longer magic anywhere, and the old "a 2-byte hit
+# in a random block is chance" waiver let a controller that erased NOTHING pass
+# as a crypto erase ("reads as random"). Review finding, wave 2 round A.
+fx new "$D" "$MIB" random; fx mbr "$D"
+ve "$D" firmware "0"
+[ "$VRC" = 1 ] && [ "$VWHY" = "MBR/boot-sector signature 0x55AA at byte 510" ] \
+  && ok "a real MBR + random-looking sectors 1-7 (untouched encrypted disk): found" || bad "a real MBR + random-looking sectors 1-7 (untouched encrypted disk): found" "rc=$VRC $VWHY"
+ve "$D" firmware "0 1048576"
+[ "$VRC" = 1 ] && ok "  ... also with a saved partition start in the list" || bad "  ... also with a saved partition start in the list" "rc=$VRC $VWHY"
+fx new "$D" "$MIB" random; fx bytes "$D" 446 00; fx bytes "$D" 462 00; fx bytes "$D" 478 00; fx bytes "$D" 494 00; fx bytes "$D" 510 55aa
+ve "$D" firmware "0"
+[ "$VRC" = 1 ] && ok "an MBR whose four status bytes are 00 (the rest random): found - that is not chance" || bad "an MBR whose four status bytes are 00 (the rest random): found" "rc=$VRC $VWHY"
+fx new "$D" "$MIB" random; fx bytes "$D" 446 00; fx bytes "$D" 462 80; fx bytes "$D" 478 00; fx bytes "$D" 494 17; fx bytes "$D" 510 55aa
+ve "$D" firmware "0"
+[ "$VRC" = 0 ] && ok "  ... but one status byte that no MBR can hold (0x17): chance, clean" || bad "  ... but one status byte that no MBR can hold (0x17): chance, clean" "rc=$VRC $VWHY"
+# The same rule for the other 2-byte magic, ext's 0xEF53: a real superblock
+# has s_rev_level 0 or 1 (20 bytes after the magic); ciphertext almost never.
+fx new "$D" "$MIB" random; fx bytes "$D" 1080 53ef; fx bytes "$D" 1100 01000000
+ve "$D" firmware "0"
+[ "$VRC" = 1 ] && [ "$VWHY" = "ext2/3/4 superblock at byte 1080" ] \
+  && ok "0xEF53 + s_rev_level 1 in a random-looking block: found" || bad "0xEF53 + s_rev_level 1 in a random-looking block: found" "rc=$VRC $VWHY"
+fx new "$D" "$MIB" random; fx bytes "$D" 1080 53ef; fx bytes "$D" 1100 7a31c9e4
+ve "$D" firmware "0"
+[ "$VRC" = 0 ] && ok "  ... 0xEF53 with a random s_rev_level: chance, clean" || bad "  ... 0xEF53 with a random s_rev_level: chance, clean" "rc=$VRC $VWHY"
 fx new "$D" "$MIB" random; fx fill "$D" 8388608 8192 text
 ve "$D" firmware "0"
 [ "$VRC" = 1 ] && case "$VWHY" in *"not an erase pattern"*) true ;; *) false ;; esac \
