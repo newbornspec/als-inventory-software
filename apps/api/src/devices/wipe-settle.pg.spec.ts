@@ -1,5 +1,8 @@
 import { DataSource } from 'typeorm';
-import { ALL_ENTITIES } from '../database/entities';
+import {
+  openPgTestDatabase,
+  pgTestPort,
+} from '../database/pg-test-db-for-spec';
 import { User, UserRole } from '../users/user.entity';
 import { Batch } from '../batches/batch.entity';
 import { Asset, AssetAuditStatus } from '../assets/asset.entity';
@@ -14,16 +17,12 @@ import { DevicesService } from './devices.service';
 // settleWipeStatus, the request that read the rows before the other's row
 // existed could finish last and write data_wiped.
 //
-// Needs a migrated database, so it runs only when ALS_PG_TEST_PORT is set
-// (skipped in the normal `npx jest` run and in CI):
-//   docker run -d --name als-api-pg -e POSTGRES_USER=als_inventory \
-//     -e POSTGRES_PASSWORD=als_inventory_ci -e POSTGRES_DB=als_inventory \
-//     -p 55437:5432 postgres:16
-//   DB_PORT=55437 DB_PASSWORD=als_inventory_ci npm run migration:run
+// Runs only when ALS_PG_TEST_PORT names a Postgres server (skipped in the
+// plain `npx jest` run), on its own test database - created and migrated by
+// openPgTestDatabase (database/pg-test-db-for-spec.ts), never the app's:
 //   ALS_PG_TEST_PORT=55437 npx jest wipe-settle.pg
 
-const port = process.env.ALS_PG_TEST_PORT;
-const maybe = port ? describe : describe.skip;
+const maybe = pgTestPort ? describe : describe.skip;
 
 maybe('settleWipeStatus under concurrent ingests (Postgres)', () => {
   let ds: DataSource;
@@ -31,19 +30,7 @@ maybe('settleWipeStatus under concurrent ingests (Postgres)', () => {
   let userId: string;
 
   beforeAll(async () => {
-    ds = new DataSource({
-      type: 'postgres',
-      host: process.env.ALS_PG_TEST_HOST ?? 'localhost',
-      port: parseInt(port!, 10),
-      username: 'als_inventory',
-      password: process.env.ALS_PG_TEST_PASSWORD ?? 'als_inventory_ci',
-      database: 'als_inventory',
-      entities: ALL_ENTITIES,
-      synchronize: false,
-      // Enough connections that the two ingests really run side by side.
-      extra: { max: 10 },
-    });
-    await ds.initialize();
+    ds = await openPgTestDatabase();
     const user = await ds.getRepository(User).save(
       ds.getRepository(User).create({
         name: 'Station',

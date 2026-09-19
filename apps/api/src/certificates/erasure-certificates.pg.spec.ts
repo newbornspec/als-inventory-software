@@ -7,7 +7,10 @@ import { HttpException } from '@nestjs/common';
 import * as QRCode from 'qrcode';
 import PDFDocument from 'pdfkit';
 import { DataSource } from 'typeorm';
-import { ALL_ENTITIES } from '../database/entities';
+import {
+  openPgTestDatabase,
+  pgTestPort,
+} from '../database/pg-test-db-for-spec';
 import { User, UserRole } from '../users/user.entity';
 import { Batch } from '../batches/batch.entity';
 import { Asset } from '../assets/asset.entity';
@@ -26,21 +29,17 @@ import { VerifyController } from './verify.controller';
 // certificate, the hash chain catching an edited row, and - with no key -
 // nothing stored at all.
 //
-// Needs a migrated database, so it runs only when ALS_PG_TEST_PORT is set
-// (skipped in the normal `npx jest` run and in CI):
-//   docker run -d --name als-api-pg -e POSTGRES_USER=als_inventory \
-//     -e POSTGRES_PASSWORD=als_inventory_ci -e POSTGRES_DB=als_inventory \
-//     -p 55437:5432 postgres:16
-//   DB_PORT=55437 DB_PASSWORD=als_inventory_ci npm run migration:run
+// Runs only when ALS_PG_TEST_PORT names a Postgres server (skipped in the
+// plain `npx jest` run), on its own test database - created and migrated by
+// openPgTestDatabase (database/pg-test-db-for-spec.ts), never the app's:
 //   ALS_PG_TEST_PORT=55437 npx jest erasure-certificates.pg
 //
 // It EMPTIES erasure_certificates first (disabling the trigger to do so):
 // the chain spans every certificate, so certificates left by an earlier run,
 // signed with that run's throwaway key, would fail this run's chain checks.
-// Never point it at a database whose certificates matter.
+// That is why it must never run on a database whose certificates matter.
 
-const port = process.env.ALS_PG_TEST_PORT;
-const maybe = port ? describe : describe.skip;
+const maybe = pgTestPort ? describe : describe.skip;
 
 // A throwaway key for this run only (owner decision D29: no real key in the
 // repo).
@@ -154,18 +153,7 @@ maybe('stored, signed erasure certificates (Postgres)', () => {
     });
 
   beforeAll(async () => {
-    ds = new DataSource({
-      type: 'postgres',
-      host: process.env.ALS_PG_TEST_HOST ?? 'localhost',
-      port: parseInt(port!, 10),
-      username: 'als_inventory',
-      password: process.env.ALS_PG_TEST_PASSWORD ?? 'als_inventory_ci',
-      database: 'als_inventory',
-      entities: ALL_ENTITIES,
-      synchronize: false,
-      extra: { max: 10 },
-    });
-    await ds.initialize();
+    ds = await openPgTestDatabase();
     await ds.query('ALTER TABLE erasure_certificates DISABLE TRIGGER USER');
     await ds.query('DELETE FROM erasure_certificates');
     await ds.query('ALTER TABLE erasure_certificates ENABLE TRIGGER USER');
