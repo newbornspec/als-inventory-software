@@ -214,6 +214,27 @@ for f in als_drive_identity als_lsblk_val wipe_result als_utc_now; do
     || bad "$f is defined above the --wipe-drive dispatch" "def line ${f_line:-none}, dispatch line ${d_line:-none}"
 done
 
+echo "esc(): no control character can break the JSON (plan step 41)"
+ESC="$(grep '^esc() {' "$SRC")"
+for code in 1 7 8 11 12 27 31 127; do
+  s=$(printf "a\\$(printf '%03o' "$code")b\"c\\\\d")
+  j=$(env -i PATH="$SAFE" "$BASH" -c "$ESC
+printf '{\"v\":\"%s\"}' \"\$(esc \"\$1\")\"" _ "$s")
+  r=$(printf '%s' "$j" | "$PY" -c 'import json,sys; v=json.loads(sys.stdin.read())["v"]; print("OK" if v == "ab\"c\\d" else repr(v))' 2>&1)
+  [ "$r" = OK ] && ok "control byte $code is stripped, quote and backslash kept" || bad "control byte $code is stripped, quote and backslash kept" "$r"
+done
+r=$(env -i PATH="$SAFE" "$BASH" -c "$ESC
+esc 'Samsung SSD 980 — Größe'" | "$PY" -c 'import sys; b=sys.stdin.buffer.read(); print("OK" if b.decode("utf-8")=="Samsung SSD 980 — Größe" else repr(b))' 2>&1)
+[ "$r" = OK ] && ok "UTF-8 text passes through untouched" || bad "UTF-8 text passes through untouched" "$r"
+# End to end: lsblk reports a control byte in the model as \x01; it must not
+# reach the WIPE_RESULT line raw.
+STUBS_CTL=$(printf '%s' "$STUBS" | sed 's/980 \\\\x22PRO\\\\x22/980 \\\\x01\\\\x22PRO\\\\x22\\\\x1b/')
+case "$STUBS_CTL" in *x01*x1b*) ;; *) echo "could not plant the control bytes"; exit 1 ;; esac
+STUBS_SAVE="$STUBS"; STUBS="$STUBS_CTL"
+run "$DEV" auto "" STUB_FW=ok
+STUBS="$STUBS_SAVE"
+check "a model with control bytes (lsblk \\x01, \\x1b): WIPE_RESULT still parses, bytes dropped" wiped auto "$SER"
+
 
 echo
 echo "$PASS passed, $FAIL failed"

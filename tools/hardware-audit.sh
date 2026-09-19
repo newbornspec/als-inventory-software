@@ -66,7 +66,13 @@ echo "  ALS Inventory — Hardware Audit"
 echo "=================================================="
 
 # --- JSON helpers (no jq dependency) ---
-esc() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr -d '\r\n\t'; }
+# esc() drops EVERY control character (0x00-0x1F and DEL), not just CR/LF/TAB.
+# JSON forbids raw control characters inside a string, and DMI, SMART and lsblk
+# strings come from firmware: one stray byte (an ESC in a vendor string, a 0x01
+# pad in a serial) made the whole profile or WIPE_RESULT unparseable, so the
+# machine or the wipe had no record at all. Must stay a one-liner: the lock
+# check tests extract this exact line.
+esc() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr -d '\000-\037\177'; }
 jstr() { printf '%s' "$1" | grep -o "\"$2\":\"[^\"]*\"" | head -n1 | sed 's/.*":"//; s/"$//'; }
 jraw() { printf '%s' "$1" | grep -o "\"$2\":[^,}]*" | head -n1 | sed 's/.*://; s/[[:space:]]//g'; }
 
