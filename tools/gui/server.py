@@ -113,7 +113,23 @@ def wipe_kind(device):
 
 
 # ---------------------------------------------------------------- config ----
+# Whether audit.conf has been read successfully at least once in this process,
+# and whether the LAST attempt failed. operator_gate reads it: a station that
+# has never managed to read its conf cannot know whether operators must sign
+# in, so it refuses rather than guess "no".
+CONF_READ = {"ok": False, "failed": False}
+
+
 def load_conf():
+    """audit.conf as a dict. A read error keeps the settings last read.
+
+    refresh() re-reads the conf on every Rescan. Returning {} on a read error
+    (the stick hiccups, its mount is briefly gone) used to switch every setting
+    off until the next good read - AUDIT_OPERATOR_SIGNIN included, so one bad
+    read opened the sign-in gate and a wipe could start with nobody signed in,
+    filed under a typed name. What the station last read successfully is still
+    the best statement of how it is meant to run; a successful read that
+    changes a setting is what changes it."""
     conf = {}
     if not CONF_PATH:
         return conf
@@ -128,6 +144,11 @@ def load_conf():
                     conf[m.group(1)] = m.group(2)
     except OSError as exc:
         STATE["error"] = "Could not read audit.conf: %s" % exc
+        CONF_READ["failed"] = True
+        if CONF_READ["ok"] and isinstance(STATE.get("conf"), dict):
+            return dict(STATE["conf"])
+        return conf
+    CONF_READ["ok"], CONF_READ["failed"] = True, False
     return conf
 
 
@@ -934,8 +955,14 @@ def post_record(item):
     why = held_reason(item)
     if why:
         raise RuntimeError(why)
+    # held_reason is only a first look: the person signed in can change
+    # before the token is read, or while the request is in flight. `owner`
+    # makes authed_api re-check, under the same lock it reads the token with,
+    # that the token IS this record's operator's ("" = the shared account).
+    tag = item.get(OPERATOR_TAG) if isinstance(item, dict) else None
+    owner = str(tag.get("id")) if isinstance(tag, dict) and tag.get("id") else ""
     body = {k: v for k, v in item.items() if k != OPERATOR_TAG}
-    return authed_api("/devices/hardware-audit", "POST", body)
+    return authed_api("/devices/hardware-audit", "POST", body, owner=owner)
 
 
 def queue_flush():
@@ -1056,23 +1083,63 @@ def ensure_token():
     return STATE["token"] or login()
 
 
-def authed_api(path, method="GET", body=None):
+class OperatorChanged(RuntimeError):
+    """The record's operator is not the one signed in now; it stays queued."""
+
+
+def operator_token_for(owner):
+    """operator_token(), but only if the signed-in operator is `owner` (a user
+    id); raises OperatorChanged otherwise. The identity and the token are read
+    under ONE hold of OPERATOR_LOCK, so nobody can sign in between the check
+    and the read. A refresh inside operator_token cannot change hands either
+    (_operator_set's expect_id)."""
+    with OPERATOR_LOCK:
+        if OPERATOR.get("token") and OPERATOR.get("id") != owner:
+            raise OperatorChanged(
+                "made by another operator than the one signed in now; it is sent "
+                "only under their own sign-in")
+        return operator_token()
+
+
+def authed_api(path, method="GET", body=None, owner=None):
     """api() with the station's current identity. With operator sign-in on, a
     401 (the token expired early, or the account's sessions were revoked) gets
     ONE refresh and retry; if that fails the operator is signed out and must
-    sign in again. Flag off: exactly the old api(..., ensure_token())."""
-    if not operator_signin_on():
+    sign in again. Flag off: exactly the old api(..., ensure_token()).
+
+    `owner`, for a record (post_record): whose record it is - an operator's
+    user id, or "" for the shared account. It is then sent only under that
+    identity, checked when the token is taken AND again before the 401 retry:
+    A's upload can come back 401 after A signed out and B signed in (A's token
+    ran out across a suspend the monotonic countdown did not see, or A's
+    sessions were revoked), and retrying with "the current token" would have
+    filed A's erasure under B's account. None (lots, lookups): whoever is
+    signed in, as before."""
+    on = operator_signin_on()
+    if owner is not None and bool(owner) != on:
+        # The flag changed between held_reason and here: an operator's record
+        # never goes under the shared account, nor the reverse.
+        raise OperatorChanged("operator sign-in was switched %s while this record was "
+                              "being sent; it stays queued" % ("on" if on else "off"))
+    if not on:
         return api(path, method, body, ensure_token())
-    tok = operator_token()
+    tok = operator_token() if owner is None else operator_token_for(owner)
     try:
         return api(path, method, body, tok)
     except urllib.error.HTTPError as exc:
         if exc.code != 401:
             raise
         with OPERATOR_LOCK:
+            if owner is not None and OPERATOR.get("id") != owner:
+                # Someone else is signed in now (or nobody): do not refresh
+                # their session for this, and do not send it under them.
+                raise OperatorChanged(
+                    "its operator signed out while it was being sent; it is sent "
+                    "only under their own sign-in")
             if OPERATOR.get("token") == tok:
                 OPERATOR["expiresMono"] = 0.0      # force the refresh below
-        return api(path, method, body, operator_token())
+            tok = operator_token() if owner is None else operator_token_for(owner)
+        return api(path, method, body, tok)
 
 
 # ------------------------------------------------------------- OPERATOR ----
@@ -1311,7 +1378,13 @@ def signin_state():
 def operator_gate():
     """None when records may be made now, else (http_code, message). Flag
     off: always None. Flag on: a signed-in operator whose session is still
-    valid (renewed now if it is near expiry)."""
+    valid (renewed now if it is near expiry). audit.conf never read (it
+    exists but every read so far failed): refused - fail closed, since the
+    station cannot tell whether sign-in is required (see load_conf)."""
+    if CONF_PATH and CONF_READ["failed"] and not CONF_READ["ok"]:
+        return 503, ("audit.conf on the boot stick could not be read, so this station "
+                     "cannot tell whether operators must sign in. Nothing is wiped, "
+                     "audited or restored until it can: re-seat the stick and press Rescan.")
     if not operator_signin_on():
         return None
     try:
@@ -3806,6 +3879,10 @@ class Handler(BaseHTTPRequestHandler):
                         # all, is on disk and uploads itself later.
                         result["queued"] = True
                         result["waiting"] = queue_count()
+                        # Asked again: the operator can change hands DURING
+                        # the upload (post_record then keeps it queued), and
+                        # "no connection" would send them to the network.
+                        held = held or held_reason(payload)
                         result["recordError"] = (
                             ("the wipe record is saved on this machine; it was " + held)
                             if held else

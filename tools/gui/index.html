@@ -509,8 +509,14 @@
       you start is recorded under your name.</p>
     <label class="fld"><span>Email</span>
       <input id="signEmail" type="email" autocomplete="off" autocapitalize="off" spellcheck="false" /></label>
+    <!-- new-password, not off: browsers ignore autocomplete=off for logins,
+         but do not fill a SAVED login into a new-password field - so a login
+         the browser kept for the previous person at this bench is not typed
+         in for the next one. Stopping the browser from SAVING the login at
+         all belongs in the kiosk browser profile (start-gui.sh:
+         signon.rememberSignons=false), not in this page. -->
     <label class="fld"><span>Password</span>
-      <input id="signPass" type="password" autocomplete="off"
+      <input id="signPass" type="password" autocomplete="new-password"
         onkeydown="if(event.key==='Enter')doSignIn()" /></label>
     <div class="diag" id="signErr"></div>
     <div class="mrow"><button class="btn gho" onclick="closeSign()">Cancel</button>

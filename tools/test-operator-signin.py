@@ -34,6 +34,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -131,6 +132,11 @@ class FakeApi(BaseHTTPRequestHandler):
             user = [u for _pw, u in USERS.values() if u["id"] == uid][0]
             return self._json(200, issue(user))
         if self.path == "/devices/hardware-audit":
+            # Something that happens at the station WHILE this request is in
+            # flight (one shot): e.g. the operator changes hands.
+            hook = API.pop("onAudit", None)
+            if hook:
+                hook()
             if API["auditDown"]:
                 return self._json(503, {"message": "down"})
             tok = (self.headers.get("Authorization") or "")[len("Bearer "):]
@@ -449,6 +455,102 @@ try:
     check("refused refresh: the sign-in panel says why",
           "sign in again" in boot["signin"].get("message", "").lower(), boot["signin"])
     API["refreshFails"] = False
+
+    print("a record is never sent under whoever signed in while it was in flight")
+    ann_user, bob_user = USERS["ann@example.test"][1], USERS["bob@example.test"][1]
+    signin("ann@example.test", PW_A)
+    settle()
+    code, msg, job = wipe()
+    check("Ann starts a wipe", code == 200 and job, (code, msg))
+
+    def hands_change():
+        # Ann's token stops being honoured (it ran out across a lid-close
+        # suspend, which the monotonic countdown does not see, or her sessions
+        # were revoked) and, while her upload is in flight, she signs out and
+        # Bob signs in.
+        for t, u in list(ACCESS.items()):
+            if u == "u-ann":
+                ACCESS.pop(t)
+        srv.operator_signout()
+        with srv.OPERATOR_LOCK:
+            srv._operator_set(issue(bob_user))
+    POSTS.clear()
+    REFRESHES.clear()
+    before = srv.queue_count()
+    API["onAudit"] = hands_change
+    res = finish(job)
+    check("401 after the operator changed hands: nothing posted under Bob",
+          not any(p[0] == "u-bob" for p in POSTS), POSTS)
+    check("...nothing posted at all, and Bob's session was not refreshed for it",
+          POSTS == [] and REFRESHES == [], (POSTS, REFRESHES))
+    q = srv.queue_load()
+    check("...the record is queued, still tagged Ann",
+          res.get("queued") and srv.queue_count() == before + 1 and
+          (q[-1].get(srv.OPERATOR_TAG) or {}).get("id") == "u-ann", (res, q[-1:]))
+    check("...the screen says it waits for Ann, not 'no connection'",
+          "Ann Operator" in (res.get("recordError") or ""), res.get("recordError"))
+    check("...Bob is still the one signed in", (srv.operator_identity() or {}).get("id") == "u-bob")
+
+    # The narrower window with no 401 at all: the record is checked as Bob's,
+    # then Ann signs in before its token is read.
+    item = srv.stamp_provenance({"profile": PROFILE, "dataWipeStatus": "wiped",
+                                 "dataWipeMethod": "m", "wipedAt": "2026-09-19T11:00:00Z"})
+    real_held = srv.held_reason
+
+    def held_then_swap(it):
+        why = real_held(it)
+        srv.held_reason = real_held
+        srv.operator_signout()
+        with srv.OPERATOR_LOCK:
+            srv._operator_set(issue(ann_user))
+        return why
+    POSTS.clear()
+    srv.held_reason = held_then_swap
+    try:
+        out, queued, err = srv.upload_audit(dict(item))
+    finally:
+        srv.held_reason = real_held
+    check("hands change between the check and the send: not sent under Ann",
+          POSTS == [], POSTS)
+    check("...queued, still tagged Bob", queued and
+          (srv.queue_load()[-1].get(srv.OPERATOR_TAG) or {}).get("id") == "u-bob", (queued, err))
+    srv.operator_signout()
+
+    print("audit.conf unreadable: the sign-in gate stays shut")
+    write_conf("1")
+    os.rename(CONF, CONF + ".gone")
+    try:
+        srv.STATE["conf"] = srv.load_conf()     # what refresh() does on every Rescan
+        check("a read error after the flag was seen on: still on", srv.operator_signin_on() is True)
+        check("...and the settings it had are kept", srv.STATE["conf"].get("AUDIT_URL") == API_URL,
+              srv.STATE["conf"])
+        code, msg, job = wipe()
+        check("...wipe still refused with nobody signed in", code == 401 and job is None, (code, msg))
+        # A station that has never managed to read its conf does not know
+        # whether its operators must sign in: fail closed.
+        srv.STATE["conf"] = {}
+        getattr(srv, "CONF_READ", {})["ok"] = False
+        srv.STATE["conf"] = srv.load_conf()
+        code, msg, job = wipe()
+        check("conf never read: wipe refused", code == 503 and job is None, (code, msg))
+        check("...saying audit.conf could not be read", "audit.conf" in msg, msg)
+        check("...no wipe marker written", srv._pending_load_unlocked() == [],
+              srv._pending_load_unlocked())
+    finally:
+        os.rename(CONF + ".gone", CONF)
+    write_conf("0")
+    check("a successful read that says off: off", srv.operator_signin_on() is False)
+    code, msg, job = wipe()
+    check("...and wiping works as before", code == 200 and job, (code, msg))
+    write_conf("1")
+
+    print("the browser is not invited to keep or fill the password")
+    with open(os.path.join(HERE, "gui", "index.html"), encoding="utf-8") as fh:
+        html = fh.read()
+    m = re.search(r'<input id="signPass"[^>]*>', html)
+    check("the sign-in password field is autocomplete=new-password (never autofilled "
+          "with a saved login)", bool(m) and 'autocomplete="new-password"' in m.group(0),
+          m.group(0) if m else "no field")
 
     print("the password is never written anywhere")
     signin("ann@example.test", PW_A)
