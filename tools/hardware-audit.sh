@@ -22,6 +22,12 @@
 
 API_DEFAULT="https://als-inventory-software-production.up.railway.app"
 
+# The version of THIS TOOL, stamped on every wipe result so a certificate can
+# name the software that did the erasure. Bump it when the wipe behaviour
+# changes. NOT to be confused with VERSION further down, which is the AUDITED
+# machine's DMI system-version (e.g. "ThinkPad T440").
+ALS_TOOL_VERSION="2026.09.19"
+
 # --- privilege warning -------------------------------------------------------
 # SystemRescue boots you in as root, so this never came up. The Ubuntu stick
 # does not, and almost every lock check reads something only root can read:
@@ -70,6 +76,13 @@ OB=""
 o_begin() { OB=""; }
 o_s() { [ -n "$2" ] || return 0; OB="$OB,\"$1\":\"$(esc "$2")\""; }
 o_n() { [ -n "$2" ] || return 0; case "$2" in ''|*[!0-9]*) return 0;; esac; OB="$OB,\"$1\":$2"; }
+# o_s0 = string field that is kept even when empty (a field a reader relies on
+# always being there, e.g. WIPE_RESULT's "reason"). o_raw = an already-built
+# JSON value (true/false, or a nested object made with o_begin..o_end first and
+# saved to a variable - o_* share one buffer, so build the inner object BEFORE
+# o_begin of the outer one).
+o_s0() { OB="$OB,\"$1\":\"$(esc "$2")\""; }
+o_raw() { [ -n "$2" ] || return 0; OB="$OB,\"$1\":$2"; }
 o_end() { printf '{%s}' "${OB#,}"; }
 
 # Reachability, with enough patience for a cold boot.
@@ -641,15 +654,21 @@ wipe_internal_drives() {
 }
 
 # ---- GUI single-drive wipe entrypoint --------------------------------------
-# Called as:  hardware-audit.sh --wipe-drive /dev/sdX [auto|crypto|secure|overwrite]
+# Called as:
+#   hardware-audit.sh --wipe-drive /dev/sdX [auto|crypto|secure|overwrite|zero] [expected-serial]
 # Wipes ONE explicitly named internal drive with the erase helpers above
 # (firmware_erase / shred + verify_zero). This is the only wipe path.
-# Emits human-readable progress on stdout and a final machine-readable line:
-#   WIPE_RESULT {"status":"wiped|failed","method":"…","device":"/dev/sdX"}
-# Refuses removable devices, USB-attached devices, and the disk the system
-# booted from - three separate checks, so the boot drive is never selected even
-# when it is a fixed-reporting SSD. (This comment used to claim USB was refused
-# when only the removable flag was checked.)
+# Emits human-readable progress on stdout and EXACTLY ONE final line on every
+# exit path (see wipe_result and contract C1):
+#   WIPE_RESULT {"status":"wiped|failed|refused","device":"/dev/sdX","method":"…",
+#                "reason":"…","toolVersion":…,"startedAt":…,"finishedAt":…,
+#                "drive":{"serialNumber":…},"methodRequested":…}
+# "refused" means NOTHING was written: not a block device, removable, USB, the
+# boot disk, a pseudo-device, or not the drive the operator picked (serial
+# mismatch). Removable, USB and boot disk are three separate checks, so the
+# boot drive is never selected even when it is a fixed-reporting SSD. (This
+# comment used to claim USB was refused when only the removable flag was
+# checked.)
 # --- overwrite with LIVE progress and a captured reason on failure -----------
 # A 250GB spinning disk takes hours to overwrite. Running shred silently made the
 # GUI look frozen for that whole time, and discarding its output threw away the
@@ -739,29 +758,104 @@ als_boot_disk() {
   return 1
 }
 
+# --- the drive's OWN identity, read from the drive -----------------------------
+#
+# A wipe record used to say which DEVICE PATH was wiped (/dev/sda) and nothing
+# about the drive itself. Device names are handed out at boot in probe order;
+# they are not an identity. A certificate - and the per-drive records built on
+# it - have to name the drive by what it reports: its serial, model and size.
+#
+# Defined HERE, above the --wipe-drive dispatch, on purpose. The profile code's
+# pval() does the same parsing but is defined after the dispatch has already
+# exited, so gui_wipe_one cannot see it.
+#
+# Pull KEY="value" out of one lsblk -P line, without eval, trimmed. lsblk -P
+# writes a quote, backslash or other unsafe byte inside a value as \xNN (a
+# backslash itself is \x5c), so the only backslashes are those escapes and
+# printf %b turns them back into the drive's real text; esc() then makes that
+# text JSON-safe.
+als_lsblk_val() {
+  local v
+  v=$(printf ' %s' "$1" | grep -oE " $2=\"[^\"]*\"" | head -n1 | sed -e "s/^ $2=\"//" -e 's/"$//')
+  printf '%b' "$v" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
+}
+# Sets DRV_SERIAL DRV_MODEL DRV_SIZE DRV_TRAN DRV_ROTA DRV_WWN for device $1.
+# Any of them may be empty: some drives report no serial (owner decision D18:
+# allowed, recorded as unknown), and USB bridges often hide it.
+als_drive_identity() {
+  local line
+  DRV_SERIAL=""; DRV_MODEL=""; DRV_SIZE=""; DRV_TRAN=""; DRV_ROTA=""; DRV_WWN=""
+  line=$(lsblk -dbnP -o SERIAL,MODEL,SIZE,TRAN,ROTA,WWN "$1" 2>/dev/null | head -n1)
+  [ -n "$line" ] || return 1
+  DRV_SERIAL=$(als_lsblk_val "$line" SERIAL)
+  DRV_MODEL=$(als_lsblk_val "$line" MODEL)
+  DRV_SIZE=$(als_lsblk_val "$line" SIZE)
+  DRV_TRAN=$(als_lsblk_val "$line" TRAN)
+  DRV_ROTA=$(als_lsblk_val "$line" ROTA)
+  DRV_WWN=$(als_lsblk_val "$line" WWN)
+  return 0
+}
+
+# UTC, ISO-8601, second precision: 2026-09-19T10:01:07Z
+als_utc_now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+
+# Print THE result line of a gui_wipe_one run. $1 status, $2 method, $3 reason.
+# Reads WR_DEV / WR_WANT / WR_STARTED (set at the top of gui_wipe_one) and the
+# DRV_* identity. Built with the o_* helpers, never by hand: a model name or a
+# shred error with a quote in it used to be able to break the line, and the
+# kiosk then had no result at all for a drive it had just wiped.
+# Fields that were not read are left out rather than sent empty.
+wipe_result() {
+  local drv
+  o_begin
+  o_s serialNumber "$DRV_SERIAL"
+  o_s model "$DRV_MODEL"
+  o_n sizeBytes "$DRV_SIZE"
+  o_s transport "$DRV_TRAN"
+  case "$DRV_ROTA" in 1) o_raw rotational true ;; 0) o_raw rotational false ;; esac
+  o_s wwn "$DRV_WWN"
+  drv=$(o_end)
+  o_begin
+  o_s0 status "$1"
+  o_s0 device "$WR_DEV"
+  o_s0 method "$2"
+  o_s0 reason "$3"
+  o_s toolVersion "$ALS_TOOL_VERSION"
+  o_s startedAt "$WR_STARTED"
+  o_s finishedAt "$(als_utc_now)"
+  [ "$drv" = "{}" ] || o_raw drive "$drv"
+  o_s methodRequested "$WR_WANT"
+  echo "WIPE_RESULT $(o_end)"
+}
+
 gui_wipe_one() {
-  local dev="$1" want="${2:-auto}" d rota m verified fw
+  local dev="$1" want="${2:-auto}" expect="${3:-}" d rota m verified fw
+  WR_DEV="$dev"; WR_WANT="$want"; WR_STARTED=$(als_utc_now)
+  DRV_SERIAL=""; DRV_MODEL=""; DRV_SIZE=""; DRV_TRAN=""; DRV_ROTA=""; DRV_WWN=""
   if [ -z "$dev" ] || [ ! -b "$dev" ]; then
-    echo "WIPE_RESULT {\"status\":\"failed\",\"method\":\"no such device\",\"device\":\"$dev\"}"
+    echo "Refusing: ${dev:-(no device given)} is not a block device."
+    wipe_result refused "no such device" "${dev:-(no device given)} is not a block device"
     return 1
   fi
   d="${dev#/dev/}"
+  # Read the identity FIRST, so even a refusal says which drive it refused.
+  als_drive_identity "$dev"
   if [ "$(cat "/sys/block/$d/removable" 2>/dev/null)" = "1" ]; then
     echo "Refusing: $dev is removable — the boot media is never wiped."
-    echo "WIPE_RESULT {\"status\":\"failed\",\"method\":\"removable device refused\",\"device\":\"$dev\"}"
+    wipe_result refused "removable device refused" "$dev is removable"
     return 1
   fi
   if als_disk_is_usb "$d"; then
     echo "Refusing: $dev is attached over USB - external drives, including the one"
     echo "this station booted from, are never wiped here."
-    echo "WIPE_RESULT {\"status\":\"failed\",\"method\":\"usb device refused\",\"device\":\"$dev\"}"
+    wipe_result refused "usb device refused" "$dev is attached over USB"
     return 1
   fi
   local boot
   boot=$(als_boot_disk)
   if [ -n "$boot" ] && [ "$d" = "$boot" ]; then
     echo "Refusing: $dev is the disk this system is running from."
-    echo "WIPE_RESULT {\"status\":\"failed\",\"method\":\"boot disk refused\",\"device\":\"$dev\"}"
+    wipe_result refused "boot disk refused" "$dev is the disk this system is running from"
     return 1
   fi
   # Pseudo-devices are not real disks: /dev/loop* is the boot media's own
@@ -769,10 +863,23 @@ gui_wipe_one() {
   case "$d" in
     loop*|ram*|zram*|sr*|fd*|dm-*)
       echo "Refusing: $dev is not a real disk (it is a $d pseudo-device)."
-      echo "WIPE_RESULT {\"status\":\"failed\",\"method\":\"none\",\"device\":\"$dev\",\"reason\":\"$dev is not a physical disk\"}"
+      wipe_result refused "none" "$dev is not a physical disk"
       return 1
       ;;
   esac
+  # Is this still the drive the operator chose? The kiosk passes the serial it
+  # showed on screen. Device names are assigned at boot in probe order, so a
+  # drive pulled or re-seated between the scan and the wipe - or a second disk
+  # that came up first this time - can put a DIFFERENT drive behind the same
+  # /dev name. Checked before anything is written; an empty expected serial
+  # (an older kiosk, or a drive that reports none) means no check.
+  expect=$(printf '%s' "$expect" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+  if [ -n "$expect" ] && [ "$expect" != "$DRV_SERIAL" ]; then
+    echo "Refusing: $dev reports serial '${DRV_SERIAL:-none}', not the '$expect' that was selected."
+    echo "Nothing has been written. Rescan the drives and choose again."
+    wipe_result refused "identity mismatch refused" "drive serial '${DRV_SERIAL:-none}' does not match the selected drive '$expect'"
+    return 1
+  fi
   export AUDIT_WIPE_METHOD="$want"
   rota=$(cat "/sys/block/$d/queue/rotational" 2>/dev/null)
   m=""; verified=0; fw=0
@@ -837,18 +944,18 @@ gui_wipe_one() {
 
   if [ -n "$m" ] && [ "$verified" = "1" ]; then
     echo "✓ $m"
-    echo "WIPE_RESULT {\"status\":\"wiped\",\"method\":\"$(esc "$m")\",\"device\":\"$dev\",\"reason\":\"\"}"
+    wipe_result wiped "$m" ""
     return 0
   fi
   [ -n "$reason" ] || reason="no erase method succeeded on this drive"
   echo "✗ FAILED on $dev — $reason"
-  echo "WIPE_RESULT {\"status\":\"failed\",\"method\":\"$(esc "${m:-none}")\",\"device\":\"$dev\",\"reason\":\"$(esc "$reason")\"}"
+  wipe_result failed "${m:-none}" "$reason"
   return 1
 }
 
 # GUI entrypoints run before the interactive audit flow and exit on their own.
 if [ "${1:-}" = "--wipe-drive" ]; then
-  gui_wipe_one "$2" "$3"
+  gui_wipe_one "${2:-}" "${3:-}" "${4:-}"
   exit $?
 fi
 

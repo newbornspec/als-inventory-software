@@ -65,7 +65,7 @@ EOF
 chmod +x "$TRIP/dd"
 
 # Read-only tools, reached by absolute path - so PATH needs nothing else.
-for t in head tr sed grep basename wc cat printenv cmp; do
+for t in head tr sed grep basename wc cat printenv cmp date; do
   real=$(command -v "$t") || { echo "missing $t"; exit 1; }
   printf '#!/bin/sh\nexec "%s" "$@"\n' "$real" > "$SAFE/$t"
   chmod +x "$SAFE/$t"
@@ -79,7 +79,11 @@ DEV="$T/fake-drive"
 case "$DEV" in /dev/*) echo "REFUSING: the test device must never be under /dev"; exit 1 ;; esac
 
 SRC="$HERE/hardware-audit.sh"
-FUNCS="$(extract "$SRC" esc)
+FUNCS="$(grep -E '^(esc|o_begin|o_s|o_s0|o_n|o_raw|o_end|als_utc_now)\(\) \{' "$SRC")
+$(grep '^ALS_TOOL_VERSION=' "$SRC")
+$(extract "$SRC" als_lsblk_val)
+$(extract "$SRC" als_drive_identity)
+$(extract "$SRC" wipe_result)
 $(extract "$SRC" clear_label)
 $(extract "$SRC" als_disk_is_usb)
 $(extract "$SRC" als_boot_disk)
