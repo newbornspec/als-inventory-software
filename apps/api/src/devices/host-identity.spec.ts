@@ -19,9 +19,30 @@ describe('usableBiosUuid', () => {
       '00000000-0000-0000-0000-000000000000',
       'FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF',
       '03000200-0400-0500-0006-000700080009',
+      // The same AMI default as SMBIOS < 2.6 boards report it (raw byte order).
+      '00020003-0004-0005-0006-000700080009',
+      // An Insyde/OEM placeholder seen on unprogrammed boards.
+      '12345678-1234-5678-90AB-CDDEEFAABBCC',
     ]) {
       expect(usableBiosUuid(junk)).toBeNull();
     }
+  });
+
+  it('ignores a Dell UUID that encodes a blank service tag', () => {
+    // Dell derives the UUID from the service tag; a replacement board whose
+    // tag was never programmed encodes seven spaces (or NULs).
+    for (const blank of [
+      '4C4C4544-0000-2010-8020-80C04F202020',
+      '4c4c4544-0000-2010-8020-80c04f202020',
+      '4C4C4544-0000-0010-8000-80C04F000000',
+    ]) {
+      expect(usableBiosUuid(blank)).toBeNull();
+      expect(hostTag(null, blank)).toBeNull();
+    }
+  });
+
+  it('keeps a Dell UUID that encodes a real service tag', () => {
+    expect(usableBiosUuid(UUID)).toBe(UUID.toUpperCase());
   });
 
   it('ignores anything that is not a UUID', () => {

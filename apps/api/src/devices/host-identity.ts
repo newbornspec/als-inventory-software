@@ -17,12 +17,34 @@
 //
 // A UUID is only used when it can identify ONE machine. Firmware that never
 // had a UUID programmed reports placeholders shared by thousands of boards -
-// all zeros, all Fs, or the well-known AMI default below - and keying on one
+// all zeros, all Fs, the well-known AMI and OEM defaults below, or a
+// Dell UUID built from a blank service tag - and keying on one
 // of those would merge unrelated machines into one asset, which is far worse
 // than splitting one machine into two. Those are ignored.
 const UUID_SHAPE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const PLACEHOLDER_UUIDS = new Set(['03000200-0400-0500-0006-000700080009']);
+const PLACEHOLDER_UUIDS = new Set([
+  // The AMI default, as dmidecode 2.6+ prints it...
+  '03000200-0400-0500-0006-000700080009',
+  // ...and in raw byte order, as SMBIOS < 2.6 boards report it.
+  '00020003-0004-0005-0006-000700080009',
+  // An Insyde/OEM placeholder left on unprogrammed boards.
+  '12345678-1234-5678-90AB-CDDEEFAABBCC',
+]);
+
+// Dell derives the system UUID from the service tag: "4C4C4544" ("DELL") then
+// the seven tag characters in bytes 5, 6, 9, 10, 13, 14 and 15 (byte 10 with
+// its high bit set). A replacement motherboard whose tag was never programmed
+// encodes seven spaces - 4C4C4544-0000-2010-8020-80C04F202020 - and every
+// such Dell shares it. A tag that is all spaces or NULs identifies nothing.
+const DELL_TAG_BYTES = [5, 6, 9, 10, 13, 14, 15];
+function isBlankDellTag(hex: string): boolean {
+  if (!hex.startsWith('4C4C4544')) return false;
+  return DELL_TAG_BYTES.every((i) => {
+    const b = parseInt(hex.slice(i * 2, i * 2 + 2), 16) & 0x7f;
+    return b === 0x00 || b === 0x20;
+  });
+}
 
 export function usableBiosUuid(raw: unknown): string | null {
   if (typeof raw !== 'string') return null;
@@ -32,6 +54,7 @@ export function usableBiosUuid(raw: unknown): string | null {
   // One repeated digit: 00000000-..., FFFFFFFF-..., and the like.
   if (/^(.)\1*$/.test(hex)) return null;
   if (PLACEHOLDER_UUIDS.has(uuid)) return null;
+  if (isBlankDellTag(hex)) return null;
   return uuid;
 }
 
