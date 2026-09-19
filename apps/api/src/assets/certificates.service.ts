@@ -44,6 +44,11 @@ import {
 } from '../common/ownership';
 import { CertificateLedger } from '../certificates/certificate-ledger';
 import { SIGNATURE_ALGORITHM } from '../certificates/certificate-signing';
+import {
+  publicVerifyEnabled,
+  verifyUrlFor,
+} from '../certificates/public-verify';
+import * as QRCode from 'qrcode';
 import type { ErasureCertificate } from '../certificates/erasure-certificate.entity';
 
 // What a SIGNED certificate prints about its signature (plan step 29). Only
@@ -52,6 +57,10 @@ import type { ErasureCertificate } from '../certificates/erasure-certificate.ent
 export interface CertificateSeal {
   keyId: string;
   sha256: string;
+  // Plan step 30: only when the public check is ALSO on
+  // (PUBLIC_VERIFY_ENABLED=1) - the id it is looked up by, and a QR code for
+  // PUBLIC_VERIFY_BASE_URL/verify/<id> when that base URL is set.
+  check?: { id: string; url: string | null; qr: Buffer | null };
 }
 
 // The answer GET /assets/:id/certificate-eligibility gives (contract C4 of the
@@ -299,7 +308,7 @@ export class CertificatesService {
       const buffer = await this.render(
         stored.payload.certificate,
         new Date(stored.issuedAt),
-        sealOf(stored),
+        await sealOf(stored),
       );
       return { buffer, filename };
     }
@@ -309,6 +318,34 @@ export class CertificatesService {
       new Date(),
     );
     return { buffer, filename };
+  }
+
+  // The signed certificate as data (plan step 30): what a customer is handed
+  // alongside the PDF to check it independently with
+  // apps/api/scripts/verify-certificate.mjs and the published keys - the
+  // stored payload exactly as hashed and signed, with its hash, signature
+  // and key_id. Same access rule as the PDF, and issued the same way if it
+  // was not yet. 404 while signing is off: there is nothing signed to give.
+  async signedRecord(assetId: string, user?: RequestUser) {
+    await this.accessibleAsset(assetId, user);
+    if (!this.ledger?.enabled)
+      throw new NotFoundException('Signed certificates are not enabled.');
+    const refusal = refusalFor(rollupFor(await this.wipeRows(assetId)));
+    if (refusal !== null) throw new BadRequestException(refusal);
+    const c = await this.ledger.ensure(assetId);
+    if (!c)
+      throw new BadRequestException('This device cannot be certified right now.');
+    return {
+      id: c.id,
+      number: c.number,
+      assetId: c.assetId,
+      issuedAt: new Date(c.issuedAt).toISOString(),
+      payload: c.payload,
+      payloadSha256: c.payloadSha256,
+      prevSha256: c.prevSha256,
+      signature: c.signature,
+      keyId: c.keyId,
+    };
   }
 
   // GET /assets/:id/certificate-eligibility (contract C4): the same roll-up
@@ -455,11 +492,39 @@ export class CertificatesService {
           .fontSize(8)
           .fillColor('#666666')
           .text(
-            `Digitally signed (${SIGNATURE_ALGORITHM}, key ID ${seal.keyId}). This certificate was stored when it was issued and cannot be altered; SHA-256 of its signed content: ${seal.sha256}`,
+            `Digitally signed (${SIGNATURE_ALGORITHM}, key ID ${seal.keyId}). This certificate was stored when it was issued; any later change to it is detectable. SHA-256 of its signed content: ${seal.sha256}`,
             left,
             doc.y,
             { width: right - left },
           );
+      }
+      if (seal?.check) {
+        const { id, url, qr } = seal.check;
+        const size = 84;
+        if (doc.y + size + 20 > bottom()) doc.addPage();
+        doc.moveDown(0.6);
+        const y = doc.y;
+        const textX = qr ? left + size + 12 : left;
+        if (qr) doc.image(qr, left, y, { width: size, height: size });
+        doc
+          .font('Helvetica-Bold')
+          .fontSize(9)
+          .fillColor('#111111')
+          .text(`Certificate ID: ${id}`, textX, y, { width: right - textX });
+        doc
+          .font('Helvetica')
+          .fontSize(8.5)
+          .fillColor('#444444')
+          .text(
+            url
+              ? `Check this certificate: scan the code, or visit ${url}`
+              : 'Quote this ID to have the certificate checked.',
+            textX,
+            doc.y + 2,
+            { width: right - textX },
+          );
+        doc.x = left;
+        doc.y = Math.max(doc.y, y + (qr ? size : 0));
       }
 
       doc.moveDown(2);
@@ -603,6 +668,22 @@ export class CertificatesService {
   }
 }
 
-function sealOf(c: ErasureCertificate): CertificateSeal {
-  return { keyId: c.keyId, sha256: c.payloadSha256 };
+async function sealOf(c: ErasureCertificate): Promise<CertificateSeal> {
+  const seal: CertificateSeal = { keyId: c.keyId, sha256: c.payloadSha256 };
+  if (publicVerifyEnabled()) {
+    const url = verifyUrlFor(c.id);
+    seal.check = {
+      id: c.id,
+      url,
+      qr: url
+        ? await QRCode.toBuffer(url, {
+            type: 'png',
+            margin: 1,
+            width: 256,
+            errorCorrectionLevel: 'M',
+          })
+        : null,
+    };
+  }
+  return seal;
 }

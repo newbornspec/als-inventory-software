@@ -1,4 +1,10 @@
-import { generateKeyPairSync } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
+import { generateKeyPairSync, randomUUID } from 'node:crypto';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import * as path from 'node:path';
+import { HttpException } from '@nestjs/common';
+import * as QRCode from 'qrcode';
 import PDFDocument from 'pdfkit';
 import { DataSource } from 'typeorm';
 import { ALL_ENTITIES } from '../database/entities';
@@ -13,6 +19,7 @@ import { DevicesService } from '../devices/devices.service';
 import { CertificateLedger } from './certificate-ledger';
 import { CertificateSigner } from './certificate-signing';
 import { ErasureCertificate } from './erasure-certificate.entity';
+import { VerifyController } from './verify.controller';
 
 // Plan step 29 against REAL Postgres: the insert-only trigger, issue-once
 // certificates drawn from their stored snapshot, a re-wipe issuing a new
@@ -393,5 +400,160 @@ maybe('stored, signed erasure certificates (Postgres)', () => {
     expect(texts.find((s) => s.startsWith('Certificate No:'))).toMatch(
       /^Certificate No: ERA-\d{8}-[0-9A-F]{8}$/,
     );
+  }, 60000);
+
+  // ---- plan step 30: the public check, the QR code and the offline script --
+
+  const withEnv = async <T>(
+    env: Record<string, string | undefined>,
+    run: () => Promise<T>,
+  ): Promise<T> => {
+    const saved = Object.fromEntries(
+      Object.keys(env).map((k) => [k, process.env[k]]),
+    );
+    for (const [k, v] of Object.entries(env))
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    try {
+      return await run();
+    } finally {
+      for (const [k, v] of Object.entries(saved))
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+    }
+  };
+  const statusOf = async (p: Promise<unknown>) => {
+    try {
+      await p;
+      return 200;
+    } catch (e) {
+      return e instanceof HttpException ? e.getStatus() : 500;
+    }
+  };
+  const req = { headers: { accept: 'application/json' }, ip: '127.0.0.1' };
+  const res = { type: () => undefined };
+
+  it('the offline script verifies a certificate the API issued, with only /verify/keys', async () => {
+    const ledger = new CertificateLedger(ds, signer);
+    const assetId = await wipedMachine(devices(ledger));
+    const record = await certificates(ledger).signedRecord(assetId);
+    const keys = await withEnv({ PUBLIC_VERIFY_ENABLED: '1' }, () =>
+      Promise.resolve(new VerifyController(ledger).keys(req as never)),
+    );
+    const dir = mkdtempSync(path.join(tmpdir(), 'als-cert-'));
+    try {
+      const k = path.join(dir, 'keys.json');
+      const c = path.join(dir, 'certificate.json');
+      // Through JSON, exactly as a customer receives both.
+      writeFileSync(k, JSON.stringify(keys));
+      writeFileSync(c, JSON.stringify(record));
+      const script = path.join(
+        __dirname,
+        '..',
+        '..',
+        'scripts',
+        'verify-certificate.mjs',
+      );
+      const r = spawnSync(
+        process.execPath,
+        [script, '--keys', k, '--certificate', c],
+        { encoding: 'utf8' },
+      );
+      expect(r.stdout).toContain(`VALID - certificate ${record.number}`);
+      expect(r.status).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 60000);
+
+  it('/verify/:id on the real chain: valid, minimal; guessed ids 404; disabled 404', async () => {
+    const ledger = new CertificateLedger(ds, signer);
+    const assetId = await wipedMachine(devices(ledger));
+    const [cert] = await certsOf(assetId);
+    const ctl = new VerifyController(ledger);
+    await withEnv({ PUBLIC_VERIFY_ENABLED: '1' }, async () => {
+      const out = await ctl.check(cert.id, req as never, res as never);
+      expect(out).toEqual({
+        valid: true,
+        certificateNumber: cert.number,
+        issuedDate: new Date(cert.issuedAt).toISOString().slice(0, 10),
+        device: { make: 'Dell', model: 'Latitude 7490' },
+        driveCount: 1,
+        sanitisationLevel: 'purge',
+      });
+      expect(JSON.stringify(out)).not.toMatch(/CERT-|J Smith|Station/);
+      for (let i = 0; i < 5; i++)
+        expect(
+          await statusOf(ctl.check(randomUUID(), req as never, res as never)),
+        ).toBe(404);
+    });
+    await withEnv({ PUBLIC_VERIFY_ENABLED: undefined }, async () => {
+      expect(
+        await statusOf(ctl.check(cert.id, req as never, res as never)),
+      ).toBe(404);
+      expect(
+        await statusOf(Promise.resolve().then(() => ctl.keys(req as never))),
+      ).toBe(404);
+    });
+  }, 60000);
+
+  it('signed AND public check on: the PDF prints the id and a QR code for <base>/verify/<id>', async () => {
+    const ledger = new CertificateLedger(ds, signer);
+    const assetId = await wipedMachine(devices(ledger));
+    const svc = certificates(ledger);
+    const images: unknown[] = [];
+    type Fn = (...a: unknown[]) => unknown;
+    const proto = (PDFDocument as unknown as { prototype: { image: Fn } })
+      .prototype;
+    const realImage = proto.image;
+    const spy = jest.spyOn(proto, 'image').mockImplementation(function (
+      this: unknown,
+      ...args: unknown[]
+    ) {
+      images.push(args[0]);
+      return realImage.apply(this, args);
+    });
+    let on: string[];
+    try {
+      on = await withEnv(
+        {
+          PUBLIC_VERIFY_ENABLED: '1',
+          PUBLIC_VERIFY_BASE_URL: 'https://api.example.test/',
+        },
+        () => printed(() => svc.erasureCertificate(assetId)),
+      );
+    } finally {
+      spy.mockRestore();
+    }
+    const [cert] = await certsOf(assetId);
+    const url = `https://api.example.test/verify/${cert.id}`;
+    expect(on).toContain(`Certificate ID: ${cert.id}`);
+    expect(on.join(' ')).toContain(url);
+    // The image drawn IS the QR code for that URL.
+    expect(images).toHaveLength(1);
+    const expected = await QRCode.toBuffer(url, {
+      type: 'png',
+      margin: 1,
+      width: 256,
+      errorCorrectionLevel: 'M',
+    });
+    expect(Buffer.compare(images[0] as Buffer, expected)).toBe(0);
+
+    // Signed but the public check off: no id, no QR.
+    const off = await withEnv({ PUBLIC_VERIFY_ENABLED: undefined }, () =>
+      printed(() => svc.erasureCertificate(assetId)),
+    );
+    expect(off.join(' ')).not.toContain('Certificate ID');
+    expect(off.join(' ')).toContain(`key ID ${signer.keyId}`);
+  }, 60000);
+
+  it('the signed record export is 404 while signing is off', async () => {
+    const assetId = await wipedMachine(devices());
+    expect(await statusOf(certificates().signedRecord(assetId))).toBe(404);
+    expect(
+      await statusOf(
+        certificates(new CertificateLedger(ds, null)).signedRecord(assetId),
+      ),
+    ).toBe(404);
   }, 60000);
 });

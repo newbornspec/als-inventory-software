@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { CertificateLedger } from './certificate-ledger';
 import { CertificateSigner } from './certificate-signing';
+import { VerifyController } from './verify.controller';
 
 // Signed, stored erasure certificates (plan step 29). One ledger for the
 // whole API, shared by the station ingest (issues when a machine becomes
@@ -9,7 +10,13 @@ import { CertificateSigner } from './certificate-signing';
 // from the stored snapshot). The signer is read from CERT_SIGNING_KEY once,
 // at startup: unset -> null -> everything inert; set but unusable -> the API
 // refuses to start (see certificate-signing.ts).
+//
+// Imported by both AssetsModule and DevicesModule; Nest builds a module once,
+// so there is one ledger and one VerifyController (one rate limiter).
 @Module({
+  // The public certificate check (plan step 30); 404s unless
+  // PUBLIC_VERIFY_ENABLED=1.
+  controllers: [VerifyController],
   providers: [
     {
       provide: CertificateLedger,

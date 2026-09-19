@@ -110,6 +110,18 @@ export class AssetsController {
     });
   }
 
+  // The signed certificate as data, for checking it independently (plan step
+  // 30; 404 while CERT_SIGNING_KEY is unset). Same permissions as the PDF.
+  @RequirePermissions('assets', 'goods_in', 'amazon_audit')
+  @Get(':id/erasure-certificate.json')
+  @Header('Cache-Control', 'no-store')
+  signedCertificate(
+    @Param('id') id: string,
+    @Req() req: { user: RequestUser },
+  ) {
+    return this.certificates.signedRecord(id, req.user);
+  }
+
   // May a certificate be issued, and if not, why - per drive (contract C4).
   // Same permissions and the same scoped-manager rule as the certificate
   // download above, because it answers the same question without the PDF.
