@@ -131,9 +131,10 @@ l=$(browser_line)
 case "$l" in "xdg-open http://127.0.0.1:8800") ok "without ESR: xdg-open, as before" ;; *) bad "full without esr" "$l" ;; esac
 
 echo "no background network chatter from a brand-new profile"
-# A fresh profile fetches ~50 MB right after the page loads (remote settings,
-# Suggest, OpenH264, Safe Browsing lists) - measured; none of it serves a
-# one-page local kiosk.
+# A fresh profile fetches ~40 MB from ~60 hosts in its first minute (Suggest,
+# OpenH264, Safe Browsing lists, new-tab stories, ...); with these prefs
+# ~23 MB, mostly Remote Settings, which is kept on purpose -
+# measured, see write_ff_prefs. None of the rest serves a one-page local kiosk.
 run kiosk firefox-esr
 UJ="$T/home/als-kiosk-profile-esr/user.js"
 miss=""

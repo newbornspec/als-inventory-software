@@ -228,17 +228,29 @@ fi
 # already doing by clicking Continue. dataSubmissionPolicyBypassNotification
 # stops the older data-reporting info bar for the same reason.
 #
-# No background network chatter. A brand-new profile - every boot, here - goes
-# on to fetch ~50 MB right after the kiosk page loads: remote settings
-# (34 MB), the Suggest database (17 MB), the OpenH264 plugin and the Safe
-# Browsing lists, plus Normandy, telemetry, add-on and search updates, region
-# lookups and captive-portal/connectivity probes. The kiosk loads one page on
-# 127.0.0.1 and has no URL bar, so none of it serves anything, and all of it
-# competes with the operator's first minutes on a 2-core machine. Measured
-# off the station: ~0.1 s earlier to the first request, and those downloads
-# gone. Safe Browsing off is a trade-off only for pages other than the local
-# kiosk, which it never shows. network.proxy.type is deliberately NOT set,
-# so a station that needs the system proxy keeps it.
+# Less background network chatter. A brand-new profile - every boot, here -
+# goes on to fetch a lot right after the kiosk page loads: the Suggest
+# database, the OpenH264 plugin, the Safe Browsing lists, new-tab stories and
+# their images from ~60 news sites, Normandy, telemetry, add-on and search
+# updates, region lookups and captive-portal/connectivity probes. The kiosk
+# loads one page on 127.0.0.1 and has no URL bar, so none of it serves
+# anything, and all of it competes with the operator's first minutes on a
+# 2-core machine. Safe Browsing off is a trade-off only for pages other than
+# the local kiosk, which it never shows. network.proxy.type is deliberately
+# NOT set, so a station that needs the system proxy keeps it.
+#
+# MEASURED (2026-09-19, this ESR, headless, fresh profile, 60 s after the
+# first request, twice each): without these prefs ~40 MB received from ~60
+# hosts, and suggest.sqlite, gmp-gmpopenh264 and safebrowsing/ were created;
+# with them ~23 MB, none of those three, and the only remote hosts left are
+# Remote Settings (firefox.settings.services / -attachments.cdn /
+# content-signature-2.cdn.mozilla.net - the ~17 MB security_state
+# certificate data and the add-on blocklist), Google's CDM updater
+# (update.googleapis.com, dl.google.com) and a handful of top-site icons.
+# Remote Settings is left ON on purpose: it is how Firefox keeps its
+# certificate-revocation data current, and turning it off is a separate
+# decision from saving bandwidth. The first-request time: ~0.1 s earlier
+# warm; cold it is inside the noise.
 write_ff_prefs() {  # write_ff_prefs <profile dir>
     mkdir -p "$1"
     cat > "$1/user.js" <<'PREFS'
