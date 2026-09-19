@@ -445,11 +445,18 @@ a second person's login; a sacrificial drive; an Ethernet cable.
 - Step 7.1: the wipe works and uploads with **no** sign-in prompt. The
   12-hour sign-in is renewed in the background while the station is online.
   That is correct, not a fault.
-- Step 7.2: the server now refuses your session. The wipe itself may still
-  run, but its upload is refused: the station signs you out and the sign-in
-  panel says your sign-in has expired. The record shows `waiting to upload`,
-  not an unclear error. Sign in again with the new password: it uploads, and
-  its certificate names you.
+- Step 7.2: the server now refuses your session (it answers "Your password
+  was changed", as HTTP 403). The wipe itself usually still runs: the
+  station only learns this when it next talks to the server. (If it already
+  learned it, from a lookup such as the batch check, the wipe is refused
+  with the sign-in prompt below instead. That is also a pass.) The upload
+  is refused, and
+  the station then signs you out: the sign-in panel opens with **The server
+  ended your session: Your password was changed. Please sign in again.** The
+  record shows `waiting to upload`, not an unclear error. Sign in again with
+  the new password: it uploads, and its certificate names you. (The same
+  happens, with "This account has been disabled", if an admin disables the
+  account while you are signed in.)
 
 **Send back:** photos of the sign-in screen, the step-1 refusal, the step-2
 error, and the header with your name; the certificate PDFs from steps 4 and 5;

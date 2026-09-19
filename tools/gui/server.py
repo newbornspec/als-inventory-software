@@ -1139,11 +1139,65 @@ def operator_token_for(owner):
         return operator_token()
 
 
-def authed_api(path, method="GET", body=None, owner=None):
+# The 403s that mean "this SESSION is over", not "this account may not do
+# that". The API authenticates the token (JwtAuthGuard, 401 when it is
+# expired or forged) and THEN PermissionsGuard re-reads the account from the
+# database on every call (apps/api/src/auth/guards/permissions.guard.ts). The
+# token itself is still valid there, so a disabled account, a deleted one, or
+# a token minted before the account's password was changed are refused with
+# 403, not 401, with exactly these messages:
+#   "This account has been disabled."
+#   "This account no longer exists."
+#   "Your password was changed. Please sign in again."
+#   "Not authenticated."            (a token that names no user)
+# Every OTHER 403 ("You don't have permission to do this.", "You do not have
+# access to this lot.") is about the request, and the session stays.
+SESSION_ENDED_403 = ("has been disabled", "no longer exists", "password was changed",
+                     "not authenticated")
+
+
+def server_ended_session(exc):
+    """The server's own message when `exc` is a 403 that ends the session
+    (SESSION_ENDED_403), else None. Reads the error body once and keeps it on
+    the exception, so a caller further up can still ask."""
+    if getattr(exc, "code", None) != 403:
+        return None
+    msg = getattr(exc, "als_message", None)
+    if msg is None:
+        msg = ""
+        try:
+            data = json.loads(exc.read().decode(errors="replace") or "{}")
+            m = data.get("message") if isinstance(data, dict) else None
+            msg = m.strip() if isinstance(m, str) else ""
+        except Exception:  # noqa: BLE001 - no body, not JSON: not a session end
+            msg = ""
+        try:
+            exc.als_message = msg
+        except Exception:  # noqa: BLE001
+            pass
+    low = msg.lower()
+    return msg if msg and any(k in low for k in SESSION_ENDED_403) else None
+
+
+def _ended_text(msg):
+    return "The server ended your session: %s%s" % (
+        msg.rstrip(".") + ".",
+        "" if "sign in again" in msg.lower() else " Sign in again, or ask an administrator.")
+
+
+def authed_api(path, method="GET", body=None, owner=None, timeout=25):
     """api() with the station's current identity. With operator sign-in on, a
     401 (the token expired early, or the account's sessions were revoked) gets
     ONE refresh and retry; if that fails the operator is signed out and must
-    sign in again. Flag off: exactly the old api(..., ensure_token()).
+    sign in again. A 403 that the API uses to END a session - the account
+    was disabled or deleted, or its password was changed (SESSION_ENDED_403)
+    - signs the operator out straight away, with the server's reason: a
+    refresh cannot help there (the API refuses it too), and staying "signed
+    in" left every upload failing with an unexplained HTTP 403. Flag off:
+    the old api(..., ensure_token()), except that such a 403 drops the
+    shared account's cached token, so the next call signs in afresh (with
+    the password audit.conf holds by then) instead of failing until a
+    restart.
 
     `owner`, for a record (post_record): whose record it is - an operator's
     user id, or "" for the shared account. It is then sent only under that
@@ -1160,10 +1214,32 @@ def authed_api(path, method="GET", body=None, owner=None):
         raise OperatorChanged("operator sign-in was switched %s while this record was "
                               "being sent; it stays queued" % ("on" if on else "off"))
     if not on:
-        return api(path, method, body, ensure_token())
+        tok = ensure_token()
+        try:
+            return api(path, method=method, body=body, token=tok, timeout=timeout)
+        except urllib.error.HTTPError as exc:
+            if server_ended_session(exc) and STATE.get("token") == tok:
+                STATE["token"] = None
+            raise
+
+    def call(tok):
+        try:
+            return api(path, method=method, body=body, token=tok, timeout=timeout)
+        except urllib.error.HTTPError as exc:
+            why = server_ended_session(exc)
+            if not why:
+                raise
+            with OPERATOR_LOCK:
+                # Only the session that was refused. If the person signed out
+                # (and someone else in) while this was in flight, the new
+                # session is not theirs to end.
+                if OPERATOR.get("token") == tok:
+                    operator_signout(_ended_text(why))
+            raise SignInRequired(_ended_text(why))
+
     tok = operator_token() if owner is None else operator_token_for(owner)
     try:
-        return api(path, method, body, tok)
+        return call(tok)
     except urllib.error.HTTPError as exc:
         if exc.code != 401:
             raise
@@ -1177,7 +1253,7 @@ def authed_api(path, method="GET", body=None, owner=None):
             if OPERATOR.get("token") == tok:
                 OPERATOR["expiresMono"] = 0.0      # force the refresh below
             tok = operator_token() if owner is None else operator_token_for(owner)
-        return api(path, method, body, tok)
+        return call(tok)
 
 
 # ------------------------------------------------------------- OPERATOR ----
@@ -1613,8 +1689,7 @@ def refresh(do_login=True):
                     # so the header says honestly whether signing in can work.
                     server_reachable()
                 else:
-                    tok = ensure_token()
-                    STATE["lots"] = api("/devices/lots", token=tok) or []
+                    STATE["lots"] = authed_api("/devices/lots") or []
                 # Back online — push anything that was held while offline.
                 if queue_count():
                     threading.Thread(target=queue_flush, daemon=True).start()
@@ -2320,8 +2395,8 @@ def prior_audit(lot_id):
         return PRIOR_CACHE["data"]
 
     try:
-        rows = api("/assets?batchId=%s&search=%s" % (lot_id, urllib.parse.quote(serial)),
-                   token=ensure_token()) or []
+        rows = authed_api("/assets?batchId=%s&search=%s"
+                          % (lot_id, urllib.parse.quote(serial))) or []
     except Exception:  # noqa: BLE001
         return None                      # offline: stay silent rather than guess
 
@@ -2340,7 +2415,7 @@ def prior_audit(lot_id):
 
     audits = []
     try:
-        audits = api("/assets/%s/audits" % match["id"], token=ensure_token()) or []
+        audits = authed_api("/assets/%s/audits" % match["id"]) or []
     except Exception:  # noqa: BLE001
         audits = []
     last = audits[0] if isinstance(audits, list) and audits else None
@@ -2379,8 +2454,7 @@ def certificate_eligibility(asset_id):
     if not re.match(r"^[A-Za-z0-9-]{1,64}$", asset_id or ""):
         return {"known": False, "why": "no asset id"}
     try:
-        out = api("/assets/%s/certificate-eligibility" % asset_id, token=ensure_token(),
-                  timeout=10)
+        out = authed_api("/assets/%s/certificate-eligibility" % asset_id, timeout=10)
     except urllib.error.HTTPError as exc:
         # 404 = an API that predates C4 (or an asset this account cannot see).
         # Both are "unknown", by contract - not "no certificate".
@@ -3631,7 +3705,7 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/api/sublots":
             batch = (parse_qs(u.query).get("batchId") or [""])[0]
             try:
-                subs = api("/lots?batchId=" + batch, token=ensure_token()) or []
+                subs = authed_api("/lots?batchId=" + urllib.parse.quote(batch, safe="")) or []
                 return self._send(200, subs)
             except Exception as exc:  # noqa: BLE001
                 return self._send(500, {"message": str(exc)})
