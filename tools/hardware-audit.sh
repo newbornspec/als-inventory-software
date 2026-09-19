@@ -438,32 +438,277 @@ ensure_tools() {
 # pseudo devices before any of these run. The text-mode wipe that used to call
 # them too was retired - see wipe_internal_drives.
 
-# Verification pass: sampled read-back confirming the device now reads as zeros
-# at the start, middle and near the end. Returns 0 (verified) or 1 (not clean).
-verify_zero() {
-  local dev="$1" sz mb offs o want
+# --- read-back verification: does the drive still hold what it held? ---------
+#
+# A firmware erase used to be verified by asking whether the drive now read as
+# ZEROS - and when it did not, the result was recorded anyway as
+# "confirmed by the controller", on its own word. A crypto erase SHOULD read
+# back as random (the old key is gone, the ciphertext stays), so that branch
+# existed for a real reason; but it also passed, byte for byte the same, a
+# controller that answered "done" and changed nothing. That drive got a
+# certificate saying its data was unrecoverable while the customer's partition
+# table, NTFS volume and files were still there to be read.
+#
+# So the read-back now asks the question that matters: is any of the OLD data
+# still recognisable? verify_erased reads bounded windows of the drive with
+# O_DIRECT (the first MiB, eight spread across the device, the last MiB, and a
+# MiB at every partition start recorded BEFORE the erase) and hands each one to
+# a small python3 checker (als_verify_py) that:
+#   - hard-fails on any on-disk structure signature: the 0x55AA boot signature
+#     at byte 510, "EFI PART" (primary GPT at LBA 1 for 512 or 4096 byte
+#     sectors, and the backup at the last LBA), NTFS, BitLocker (-FVE-FS-),
+#     FAT/exFAT, LUKS, ext2/3/4, XFS, Btrfs, APFS and swap - at the start of
+#     the disk and at every saved partition start. An erase that worked leaves
+#     none of them; a controller that lied leaves all of them.
+#   - after a FIRMWARE method, accepts content that is all zeros, all 0xFF, a
+#     short repeated vendor fill, or high-entropy (ciphertext after a crypto
+#     erase), judged per 4 KiB. Anything else looks like data and fails.
+#   - after an OVERWRITE, accepts nothing but zeros (the last pass wrote them).
+# Returns 0 = clean, 1 = old data found, 2 = could not verify (a short or failed
+# read, the device gone, no python3). Sets VE_WHY (the finding or the reason),
+# VE_LABEL (what the clean drive read as: zeros, 0xFF, random, pattern, or a
+# "+"-joined mix) and VE_MIB (MiB read). Owner decision D31 (reversible): a
+# drive that could not be verified is recorded as failed, never as wiped.
+#
+# What it cannot see: data that is already high-entropy (compressed or
+# encrypted files) sitting in the middle of the drive between the windows
+# looks the same as ciphertext. The signature checks at every saved partition
+# start are what catch the lying controller; the content check catches the
+# rest of what it reads.
+#
+# The checker is printed by a function (not kept in a variable) so the tests
+# can extract and run exactly this code. Keep every python line from starting
+# with "}" - the tests' extractor ends a function at the first such line.
+als_verify_py() {
+  cat <<'PYEOF'
+import sys, math
+from collections import Counter
+
+def u32(b, o):
+    return int.from_bytes(b[o:o + 4], "little")
+
+def u64(b, o):
+    return int.from_bytes(b[o:o + 8], "little")
+
+# (what it is, offset from the start of the structure, the magic bytes)
+# The bare 0x55AA is last: every NTFS/FAT/BitLocker boot sector carries it
+# too, and the finding should name the volume, not just "a boot sector".
+SIGS = [
+    ("GPT header (EFI PART)", 512, b"EFI PART"),
+    ("GPT header (EFI PART, 4K sectors)", 4096, b"EFI PART"),
+    ("NTFS boot sector", 3, b"NTFS    "),
+    ("BitLocker boot sector (-FVE-FS-)", 3, b"-FVE-FS-"),
+    ("exFAT boot sector", 3, b"EXFAT   "),
+    ("FAT boot sector", 54, b"FAT12   "),
+    ("FAT boot sector", 54, b"FAT16   "),
+    ("FAT boot sector", 54, b"FAT     "),
+    ("FAT32 boot sector", 82, b"FAT32   "),
+    ("LUKS header", 0, b"LUKS\xba\xbe"),
+    ("LUKS2 secondary header", 16384, b"SKUL\xba\xbe"),
+    ("ext2/3/4 superblock", 1080, b"\x53\xef"),
+    ("XFS superblock", 0, b"XFSB"),
+    ("Btrfs superblock", 65600, b"_BHRfS_M"),
+    ("APFS container", 32, b"NXSB"),
+    ("Linux swap signature", 4086, b"SWAPSPACE2"),
+    ("MBR/boot-sector signature 0x55AA", 510, b"\x55\xaa"),
+]
+
+def parts(data, ss):
+    # Partition start byte offsets from the MBR and the GPT (either sector size).
+    out = []
+    if len(data) >= 512 and data[510:512] == b"\x55\xaa":
+        for i in range(4):
+            e = data[446 + 16 * i:462 + 16 * i]
+            if len(e) == 16 and e[4] not in (0, 0xEE) and u32(e, 8):
+                out.append(u32(e, 8) * ss)
+    for gss in (512, 4096):
+        h = data[gss:gss + 92]
+        if len(h) < 92 or h[:8] != b"EFI PART":
+            continue
+        lba, n, esz = u64(h, 72), u32(h, 80), u32(h, 84)
+        if esz < 128 or n > 1024:
+            continue
+        for i in range(n):
+            o = lba * gss + i * esz
+            e = data[o:o + esz]
+            if len(e) < 48:
+                break
+            if e[:16] != bytes(16) and u64(e, 32):
+                out.append(u64(e, 32) * gss)
+    return out
+
+def entropy(c):
+    n = len(c)
+    return -sum(k / n * math.log2(k / n) for k in Counter(c).values())
+
+def classify(c):
+    n = len(c)
+    if c.count(0) == n:
+        return "zeros"
+    if c.count(255) == n:
+        return "0xFF"
+    for p in (1, 2, 4, 8, 16, 32, 64, 128, 256, 512):
+        if n > p and n % p == 0 and c == c[:p] * (n // p):
+            return "pattern"
+    if entropy(c) >= (7.8 if n >= 4096 else 7.0):
+        return "random"
+    return None
+
+def fill(data, r, n):
+    # A 4 KiB block that is one uniform fill cannot hold a boot sector or a
+    # superblock. Without this a vendor fill of 55 AA 55 AA ... would "hold"
+    # the 0x55AA boot signature at byte 510.
+    # A TWO-byte magic (0x55AA, the ext 0xEF53) inside a block of ciphertext is
+    # chance: 1 in 65536 per place looked, so a genuine crypto erase would be
+    # sent to an hours-long overwrite now and then for nothing. A real boot
+    # sector or superblock is mostly zeros and small fields - it never reads as
+    # 7.8 bits/byte - so a 2-byte hit inside a random-looking block is ignored.
+    # Every longer magic (EFI PART, NTFS, -FVE-FS-, LUKS...) still counts there.
+    o = r // 4096 * 4096
+    k = classify(data[o:o + 4096])
+    return k in ("zeros", "0xFF", "pattern") or (k == "random" and n <= 2)
+
+def check(mode, base, want, size, starts, data):
+    if len(data) < want:
+        return 2, "short read at byte %d: %d of %d bytes came back" % (base, len(data), want)
+    data = data[:want]
+    end = base + want
+    for s in sorted(set(starts)):
+        for name, off, magic in SIGS:
+            a = s + off
+            if base <= a and a + len(magic) <= end and data[a - base:a - base + len(magic)] == magic \
+                    and not fill(data, a - base, len(magic)):
+                return 1, "%s at byte %d" % (name, a)
+    for ss in (512, 4096):
+        a = size - ss
+        if a > 0 and base <= a and a + 8 <= end and data[a - base:a - base + 8] == b"EFI PART" \
+                and not fill(data, a - base, 8):
+            return 1, "backup GPT header (EFI PART) at byte %d" % a
+    if mode == "overwrite":
+        z = len(data) - len(data.lstrip(b"\0"))
+        if z < len(data):
+            return 1, "non-zero data at byte %d (an overwrite must read back as zeros)" % (base + z)
+        return 0, "zeros"
+    seen = []
+    for o in range(0, len(data), 4096):
+        c = data[o:o + 4096]
+        k = classify(c)
+        if k is None:
+            return 1, "data that is not an erase pattern at byte %d (entropy %.2f bits/byte)" % (base + o, entropy(c))
+        if k not in seen:
+            seen.append(k)
+    return 0, ",".join(seen)
+
+# Answers are written with no newline: the shell's $(...) would strip a "\n"
+# but not the "\r" a text-mode stdout adds on some platforms, and a stray "\r"
+# would end up inside the method label.
+def main():
+    a = sys.argv[1:]
+    data = sys.stdin.buffer.read()
+    if a[0] == "parts":
+        sys.stdout.write(" ".join(str(x) for x in parts(data, int(a[1]))))
+        return 0
+    rc, msg = check(a[0], int(a[1]), int(a[2]), int(a[3]), [int(x) for x in a[4:]], data)
+    sys.stdout.write(["clean", "found", "unverified"][rc] + " " + msg)
+    return rc
+
+try:
+    sys.exit(main())
+except SystemExit:
+    raise
+except BaseException as e:
+    sys.stdout.write("unverified checker error: %s" % e)
+    sys.exit(2)
+PYEOF
+}
+
+# Byte offsets where a partition started, recorded BEFORE the erase: the ones
+# the kernel knows (sysfs, in 512-byte units) and the ones in the on-disk MBR /
+# GPT itself (the kernel may not have scanned a table, and a table the kernel
+# rejected can still hold a volume). After the erase these are exactly the
+# places a filesystem's own boot sector or superblock would still be found if
+# the erase did nothing - which is what verify_erased looks for there.
+# $1 = device, $2 = kernel name. Prints space-separated offsets (maybe none).
+als_part_starts() {
+  local dev="$1" d="$2" sys="${ALS_SYS_ROOT:-}/sys" f s out="" py sz ss blk
+  for f in "$sys/block/$d/$d"*/start; do
+    [ -r "$f" ] || continue
+    s=$(cat "$f" 2>/dev/null)
+    case "$s" in ''|*[!0-9]*) continue ;; esac
+    out="$out $(( s * 512 ))"
+  done
+  py=$(command -v python3 2>/dev/null)
   sz=$(blockdev --getsize64 "$dev" 2>/dev/null)
-  case "$sz" in ''|*[!0-9]*) return 1;; esac
-  [ "$sz" -gt 0 ] || return 1
+  if [ -n "$py" ] && case "$sz" in ''|*[!0-9]*|0) false ;; *) true ;; esac; then
+    ss=$(blockdev --getss "$dev" 2>/dev/null)
+    case "$ss" in 512|4096) ;; *) ss=512 ;; esac
+    blk=4096; [ $(( sz % 4096 )) -eq 0 ] || blk=512
+    s=1048576; [ "$sz" -lt "$s" ] && s="$sz"
+    out="$out $(dd if="$dev" bs="$blk" count=$(( s / blk )) iflag=direct 2>/dev/null \
+      | "$py" -c "$(als_verify_py)" parts "$ss" 2>/dev/null)"
+  fi
+  # shellcheck disable=SC2086
+  printf '%s' "$(echo $out)"
+}
+
+verify_erased() {
+  local dev="$1" mode="$2" starts="${3:-}" py sz blk win=1048576 offs o s i n out rc seen=" " cnt=0 lab=""
+  VE_WHY=""; VE_LABEL=""; VE_MIB=0
+  py=$(command -v python3 2>/dev/null)
+  [ -n "$py" ] || { VE_WHY="python3 is not installed, so the drive could not be read back"; return 2; }
+  [ -e "$dev" ] || { VE_WHY="$dev is no longer present"; return 2; }
+  sz=$(blockdev --getsize64 "$dev" 2>/dev/null)
+  case "$sz" in ''|*[!0-9]*|0) VE_WHY="could not read the size of $dev"; return 2 ;; esac
   # Read the DRIVE, not the page cache: flush it, then read with O_DIRECT. A
   # cached copy of what was just written would otherwise answer for the disk.
   blockdev --flushbufs "$dev" >/dev/null 2>&1
-  mb=$(( sz / 1048576 ))
+  # O_DIRECT needs offsets and lengths in whole logical sectors. A size that is
+  # a multiple of 4096 works in 4 KiB units whatever the sector size; one that
+  # is not can only be a 512-byte-sector drive, whose last 512 bytes (the
+  # backup GPT) 4 KiB units would miss.
+  blk=4096; [ $(( sz % 4096 )) -eq 0 ] || blk=512
+  # Bounded windows, never the whole drive: the first MiB, eight spread
+  # evenly, the last MiB, and one at each pre-erase partition start (at most
+  # 32). A 1 TB drive with no partitions reads 10 MiB.
   offs="0"
-  [ "$mb" -gt 128 ] && offs="0 $(( mb / 2 )) $(( mb - 32 ))"
-  want=33554432
-  [ "$sz" -lt "$want" ] && want="$sz"
-  for o in $offs; do
-    # The whole window must come back, and every byte of it must be zero.
-    #
-    # This used to count the NON-zero bytes in whatever dd returned. A read
-    # that failed returned nothing - zero non-zero bytes - so a drive that
-    # could not be read at all "verified (reads as zeros)". cmp settles both
-    # questions in one pass: it compares exactly $want bytes against zeros,
-    # and a short or empty read hits EOF first and fails.
-    dd if="$dev" bs=1M count=32 skip="$o" iflag=direct 2>/dev/null \
-      | cmp -s -n "$want" - /dev/zero || return 1
+  if [ "$sz" -gt "$win" ]; then
+    for i in 1 2 3 4 5 6 7 8; do offs="$offs $(( sz / 9 * i / blk * blk ))"; done
+    offs="$offs $(( (sz - win) / blk * blk ))"
+  fi
+  n=0
+  for s in $starts; do
+    case "$s" in ''|*[!0-9]*) continue ;; esac
+    [ "$s" -lt "$sz" ] || continue
+    n=$(( n + 1 )); [ "$n" -le 32 ] || break
+    offs="$offs $(( s / blk * blk ))"
   done
+  for o in $offs; do
+    case "$seen" in *" $o "*) continue ;; esac
+    seen="$seen$o "
+    n=$(( sz - o )); [ "$n" -gt "$win" ] && n=$win
+    # shellcheck disable=SC2086
+    out=$(dd if="$dev" bs="$blk" skip=$(( o / blk )) count=$(( n / blk )) iflag=direct 2>/dev/null \
+      | "$py" -c "$(als_verify_py)" "$mode" "$o" "$n" "$sz" 0 $starts 2>/dev/null)
+    rc=$?
+    cnt=$(( cnt + n ))
+    # Only a checker that SAID what it found counts as a finding. A crash, a
+    # killed interpreter or no output is "could not verify", never "clean" and
+    # never a reason to overwrite.
+    case "$rc:$out" in
+      0:clean\ *) for i in $(printf '%s' "${out#clean }" | tr ',' ' '); do
+                    case " $lab " in *" $i "*) ;; *) lab="$lab $i" ;; esac
+                  done ;;
+      1:found\ *) VE_WHY="${out#found }"; VE_MIB=$(( cnt / 1048576 )); return 1 ;;
+      2:unverified\ *) VE_WHY="${out#unverified }"; VE_MIB=$(( cnt / 1048576 )); return 2 ;;
+      *) VE_WHY="the read-back checker gave no verdict at byte $o (exit $rc)"; VE_MIB=$(( cnt / 1048576 )); return 2 ;;
+    esac
+  done
+  VE_MIB=$(( cnt / 1048576 ))
+  # shellcheck disable=SC2086
+  set -- $lab
+  VE_LABEL="$1"; shift
+  for i in "$@"; do VE_LABEL="$VE_LABEL + $i"; done
+  [ -n "$VE_LABEL" ] || { VE_WHY="nothing was read back"; return 2; }
   return 0
 }
 
@@ -496,7 +741,12 @@ ata_secure_erase() {
 
   hdparm --user-master u --security-set-pass "$pass" "$dev" >/dev/null 2>&1 || return 1
   if hdparm --user-master u $eraseflag "$pass" "$dev" >/dev/null 2>&1; then
-    M="$label"; return 0
+    # NIST SP 800-88: the ENHANCED erase (which also reaches reallocated and
+    # vendor-reserved areas) is a Purge; the normal one writes only the user
+    # area, which is a Clear.
+    M="$label"
+    if [ "$eraseflag" = "--security-erase-enhanced" ]; then FW_LEVEL=purge; else FW_LEVEL=clear; fi
+    return 0
   fi
   hdparm --user-master u --security-disable "$pass" "$dev" >/dev/null 2>&1
   echo "    ATA secure erase failed on $dev — will overwrite instead."
@@ -634,12 +884,12 @@ firmware_erase() {
       local ctrl="/dev/${d%%n[0-9]*}" err=""   # nvme0n1 -> nvme0
       if [ "$want" = "crypto" ] || [ "$want" = "auto" ]; then
         # Prefer format-based crypto, else the SANITIZE crypto-erase (widely supported).
-        err=$(nvme format "$dev" -s 2 --force 2>&1) && { M="NVMe cryptographic erase (nvme format -s2)"; return 0; }
-        nvme_sanitize "$ctrl" 4 && { M="NVMe cryptographic erase (sanitize)"; return 0; }
+        err=$(nvme format "$dev" -s 2 --force 2>&1) && { M="NVMe cryptographic erase (nvme format -s2)"; FW_LEVEL=purge; return 0; }
+        nvme_sanitize "$ctrl" 4 && { M="NVMe cryptographic erase (sanitize)"; FW_LEVEL=purge; return 0; }
         [ "$want" = "crypto" ] && { echo "    crypto erase unavailable — $(printf '%s' "$err" | head -n1)"; return 1; }
       fi
-      err=$(nvme format "$dev" -s 1 --force 2>&1) && { M="NVMe secure erase (nvme format -s1)"; return 0; }
-      nvme_sanitize "$ctrl" 2 && { M="NVMe block-erase sanitize"; return 0; }
+      err=$(nvme format "$dev" -s 1 --force 2>&1) && { M="NVMe secure erase (nvme format -s1)"; FW_LEVEL=purge; return 0; }
+      nvme_sanitize "$ctrl" 2 && { M="NVMe block-erase sanitize"; FW_LEVEL=purge; return 0; }
       echo "    NVMe firmware erase unavailable — $(printf '%s' "$err" | head -n1)"
       return 1
       ;;
@@ -693,12 +943,15 @@ wipe_internal_drives() {
 # Called as:
 #   hardware-audit.sh --wipe-drive /dev/sdX [auto|crypto|secure|overwrite|zero] [expected-serial]
 # Wipes ONE explicitly named internal drive with the erase helpers above
-# (firmware_erase / shred + verify_zero). This is the only wipe path.
-# Emits human-readable progress on stdout and EXACTLY ONE final line on every
-# exit path (see wipe_result and contract C1):
+# (firmware_erase / shred, each read back by verify_erased). This is the only
+# wipe path. Emits human-readable progress on stdout and EXACTLY ONE final line
+# on every exit path (see wipe_result and contract C1):
 #   WIPE_RESULT {"status":"wiped|failed|refused","device":"/dev/sdX","method":"…",
 #                "reason":"…","toolVersion":…,"startedAt":…,"finishedAt":…,
-#                "drive":{"serialNumber":…},"methodRequested":…}
+#                "drive":{"serialNumber":…},"methodRequested":…,
+#                "sanitisationLevel":"purge|clear|none","verification":"clean|found|unverified"}
+# "wiped" ALWAYS means the drive was read back afterwards and none of its old
+# data was recognisable. There is no status for "the drive said it worked".
 # "refused" means NOTHING was written: not a block device, removable, USB, the
 # boot disk, a pseudo-device, or not the drive the operator picked (serial
 # mismatch). Removable, USB and boot disk are three separate checks, so the
@@ -898,12 +1151,20 @@ wipe_result() {
   o_s finishedAt "$(als_utc_now)"
   [ "$drv" = "{}" ] || o_raw drive "$drv"
   o_s methodRequested "$WR_WANT"
+  # Level by NIST SP 800-88, and only for what was actually achieved AND read
+  # back: purge / clear on a verified wipe, none on a failure, left out on a
+  # refusal (nothing was written). See gui_wipe_one.
+  case "$1" in
+    wiped)  o_s sanitisationLevel "$WR_LEVEL" ;;
+    failed) o_s sanitisationLevel none ;;
+  esac
+  o_s verification "$WR_VERIFY"
   echo "WIPE_RESULT $(o_end)"
 }
 
 gui_wipe_one() {
   local dev="$1" want="${2:-auto}" expect="${3:-}" d rota m verified fw
-  WR_DEV="$dev"; WR_WANT="$want"; WR_STARTED=$(als_utc_now)
+  WR_DEV="$dev"; WR_WANT="$want"; WR_STARTED=$(als_utc_now); WR_VERIFY=""; WR_LEVEL=""
   DRV_SERIAL=""; DRV_MODEL=""; DRV_SIZE=""; DRV_TRAN=""; DRV_ROTA=""; DRV_WWN=""
   if [ -z "$dev" ] || [ ! -b "$dev" ]; then
     echo "Refusing: ${dev:-(no device given)} is not a block device."
@@ -972,17 +1233,48 @@ gui_wipe_one() {
     echo "  spinning disk this size can take several hours — progress is shown below."
   fi
 
+  # Where the partitions were, read BEFORE anything is erased: afterwards the
+  # table itself may be gone while the volumes it pointed at are not, and
+  # these offsets are where verify_erased looks for them.
+  local parts vr
+  parts=$(als_part_starts "$dev" "$d")
+
+  FW_LEVEL=""
   if firmware_erase "$dev" "$d"; then m="$M"; fw=1; fi
 
   # No TRIM here, on purpose. This used to run blkdiscard when the firmware
-  # erase failed on an SSD and record it as the wipe - then verify_zero passed
-  # it, because a TRIMmed drive reads back zeros by design whether or not the
-  # NAND was erased. It produced a certificate saying "unrecoverable" about data
-  # that could still be there, for every SSD whose firmware erase failed -
-  # including when the operator had explicitly chosen "overwrite". An SSD now
-  # falls through to a real overwrite, labelled for what it reaches.
+  # erase failed on an SSD and record it as the wipe - then the zeros check
+  # passed it, because a TRIMmed drive reads back zeros by design whether or
+  # not the NAND was erased. It produced a certificate saying "unrecoverable"
+  # about data that could still be there, for every SSD whose firmware erase
+  # failed - including when the operator had explicitly chosen "overwrite". An
+  # SSD now falls through to a real overwrite, labelled for what it reaches.
 
-  if [ -z "$m" ]; then
+  # A firmware erase is believed only once the drive has been read back. There
+  # used to be a third answer here - "confirmed by the controller", taken when the
+  # read-back did not show zeros - and it certified a controller that said
+  # "done" and changed nothing exactly like a real erase. Now:
+  #   clean            -> wiped (Purge, or Clear for a normal ATA erase)
+  #   old data found   -> announced, and down the ladder to a real overwrite
+  #   could not verify -> failed with the reason (owner decision D31)
+  if [ "$fw" = "1" ]; then
+    echo "Verifying: reading the drive back …"
+    verify_erased "$dev" firmware "$parts"; vr=$?
+    case "$vr" in
+      0) verified=1; WR_VERIFY=clean; WR_LEVEL="${FW_LEVEL:-clear}"
+         m="$m — verified (reads as $VE_LABEL)" ;;
+      1) WR_VERIFY=found
+         echo "  OLD DATA STILL PRESENT after $m: $VE_WHY."
+         echo "  The drive reported success but did not erase. Falling back to a full"
+         echo "  overwrite — this is the slow path and can take hours …"
+         m="" ;;
+      *) WR_VERIFY=unverified
+         reason="could not verify the erase: $VE_WHY"
+         m="$m — NOT verified" ;;
+    esac
+  fi
+
+  if [ -z "$m" ] && [ -z "$reason" ]; then
     if [ "$want" = "zero" ]; then
       echo "  Overwriting — single zero pass (NIST 800-88 Clear) …"
       if run_overwrite "$dev" 1; then
@@ -1000,30 +1292,24 @@ gui_wipe_one() {
         echo "  Overwrite failed: $reason"
       fi
     fi
-  fi
-
-  if [ -n "$m" ]; then
-    echo "Verifying …"
-    if verify_zero "$dev"; then
-      verified=1; m="$m — verified (reads as zeros)"
-    elif [ "$fw" = "1" ]; then
-      verified=1; m="$m — controller-confirmed"
-    else
-      # The firmware claimed success but the disk does not read back as zeros.
-      # Fall back to a full overwrite — announced, because it takes hours.
-      echo "  Verify failed — falling back to a full overwrite pass …"
-      if [ "$want" = "zero" ]; then p=1; else p=2; fi
-      if run_overwrite "$dev" "$p" && verify_zero "$dev"; then
-        m="Overwrite — $([ "$p" = "1" ] && echo "single zero pass" || echo "shred 1 pass + zero") ($(clear_label "$rota")) — verified (reads as zeros)"
-        verified=1
-      else
-        reason="${OVR_ERR:-verification failed: device does not read back as zeros}"
-      fi
+    # The last pass of every overwrite writes zeros, so zeros are the only
+    # acceptable read-back here - and the partition signatures must be gone.
+    if [ -n "$m" ] && [ -z "$reason" ]; then
+      echo "Verifying: reading the drive back …"
+      verify_erased "$dev" overwrite "$parts"; vr=$?
+      case "$vr" in
+        0) verified=1; WR_VERIFY=clean; WR_LEVEL=clear
+           m="$m — verified (reads as zeros)" ;;
+        1) WR_VERIFY=found; reason="verification failed: $VE_WHY" ;;
+        *) WR_VERIFY=unverified; reason="could not verify the overwrite: $VE_WHY" ;;
+      esac
     fi
   fi
 
-  if [ -n "$m" ] && [ "$verified" = "1" ]; then
+  if [ -n "$m" ] && [ "$verified" = "1" ] && [ -z "$reason" ]; then
     echo "✓ $m"
+    echo "  Read back ${VE_MIB} MiB across the drive: no old data found."
+    echo "  Sanitisation level: $WR_LEVEL (NIST SP 800-88)."
     wipe_result wiped "$m" ""
     return 0
   fi

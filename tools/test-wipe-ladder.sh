@@ -3,14 +3,14 @@
 #
 # Why this exists. The remediation spec's D-1: on an SSD whose firmware erase
 # failed, the ladder fell through to `blkdiscard` (TRIM), recorded "Block
-# discard / TRIM (SSD)" as the wipe method, and then verify_zero "verified" it -
+# discard / TRIM (SSD)" as the wipe method, and then the zeros check "verified" it -
 # because a TRIMmed drive reports zeros by design (DRAT/RZAT) while the NAND
 # behind it can be untouched. TRIM is a hint to the controller, not an erase.
 # That is the one path that produced a confidently wrong certificate.
 #
-# And D-1/D-3: verify_zero counted the non-zero bytes in what dd read back. A
-# read that FAILED returned nothing - zero non-zero bytes - so an unreadable
-# drive "verified (reads as zeros)".
+# And D-1/D-3: the zeros check counted the non-zero bytes in what dd read back.
+# A read that FAILED returned nothing - zero non-zero bytes - so an unreadable
+# drive "verified (reads as zeros)". That is now tools/test-wipe-verify.sh.
 #
 #   bash tools/test-wipe-ladder.sh
 #
@@ -49,7 +49,7 @@ for t in shred dd blkdiscard hdparm nvme rtcwake wipefs sgdisk; do
   printf '#!/bin/sh\necho "%s $*" >> "%s"\nrc=$(printenv STUB_RC_%s)\nexit ${rc:-0}\n' "$t" "$LOG" "$t" > "$TRIP/$t"
   chmod +x "$TRIP/$t"
 done
-# dd needs to be able to HAND BACK data for the verify_zero cases.
+# dd can hand back data (kept for any read-back a stub does not cover).
 # STUB_DD: "zeros" (32 MiB of zeros), "empty" (nothing, read failed), "data".
 cat > "$TRIP/dd" <<EOF
 #!/bin/sh
@@ -94,7 +94,9 @@ case "$FUNCS" in *'[ ! -e "$dev" ]'*) ;; *) echo "could not relax the -b check -
 STUBS='
 firmware_erase() { echo "firmware_erase $*" >> "$LOG"; if [ "${STUB_FW:-fail}" = "ok" ]; then M="${STUB_FW_M:-NVMe crypto erase}"; return 0; fi; return 1; }
 run_overwrite()  { echo "run_overwrite $*" >> "$LOG"; return "${STUB_OVR_RC:-0}"; }
-verify_zero()    { echo "verify_zero $*" >> "$LOG"; return "${STUB_VERIFY_RC:-0}"; }
+verify_erased()  { echo "verify_erased $*" >> "$LOG"; VE_LABEL="${STUB_VE_LABEL:-zeros}"; VE_WHY="NTFS boot sector at byte 1048576"; VE_MIB=10
+                   case "$2" in firmware) return "${STUB_VERIFY_FW_RC:-${STUB_VERIFY_RC:-0}}" ;; esac; return "${STUB_VERIFY_RC:-0}"; }
+als_part_starts() { echo "als_part_starts $*" >> "$LOG"; printf "1048576"; }
 blockdev()       { echo 512110190592; }
 cat() { case "$*" in */queue/rotational) echo "${STUB_ROTA:-0}" ;; */removable) echo 0 ;; *) command cat "$@" ;; esac; }
 '
@@ -149,18 +151,8 @@ wipe STUB_ROTA=0 STUB_FW=ok WANT=auto
 [ "$(field status)" = wiped ] && ok "SSD, firmware erase worked and read back clean: wiped" || bad "SSD, firmware erase worked and read back clean: wiped" "$RESULT"
 case "$CALLS" in *run_overwrite*) bad "SSD, firmware worked: no hours-long overwrite" "$CALLS" ;; *) ok "SSD, firmware worked: no hours-long overwrite" ;; esac
 
-echo "D-1/D-3: verify_zero must not pass a read that returned nothing"
-VZ="$(extract "$SRC" verify_zero)"
-vz() {
-  env -i PATH="$TRIP:$SAFE" LOG="$LOG" DEV="$DEV" "$@" "$BASH" -c "$VZ
-blockdev() { echo \${STUB_SIZE:-512110190592}; }
-verify_zero \"\$DEV\"" >/dev/null 2>&1
-}
-vz STUB_DD=zeros;  [ $? -eq 0 ] && ok "all windows read back zeros: passes" || bad "all windows read back zeros: passes" "returned non-zero"
-vz STUB_DD=data;   [ $? -ne 0 ] && ok "old data read back: fails" || bad "old data read back: fails" "returned 0"
-vz STUB_DD=empty;  [ $? -ne 0 ] && ok "the read FAILED (nothing came back): fails" || bad "the read FAILED (nothing came back): fails" "returned 0 - an unreadable drive counts as clean"
-vz STUB_DD=short;  [ $? -ne 0 ] && ok "a SHORT read (1 MiB of a 32 MiB window): fails" || bad "a SHORT read (1 MiB of a 32 MiB window): fails" "returned 0 - a part-read window counts as clean"
-vz STUB_DD=zeros STUB_SIZE=4194304; [ $? -eq 0 ] && ok "a device smaller than one window: whole device read, passes" || bad "a device smaller than one window: whole device read, passes" "returned non-zero"
+# D-1/D-3 (an unreadable drive counting as clean) is now tested against the
+# real read-back, verify_erased, with real bytes: tools/test-wipe-verify.sh.
 
 echo "the whole engine: TRIM survives nowhere as a wipe, in either copy"
 # The text-mode wipe (wipe_internal_drives) had its own copy of the TRIM branch.
@@ -205,7 +197,7 @@ case "$BODY" in
 esac
 case "$TXT" in *"done from the kiosk screen"*) ok "text mode: the operator is told to wipe from the kiosk" ;; *) bad "text mode: the operator is told to wipe from the kiosk" "$TXT" ;; esac
 body=$(extract "$SRC" wipe_internal_drives)
-case "$body" in *firmware_erase*|*run_overwrite*|*verify_zero*|*shred*|*nvme*|*hdparm*) bad "text mode: the duplicated ladder is gone, not left dead" "$body" ;; *) ok "text mode: the duplicated ladder is gone, not left dead" ;; esac
+case "$body" in *firmware_erase*|*run_overwrite*|*verify_erased*|*shred*|*nvme*|*hdparm*) bad "text mode: the duplicated ladder is gone, not left dead" "$body" ;; *) ok "text mode: the duplicated ladder is gone, not left dead" ;; esac
 
 echo
 echo "$PASS passed, $FAIL failed"
