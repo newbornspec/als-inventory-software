@@ -122,7 +122,9 @@
   .dchk{display:flex;align-items:center;gap:10px;border:1px solid var(--line);border-radius:10px;
         padding:10px 13px;margin-bottom:8px;cursor:pointer;font-size:14px}
   .dchk input{width:17px;height:17px;accent-color:var(--blue);flex:none}
-  .dchk .dn{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  /* Wraps rather than truncates: the serial sits at the END of the label, and
+     it is the part the operator checks against the sticker on the disk. */
+  .dchk .dn{flex:1;min-width:0;overflow-wrap:anywhere}
   .dchk .dh{font-size:11px;padding:2px 8px;border-radius:99px;flex:none}
   .dchk .dh.ok{background:#f0fdf4;color:#15803d}
   .dchk .dh.warn{background:#fffbeb;color:var(--amber)}
@@ -131,7 +133,13 @@
   /* one progress block per drive being wiped, since they run concurrently */
   .wjob{border-top:1px solid var(--line2);padding-top:11px;margin-top:11px}
   .wjob:first-child{border-top:0;padding-top:0;margin-top:0}
-  .wjob .wd{font-size:12px;color:var(--ink);font-weight:600}
+  .wjob .wd{font-size:12px;color:var(--ink);font-weight:600;overflow-wrap:anywhere}
+  /* Each drive's own outcome, written once by its onDone and left on screen
+     until the operator presses Done - see confirmWipe(). */
+  .wjob .health,#wSummary{margin:10px 0 0}
+  #wDone{margin-top:12px}
+  /* The confirm dialog lists one drive per line. */
+  #ovMsg{white-space:pre-line}
 
   /* alerts */
   .alert{border:1px solid #fecaca;background:#fef2f2;border-radius:12px;padding:14px 16px;
@@ -225,6 +233,9 @@
         stroke-width="2" stroke-linecap="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg>
         <span id="hUser">—</span></span>
       <button id="hOperator" class="linklike" title="Who is at this station? Recorded on every audit, wipe and restore this session." onclick="setOperator()">Operator: —</button>
+      <!-- Operator sign-in (AUDIT_OPERATOR_SIGNIN=1 on the stick): shown in
+           place of the typed name above. Hidden when the flag is off. -->
+      <button id="hSign" class="linklike hidden" onclick="signClick()">Sign in</button>
       <span class="chip"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
         stroke-width="2" stroke-linecap="round"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M8 3v4M16 3v4M3 11h18"/></svg>
         <span id="hDate">—</span></span>
@@ -467,7 +478,9 @@
                 stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg>
               Wipe</button>
           </div>
-          <div class="hidden" id="wRun"><div id="wRuns"></div></div>
+          <div class="hidden" id="wRun"><div id="wRuns"></div>
+            <div class="health hidden" id="wSummary"></div>
+            <button class="btn gho hidden" id="wDone" onclick="wipeDone()">Done</button></div>
         </div>
 
       </div>
@@ -483,6 +496,31 @@
       <input id="ovPin" type="password" inputmode="numeric" /></label></div>
     <div class="mrow"><button class="btn gho" onclick="closeOv()">Cancel</button>
       <button class="btn dan" id="ovGo" onclick="ovGo()">Confirm</button></div>
+  </div>
+</div>
+
+<!-- Operator sign-in. Static markup (never rewritten by the bootstrap poll, so
+     typing is not interrupted). The password field is cleared the moment the
+     request is sent, whatever the answer; the station keeps no copy. -->
+<div class="ov" id="ovSign">
+  <div class="modal">
+    <h3>Sign in</h3>
+    <p id="signMsg">Sign in with your own ALS account. Every wipe, audit and restore
+      you start is recorded under your name.</p>
+    <label class="fld"><span>Email</span>
+      <input id="signEmail" type="email" autocomplete="off" autocapitalize="off" spellcheck="false" /></label>
+    <!-- new-password, not off: browsers ignore autocomplete=off for logins,
+         but do not fill a SAVED login into a new-password field - so a login
+         the browser kept for the previous person at this bench is not typed
+         in for the next one. Stopping the browser from SAVING the login at
+         all belongs in the kiosk browser profile (start-gui.sh:
+         signon.rememberSignons=false), not in this page. -->
+    <label class="fld"><span>Password</span>
+      <input id="signPass" type="password" autocomplete="new-password"
+        onkeydown="if(event.key==='Enter')doSignIn()" /></label>
+    <div class="diag" id="signErr"></div>
+    <div class="mrow"><button class="btn gho" onclick="closeSign()">Cancel</button>
+      <button class="btn" id="signGo" onclick="doSignIn()">Sign in</button></div>
   </div>
 </div>
 
@@ -587,6 +625,7 @@ async function bootstrap(){
   $('hConn').style.color=bad?'var(--red)':'var(--green)';
   $('hUser').textContent=b.currentUser||'Operator';
   $('hOperator').textContent='Operator: '+(b.operator||'— tap to set');
+  renderSignin(b.signin);
   // Records held on this machine because the network was down.
   const q=b.waiting||0;
   $('hQueue').classList.toggle('hidden',!q);
@@ -595,11 +634,15 @@ async function bootstrap(){
     /* Whether these survive a power-off is the only thing the operator can act
        on, so say it rather than hiding it in a tooltip. */
     const safe=b.queueDurable!==false;
-    $('hQueue').title=safe
+    // Records made by another operator wait for THAT person's sign-in; they
+    // are never sent under whoever is signed in now.
+    const held=b.waitingHeld||0;
+    $('hQueue').title=(safe
       ? q+' record(s) saved on the USB stick, waiting for the network. '+
         'They upload by themselves when it returns — safe to reboot or shut down.'
       : q+' record(s) held in memory because the stick could not be written. '+
-        'DO NOT reboot or shut down: they would be lost.';
+        'DO NOT reboot or shut down: they would be lost.')+
+      (held?' '+held+' of them belong to another operator and upload only when that person signs in.':'');
     $('hQueue').style.color=safe?'var(--amber)':'var(--red)';
   }
   if(b.error){$('errBanner').classList.remove('hidden');$('errMsg').textContent=b.error;}
@@ -632,7 +675,10 @@ async function bootstrap(){
 // depends on the grade.
 function auditGate(){
   const needBatch=wf()==='goods_in';
-  $('aStart').disabled=!(BOOT.device&&wf()&&(!needBatch||$('batchSel').value));
+  // With operator sign-in on, nobody signed in = nothing to file it under.
+  const si=BOOT.signin||{};
+  $('aStart').disabled=!(BOOT.device&&wf()&&(!needBatch||$('batchSel').value)&&
+    (!si.required||si.signedIn));
 }
 
 function fillBatches(){
@@ -653,9 +699,28 @@ function onBatch(){
   checkPrior();
 }
 
-function driveOpts(){return DRIVES.map(d=>'<option value="'+d.device+'" data-bytes="'+(d.bytes||0)+
-  '" data-rota="'+(d.rotational?1:0)+'">'+d.device+' — '+(d.size||'?')+
-  (d.model&&d.model!=='Unknown model'?' · '+d.model:'')+'</option>').join('');}
+/* A drive named the way the operator can check it against the disk itself:
+   device, size, model AND serial. The /dev name alone is not an identity - it
+   shifts when anything is plugged in - and the confirm dialog used to offer
+   nothing else. Model and serial come from the drive's firmware via lsblk, so
+   they are escaped wherever this lands in markup. */
+function driveById(dev){return DRIVES.find(x=>x.device===dev)||null;}
+function driveLabel(d){
+  if(!d)return '';
+  const bits=[d.device+' — '+(d.size||'?')];
+  if(d.model&&d.model!=='Unknown model')bits.push(d.model);
+  // D18: a drive with no readable serial can still be wiped; say so plainly
+  // rather than leaving a gap the operator reads as "not loaded yet".
+  bits.push(d.serial?('S/N '+d.serial):'serial not reported');
+  // D36: a namespace of a multi-namespace NVMe drive is not a separate disk -
+  // a sanitize of it erases its siblings too. Said in the list, not only at
+  // confirm (see nsWarning).
+  const ns=d.namespaces||[];
+  if(ns.length>1)bits.push('same NVMe drive as '+ns.filter(x=>x!==d.device).join(', '));
+  return bits.join(' · ');
+}
+function driveOpts(){return DRIVES.map(d=>'<option value="'+esc(d.device)+'" data-bytes="'+(d.bytes||0)+
+  '" data-rota="'+(d.rotational?1:0)+'">'+esc(driveLabel(d))+'</option>').join('');}
 function fillDrives(){
   fillSelect($('iDrive'),DRIVES.length?driveOpts():'<option value="">No internal drive detected</option>');
   fillWipeDrives();
@@ -677,9 +742,8 @@ function fillWipeDrives(){
       const h=d.health, cls=!h||h.status==='unknown'?'na':(h.status==='failing'?'bad':
               (h.status==='caution'?'warn':'ok'));
       const lab=(h===null||h===undefined)?'checking…':(h.status==='unknown'?'no SMART':h.status);
-      return '<label class="dchk"><input type="checkbox" class="wchk" value="'+d.device+
-        '" onchange="estimate()" checked><span class="dn">'+d.device+' — '+(d.size||'?')+
-        (d.model&&d.model!=='Unknown model'?' · '+d.model:'')+
+      return '<label class="dchk"><input type="checkbox" class="wchk" value="'+esc(d.device)+
+        '" onchange="estimate()" checked><span class="dn">'+esc(driveLabel(d))+
         '</span><span class="dh '+cls+'">'+lab+'</span></label>';}).join('');
     if(setHTML(box,html)&&had){
       // untick what the operator had unticked before the redraw
@@ -952,6 +1016,62 @@ async function setOperator(){
   catch(e){ toast('Could not save the operator name.',false); }
 }
 
+/* Operator sign-in (plan step 27; only when the stick sets
+   AUDIT_OPERATOR_SIGNIN=1 - `s.required`). The typed "Operator:" name is
+   replaced by a real account: the header shows who is signed in, with Sign
+   out; nobody signed in shows Sign in, and the panel opens by itself once so
+   the first thing an operator sees is what they must do. Pure-ish (DOM only),
+   for tools/test-kiosk-ui.py. */
+let SIGN_PROMPTED=false;
+function renderSignin(s){
+  s=s||{};
+  const on=!!s.required;
+  $('hOperator').classList.toggle('hidden',on);
+  $('hSign').classList.toggle('hidden',!on);
+  if(!on)return;
+  if(s.signedIn){
+    $('hSign').textContent='Sign out';
+    $('hSign').title='Signed in as '+(s.name||s.email||'this account')+
+      '. Everything started at this station is recorded under this account.';
+    SIGN_PROMPTED=false;
+  }else{
+    $('hSign').textContent='Sign in';
+    $('hSign').title='Nothing can be wiped, audited or restored until someone signs in.';
+    if(s.message)$('signMsg').textContent=s.message;
+    if(!SIGN_PROMPTED&&$('ovSign').style.display!=='flex'){SIGN_PROMPTED=true;openSign();}
+  }
+}
+function openSign(){$('signErr').textContent='';$('signPass').value='';
+  $('ovSign').style.display='flex';try{$('signEmail').focus();}catch(e){}}
+function closeSign(){$('signPass').value='';$('ovSign').style.display='none';}
+function signClick(){
+  const s=(BOOT&&BOOT.signin)||{};
+  if(!s.signedIn){openSign();return;}
+  openOv('Sign out '+(s.name||s.email||'')+'?',
+    'Wipes already running stay recorded under your name. Nothing new can start '+
+    'until someone signs in.',false,async()=>{closeOv();
+      try{await jpost('/api/operator/signout',{});}catch(e){}
+      bootstrap();},'Sign out');
+}
+async function doSignIn(){
+  const email=$('signEmail').value.trim();
+  let pass=$('signPass').value;
+  // Cleared before the request goes, so the field never holds it longer than
+  // the one call that needs it.
+  $('signPass').value='';
+  if(!email||!pass){$('signErr').textContent='Enter your email and password.';return;}
+  $('signGo').disabled=true; $('signErr').textContent='Signing in…';
+  let r;
+  try{ r=await jpost('/api/operator/signin',{email:email,password:pass}); }
+  catch(e){ r={ok:false,data:{message:'Could not reach the station service.'}}; }
+  pass=null;
+  $('signGo').disabled=false;
+  if(!r.ok){$('signErr').textContent=(r.data&&r.data.message)||'Sign-in failed.';return;}
+  closeSign();
+  toast('Signed in as '+((r.data&&(r.data.name||r.data.email))||email)+' ✓');
+  bootstrap();
+}
+
 async function doAudit(){
   if(!BOOT.device){toast('Hardware not detected yet.',false);return;}
   $('aStart').disabled=true; $('aRun').classList.remove('hidden');
@@ -1035,6 +1155,9 @@ function pollJob(kind,o){
         t+=(j.writeStalled===false)?' · working quietly'
           :' · no new output for '+fmtSecs(j.idle)
             +(j.writeStalled===true?' and no disk activity':' (large drives work quietly)');
+      // Queued behind another namespace of the same NVMe drive (plan step
+      // 36): say what it waits for, not a running clock for work not begun.
+      if(j.waiting)t=j.waiting;
       $(o.statId).textContent=t;}
     if(j.running){setTimeout(tick,1500);return;}
     if(j.result)finish(j.result);
@@ -1044,71 +1167,261 @@ function pollJob(kind,o){
 }
 
 /* -------------------------------------------------------------- wipe --- */
-let RUNNING=0;                       // drives still being wiped
+/* What one drive's run came to, in the words the operator acts on. Pure (no
+   DOM) so tools/test-kiosk-ui.py can run it under node.
+   Before this, each drive's outcome was a 4.2 s toast that the NEXT drive's
+   toast overwrote: two drives finishing a second apart left the first result
+   on screen for under a second, and a failure could vanish unread. */
+/* Plan step 38. The engine reports what was ASKED for (methodRequested), what
+   it tried in order (methodAttempted, comma-separated) and why a stronger or
+   requested method was not used (fallbackReason) - e.g. a "crypto" request
+   on a drive the BIOS froze ends as an overwrite. That used to be invisible:
+   the screen said "Wiped — Overwrite" and nobody knew a purge had been asked
+   for. When the achieved method differs from the request, say so:
+   "requested X, achieved Y (reason)". The engine's own fallbackReason is the
+   signal, or more than one method attempted; an older engine sends neither
+   and the line reads as before. Pure, for tools/test-kiosk-ui.py. */
+const METHOD_WORDS={auto:'the strongest method the drive supports',crypto:'a cryptographic erase',
+  secure:'the drive\'s own secure erase',overwrite:'an overwrite',zero:'a zero fill'};
+const FALLBACK_WORDS={frozen:'the drive\'s security is frozen by the BIOS',
+  unsupported:'the drive does not support it',tool_missing:'the erase tool is missing on this station',
+  verify_failed:'the read-back check after it failed',locked:'the drive is password-locked',
+  aborted:'the drive aborted it',timeout:'it did not finish in time'};
+function fallbackWords(why){
+  return String(why||'').split(',').map(s=>s.trim()).filter(Boolean)
+    .map(s=>FALLBACK_WORDS[s]||s.replace(/_/g,' ')).join('; ');
+}
+function methodNote(r){
+  r=r||{};
+  const tried=String(r.methodAttempted||'').split(',').filter(s=>s.trim());
+  const why=String(r.fallbackReason||'').trim();
+  if(!why&&tried.length<2)return '';
+  const req=String(r.methodRequested||'').trim();
+  return 'requested '+(METHOD_WORDS[req]||req||'a stronger method')+', achieved '+
+    (r.method||'method not reported')+(why?' ('+fallbackWords(why)+')':'');
+}
+/* The engine's limitations are already sentences for a person ("12
+   reallocated sectors - their old contents cannot be reached by an overwrite").
+   Listed as they are, never summarised into a count. */
+function limitsNote(r){
+  const l=((r&&r.limitations)||[]).filter(x=>typeof x==='string'&&x.trim()).map(x=>x.trim());
+  return l.length?' Limitations: '+l.join('; ')+(/[.!?]$/.test(l[l.length-1])?'':'.'):'';
+}
+function wipeOutcome(r){
+  r=r||{};
+  if(r.status==='wiped'){
+    const m=methodNote(r)||r.method||'method not reported';
+    const lim=limitsNote(r);
+    if(r.recorded)
+      return{cls:(methodNote(r)||lim)?'warn':'ok',
+        text:'Wiped — '+m+' — recorded'+(r.recordTag?' as '+r.recordTag:'')+lim};
+    /* Queued for another reason than the network: with operator sign-in, a
+       wipe whose operator signed out before it finished waits for THEIR next
+       sign-in (the server says so in recordError). "no connection" would
+       send the operator hunting for a network fault that is not there. */
+    if(r.queued&&r.recordError&&!/^no connection/.test(r.recordError))
+      return{cls:'warn',text:'Wiped — '+m+' — NOT recorded yet: '+r.recordError+'.'+lim};
+    if(r.queued)
+      return{cls:'warn',text:'Wiped — '+m+' — NOT recorded yet: no connection. The record is '+
+        'saved on this machine and uploads by itself when the network returns.'+lim};
+    return{cls:'warn',text:'Wiped — '+m+' — NOT recorded'+(r.recordError?': '+r.recordError:'')+lim};
+  }
+  if(r.status==='refused')
+    /* The engine wrote nothing (wrong drive, USB, boot disk...), so nothing is
+       recorded either - say both, or "failed" would send the operator looking
+       for a damaged drive. Refused results are never filed (contract C1). */
+    return{cls:'warn',text:'Refused — '+(r.reason||r.method||'the drive was refused')+
+      '. Nothing was written to the drive and nothing was recorded.'};
+  const why=r.reason||r.message||(r.method&&r.method!=='none'?r.method:'')||'reason not reported';
+  const heldWhy=r.queued&&r.recordError&&!/^no connection/.test(r.recordError);
+  return{cls:'bad',text:'FAILED — '+why+(r.recorded?' (the failure is recorded)':
+    (heldWhy?' (the failure is not recorded yet: '+r.recordError+')':
+    (r.queued?' (the failure is saved on this machine and uploads automatically)':'')))+
+    limitsNote(r)};
+}
+
+/* The toast when a run ends. One drive: its method note in full, since that is
+   the one thing the operator must not miss. Several: how many did not get
+   what was asked for; each drive's block has the detail. */
+function wipeToast(results){
+  const rs=(results||[]).filter(Boolean);
+  const fb=rs.filter(r=>r.status==='wiped'&&methodNote(r));
+  const lim=rs.some(r=>limitsNote(r));
+  let t='Wipe finished — ';
+  if(rs.length===1&&fb.length===1)t+=methodNote(fb[0])+'.';
+  else if(fb.length)t+=fb.length+' of '+rs.length+' drives did not get the method asked for — see each drive.';
+  else t+='the result for each drive is on screen.';
+  if(lim)t+=' Limitations noted — see the drive'+(rs.length>1?'s':'')+'.';
+  return t;
+}
+
+/* Can the operator be told "certificate available"? Only when EVERY drive in
+   this run finished as wiped AND its record reached the server (plan step 11,
+   kiosk half) - one failed or unrecorded drive and the machine is not erased.
+   `eligs` are the server's own answers (contract C4) for the assets the run
+   was filed under: undefined while still asking, and an answer with
+   known:false (a 404 from an older API, or offline) counts as unknown, never
+   as "no". Pure, for the same reason as wipeOutcome. */
+function certSummary(results,eligs){
+  const n=results.length, s=n===1?'':'s';
+  const good=results.filter(r=>r&&r.status==='wiped'&&r.recorded).length;
+  if(!n)return{cls:'na',text:''};
+  if(good<n){
+    const failed=results.some(r=>!r||r.status==='failed');
+    return{cls:failed?'bad':'warn',text:'No erasure certificate from this run: '+(n-good)+' of '+n+
+      ' drive'+s+' did not finish as wiped and recorded. Deal with '+(n-good===1?'it':'them')+
+      ' before this machine leaves the bench.'};
+  }
+  if(eligs===undefined)
+    return{cls:'na',text:'All '+n+' drive'+s+' wiped and recorded — checking the certificate with the server…'};
+  const known=(eligs||[]).filter(e=>e&&e.known);
+  const no=known.find(e=>e.available===false);
+  if(no){
+    const bad=(no.drives||[]).filter(d=>d&&d.status!=='wiped')
+      .map(d=>(d.model||'drive')+' '+(d.serialNumber?('S/N '+d.serialNumber):('('+(d.key||'serial not reported')+')'))+
+        ': '+d.status);
+    return{cls:'bad',text:'All '+n+' drive'+s+' here wiped and recorded, but the server will not issue '+
+      'a certificate yet ('+(no.verdict||'no verdict')+')'+(no.reason?': '+no.reason:'')+
+      (bad.length?' — '+bad.join('; '):'')+'.'};
+  }
+  if(known.length&&known.length===(eligs||[]).length)
+    return{cls:'ok',text:'All '+n+' drive'+s+' wiped and recorded — erasure certificate available ✓'};
+  return{cls:'ok',text:'All '+n+' drive'+s+' wiped and recorded — the erasure certificate should now be '+
+    'available (the server could not confirm it from here; check the asset page).'};
+}
+
+async function askEligibility(results){
+  const ids=[...new Set(results.map(r=>r&&r.recordAssetId).filter(Boolean))];
+  if(!ids.length)return [{known:false}];
+  return Promise.all(ids.map(id=>jget('/api/wipe/eligibility?assetId='+encodeURIComponent(id))
+    .catch(()=>({known:false}))));
+}
+
+function showSummary(sum){
+  const el=$('wSummary');
+  el.className='health '+sum.cls;
+  el.innerHTML='<span class="hd"></span><span><b>'+esc(sum.text)+'</b></span>';
+}
+
+/* Done hands the controls back. Nothing on this panel hides itself: an
+   operator returning to the bench must still see what happened to each drive. */
+function wipeDone(){
+  RUN=null;
+  $('wRuns').innerHTML=''; $('wSummary').classList.add('hidden'); $('wDone').classList.add('hidden');
+  $('wRun').classList.add('hidden'); $('wActions').classList.remove('hidden');
+  bootstrap();
+}
+
+/* Owner decision D36 (plan step 36): an NVMe drive can show up as several
+   disks - one per namespace, nvme0n1, nvme0n2. A SANITIZE is a command to the
+   drive and erases every namespace, ticked or not; the engine's format and
+   overwrite erase only the namespace they are given. So the server wipes each
+   ticked namespace, one after the other (never two erases on one drive at
+   once), and the operator must hear, before confirming and in plain words:
+   that they run in turn, that a sanitize takes them all, and that a namespace
+   left unticked is neither reliably erased nor recorded. An earlier version
+   said erasing one "erases ALL of them" and had the operator untick the rest -
+   untrue whenever the engine fell back to overwrite. `namespaces` comes from
+   list_drives (all namespaces on the same controller). Pure, for
+   tools/test-kiosk-ui.py. */
+function nsWarning(devs){
+  const out=[], seen=new Set();
+  for(const d of devs){
+    const x=driveById(d), ns=(x&&x.namespaces)||[];
+    const key=(x&&x.controller)||d;
+    if(ns.length<2||seen.has(key))continue;
+    seen.add(key);
+    const picked=ns.filter(n=>devs.includes(n)), left=ns.filter(n=>!devs.includes(n));
+    let t='\n\n⚠ '+ns.join(', ')+' are '+ns.length+' parts (namespaces) of ONE NVMe drive. '+
+      (picked.length>1?'The ticked ones are wiped one after the other, never at once, each '+
+        'with its own result. ':'')+
+      'If the drive uses its own sanitize, that erases ALL of its namespaces, ticked or not.';
+    if(left.length){const many=left.length>1;
+      t+=' '+left.join(', ')+(many?' are':' is')+' NOT ticked: the other erase methods leave '+
+        (many?'them':'it')+' untouched, and '+(many?'they are':'it is')+' not recorded either '+
+        'way. Tick every namespace to wipe the whole drive.';}
+    out.push(t);
+  }
+  return out.join('');
+}
+
+let RUN=null;                        // the wipe run on screen: {devs, results}
 function confirmWipe(){
   const devs=selectedWipeDrives();
   if(!devs.length){toast('No drive selected.',false);return;}
-  const batch=$('batchSel').selectedOptions[0];
+  // Labels frozen now: DRIVES is re-read by every poll, and the run panel must
+  // keep naming the disks the operator confirmed.
+  const labels={}; for(const d of devs)labels[d]=driveLabel(driveById(d))||d;
   const warns=[];
   for(const d of devs){
     const h=healthOf(d);
     if(h&&h.status==='failing')warns.push(d+' is FAILING ('+(h.reasons||[]).join(', ')+')');
     else if(h&&h.status==='caution')warns.push(d+' reports faults ('+(h.reasons||[]).join(', ')+')');
   }
-  const warn=warns.length?' ⚠ '+warns.join('; ')+' — the wipe may stall or fail.':'';
-  const what=devs.length>1?(devs.length+' drives ('+devs.join(', ')+')'):devs[0];
-  openOv('Erase '+what+'?','This permanently destroys all data on '+what+
-    ' and records the wipe against '+(batch?batch.textContent:'the selected batch')+
-    '. This cannot be undone.'+warn, false, async()=>{
+  const warn=(warns.length?'\n\n⚠ '+warns.join('; ')+' — the wipe may stall or fail.':'')+
+    nsWarning(devs);
+  // Only the Goods In workflow files into a batch. The Amazon / general audit
+  // has no batch, and naming one here told the operator something untrue.
+  let dest='records the wipe on this machine’s record';
+  if(wf()==='goods_in'){
+    const batch=$('batchSel').selectedOptions[0];
+    dest='records the wipe against batch '+(batch&&$('batchSel').value?batch.textContent:'(none selected)');
+  }
+  const what=devs.length>1?(devs.length+' drives'):devs[0];
+  openOv('Erase '+what+'?','This permanently destroys all data on:\n'+
+    devs.map(d=>'• '+labels[d]).join('\n')+
+    '\n\nand '+dest+'. Check the serial against the drive. This cannot be undone.'+warn, false, async()=>{
     closeOv();
     let res;
+    // A refusal stays on screen until the operator dismisses it. It used to be
+    // a 4.2 s toast: look away while it showed and the wipe seemed to have
+    // silently not run.
+    const notStarted=(m)=>openOv('The wipe did not start',
+      m+'\n\nNothing was erased.',false,closeOv,'OK');
     try{ res=await jpost('/api/wipe/start',{devices:devs,
       lotId:(wf()==='goods_in'?$('batchSel').value:undefined),
                                            method:$('wMethod').value}); }
-    catch(e){ toast('Could not start the wipe.',false); return; }
-    if(!res.ok){toast(res.data.message||'Could not start wipe',false);return;}
+    catch(e){ notStarted('Could not reach the station service.'); return; }
+    if(!res.ok){notStarted((res.data&&res.data.message)||'Could not start the wipe.');return;}
     const started=(res.data&&res.data.started)||devs;
+    const run=RUN={devs:started,results:{}};
     $('wActions').classList.add('hidden'); $('wRun').classList.remove('hidden');
-    // One progress block per drive — they erase concurrently.
+    $('wSummary').classList.add('hidden'); $('wDone').classList.add('hidden');
+    // One block per drive - they erase concurrently - and each keeps its own
+    // result once it finishes. The drive is always named, even when alone.
     $('wRuns').innerHTML=started.map(d=>{const k=devKey(d);return (
       '<div class="wjob" id="wj_'+k+'">'+
-        (started.length>1?'<div class="wd">'+d+'</div>':'')+
-        '<div class="prow"><span id="wst_'+k+'">Starting…</span><b id="wpc_'+k+'">0%</b></div>'+
-        '<div class="pr ind" id="wbar_'+k+'"><i></i></div>'+
+        '<div class="wd">'+esc(labels[d]||d)+'</div>'+
+        '<div id="wprog_'+k+'">'+
+          '<div class="prow"><span id="wst_'+k+'">Starting…</span><b id="wpc_'+k+'">0%</b></div>'+
+          '<div class="pr ind" id="wbar_'+k+'"><i></i></div></div>'+
+        '<div class="health hidden" id="wres_'+k+'"></div>'+
         '<div style="display:flex;align-items:center;gap:12px;margin-top:9px">'+
           '<button class="lnk" onclick="toggleLog(\'wlog_'+k+'\',this)">Show details</button>'+
           '<span style="flex:1"></span>'+
-          '<button class="btn gho sm" onclick="cancelWipe(\''+d+'\')">■ Stop</button></div>'+
+          '<button class="btn gho sm" id="wstop_'+k+'" onclick="cancelWipe(\''+esc(d)+'\')">■ Stop</button></div>'+
         '<div class="log hidden" id="wlog_'+k+'"></div></div>');}).join('');
-    RUNNING=started.length;
     for(const d of started){
       const k=devKey(d);
       pollJob('wipe:'+d,{logId:'wlog_'+k,barId:'wbar_'+k,pctId:'wpc_'+k,statId:'wst_'+k,
         label:'Wiping',
         onDone:(r)=>{
-          const name=started.length>1?(d+': '):'';
-          if(r.status==='wiped'){
-            if(r.queued)
-              toast(name+'Wipe complete — no connection, record saved on this machine '+
-                    'and will upload automatically ('+(r.waiting||1)+' waiting)',false);
-            else if(r.recorded)
-              // A recorded wipe makes the Certificate of Data Erasure issuable.
-              toast(name+'Wipe complete — saved as '+(r.recordTag||'a new asset')+' in '+
-                    (batch?batch.textContent:'the batch')+'. Erasure certificate now available ✓');
-            else if(r.recordError)toast(name+'Wiped, but not saved: '+r.recordError,false);
-            else toast(name+'Wipe complete ✓');
-          }else if(r.status==='refused'){
-            /* The engine wrote nothing (wrong drive, USB, boot disk...), so
-               nothing is recorded either - say both, or "failed" would send
-               the operator looking for a damaged drive. */
-            toast(name+'Not wiped — '+(r.reason||r.method||'the drive was refused')+
-                  '. Nothing was written to the drive and nothing was recorded.',false);
-          }else{
-            const why=r.reason||r.message||r.method||'reason not reported';
-            toast(name+'Wipe failed — '+why+(r.recorded?' (recorded against the batch)':''),false);
-          }
-          // Restore the controls only once every drive has finished.
-          if(--RUNNING<=0){$('wActions').classList.remove('hidden');$('wRun').classList.add('hidden');}
+          if(RUN!==run)return;         // Done was pressed; this run is gone
+          run.results[d]=r;
+          const o=wipeOutcome(r), el=$('wres_'+k);
+          if(el){el.className='health '+o.cls;
+            el.innerHTML='<span class="hd"></span><span><b>'+esc(o.text)+'</b></span>';}
+          const p=$('wprog_'+k); if(p)p.classList.add('hidden');
+          const st=$('wstop_'+k); if(st)st.classList.add('hidden');
+          if(Object.keys(run.results).length<run.devs.length)return;
+          // Every drive has finished: the run's verdict, then the Done button.
+          const all=run.devs.map(x=>run.results[x]);
+          const local=certSummary(all);
+          showSummary(local);
+          $('wDone').classList.remove('hidden');
+          toast(wipeToast(all),local.cls!=='bad');
+          if(all.every(x=>x&&x.status==='wiped'&&x.recorded))
+            askEligibility(all).then(e=>{if(RUN===run)showSummary(certSummary(all,e));});
         }});
     }
   },'Erase drive'+(devs.length>1?'s':''));

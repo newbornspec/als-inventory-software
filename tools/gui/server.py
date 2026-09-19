@@ -29,6 +29,7 @@ import signal
 import subprocess
 import threading
 import time
+import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import urllib.parse
@@ -92,6 +93,14 @@ STATE = {
 JOBS = {"wipe": None, "install": None}
 PROCS = {}          # kind -> Popen, so a running job can be cancelled
 LOCK = threading.Lock()
+# Jobs that must not run at the same time as each other, in the order they
+# were asked for: key -> [(token, device), ...], head = the one allowed to run.
+# Used for the namespaces of one NVMe drive (plan step 36): each is wiped, but
+# one after the other. Guarded by LOCK through QUEUE_COND, and filled in the
+# SAME critical section that registers the job in JOBS, so two overlapping
+# requests cannot both see an empty queue and both start.
+DRIVE_QUEUES = {}
+QUEUE_COND = threading.Condition(LOCK)
 # Guards job["log"]/job["seq"] as a PAIR. Two threads now append to a running
 # job's log (the engine reader and the disk-write watchdog), and the /api/job
 # incremental protocol derives the client's window from seq - len(log) — so a
@@ -104,7 +113,23 @@ def wipe_kind(device):
 
 
 # ---------------------------------------------------------------- config ----
+# Whether audit.conf has been read successfully at least once in this process,
+# and whether the LAST attempt failed. operator_gate reads it: a station that
+# has never managed to read its conf cannot know whether operators must sign
+# in, so it refuses rather than guess "no".
+CONF_READ = {"ok": False, "failed": False}
+
+
 def load_conf():
+    """audit.conf as a dict. A read error keeps the settings last read.
+
+    refresh() re-reads the conf on every Rescan. Returning {} on a read error
+    (the stick hiccups, its mount is briefly gone) used to switch every setting
+    off until the next good read - AUDIT_OPERATOR_SIGNIN included, so one bad
+    read opened the sign-in gate and a wipe could start with nobody signed in,
+    filed under a typed name. What the station last read successfully is still
+    the best statement of how it is meant to run; a successful read that
+    changes a setting is what changes it."""
     conf = {}
     if not CONF_PATH:
         return conf
@@ -119,7 +144,35 @@ def load_conf():
                     conf[m.group(1)] = m.group(2)
     except OSError as exc:
         STATE["error"] = "Could not read audit.conf: %s" % exc
+        CONF_READ["failed"] = True
+        if CONF_READ["ok"] and isinstance(STATE.get("conf"), dict):
+            return dict(STATE["conf"])
+        return conf
+    CONF_READ["ok"], CONF_READ["failed"] = True, False
     return conf
+
+
+# AUDIT_OPERATOR_SIGNIN (audit.conf) - operators sign in at the station with
+# their OWN account (plan step 27, owner decision D27, reversible).
+#
+#   unset / "0"  (the default)  exactly as before: the stick logs in as the ONE
+#                shared account in AUDIT_EMAIL / AUDIT_PASSWORD, and the person
+#                at the bench types a free-text name ("Operator: ...") that the
+#                certificate can only print as self-declared.
+#   "1"          nobody can wipe, audit or restore until a person signs in on
+#                the screen with their own email and password, which go to the
+#                API's normal /auth/login. Every record is then filed under
+#                THAT account (the API sets auditedById from the token) and
+#                names them as the operator. The shared account is never used
+#                for anything while the flag is on - not as a fallback when a
+#                token expires, not to flush the offline queue - and
+#                AUDIT_EMAIL / AUDIT_PASSWORD can be deleted from the stick.
+#
+# Built behind a flag so it ships inert: the owner turns it on after trying it
+# on the station. See the OPERATOR section below for how the session works.
+def operator_signin_on():
+    v = str((STATE.get("conf") or {}).get("AUDIT_OPERATOR_SIGNIN", "")).strip().lower()
+    return v in ("1", "yes", "true", "on")
 
 
 def save_conf(updates):
@@ -643,6 +696,18 @@ def stamp_provenance(payload):
         # the source.
         payload.pop("lotId", None)
         payload.pop("subLotId", None)
+    if operator_signin_on():
+        # The signed-in account, never the free-text name: with sign-in on,
+        # the person IS the account (the API also sets auditedById from the
+        # token this record is sent under). The tag says whose token that must
+        # be - see OPERATOR_TAG. Nobody signed in: no name and no tag, and the
+        # callers refuse before a record can be made that way.
+        who = operator_identity()
+        if who:
+            if who.get("name"):
+                payload["operatorName"] = who["name"][:120]
+            payload[OPERATOR_TAG] = who
+        return payload
     op = (STATE.get("operator") or "").strip()
     if op:
         payload["operatorName"] = op[:120]
@@ -809,6 +874,40 @@ def wipe_record_fields(result, device, drive=None, method=None,
     return out, notes
 
 
+def bios_locked(profile):
+    """The API's single biosLocked boolean, from the lock report the capture
+    already holds (profile.locks, written by lock-checks.sh's lock_json), or
+    None to leave the field out. Plan step 38.
+
+    The text-mode flow has always sent it (hardware-audit.sh, lock_bios_locked);
+    the kiosk never did, so every kiosk wipe record had it NULL. Same meaning:
+    true when any check's STATUS is LOCKED. Read from the status field only,
+    never the row text - lock_status learnt that a PASS row whose detail
+    merely contained "|LOCKED|" flipped the verdict.
+
+    False only when the checks RAN and found nothing locked (roll-up CLEAR or
+    WARNING, and no check UNKNOWN). UNVERIFIED, or any single check UNKNOWN
+    - some checks could not complete - leaves the field
+    out rather than asserting "not locked" on an unproven machine; the API
+    derives lock_status from the same report and keeps that distinction."""
+    locks = (profile or {}).get("locks") if isinstance(profile, dict) else None
+    if not isinstance(locks, dict):
+        return None
+    checks = locks.get("checks") if isinstance(locks.get("checks"), list) else []
+    sts = [str(c.get("status") or "").strip().upper() for c in checks if isinstance(c, dict)]
+    roll = str(locks.get("status") or "").strip().upper()
+    if "LOCKED" in sts or roll == "LOCKED":
+        return True
+    if "UNKNOWN" in sts:
+        # A check that did not complete, whatever the roll-up says:
+        # lock_status ranks DETECTED/WARNING above UNKNOWN, so a WARNING
+        # roll-up can hide an unfinished BIOS-password check.
+        return None
+    if roll in ("CLEAR", "WARNING"):
+        return False
+    return None
+
+
 def build_wipe_payload(base, result, dev, drive, method, started_epoch, clock_at_start):
     """One drive's wipe record: `base` (profile, lot, operator) plus the wipe
     fields. Shared by the live path (record_wipe) and startup recovery of a
@@ -820,6 +919,9 @@ def build_wipe_payload(base, result, dev, drive, method, started_epoch, clock_at
     payload["dataWipeStatus"] = result.get("status")
     payload["dataWipeMethod"] = result.get("method") or "none"
     payload.update(fields)
+    locked = bios_locked(payload.get("profile"))
+    if locked is not None:
+        payload["biosLocked"] = locked
     # Record WHY a wipe failed, so the audit trail explains itself instead of
     # just saying "Failed".
     reason = (result.get("reason") or "").strip()
@@ -841,10 +943,32 @@ def upload_audit(payload):
     the device twice. One at a time turns the second into a clean re-audit."""
     try:
         with UPLOAD_LOCK:
-            return api("/devices/hardware-audit", "POST", payload, ensure_token()), False, ""
+            return post_record(payload), False, ""
     except Exception as exc:  # noqa: BLE001
         queue_add(payload)
         return None, True, str(exc)
+
+
+def post_record(item):
+    """POST one record (live or from the queue) under the identity it belongs
+    to, or raise. The operator tag is the station's own bookkeeping and never
+    goes to the API.
+
+    Flag off: an untagged record goes under the shared account, as it always
+    has. Flag on: a record goes only under the token of the operator it is
+    tagged with (held_reason). Either way a record that belongs to someone
+    else stays in the queue - it is never re-attributed."""
+    why = held_reason(item)
+    if why:
+        raise RuntimeError(why)
+    # held_reason is only a first look: the person signed in can change
+    # before the token is read, or while the request is in flight. `owner`
+    # makes authed_api re-check, under the same lock it reads the token with,
+    # that the token IS this record's operator's ("" = the shared account).
+    tag = item.get(OPERATOR_TAG) if isinstance(item, dict) else None
+    owner = str(tag.get("id")) if isinstance(tag, dict) and tag.get("id") else ""
+    body = {k: v for k, v in item.items() if k != OPERATOR_TAG}
+    return authed_api("/devices/hardware-audit", "POST", body, owner=owner)
 
 
 def queue_flush():
@@ -868,8 +992,12 @@ def _queue_flush():
             # a live one for the same machine (a second drive finishing while
             # the first drive's queued record flushes) otherwise race past the
             # API's find-by-serial and create the device twice.
+            # A record another operator made is skipped here, not sent under
+            # whoever is signed in now (post_record raises; it stays queued).
+            if held_reason(it):
+                continue
             with UPLOAD_LOCK:
-                api("/devices/hardware-audit", "POST", it, ensure_token())
+                post_record(it)
             sent += 1
             done.append(it)
         except Exception:  # noqa: BLE001
@@ -914,7 +1042,24 @@ def api(path, method="GET", body=None, token=None, timeout=25):
     return json.loads(raw) if raw else None
 
 
+def server_reachable(timeout=15):
+    """Raise unless the API answers at all. Any HTTP status counts as an
+    answer - this asks "is the server there", not "am I allowed in"."""
+    base = STATE["conf"].get("AUDIT_URL", "").rstrip("/")
+    if not base:
+        raise RuntimeError("AUDIT_URL is not set in audit.conf")
+    try:
+        urllib.request.urlopen(urllib.request.Request(base + "/"), timeout=timeout).close()
+    except urllib.error.HTTPError:
+        pass
+
+
 def login():
+    """The SHARED station account (flag off only)."""
+    if operator_signin_on():
+        # Never the shared account while operators sign in themselves - not
+        # even as a fallback for an expired operator session (plan step 27).
+        raise SignInRequired(SIGNIN_NEEDED)
     conf = STATE["conf"]
     out = api("/auth/login", "POST", {
         "email": conf.get("AUDIT_EMAIL", ""),
@@ -939,7 +1084,326 @@ def login():
 
 
 def ensure_token():
+    if operator_signin_on():
+        return operator_token()
     return STATE["token"] or login()
+
+
+class OperatorChanged(RuntimeError):
+    """The record's operator is not the one signed in now; it stays queued."""
+
+
+def operator_token_for(owner):
+    """operator_token(), but only if the signed-in operator is `owner` (a user
+    id); raises OperatorChanged otherwise. The identity and the token are read
+    under ONE hold of OPERATOR_LOCK, so nobody can sign in between the check
+    and the read. A refresh inside operator_token cannot change hands either
+    (_operator_set's expect_id)."""
+    with OPERATOR_LOCK:
+        if OPERATOR.get("token") and OPERATOR.get("id") != owner:
+            raise OperatorChanged(
+                "made by another operator than the one signed in now; it is sent "
+                "only under their own sign-in")
+        return operator_token()
+
+
+def authed_api(path, method="GET", body=None, owner=None):
+    """api() with the station's current identity. With operator sign-in on, a
+    401 (the token expired early, or the account's sessions were revoked) gets
+    ONE refresh and retry; if that fails the operator is signed out and must
+    sign in again. Flag off: exactly the old api(..., ensure_token()).
+
+    `owner`, for a record (post_record): whose record it is - an operator's
+    user id, or "" for the shared account. It is then sent only under that
+    identity, checked when the token is taken AND again before the 401 retry:
+    A's upload can come back 401 after A signed out and B signed in (A's token
+    ran out across a suspend the monotonic countdown did not see, or A's
+    sessions were revoked), and retrying with "the current token" would have
+    filed A's erasure under B's account. None (lots, lookups): whoever is
+    signed in, as before."""
+    on = operator_signin_on()
+    if owner is not None and bool(owner) != on:
+        # The flag changed between held_reason and here: an operator's record
+        # never goes under the shared account, nor the reverse.
+        raise OperatorChanged("operator sign-in was switched %s while this record was "
+                              "being sent; it stays queued" % ("on" if on else "off"))
+    if not on:
+        return api(path, method, body, ensure_token())
+    tok = operator_token() if owner is None else operator_token_for(owner)
+    try:
+        return api(path, method, body, tok)
+    except urllib.error.HTTPError as exc:
+        if exc.code != 401:
+            raise
+        with OPERATOR_LOCK:
+            if owner is not None and OPERATOR.get("id") != owner:
+                # Someone else is signed in now (or nobody): do not refresh
+                # their session for this, and do not send it under them.
+                raise OperatorChanged(
+                    "its operator signed out while it was being sent; it is sent "
+                    "only under their own sign-in")
+            if OPERATOR.get("token") == tok:
+                OPERATOR["expiresMono"] = 0.0      # force the refresh below
+            tok = operator_token() if owner is None else operator_token_for(owner)
+        return api(path, method, body, tok)
+
+
+# ------------------------------------------------------------- OPERATOR ----
+# Operator sign-in (AUDIT_OPERATOR_SIGNIN=1, see operator_signin_on).
+#
+# The session lives in this dict and NOWHERE else: not in STATE (which is
+# shown, in part, to the page), not on the stick, not in any log. A reboot or
+# a backend restart signs everyone out - which is the point: the station is a
+# shared bench, and a session that outlived its person would file the next
+# person's work under their name.
+#
+# The password is used for exactly one request (operator_signin) and is not
+# kept: no reference to it survives the call. Python cannot promise to zero
+# the bytes of a str - they stay in freed memory until reused - but nothing in
+# this process can reach them again, and nothing writes them anywhere.
+#
+# Expiry. The API's access token lasts 12 hours and its refresh token 7 days
+# (apps/api/src/config/configuration.ts). The shared-account path never
+# refreshed at all: ensure_token handed out the same token until it died, and
+# every upload after that failed and queued. Here the expiry is read from the
+# token itself as a DURATION (exp - iat, both the server's clock) and counted
+# on this machine's monotonic clock from when the token arrived, so a station
+# whose clock is years out (a dead CMOS battery - common on this bench) still
+# knows when its token runs out. Near the end it is renewed with the refresh
+# token; if the server refuses that, the operator is signed out and asked to
+# sign in again. Nothing ever falls back to the shared account.
+OPERATOR = {}
+OPERATOR_LOCK = threading.RLock()
+# Key on a queued record naming the operator whose token it must be sent
+# under: {"id", "name", "email"}. Stripped before the record is POSTed.
+OPERATOR_TAG = "_alsOperator"
+TOKEN_MARGIN = 120          # renew this many seconds before the token expires
+SIGNIN_NEEDED = ("Sign in with your own account first (Sign in, at the top of the "
+                 "screen). Nothing is wiped, audited or restored at this station "
+                 "until someone is signed in.")
+
+
+class SignInRequired(RuntimeError):
+    """Nobody is signed in, or the session ended and needs a fresh sign-in."""
+
+
+def _jwt_lifetime(token):
+    """Seconds an access token is valid for (exp - iat), or None."""
+    import base64
+    try:
+        part = token.split(".")[1]
+        part += "=" * (-len(part) % 4)
+        claims = json.loads(base64.urlsafe_b64decode(part.encode()).decode())
+        life = float(claims["exp"]) - float(claims.get("iat", claims["exp"] - 12 * 3600))
+        return life if life > 0 else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _operator_set(out, expect_id=None):
+    """Adopt a login/refresh response as the session. Returns the identity."""
+    out = out if isinstance(out, dict) else {}
+    tok = out.get("accessToken")
+    u = out.get("user") if isinstance(out.get("user"), dict) else {}
+    uid = str(u.get("id") or "").strip()
+    if not tok or not uid:
+        raise RuntimeError("The server's sign-in answer had no token or no user.")
+    if expect_id and uid != expect_id:
+        # A refresh must renew THIS person's session, never become someone else.
+        raise SignInRequired("The session changed hands - sign in again.")
+    # The API's own 12 hours when the token does not say.
+    life = _jwt_lifetime(tok) or 12 * 3600.0
+    OPERATOR.clear()
+    OPERATOR.update({
+        "token": tok, "refresh": out.get("refreshToken") or None,
+        "expiresMono": time.monotonic() + life,
+        "id": uid, "name": (u.get("name") or "").strip()[:120],
+        "email": (u.get("email") or "").strip()[:200],
+    })
+    # The same account-derived state the shared login sets: header name,
+    # role and permissions (which decide the workflows this person may file).
+    STATE["userName"] = OPERATOR["name"]
+    STATE["role"] = u.get("role") or ""
+    perms = u.get("permissions")
+    STATE["permissions"] = perms if isinstance(perms, list) else None
+    wfs = allowed_workflows()
+    if STATE.get("workflow") not in wfs:
+        STATE["workflow"] = wfs[0] if len(wfs) == 1 else ""
+    return operator_identity()
+
+
+def operator_identity():
+    """{"id","name","email"} of the signed-in operator, or None."""
+    with OPERATOR_LOCK:
+        if not OPERATOR.get("id"):
+            return None
+        return {"id": OPERATOR["id"], "name": OPERATOR.get("name") or "",
+                "email": OPERATOR.get("email") or ""}
+
+
+def operator_signout(reason=None):
+    """End the session: forget the tokens and every account-derived setting.
+    `reason`, when given, is kept to tell the NEXT screen why."""
+    with OPERATOR_LOCK:
+        OPERATOR.clear()
+        if reason:
+            OPERATOR["endedWhy"] = reason
+    STATE["userName"] = ""
+    STATE["role"] = ""
+    STATE["permissions"] = None
+    STATE["workflow"] = ""
+    STATE["lots"] = []
+
+
+def operator_token():
+    """The signed-in operator's access token, renewed when it is near expiry.
+    Raises SignInRequired when nobody is signed in or the session cannot be
+    renewed (the server said no); raises RuntimeError when the renewal could
+    not reach the server - the session is kept then, to renew later."""
+    with OPERATOR_LOCK:
+        if not OPERATOR.get("token"):
+            raise SignInRequired(OPERATOR.get("endedWhy") or SIGNIN_NEEDED)
+        if time.monotonic() < OPERATOR["expiresMono"] - TOKEN_MARGIN:
+            return OPERATOR["token"]
+        refresh_tok, uid = OPERATOR.get("refresh"), OPERATOR["id"]
+        if not refresh_tok:
+            operator_signout("Your sign-in has expired - sign in again.")
+            raise SignInRequired(OPERATOR["endedWhy"])
+        try:
+            out = api("/auth/refresh", "POST", {"refreshToken": refresh_tok})
+        except urllib.error.HTTPError as exc:
+            if exc.code in (400, 401, 403):
+                operator_signout("Your sign-in has expired - sign in again.")
+                raise SignInRequired(OPERATOR["endedWhy"])
+            raise RuntimeError("Your sign-in needs renewing and the server "
+                               "answered HTTP %d - try again shortly." % exc.code)
+        except Exception:  # noqa: BLE001
+            raise RuntimeError("Your sign-in needs renewing, and the server cannot be "
+                               "reached to renew it. Reconnect the network.")
+        try:
+            _operator_set(out, expect_id=uid)
+        except SignInRequired as exc:
+            operator_signout(str(exc))
+            raise
+        return OPERATOR["token"]
+
+
+def operator_signin(email, password):
+    """Sign an operator in with their own account (/auth/login). Returns the
+    identity, or raises with a message fit for the screen. Offline this can
+    only fail: there is no offline sign-in (plan step 27), because a session
+    nobody could check is exactly the free-text name this replaces."""
+    email = (email or "").strip()
+    if not email or not password:
+        raise ValueError("Enter your email and password.")
+    body = {"email": email, "password": password}
+    password = None          # noqa: F841 - the one other reference, dropped
+    try:
+        out = api("/auth/login", "POST", body, timeout=20)
+    except urllib.error.HTTPError as exc:
+        msg = ""
+        try:
+            data = json.loads(exc.read().decode(errors="replace") or "{}")
+            msg = data.get("message") if isinstance(data.get("message"), str) else ""
+        except Exception:  # noqa: BLE001
+            pass
+        if exc.code in (400, 401):
+            # "disabled" is worth repeating (the person can do something about
+            # it); anything else is the plain "not accepted".
+            raise ValueError(msg if "disabled" in msg.lower()
+                             else "Email or password not accepted.")
+        raise ValueError("The server refused the sign-in (HTTP %d)." % exc.code)
+    except (urllib.error.URLError, OSError, RuntimeError) as exc:
+        raise ValueError("Cannot reach the server, and signing in needs it - there is "
+                         "no offline sign-in. Nothing can be wiped until someone signs "
+                         "in. Check the network (Settings). (%s)"
+                         % getattr(exc, "reason", exc))
+    finally:
+        body.clear()         # drop the password with the request body
+    with OPERATOR_LOCK:
+        who = _operator_set(out)
+    # Now that someone may use the server: the batches, and any records this
+    # person left queued earlier.
+    def after():
+        try:
+            STATE["lots"] = api("/devices/lots", token=operator_token()) or []
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            if queue_count():
+                queue_flush()
+        except Exception:  # noqa: BLE001
+            pass
+    threading.Thread(target=after, daemon=True).start()
+    return who
+
+
+def held_reason(item):
+    """Why this record may NOT be sent now, or None if it may.
+
+    A record goes to the API only under the identity that made it:
+      flag on  - tagged with operator X: only while X is signed in. Untagged
+                 (made under the shared account before the flag was turned on):
+                 held - sending it under whoever is signed in would name them
+                 on work they did not do; turn the flag off once to send it.
+      flag off - untagged: the shared account, as always. Tagged (made by a
+                 signed-in operator, flag since turned off): held for the same
+                 reason, until the flag is on and X signs in."""
+    tag = item.get(OPERATOR_TAG) if isinstance(item, dict) else None
+    tag = tag if isinstance(tag, dict) and tag.get("id") else None
+    if not operator_signin_on():
+        if tag:
+            return ("made by %s while operator sign-in was on; it is sent when they "
+                    "sign in again" % (tag.get("name") or tag.get("email") or "an operator"))
+        return None
+    if not tag:
+        return ("made under the shared station account; it is sent once operator "
+                "sign-in is turned off again")
+    who = operator_identity()
+    if who and who["id"] == tag["id"]:
+        return None
+    return ("made by %s; it is sent only under their own sign-in"
+            % (tag.get("name") or tag.get("email") or "another operator"))
+
+
+def queue_held_count():
+    return sum(1 for it in queue_load() if held_reason(it))
+
+
+def signin_state():
+    """What the page needs to draw the sign-in controls."""
+    on = operator_signin_on()
+    who = operator_identity() if on else None
+    with OPERATOR_LOCK:
+        why = OPERATOR.get("endedWhy") or ""
+    return {"required": on, "signedIn": bool(who),
+            "name": (who or {}).get("name", ""), "email": (who or {}).get("email", ""),
+            "message": why if on and not who else ""}
+
+
+def operator_gate():
+    """None when records may be made now, else (http_code, message). Flag
+    off: always None. Flag on: a signed-in operator whose session is still
+    valid (renewed now if it is near expiry). audit.conf never read (it
+    exists but every read so far failed): refused - fail closed, since the
+    station cannot tell whether sign-in is required (see load_conf)."""
+    if CONF_PATH and CONF_READ["failed"] and not CONF_READ["ok"]:
+        return 503, ("audit.conf on the boot stick could not be read, so this station "
+                     "cannot tell whether operators must sign in. Nothing is wiped, "
+                     "audited or restored until it can: re-seat the stick and press Rescan.")
+    if not operator_signin_on():
+        return None
+    try:
+        operator_token()
+        return None
+    except SignInRequired as exc:
+        msg = str(exc)
+        if STATE.get("error") and not operator_identity():
+            msg += (" This station is not connected to the server right now, and "
+                    "signing in needs the network - there is no offline sign-in.")
+        return 401, msg
+    except Exception as exc:  # noqa: BLE001
+        return 503, str(exc)
 
 
 # --------------------------------------------------------------- capture ----
@@ -1111,11 +1575,21 @@ def refresh(do_login=True):
                 except Exception:  # noqa: BLE001
                     pass
             try:
-                ensure_token()
-                STATE["lots"] = api("/devices/lots", token=STATE["token"]) or []
+                if operator_signin_on() and not operator_identity():
+                    # Nobody signed in yet: nothing to fetch as anyone, and
+                    # that is not an error. Still check the server answers,
+                    # so the header says honestly whether signing in can work.
+                    server_reachable()
+                else:
+                    tok = ensure_token()
+                    STATE["lots"] = api("/devices/lots", token=tok) or []
                 # Back online — push anything that was held while offline.
                 if queue_count():
                     threading.Thread(target=queue_flush, daemon=True).start()
+            except SignInRequired:
+                # The operator's session ended (the sign-in panel says why).
+                # That is not a network fault, so no "Not connected" banner.
+                pass
             except Exception as exc:  # noqa: BLE001
                 # Prefer the Wi-Fi hint if the network never came up.
                 hint = wifi_msg if wifi_msg and "connected" not in wifi_msg.lower() else ""
@@ -1247,6 +1721,50 @@ def drive_serial(value):
 
 DRIVES_CACHE = {"ts": 0.0, "data": []}
 
+# Where sysfs is. Only ever changed by tests (tools/test-wipe-gate.py builds a
+# fake tree in a temp folder) - nothing on the station sets it.
+SYS_ROOT = "/sys"
+
+
+def nvme_controller(name):
+    """Which NVMe drive a namespace belongs to: "nvme0" (the controller) or
+    "nvme-subsys0" (the subsystem, on kernels with native NVMe multipath, which
+    Ubuntu's is). None for anything that is not an NVMe namespace.
+
+    Why the kiosk cares (plan step 36, owner decision D36): an NVMe drive can
+    expose several namespaces - nvme0n1, nvme0n2 - and each shows up here as its
+    own disk. But the engine's sanitize is a command to the CONTROLLER, and it
+    erases every namespace on it. Two namespaces of one drive ticked together
+    would start two erases on the same controller at once - the second one
+    fails or aborts the first. So /api/wipe/start runs them one after the other
+    (each still wiped and recorded on its own: the engine's format and
+    overwrite cover only the namespace they are given), and the confirm dialog
+    says so, and that a sanitize takes every namespace, ticked or not.
+
+    Read from sysfs, not guessed from the name: /sys/block/nvme0n1 resolves to
+    .../nvme/nvme0/nvme0n1 (or .../nvme-subsystem/nvme-subsys0/nvme0n1 with
+    multipath), and that path is the kernel's own statement of which controller
+    or subsystem owns the namespace. Only when sysfs says nothing (not Linux, a
+    test) does it fall back to the name, where nvme<N>n<M> shares <N> with
+    every other namespace of the same controller (or subsystem) anyway."""
+    if not re.match(r"^nvme\d+n\d+$", name or ""):
+        return None
+    try:
+        real = os.path.realpath(os.path.join(SYS_ROOT, "block", name))
+    except (OSError, ValueError):
+        real = ""
+    parts = real.replace("\\", "/").split("/")
+    # The subsystem wins when there is one: it is the unit a sanitize covers
+    # (the NVMe spec's sanitize acts on the whole NVM subsystem).
+    for p in parts:
+        if re.match(r"^nvme-subsys\d+$", p):
+            return p
+    # Nearest controller above the namespace node itself.
+    for p in reversed(parts[:-1]):
+        if re.match(r"^nvme\d+$", p):
+            return p
+    return re.match(r"^(nvme\d+)n\d+$", name).group(1)
+
 
 def list_drives(force=False):
     """Internal (non-removable, non-USB) whole disks that can be wiped/imaged,
@@ -1319,7 +1837,19 @@ def list_drives(force=False):
             "transport": tran,
             "method": method,
             "health": smart_health("/dev/" + name),
+            # The NVMe controller (or subsystem) this namespace sits on; None
+            # for SATA/SAS disks. See nvme_controller.
+            "controller": nvme_controller(name),
         })
+    # Every namespace of the same NVMe drive, on each of them (a one-element
+    # list for the usual single-namespace drive, [] for non-NVMe). The confirm
+    # dialog warns from this when it is longer than one (D36): they are wiped
+    # in turn, a sanitize of any of them takes all of them, and a namespace
+    # left unticked is neither wiped by format/overwrite nor recorded.
+    for d in drives:
+        ctrl = d.get("controller")
+        d["namespaces"] = [x["device"] for x in drives
+                           if ctrl and x.get("controller") == ctrl]
     DRIVES_CACHE["ts"], DRIVES_CACHE["data"] = now, drives
     return drives
 
@@ -1797,6 +2327,39 @@ def prior_audit(lot_id):
     }
     PRIOR_CACHE.update(key=key, ts=now, data=data)
     return data
+
+
+ELIGIBILITY_KEYS = ("available", "reason", "verdict", "drives")
+
+
+def certificate_eligibility(asset_id):
+    """Does this asset have a Certificate of Data Erasure now? Asked of the API
+    (contract C4, GET /assets/:id/certificate-eligibility) rather than worked
+    out here: the rule - every drive of the machine wiped, the D11 mixed-result
+    guard, legacy rows - lives on the server, and a second copy in the kiosk
+    would drift from it. The screen used to announce "certificate available"
+    after ANY recorded wipe, including one where another drive of the same
+    machine had just failed.
+
+    Always answers 200 with {"known": bool, ...}. known=False means "cannot
+    tell" - no asset id, offline, or an API older than C4 (a 404) - and the
+    screen then says only what it saw itself, never "available"."""
+    if not re.match(r"^[A-Za-z0-9-]{1,64}$", asset_id or ""):
+        return {"known": False, "why": "no asset id"}
+    try:
+        out = api("/assets/%s/certificate-eligibility" % asset_id, token=ensure_token(),
+                  timeout=10)
+    except urllib.error.HTTPError as exc:
+        # 404 = an API that predates C4 (or an asset this account cannot see).
+        # Both are "unknown", by contract - not "no certificate".
+        return {"known": False, "why": "server did not answer (HTTP %s)" % exc.code}
+    except Exception as exc:  # noqa: BLE001 - offline, timeout, bad JSON
+        return {"known": False, "why": str(exc) or "server unreachable"}
+    if not isinstance(out, dict) or not isinstance(out.get("available"), bool):
+        return {"known": False, "why": "unexpected answer from the server"}
+    ans = {k: out.get(k) for k in ELIGIBILITY_KEYS}
+    ans["known"] = True
+    return ans
 
 
 # --------------------------------------------------------------- boot timing --
@@ -2660,7 +3223,7 @@ def image_complete(path):
 
 def start_job(kind, argv, result_prefix, device="", on_done=None,
               watch_writes=False, noun="process", hint="",
-              record_on_no_result=False):
+              record_on_no_result=False, queue_key=None, on_start=None):
     """Run a long command in the background, streaming its stdout into a rolling
     log and parsing the final `<PREFIX> {json}` line into `result`. `on_done`
     (given the parsed result) runs after the process ends and before the job is
@@ -2674,24 +3237,84 @@ def start_job(kind, argv, result_prefix, device="", on_done=None,
     result - on_done still runs, with a synthesized status "failed" result.
     Before this a wipe whose job died filed NOTHING: a drive that may be half
     overwritten left no trace on the asset, which kept whatever wipe status it
-    had before. A failed record is the honest one."""
+    had before. A failed record is the honest one.
+
+    `queue_key`: jobs sharing a key run one at a time, in the order they were
+    started (see DRIVE_QUEUES). A job behind another is registered and
+    `running` at once - so the screen can follow it and a second request for
+    the same device is refused as usual - but its command does not start until
+    the one ahead has ended; until then job["waiting"] says what it waits for.
+    Stopped while waiting, it ends "refused": nothing was written.
+
+    `on_start`: called just before the command is launched (after any wait),
+    so a caller can note when the work REALLY began."""
     now = time.time()
+    token = object()
     with LOCK:
         cur = JOBS.get(kind)
         if cur and cur.get("running"):
             return False
+        ahead = []
+        if queue_key:
+            q = DRIVE_QUEUES.setdefault(queue_key, [])
+            ahead = [dev for _t, dev in q]
+            q.append((token, device))
         JOBS[kind] = {"running": True, "log": [], "result": None, "error": None,
                       "device": device, "startedAt": now, "updatedAt": now,
                       "cancelled": False, "seq": 0,
                       # None = not being watched; the UI needs to tell "quiet but
                       # writing" apart from "genuinely stopped".
-                      "writeBytes": 0, "writeStalled": None}
+                      "writeBytes": 0, "writeStalled": None,
+                      "waiting": _waiting_text(ahead, queue_key)}
     job = JOBS[kind]
+    released = [not queue_key]
+
+    def release():
+        """Let the next job with this key go. Idempotent."""
+        if released[0]:
+            return
+        released[0] = True
+        with QUEUE_COND:
+            rest = [e for e in DRIVE_QUEUES.get(queue_key, []) if e[0] is not token]
+            if rest:
+                DRIVE_QUEUES[queue_key] = rest
+            else:
+                DRIVE_QUEUES.pop(queue_key, None)
+            QUEUE_COND.notify_all()
+
+    def wait_turn():
+        """Block until this job is at the head of its queue, or is stopped.
+        Returns True when it may run."""
+        with QUEUE_COND:
+            while True:
+                q = DRIVE_QUEUES.get(queue_key, [])
+                idx = next((i for i, e in enumerate(q) if e[0] is token), 0)
+                if idx == 0 or job.get("cancelled"):
+                    job["waiting"] = None
+                    return not job.get("cancelled")
+                job["waiting"] = _waiting_text([dev for _t, dev in q[:idx]], queue_key)
+                # Waiting is not hanging: keep `idle` low so the screen does
+                # not warn "no new output" about a job that has not begun.
+                job["updatedAt"] = time.time()
+                QUEUE_COND.wait(1.0)
 
     def worker():
         proc = None
         stop_watch = threading.Event()
         try:
+            if queue_key and not wait_turn():
+                # Stopped before its turn came: the command never ran, so
+                # nothing touched the drive. "refused" is exactly that (and a
+                # wipe's on_done does not file it); "failed" would put a
+                # failed wipe on a record for a drive nobody wrote to.
+                job["result"] = {"status": "refused", "method": "none", "device": device,
+                                 "reason": "Stopped before it started, while it was waiting "
+                                           "its turn - nothing was written to the drive."}
+                return
+            if queue_key:
+                job["startedAt"] = job["updatedAt"] = time.time()
+            if on_start:
+                on_start()
             # start_new_session puts the engine in its own process group, so a
             # cancel can take down the whole tree (shred/dd keep running
             # otherwise) instead of orphaning a process writing to a disk.
@@ -2743,6 +3366,10 @@ def start_job(kind, argv, result_prefix, device="", on_done=None,
             job["error"] = str(exc)
         finally:
             stop_watch.set()             # stop the disk-write heartbeat
+            # The command has ended (or never started): the next job with the
+            # same key may begin. Before on_done, so a slow upload of this
+            # record does not hold up the next drive's erase.
+            release()
             if on_done and record_on_no_result and not job.get("result"):
                 job["result"] = {"status": "failed", "method": "none", "device": device,
                                  "reason": job.get("error") or
@@ -2764,10 +3391,28 @@ def start_job(kind, argv, result_prefix, device="", on_done=None,
     return True
 
 
+def _waiting_text(ahead, key):
+    """What a queued job tells the screen while it waits (None = not waiting)."""
+    if not ahead:
+        return None
+    return ("Waiting for %s to finish - it is on the same NVMe drive (%s), and two "
+            "erases cannot run on one drive at once. This one starts next."
+            % (", ".join(ahead), key))
+
+
 def cancel_job(kind):
     """Stop a running job and everything it spawned. Returns a status message."""
     job = JOBS.get(kind)
     proc = PROCS.get(kind)
+    # Still waiting its turn (start_job queue_key): nothing to kill. The worker
+    # wakes, sees `cancelled` and ends without running anything. Decided under
+    # the queue's lock, the same one wait_turn clears `waiting` under, so a
+    # job that has just been let go is never told "stopped before it started".
+    with QUEUE_COND:
+        if job and job.get("running") and job.get("waiting") and not proc:
+            job["cancelled"] = True
+            QUEUE_COND.notify_all()
+            return True, "Stopped before it started - nothing was written to the drive."
     if not job or not job.get("running") or not proc:
         return False, "Nothing is running."
     job["cancelled"] = True
@@ -2861,9 +3506,17 @@ class Handler(BaseHTTPRequestHandler):
                 "osImages": list_os_images(),
                 "wipeMethod": STATE["conf"].get("AUDIT_WIPE_METHOD", "auto"),
                 "server": STATE["conf"].get("AUDIT_URL", ""),
-                "currentUser": (STATE.get("userName")
-                                or STATE["conf"].get("AUDIT_EMAIL", "") or "Operator"),
+                # Flag on: the signed-in person, never the shared account's
+                # address (which may well still be in audit.conf).
+                "currentUser": ((STATE.get("userName") or "Signed in")
+                                if operator_identity() else "Not signed in")
+                if operator_signin_on() else
+                (STATE.get("userName") or STATE["conf"].get("AUDIT_EMAIL", "") or "Operator"),
                 "operator": STATE.get("operator", ""),
+                "signin": signin_state(),
+                # Of `waiting`, how many belong to someone other than whoever
+                # may send right now (see held_reason). Shown, never sent.
+                "waitingHeld": queue_held_count(),
                 "workflow": current_workflow(),
                 "workflows": allowed_workflows(),
                 "adminPinSet": bool(STATE["conf"].get("AUDIT_ADMIN_PIN", "")),
@@ -2927,6 +3580,10 @@ class Handler(BaseHTTPRequestHandler):
             # can be opened, so it must never touch hardware or the network.
             return self._send(200, {"ok": True})
 
+        if u.path == "/api/wipe/eligibility":
+            asset = (parse_qs(u.query).get("assetId") or [""])[0]
+            return self._send(200, certificate_eligibility(asset))
+
         if u.path == "/api/priorAudit":
             lot = (parse_qs(u.query).get("lotId") or [""])[0]
             return self._send(200, prior_audit(lot) or {"found": False, "unknown": True})
@@ -2979,14 +3636,57 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, {"ok": True, "workflow": wf})
 
         if u.path == "/api/operator":
+            if operator_signin_on():
+                # The operator is whoever signed in; a typed name next to a
+                # signed-in account could only contradict it.
+                return self._send(409, {"message": "Operators sign in at this station - "
+                                                   "use Sign in instead of typing a name."})
             # Session-scoped, not PIN-gated: it is a name label on the records
             # this station files, reversible, and a fresh boot clears it.
             STATE["operator"] = (body.get("name") or "").strip()[:120]
             return self._send(200, {"ok": True, "operator": STATE["operator"]})
 
+        if u.path == "/api/operator/signin":
+            # The password is in `body` (the parsed request) and nowhere else.
+            # It goes to the API once and is dropped here whatever happens; it
+            # is never logged (log_message is silenced), never in an error.
+            if not isinstance(body, dict):
+                return self._send(400, {"message": "Enter your email and password."})
+            try:
+                if not operator_signin_on():
+                    return self._send(409, {"message": "Operator sign-in is not switched "
+                                                       "on for this station."})
+                if operator_identity():
+                    return self._send(409, {"message": "%s is signed in. Sign out first."
+                                                       % (operator_identity()["name"]
+                                                          or "Someone")})
+                try:
+                    who = operator_signin(body.get("email"), body.get("password"))
+                except ValueError as exc:
+                    return self._send(401, {"message": str(exc)})
+                except Exception:  # noqa: BLE001
+                    return self._send(502, {"message": "Sign-in failed unexpectedly."})
+                return self._send(200, {"ok": True, "name": who.get("name", ""),
+                                        "email": who.get("email", "")})
+            finally:
+                body.clear()
+
+        if u.path == "/api/operator/signout":
+            if not operator_signin_on():
+                return self._send(409, {"message": "Operator sign-in is not switched on."})
+            # A wipe still running keeps the operator who STARTED it (stamped
+            # at start). If they have signed out by the time it finishes, its
+            # record waits in the queue for their next sign-in - it is never
+            # sent under whoever signs in after them.
+            operator_signout()
+            return self._send(200, {"ok": True})
+
         if u.path == "/api/audit":
             if not STATE["profile"]:
                 return self._send(400, {"message": "hardware not captured yet"})
+            gate = operator_gate()
+            if gate:
+                return self._send(gate[0], {"message": gate[1]})
             payload = {"lotId": body.get("lotId"), "profile": STATE["profile"]}
             if body.get("subLotId"):
                 payload["subLotId"] = body["subLotId"]
@@ -3070,11 +3770,41 @@ class Handler(BaseHTTPRequestHandler):
                 if d not in offered:
                     return self._send(400, {"message": "%s is not an internal disk this "
                                                        "station can wipe" % d})
+            # Namespaces of one NVMe drive (plan step 36, owner decision D36):
+            # nvme0n1 and nvme0n2 are listed as two disks but sit on ONE
+            # controller. They are both accepted and each is wiped and filed
+            # on its own, but one after the other - start_job's queue_key
+            # below - never at the same time: a sanitize is a command to the
+            # whole controller, and a second erase started while it runs is
+            # refused by the drive or aborts it.
+            #
+            # Not refused, and not "merged" into one erase: an earlier version
+            # refused both and told the operator the wipe of one "covers the
+            # other as well". Only a SANITIZE does. The engine tries a
+            # per-namespace `nvme format` first, and its overwrite (the
+            # fallback, and AUDIT_WIPE_METHOD=overwrite/zero) shreds only the
+            # namespace it is handed - so the unticked namespace kept its data
+            # while the screen said the machine was clean. Wiping each one is
+            # right whichever method the engine ends up using; when it does
+            # sanitize, the second pass only repeats an erase already done.
+            # The queue also holds across requests: a sibling asked for while
+            # one is running waits behind it, decided in the same critical
+            # section that registers the job, so two overlapping requests
+            # (double tap, two tabs) cannot both start at once.
             # No machine identity, no erase. This check used to live in
             # record_wipe, AFTER the drive was already destroyed - so a wipe
             # with no profile erased the data and then filed nothing, leaving
             # no record that it ever happened. A capture in progress counts as
             # no identity too: the profile on screen is about to be replaced.
+            #
+            # No PERSON, no erase either, when operators sign in (plan step
+            # 27): a wipe nobody is signed in for could only be filed under
+            # nobody. Checked here, before anything is written, and it renews
+            # a session near expiry now - not hours later at record time.
+            # Offline and not signed in = refused: there is no offline sign-in.
+            gate = operator_gate()
+            if gate:
+                return self._send(gate[0], {"message": gate[1]})
             if STATE.get("capturing"):
                 return self._send(409, {"message": "The hardware is still being read. "
                                                    "Wait for it to finish, then start the wipe."})
@@ -3118,8 +3848,13 @@ class Handler(BaseHTTPRequestHandler):
                 base["lotId"] = lot_id
             if sub_lot_id:
                 base["subLotId"] = sub_lot_id
+            # With operator sign-in, WHO wiped is fixed when the wipe starts:
+            # the person signed in now. Stamping at the end (as the free-text
+            # path still does) would name whoever happened to be signed in
+            # hours later, and send the record under their token.
+            signed_base = stamp_provenance(dict(base)) if operator_signin_on() else None
 
-            def make_recorder(dev, drive, started_epoch, pid):
+            def make_recorder(dev, drive, started, pid):
                 def record_wipe(result):
                     # "refused" = the engine wrote nothing to the drive (wrong
                     # serial, USB, boot disk...). Filing it would put a failed
@@ -3127,12 +3862,20 @@ class Handler(BaseHTTPRequestHandler):
                     if result.get("status") not in ("wiped", "failed"):
                         pending_remove(pid)
                         return
-                    payload = build_wipe_payload(base, result, dev, drive, method,
-                                                 started_epoch, clock_at_start)
-                    stamp_provenance(payload)
+                    # started["epoch"]: when the engine really began - a
+                    # namespace that waited its turn did not start when the
+                    # request came in.
+                    if signed_base is not None:
+                        payload = build_wipe_payload(signed_base, result, dev, drive, method,
+                                                     started["epoch"], clock_at_start)
+                    else:
+                        payload = build_wipe_payload(base, result, dev, drive, method,
+                                                     started["epoch"], clock_at_start)
+                        stamp_provenance(payload)
                     # On disk before the upload starts: a power cut during the
                     # POST now files this record at the next boot.
                     pending_finalize(pid, payload)
+                    held = held_reason(payload)
                     out, queued, err = upload_audit(payload)
                     # Uploaded or queued - either way it is no longer only in
                     # this process's memory.
@@ -3142,12 +3885,23 @@ class Handler(BaseHTTPRequestHandler):
                         # all, is on disk and uploads itself later.
                         result["queued"] = True
                         result["waiting"] = queue_count()
-                        result["recordError"] = ("no connection — the wipe record is saved "
-                                                 "on this machine and will upload automatically")
+                        # Asked again: the operator can change hands DURING
+                        # the upload (post_record then keeps it queued), and
+                        # "no connection" would send them to the network.
+                        held = held or held_reason(payload)
+                        result["recordError"] = (
+                            ("the wipe record is saved on this machine; it was " + held)
+                            if held else
+                            ("no connection — the wipe record is saved "
+                             "on this machine and will upload automatically"))
                         return
                     result["recorded"] = bool(out and out.get("assetId"))
                     result["recordName"] = (out or {}).get("name")
                     result["recordTag"] = (out or {}).get("tag")
+                    # The asset the record landed on: the screen asks the API
+                    # (contract C4, /api/wipe/eligibility) whether THAT asset
+                    # now has a certificate, instead of assuming it does.
+                    result["recordAssetId"] = (out or {}).get("assetId")
                 return record_wipe
 
             started, busy = [], []
@@ -3168,12 +3922,18 @@ class Handler(BaseHTTPRequestHandler):
                 pid = pending_add({"device": d, "drive": drive, "method": method,
                                    "startedEpoch": started_epoch,
                                    "clockAtStart": clock_at_start,
-                                   "base": stamp_provenance(dict(base))})
+                                   "base": (signed_base if signed_base is not None
+                                            else stamp_provenance(dict(base)))})
+                began = {"epoch": started_epoch}
                 ok = start_job(wipe_kind(d), argv,
                                "WIPE_RESULT ", d,
-                               on_done=make_recorder(d, drive, started_epoch, pid),
+                               on_done=make_recorder(d, drive, began, pid),
                                noun="wipe", record_on_no_result=True,
-                               hint="The drive may be failing or was disconnected.")
+                               hint="The drive may be failing or was disconnected.",
+                               # One NVMe controller, one erase at a time (see
+                               # above). None for SATA/SAS: no queue.
+                               queue_key=offered[d].get("controller"),
+                               on_start=lambda b=began: b.update(epoch=time.time()))
                 if not ok:
                     pending_remove(pid)     # never started: nothing to record
                 (started if ok else busy).append(d)
@@ -3196,6 +3956,12 @@ class Handler(BaseHTTPRequestHandler):
                                                    % device})
             if not re.match(r"^[A-Za-z0-9_.-]+$", image or ""):
                 return self._send(400, {"message": "invalid image"})
+            # A restore files a record too, so with operator sign-in it needs
+            # a signed-in person, fixed now for the same reason as a wipe's.
+            gate = operator_gate()
+            if gate:
+                return self._send(gate[0], {"message": gate[1]})
+            install_who = stamp_provenance({}) if operator_signin_on() else None
             # Point the driver at whichever library is active (server share or
             # the stick). This MUST be set before the job starts — it was
             # previously assigned afterwards, so the child never saw it.
@@ -3230,6 +3996,12 @@ class Handler(BaseHTTPRequestHandler):
                 if install_lot:
                     payload["lotId"] = install_lot
                 stamp_provenance(payload)
+                if install_who is not None:
+                    # The person who STARTED the restore (stamped above, at
+                    # start), not whoever is signed in when it ends.
+                    payload.pop("operatorName", None)
+                    payload.pop(OPERATOR_TAG, None)
+                    payload.update(install_who)
                 out, queued, err = upload_audit(payload)
                 if queued:
                     result["queued"] = True

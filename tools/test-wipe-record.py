@@ -240,6 +240,79 @@ try:
                                  "reallocatedAfter": 0, "pendingAfter": 0}, p)
     check("no notes on a clean wipe", "notes" not in p, p)
 
+    print("step 38: why a requested method was not used, bad sectors, BIOS lock")
+
+    # A purge asked for, an overwrite achieved (the BIOS froze the drive): the
+    # record carries all of it, not just the achieved label.
+    sent = start(["/dev/sda"])
+    JOBS[0]["on_done"]({
+        "status": "wiped", "device": "/dev/sda", "method": "Overwrite + verify",
+        "methodRequested": "secure", "methodAttempted": "ata-secure-erase,overwrite",
+        "fallbackReason": "frozen", "sanitisationLevel": "clear", "verification": "clean",
+        "hiddenAreas": "unknown",
+        "limitations": ["12 reallocated sectors were not overwritten",
+                        "Hidden areas could not be checked"],
+        "smart": {"reallocatedBefore": 12, "pendingBefore": 0, "reallocatedAfter": 12,
+                  "pendingAfter": None}})
+    p = UPLOADS[-1]
+    check("fallback: requested / attempted / reason / level all forwarded",
+          (p.get("methodRequested"), p.get("methodAttempted"), p.get("fallbackReason"),
+           p.get("sanitisationLevel"), p.get("verification"), p.get("hiddenAreas")) ==
+          ("secure", "ata-secure-erase,overwrite", "frozen", "clear", "clean", "unknown"), p)
+    check("fallback: the achieved method is still dataWipeMethod",
+          p.get("dataWipeMethod") == "Overwrite + verify", p)
+    check("limitations forwarded in order as wipeLimitations",
+          p.get("wipeLimitations") == ["12 reallocated sectors were not overwritten",
+                                       "Hidden areas could not be checked"], p)
+    check("SMART counts forwarded, an unread count kept as null",
+          p.get("wipeSmart") == {"reallocatedBefore": 12, "pendingBefore": 0,
+                                 "reallocatedAfter": 12, "pendingAfter": None}, p)
+    check("the engine's methodRequested wins over the station's default",
+          p.get("methodRequested") == "secure", p)
+
+    # biosLocked from the lock report captured with the profile. Old kiosk
+    # records never carried it at all.
+    check("no lock report in the profile: biosLocked left out", "biosLocked" not in p, p)
+
+    def with_locks(locks):
+        srv.STATE["profile"] = dict(json.loads(json.dumps(PROFILE)), locks=locks)
+        start(["/dev/sda"])
+        JOBS[0]["on_done"]({"status": "wiped", "method": "m", "device": "/dev/sda"})
+        return UPLOADS[-1] if UPLOADS else {}
+
+    try:
+        p = with_locks({"status": "LOCKED", "checks": [
+            {"key": "autopilot", "status": "PASS", "detail": "not registered"},
+            {"key": "bios_pw", "status": "LOCKED", "detail": "supervisor password set"}]})
+        check("a LOCKED check: biosLocked true", p.get("biosLocked") is True, p.get("biosLocked"))
+        p = with_locks({"status": "CLEAR", "checks": [
+            {"key": "bios_pw", "status": "PASS", "detail": "Deactivate|LOCKED|yes"}]})
+        check("checks ran, nothing locked (a detail mentioning LOCKED): false",
+              p.get("biosLocked") is False, p.get("biosLocked"))
+        p = with_locks({"status": "WARNING", "checks": [{"key": "mdm", "status": "DETECTED"}]})
+        check("WARNING, nothing locked: false", p.get("biosLocked") is False, p.get("biosLocked"))
+        # lock_status ranks WARNING above UNKNOWN, so a WARNING roll-up can
+        # hide a check that never finished (here the BIOS-password one).
+        p = with_locks({"status": "WARNING", "checks": [{"key": "mdm", "status": "DETECTED"},
+                                                        {"key": "bios_pw", "status": "UNKNOWN"}]})
+        check("WARNING hiding an UNKNOWN check: left out, never claimed unlocked",
+              "biosLocked" not in p, p.get("biosLocked"))
+        p = with_locks({"status": "CLEAR", "checks": [{"key": "bios_pw", "status": "unknown"}]})
+        check("an UNKNOWN check under any roll-up: left out", "biosLocked" not in p,
+              p.get("biosLocked"))
+        p = with_locks({"status": "UNVERIFIED", "checks": [{"key": "bios_pw", "status": "UNKNOWN"}]})
+        check("UNVERIFIED: left out, never claimed unlocked", "biosLocked" not in p, p)
+        p = with_locks("garbage")
+        check("an unreadable lock report: left out", "biosLocked" not in p, p)
+    finally:
+        srv.STATE["profile"] = json.loads(json.dumps(PROFILE))
+    check("bios_locked: no profile", srv.bios_locked(None) is None)
+    # A restart-recovered record carries it too (built by the same function).
+    rec = srv.pending_failed_payload({"device": "/dev/sda", "drive": {"serial": "W2"},
+                                      "base": {"profile": dict(PROFILE, locks={"status": "LOCKED",
+                                                                               "checks": []})}})
+    check("recovered record: biosLocked from its own profile", rec.get("biosLocked") is True, rec)
+
     # An engine that predates C1: the station fills in what it saw itself.
     sent = start(["/dev/sda"])
     JOBS[0]["on_done"]({"status": "wiped", "method": "overwrite", "device": "/dev/sda",
