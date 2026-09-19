@@ -276,6 +276,24 @@ export function lockedNotice(n: number): string {
   } may not be usable by a new owner until it is released.`;
 }
 
+// Which build of the station software erased the drive (plan step 28, stage
+// 1). A record from a stick too old to send it says so rather than printing
+// nothing: the certificate is still issued (never blocked in stage 1, owner
+// decision D28), but a reader can see the tool was not identified.
+export const TOOL_NOT_RECORDED = 'not recorded';
+
+function toolRow(r: AssetAudit): Row {
+  const version = r.toolVersion?.trim();
+  if (!version) return ['Tool version', TOOL_NOT_RECORDED];
+  const name = r.toolName?.trim();
+  const commit = r.toolCommit?.trim();
+  return [
+    'Tool version',
+    [name, version].filter(Boolean).join(' ') +
+      (commit ? ` (build ${commit})` : ''),
+  ];
+}
+
 function driveSection(
   d: DriveOutcome<AssetAudit>,
   index: number,
@@ -328,8 +346,15 @@ function driveSection(
             : att.result,
     ],
     ...(source === 'station' ? achievedRows(r) : []),
+    ...(source === 'station' ? [toolRow(r)] : []),
     ...dateRows(r),
-    ...erasurePeople(source, att, r.operatorName, r.auditedBy?.name ?? null),
+    ...erasurePeople(
+      source,
+      att,
+      r.operatorName,
+      r.auditedBy?.name ?? null,
+      r.auditedBy?.isStation === true,
+    ),
   ];
   return { title, rows };
 }

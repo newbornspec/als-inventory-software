@@ -1,4 +1,11 @@
-import { ArrayUnique, IsEnum, IsIn, IsOptional, IsString } from 'class-validator';
+import {
+  ArrayUnique,
+  IsBoolean,
+  IsEnum,
+  IsIn,
+  IsOptional,
+  IsString,
+} from 'class-validator';
 import { UserRole } from '../user.entity';
 import { ALL_PERMISSIONS, Permission } from '../../auth/permissions';
 
@@ -15,4 +22,9 @@ export class UpdateUserDto {
   @ArrayUnique()
   @IsIn(ALL_PERMISSIONS, { each: true })
   permissions?: Permission[];
+
+  // A shared (station) account rather than a person - see User.isStation.
+  @IsOptional()
+  @IsBoolean()
+  isStation?: boolean;
 }
