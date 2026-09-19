@@ -769,6 +769,96 @@ fw_tried() {
   FW_TRIED="${FW_TRIED:+$FW_TRIED,}$1"
 }
 
+# --- suspend-to-unfreeze: when is it safe? (plan step 42, D-2) ---------------
+#
+# Most BIOSes "freeze" SATA security at boot, which blocks the ATA secure
+# erase; a suspend/resume cycle usually unfreezes it. AUDIT_WIPE_UNFREEZE=1
+# does that with rtcwake. But a suspend stops the WHOLE machine, and the kiosk
+# runs wipes of several drives at the same time: suspending under another
+# drive's overwrite or sanitize can abort it, or corrupt it mid-write. And on
+# some machines resume simply fails - the station then hangs with drives half
+# erased. So a suspend is allowed only when ALL of these hold:
+#   - no other wipe is running on this machine: every running gui_wipe_one
+#     registers itself as a directory named by its PID under ALS_WIPE_RUN_DIR
+#     (default /run/als-wipe, a tmpfs, so a reboot clears it); an entry whose
+#     process is gone is stale and ignored. If THIS wipe could not register,
+#     other wipes could not have either, so nothing can be ruled out: no.
+#   - /sys/power/mem_sleep offers "deep" (S3). s2idle keeps the drives
+#     powered, so it cannot unfreeze anything and would only stall the wipe;
+#   - the machine (DMI product name) is not one where resume is known to fail:
+#     ALS_NO_RESUME_MODELS below, plus AUDIT_WIPE_NO_SUSPEND_MODELS from
+#     audit.conf, "|"-separated, compared case-insensitively. The built-in
+#     list starts EMPTY: no model has yet been seen to fail on this station,
+#     and a guessed entry would be fiction. Add one the day it happens;
+#   - this drive's HPA was not removed temporarily (step 34): the suspend
+#     resets the drive, which brings the HPA back.
+# Still a race: a wipe started during the ~8 seconds of the suspend itself is
+# not seen. The kiosk starts wipes only on an operator's click, and the whole
+# feature stays OFF (owner decision D42) until tried on the station.
+# Returns 0 when a suspend is allowed; else 1 with SUSPEND_WHY.
+ALS_NO_RESUME_MODELS=""
+als_wipe_lock() {
+  local dir="${ALS_WIPE_RUN_DIR:-/run/als-wipe}"
+  WR_LOCK=""
+  [ -d "${dir%/*}" ] || return 1
+  mkdir -p "$dir" 2>/dev/null || return 1
+  # A directory already named by our PID is a dead wipe's leftover (PIDs are
+  # reused) - it is ours now.
+  [ -d "$dir/$$" ] || mkdir "$dir/$$" 2>/dev/null || return 1
+  WR_LOCK="$dir/$$"
+  return 0
+}
+als_wipe_unlock() {
+  [ -n "${WR_LOCK:-}" ] && rmdir "$WR_LOCK" 2>/dev/null
+  WR_LOCK=""
+  return 0
+}
+als_suspend_ok() {
+  local dir="${ALS_WIPE_RUN_DIR:-/run/als-wipe}" sys="${ALS_SYS_ROOT:-}/sys" f p model m lc
+  SUSPEND_WHY=""
+  if [ "${WR_HPA_REMOVED:-0}" = 1 ]; then
+    SUSPEND_WHY="this drive's hidden area (HPA) was removed only until the next reset, and a suspend resets the drive"
+    return 1
+  fi
+  if [ -z "${WR_LOCK:-}" ] || [ ! -d "$WR_LOCK" ]; then
+    SUSPEND_WHY="this wipe could not register in $dir, so other running wipes cannot be ruled out"
+    return 1
+  fi
+  for f in "$dir"/*; do
+    [ -e "$f" ] || continue
+    [ "$f" = "$WR_LOCK" ] && continue
+    p="${f##*/}"
+    case "$p" in
+      ''|*[!0-9]*) SUSPEND_WHY="unexpected entry '$p' in $dir"; return 1 ;;
+    esac
+    if kill -0 "$p" 2>/dev/null || [ -d "/proc/$p" ]; then
+      SUSPEND_WHY="another wipe is running on this machine (process $p)"
+      return 1
+    fi
+    rmdir "$f" 2>/dev/null   # stale: that wipe is gone
+  done
+  if ! grep -qw deep "$sys/power/mem_sleep" 2>/dev/null; then
+    SUSPEND_WHY="this machine does not offer deep suspend (S3)"
+    return 1
+  fi
+  model=$(tr -d '\r\n' < "$sys/class/dmi/id/product_name" 2>/dev/null | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+  if [ -z "$model" ]; then
+    SUSPEND_WHY="the machine model could not be read, so it cannot be checked against the list where resume fails"
+    return 1
+  fi
+  lc=$(printf '%s' "$model" | tr '[:upper:]' '[:lower:]')
+  local IFS='|'
+  for m in $ALS_NO_RESUME_MODELS ${AUDIT_WIPE_NO_SUSPEND_MODELS:-}; do
+    m=$(printf '%s' "$m" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | tr '[:upper:]' '[:lower:]')
+    [ -n "$m" ] || continue
+    if [ "$m" = "$lc" ]; then
+      SUSPEND_WHY="resume is known to fail on this model ($model)"
+      return 1
+    fi
+  done
+  return 0
+}
+
 # ATA Secure Erase for one SATA/ATA drive via hdparm, honouring the wanted method
 # ("crypto" needs enhanced/SED support). Sets M. Returns 0 on success. Handles the
 # BIOS "frozen" state (optional suspend/resume) and clears the temporary password
@@ -781,10 +871,22 @@ ata_secure_erase() {
   printf '%s\n' "$info" | grep -qi 'supported: enhanced erase' && enh="yes"
 
   if ! printf '%s\n' "$info" | grep -qi 'not frozen'; then
+    # Suspend-to-unfreeze: OFF unless audit.conf sets AUDIT_WIPE_UNFREEZE=1
+    # (owner decision D42: the guards exist, the feature stays disabled until
+    # it has been proved on the station's machines). als_suspend_ok says when
+    # it is safe at all.
     if [ "${AUDIT_WIPE_UNFREEZE:-0}" = "1" ] && command -v rtcwake >/dev/null 2>&1; then
-      echo "    $dev is frozen — suspending ~6s to unfreeze …"
-      rtcwake -m mem -s 6 >/dev/null 2>&1; sleep 2
-      info=$(hdparm -I "$dev" 2>/dev/null | tr '\t' ' ' | tr -s ' ')
+      if als_suspend_ok; then
+        echo "    $dev is frozen — suspending ~6s to unfreeze …"
+        # "deep" is offered (checked); make it the mode `-m mem` uses, or the
+        # suspend is s2idle, which keeps the drive powered - and frozen.
+        grep -q '\[deep\]' "${ALS_SYS_ROOT:-}/sys/power/mem_sleep" 2>/dev/null \
+          || { echo deep > "${ALS_SYS_ROOT:-}/sys/power/mem_sleep"; } 2>/dev/null
+        rtcwake -m mem -s 6 >/dev/null 2>&1; sleep 2
+        info=$(hdparm -I "$dev" 2>/dev/null | tr '\t' ' ' | tr -s ' ')
+      else
+        echo "    $dev is frozen; not suspending to unfreeze it: $SUSPEND_WHY."
+      fi
     fi
     printf '%s\n' "$info" | grep -qi 'not frozen' || { fw_why frozen; echo "    $dev still frozen — will overwrite instead."; return 1; }
   fi
@@ -1686,6 +1788,13 @@ gui_wipe_one() {
     wipe_result refused "identity mismatch refused" "drive serial '${DRV_SERIAL:-none}' does not match the selected drive '$expect'"
     return 1
   fi
+  # From here on this drive is being wiped: register it, so a suspend-to-
+  # unfreeze in ANOTHER wipe on this machine knows to wait (step 42). Removed
+  # when the engine exits - the --wipe-drive entrypoint exits right after this
+  # function - and an entry left by a killed engine is recognised as stale by
+  # its dead PID. A failure to register only disables suspending.
+  als_wipe_lock
+  trap 'als_wipe_unlock' EXIT
   export AUDIT_WIPE_METHOD="$want"
   rota=$(cat "/sys/block/$d/queue/rotational" 2>/dev/null)
   m=""; verified=0; fw=0

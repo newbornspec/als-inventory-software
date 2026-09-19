@@ -248,6 +248,8 @@ $(extract "$SRC" ata_hidden_areas)
 $(extract "$SRC" ata_hpa_remove)
 $(extract "$SRC" smart_counts)
 $(extract "$SRC" wipe_assess)
+$(extract "$SRC" als_wipe_lock)
+$(extract "$SRC" als_wipe_unlock)
 $VF
 $(extract "$SRC" gui_wipe_one | sed 's/\[ ! -b "\$dev" \]/[ ! -e "$dev" ]/')"
 case "$FUNCS" in *'[ ! -e "$dev" ]'*) ;; *) echo "could not relax the -b check - refusing to run"; exit 1 ;; esac
