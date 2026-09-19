@@ -68,6 +68,14 @@ done
 #               (neither feature set) | fail (no answer at all, e.g. behind RAID)
 #   STUB_REAL   the DCO "Real max sectors" (unset: --dco-identify fails)
 #   STUB_SET    ok (default) | fail (rejected) | ignore (accepted, nothing changes)
+#   STUB_AMAX   1: an ACS-3 drive with ACCESSIBLE MAX ADDRESS (IDENTIFY word 119
+#               bit 8). hdparm 9.65 then prints the AMA wording for -N (two
+#               lines when lowered, exactly as hdparm.c prints them) and turns
+#               ANY -N <n> - "p" or not - into SET ACCESSIBLE MAX ADDRESS EXT,
+#               which ACS-3 defines as non-volatile: a PERMANENT change to the
+#               customer's drive, so on such a drive a SET is a TRIPWIRE too.
+#   STUB_STD    the ATA major versions -I lists under "Standards: Supported:"
+#               (e.g. "8 7 6 5"; unset: no Standards section). 10 = ACS-3.
 cat > "$TRIP/hdparm" <<EOF
 #!/bin/sh
 echo "hdparm \$*" >> "$LOG"
@@ -86,6 +94,12 @@ case "$op" in
     [ "$(printenv STUB_I)" = fail ] && { echo " HDIO_DRIVE_CMD(identify) failed: Invalid argument" >&2; exit 5; }
     echo ""
     echo "ATA device, with non-removable media"
+    if [ -n "$(printenv STUB_STD)" ]; then
+      echo "Standards:"
+      echo "	Used: unknown (minor revision code 0x011b) "
+      echo "	Supported: $(printenv STUB_STD) "
+      echo "	Likely used: 9"
+    fi
     echo "Commands/features:"
     echo "	Enabled	Supported:"
     echo "	   *	SMART feature set"
@@ -100,6 +114,10 @@ case "$op" in
   -N)
     if [ "$#" -ge 3 ]; then
       # a SET: -N <count> <dev>
+      if [ "$(printenv STUB_AMAX)" = 1 ]; then
+        echo "hdparm $* (SET ACCESSIBLE MAX ADDRESS EXT: permanent)" >> "$(printenv TRIPLOG)"
+        echo "TRIPWIRE: a permanent max-address change" >&2; exit 99
+      fi
       case "$(printenv STUB_SET)" in
         fail) echo " SET_MAX_ADDRESS failed" >&2; exit 5 ;;
         ignore) ;;
@@ -114,6 +132,12 @@ case "$op" in
       garbage) echo "SG_IO: bad/missing sense data, sb[]:  70 00 05"; exit 0 ;;
       invalid) echo " max sectors   = $1/$2, HPA setting seems invalid (buggy kernel device driver?)"; exit 0 ;;
     esac
+    if [ "$(printenv STUB_AMAX)" = 1 ]; then
+      if [ "$1" = "$2" ]; then echo " max sectors   = $1/$2, ACCESSIBLE MAX ADDRESS disabled"
+      else echo " max sectors   = $1/$2, ACCESSIBLE MAX ADDRESS enabled"
+           echo "Power cycle your device after every ACCESSIBLE MAX ADDRESS"; fi
+      exit 0
+    fi
     if [ "$1" = "$2" ]; then echo " max sectors   = $1/$2, HPA is disabled"
     else echo " max sectors   = $1/$2, HPA is enabled"; fi
     ;;
@@ -168,13 +192,14 @@ $(extract "$SRC" ata_hpa_remove)
 $(extract "$SRC" gui_wipe_one | sed 's/\[ ! -b "\$dev" \]/[ ! -e "$dev" ]/')"
 case "$FUNCS" in *'ata_hidden_areas() {'*'[ ! -e "$dev" ]'*) ;; *) echo "could not extract gui_wipe_one / ata_hidden_areas - refusing to run"; exit 1 ;; esac
 # Every function gui_wipe_one needs that this harness does not stub must be here.
-for f in smart_counts wipe_assess als_wipe_lock als_wipe_unlock; do
+for f in ata_kernel_whole smart_counts wipe_assess als_wipe_lock als_wipe_unlock; do
   if grep -q "^$f() {" "$SRC"; then FUNCS="$FUNCS
 $(extract "$SRC" "$f")"; fi
 done
 
 # STUB_KSIZE: follow (default: the kernel's size follows the drive after a
 # rescan) | stale (the kernel keeps the old, smaller size).
+# STUB_KSEC=<n>: the kernel sees exactly n sectors, whatever the drive says.
 # STUB_RESET=1: the drive is reset during the erase, and its HPA comes back.
 STUBS='
 firmware_erase() { echo "firmware_erase $*" >> "$LOG"
@@ -187,7 +212,8 @@ blockdev() {
   case "$1" in
     --getss) echo 512 ;;
     --getsize64)
-      if [ "${STUB_KSIZE:-follow}" = stale ]; then set -- $INITIAL; else set -- $(command cat "$ST"); fi
+      if [ -n "${STUB_KSEC:-}" ]; then set -- "$STUB_KSEC"
+      elif [ "${STUB_KSIZE:-follow}" = stale ]; then set -- $INITIAL; else set -- $(command cat "$ST"); fi
       echo $(( $1 * 512 )) ;;
   esac
 }
@@ -266,8 +292,16 @@ ha "976771055 976773168" STUB_N=invalid STUB_REAL=976773168
 [ "$HA" = unknown ] && ok "'HPA setting seems invalid' (buggy driver): unknown, not trusted" || bad "'HPA setting seems invalid': unknown" "$HA / $HAV"
 ha "976773168 976773168" STUB_N=fail STUB_I=fail
 [ "$HA" = unknown ] && ok "nothing answers at all (RAID/RST): unknown" || bad "nothing answers at all (RAID/RST): unknown" "$HA / $HAV"
+ha "976773168 976773168" STUB_N=fail STUB_I=empty STUB_STD="8 7 6 5"
+[ "$HA" = none ] && ok "-N fails, -I lists neither the HPA nor the DCO feature set, pre-ACS-3 drive: none" || bad "-N fails, -I lists neither feature set, pre-ACS-3: none" "$HA / $HAV"
+# ACS-3 made the HPA feature-set bit (word 82 bit 10) obsolete: such a drive
+# can have a lowered capacity (ACCESSIBLE MAX ADDRESS) that -I never prints.
+ha "976773168 976773168" STUB_N=fail STUB_I=empty STUB_STD="11 10 9 8"
+[ "$HA" = unknown ] && ok "-N fails, no HPA feature set, but an ACS-3+ drive (AMA possible): unknown, not none" || bad "-N fails, no HPA feature set, ACS-3+ drive: unknown" "$HA / $HAV"
 ha "976773168 976773168" STUB_N=fail STUB_I=empty
-[ "$HA" = none ] && ok "-N fails, but -I lists neither the HPA nor the DCO feature set: none" || bad "-N fails, -I lists neither feature set: none" "$HA / $HAV"
+[ "$HA" = unknown ] && ok "-N fails, no HPA feature set, standard not listed: unknown" || bad "-N fails, no HPA feature set, standard not listed: unknown" "$HA / $HAV"
+ha "976771055 976773168" STUB_AMAX=1 STUB_REAL=976773168
+[ "$HA" = hpa-present ] && ok "'ACCESSIBLE MAX ADDRESS enabled' (ACS-3 AMA wording, two lines): the lowered capacity is seen" || bad "AMA wording: hpa-present" "$HA / $HAV"
 ha "976773168 976773168" STUB_N=fail STUB_I=nodco
 [ "$HA" = unknown ] && ok "HPA feature set present but -N unreadable: unknown" || bad "HPA feature set present but -N unreadable: unknown" "$HA / $HAV"
 ha "976773168 976773170" STUB_REAL=976773168
@@ -307,6 +341,37 @@ case "$(field reason)" in *kernel*) ok "  ... the reason says it is the kernel's
 wipe "976771055 976773168" STUB_REAL=976773168 STUB_RESET=1
 [ "$(field status)" = failed ] && case "$(field reason)" in *"came back during the wipe"*) true ;; *) false ;; esac \
   && ok "the HPA comes back during the erase (a drive reset): failed, not certified" || bad "the HPA comes back during the erase: failed" "$RESULT"
+
+echo "an ACS-3 ACCESSIBLE MAX ADDRESS cannot be lowered back temporarily: failed, drive untouched"
+# hdparm 9.65 (Ubuntu 24.04) sends SET ACCESSIBLE MAX ADDRESS EXT for ANY -N <n>
+# on such a drive, and ACS-3 has no volatile form of it - the "temporary"
+# removal would permanently reconfigure the customer's drive.
+wipe "976771055 976773168" STUB_AMAX=1 STUB_REAL=976773168
+[ "$(field status)" = failed ] && ok "AMA-lowered drive: failed" || bad "AMA-lowered drive: failed" "$RESULT"
+case "$CALLS" in *"-N 976773168 "*) bad "  ... no max-address change is even attempted" "$CALLS" ;; *) ok "  ... no max-address change is even attempted" ;; esac
+case "$CALLS" in *firmware_erase*|*run_overwrite*) bad "  ... nothing erased" "$CALLS" ;; *) ok "  ... nothing erased" ;; esac
+[ "$(field hiddenAreas)" = hpa-present ] && ok "  ... hiddenAreas: hpa-present" || bad "  ... hiddenAreas: hpa-present" "$RESULT"
+case "$(field reason)" in *"2113 sectors"*permanent*) ok "  ... the reason names the area and why it was left alone" ;; *) bad "  ... the reason names the area and why" "$(field reason)" ;; esac
+case "$(field method)" in *"; hidden areas: "*"accessible max address"*) ok "  ... and so does the method" ;; *) bad "  ... and so does the method" "$(field method)" ;; esac
+wipe "976773168 976773168" STUB_AMAX=1 STUB_REAL=976773168
+[ "$(field status)" = wiped ] && [ "$(field hiddenAreas)" = none ] && ok "AMA drive at its full size ('ACCESSIBLE MAX ADDRESS disabled'): wiped, none" || bad "AMA drive at full size: wiped, none" "$RESULT"
+# The same process-level rule for any -N wording hdparm might print: only the
+# legacy "HPA is enabled" answer promises the volatile SET MAX ADDRESS path.
+wipe "976771055 976773168" STUB_N=invalid STUB_REAL=976773168
+case "$CALLS" in *"-N 976773168 "*) bad "an untrusted -N answer: nothing is set" "$CALLS" ;; *) ok "an untrusted -N answer: nothing is set" ;; esac
+
+echo "the drive is whole but the KERNEL sees less: failed, nothing erased"
+# A previous attempt in this boot removed the HPA (volatile) but libata kept its
+# probe-time size: the drive now says current = native, the kernel does not.
+wipe "976773168 976773168" STUB_REAL=976773168 STUB_KSEC=976771055
+[ "$(field status)" = failed ] && ok "drive current = native, kernel 2113 sectors short: failed (was 'wiped, hidden areas: none')" || bad "drive whole, kernel short: failed" "$RESULT"
+case "$CALLS" in *firmware_erase*|*run_overwrite*) bad "  ... nothing erased" "$CALLS" ;; *) ok "  ... nothing erased" ;; esac
+case "$(field reason)" in *kernel*) ok "  ... the reason says it is the kernel's size ($(field reason))" ;; *) bad "  ... the reason says it is the kernel's size" "$(field reason)" ;; esac
+wipe "976773168 976773168" STUB_KSEC=976771055
+[ "$(field status)" = failed ] && case "$CALLS" in *firmware_erase*|*run_overwrite*) false ;; *) true ;; esac \
+  && ok "the same with the DCO unreadable (state unknown, native known): failed, nothing erased" || bad "unknown state, kernel short: failed" "$RESULT"
+wipe "976773168 976773168" STUB_N=garbage STUB_REAL=976773168 STUB_KSEC=976771055
+[ "$(field status)" = wiped ] && ok "native size unreadable: nothing to compare with, the unknown limitation stands (wiped)" || bad "native unreadable: wiped with limitation" "$RESULT"
 
 echo "a DCO: failed, named, never restored"
 wipe "976773168 976773168" STUB_REAL=1000215216

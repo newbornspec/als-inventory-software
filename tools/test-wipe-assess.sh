@@ -127,7 +127,7 @@ SRC="$HERE/hardware-audit.sh"
 FUNCS="$(grep -E '^(esc|o_begin|o_s|o_s0|o_n|o_raw|o_end|als_utc_now)\(\) \{' "$SRC")
 $(grep '^ALS_TOOL_VERSION=' "$SRC")"
 for f in als_json_array wr_limit als_lsblk_val als_lsblk_unescape als_drive_identity wipe_result clear_label \
-         als_disk_is_usb als_boot_disk ata_hidden_areas ata_hpa_remove smart_counts wipe_assess \
+         als_disk_is_usb als_boot_disk ata_hidden_areas ata_hpa_remove ata_kernel_whole smart_counts wipe_assess \
          fw_why fw_tried ata_secure_erase firmware_erase als_nvme_ctrl als_suspend_ok als_wipe_lock als_wipe_unlock; do
   if grep -q "^$f() {" "$SRC"; then FUNCS="$FUNCS
 $(extract "$SRC" "$f")"; fi

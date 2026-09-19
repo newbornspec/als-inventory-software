@@ -933,7 +933,8 @@ ata_secure_erase() {
 #                          (no DCO feature set = no DCO can exist).
 #   hdparm --dco-identify  "Real max sectors: N": above the native max is a DCO.
 # Sets HA_HPA and HA_DCO (none | present | unknown), HA_CUR / HA_NATIVE /
-# HA_REAL (sector counts, when read) and HA_WHY, and sets HA_STATE and prints
+# HA_REAL (sector counts, when read), HA_AMAX (1 / 0 / "": whether the drive's
+# max address can only be changed permanently) and HA_WHY, and sets HA_STATE and prints
 # the combined state (call it WITHOUT $(...) when the HA_* values are needed):
 #   dco-present > hpa-present > unknown > none
 # Anything it cannot parse - a RAID/RST controller that does not pass ATA
@@ -942,8 +943,8 @@ ata_secure_erase() {
 # It never changes anything; --dco-restore / --dco-setmax are never run by this
 # engine at all (a DCO restore is permanent and has bricked drives).
 ata_hidden_areas() {
-  local dev="$1" info n x real
-  HA_STATE=unknown; HA_HPA=unknown; HA_DCO=unknown; HA_CUR=""; HA_NATIVE=""; HA_REAL=""; HA_WHY=""
+  local dev="$1" info n x real std top v
+  HA_STATE=unknown; HA_HPA=unknown; HA_DCO=unknown; HA_CUR=""; HA_NATIVE=""; HA_REAL=""; HA_WHY=""; HA_AMAX=""
   if ! command -v hdparm >/dev/null 2>&1; then
     HA_WHY="hdparm is not installed"; echo unknown; return 0
   fi
@@ -952,6 +953,20 @@ ata_hidden_areas() {
   x=$(printf '%s\n' "$n" | sed -n 's/.*max sectors *= *\([0-9][0-9]*\)\/\([0-9][0-9]*\).*/\1 \2/p' | head -n1)
   if [ -n "$x" ] && ! printf '%s\n' "$n" | grep -qi 'seems invalid'; then
     HA_CUR="${x% *}"; HA_NATIVE="${x#* }"
+    # Which command a later `hdparm -N <n>` would send. hdparm (9.52+, and
+    # 9.65 on this stick) decides it by ONE test - ACS-3 with ACCESSIBLE MAX
+    # ADDRESS (IDENTIFY word 119 bit 8) - and prints its -N answer by the
+    # same test: "ACCESSIBLE MAX ADDRESS enabled/disabled" on such a drive,
+    # "HPA is enabled/disabled" otherwise. On an AMA drive the SET is SET
+    # ACCESSIBLE MAX ADDRESS EXT, which ACS-3 defines as non-volatile, and
+    # hdparm ignores the missing "p": the "temporary" removal would
+    # permanently reconfigure the customer's drive. So HA_AMAX: 1 = AMA
+    # (permanent only), 0 = the legacy SET MAX ADDRESS whose volatile form
+    # the drive forgets at power-off, "" = hdparm did not say (then nothing
+    # is ever set - see ata_hpa_remove).
+    if printf '%s\n' "$n" | grep -qi 'ACCESSIBLE MAX ADDRESS'; then HA_AMAX=1
+    elif printf '%s\n' "$n" | grep -qiE 'HPA is (enabled|disabled)'; then HA_AMAX=0
+    fi
     if [ "$HA_NATIVE" -le 0 ]; then HA_WHY="hdparm -N reported a native max of 0"; HA_CUR=""; HA_NATIVE=""
     elif [ "$HA_CUR" -eq "$HA_NATIVE" ]; then HA_HPA=none
     elif [ "$HA_CUR" -lt "$HA_NATIVE" ]; then HA_HPA=present
@@ -959,7 +974,23 @@ ata_hidden_areas() {
     fi
   elif printf '%s\n' "$info" | grep -q 'Commands/features' \
        && ! printf '%s\n' "$info" | grep -qi 'Host Protected Area'; then
-    HA_HPA=none     # the drive has no HPA feature set
+    # No HPA feature set (word 82 bit 10) proves there is no HPA only on a
+    # drive older than ACS-3. ACS-3 made that bit obsolete and added
+    # ACCESSIBLE MAX ADDRESS, which lowers the capacity just the same and
+    # which hdparm -I never prints. So "none" only when -I lists the ATA
+    # versions the drive supports and all are below ACS-3 (10); an ACS-3+
+    # drive, or one that does not list them, is unknown.
+    std=$(printf '%s\n' "$info" | sed -n 's/^ *Supported: *\([0-9][0-9 ]*\)$/\1/p' | head -n1)
+    top=""
+    for v in $std; do
+      case "$v" in *[!0-9]*) continue ;; esac
+      if [ -z "$top" ] || [ "$v" -gt "$top" ]; then top="$v"; fi
+    done
+    if [ -n "$top" ] && [ "$top" -lt 10 ]; then
+      HA_HPA=none   # a pre-ACS-3 drive with no HPA feature set
+    else
+      HA_WHY="the drive's max sectors could not be read (hdparm -N), and a drive of ACS-3 or later can hide sectors without the HPA feature set"
+    fi
   else
     HA_WHY="the drive's max sectors could not be read (hdparm -N)"
   fi
@@ -996,12 +1027,25 @@ ata_hidden_areas() {
 # decision D34, reversible). Then make the kernel re-read the size and require
 # that BOTH the drive (hdparm -N again) and the kernel (the block device's size)
 # now report the full native size - an overwrite only reaches what the kernel
-# thinks the drive holds. $1 = /dev/sdX, $2 = kernel name. Uses HA_NATIVE.
-# Returns 0 when the whole drive is visible; else 1 with HR_WHY.
+# thinks the drive holds. $1 = /dev/sdX, $2 = kernel name. Uses HA_NATIVE and
+# HA_AMAX: only a drive whose hdparm -N answer was the legacy "HPA is ..."
+# wording gets the SET - on an ACS-3 ACCESSIBLE MAX ADDRESS drive the same
+# command is PERMANENT (see ata_hidden_areas), and on an unknown wording it
+# might be; either way the drive is left exactly as it is and the wipe fails.
+# Returns 0 when the whole drive is visible; else 1 with HR_WHY (and HR_AMA=1
+# when it was refused because the change could only be permanent).
 ata_hpa_remove() {
-  local dev="$1" d="$2" nat="$HA_NATIVE" n x cur ss sz i
-  HR_WHY=""
+  local dev="$1" d="$2" nat="$HA_NATIVE" n x cur
+  HR_WHY=""; HR_AMA=""
   case "$nat" in ''|*[!0-9]*) HR_WHY="the native size is not known"; return 1 ;; esac
+  if [ "$HA_AMAX" = 1 ]; then
+    HR_AMA=1
+    HR_WHY="it is an ACS-3 accessible max address, which can only be changed permanently - left as it is (owner decision D34: temporary removal only)"
+    return 1
+  elif [ "$HA_AMAX" != 0 ]; then
+    HR_WHY="hdparm did not say whether the change would be temporary - left as it is"
+    return 1
+  fi
   # hdparm's own manual: setting the max takes two back-to-back commands the
   # kernel can interleave with others, "so if it fails initially, just try
   # again". Once.
@@ -1016,17 +1060,39 @@ ata_hpa_remove() {
     HR_WHY="the drive still reports ${cur:-an unreadable} of $nat sectors after the removal"
     return 1
   fi
-  # The kernel keeps the size it read at probe time until told to look again.
-  for i in 1 2 3; do
-    { echo 1 > "${ALS_SYS_ROOT:-}/sys/block/$d/device/rescan"; } 2>/dev/null
+  ata_kernel_whole "$dev" "$d" "$nat"
+}
+
+# Does the KERNEL see the whole drive? $1 = /dev/sdX, $2 = kernel name, $3 =
+# the drive's native sector count. The overwrite and the read-back stop at the
+# kernel's size, not the drive's, and the kernel keeps the size it read at
+# probe time until told to look again - so after a (volatile) HPA removal, and
+# also when hdparm -N says the drive is whole: an earlier attempt in the same
+# boot may have removed the HPA while libata kept the old, smaller size, and
+# then the drive answers current = native while the last sectors are out of
+# the wipe's reach. Checked first, then after a rescan, three times.
+# Returns 0 when the kernel's size is exactly native x sector size; else 1
+# with HR_WHY (an unreadable size is a failure too: nothing is proven).
+ata_kernel_whole() {
+  local dev="$1" d="$2" nat="$3" ss sz i
+  HR_WHY=""
+  case "$nat" in ''|*[!0-9]*) HR_WHY="the native size is not known"; return 1 ;; esac
+  for i in 0 1 2 3; do
+    if [ "$i" -gt 0 ]; then
+      { echo 1 > "${ALS_SYS_ROOT:-}/sys/block/$d/device/rescan"; } 2>/dev/null
+    fi
     ss=$(blockdev --getss "$dev" 2>/dev/null)
     sz=$(blockdev --getsize64 "$dev" 2>/dev/null)
     case "$ss" in ''|*[!0-9]*) ss="" ;; esac
     case "$sz" in ''|*[!0-9]*) sz="" ;; esac
     [ -n "$ss" ] && [ -n "$sz" ] && [ "$sz" = $(( nat * ss )) ] && return 0
-    sleep 1
+    [ "$i" -gt 0 ] && sleep 1
   done
-  HR_WHY="the kernel still sees ${sz:-an unreadable number of} bytes, not the whole drive ($nat sectors of ${ss:-unknown size})"
+  if [ -n "$ss" ] && [ -n "$sz" ] && [ "$sz" -lt $(( nat * ss )) ]; then
+    HR_WHY="the kernel still sees $sz bytes, $(( nat - sz / ss )) sectors short of the whole drive ($nat sectors of $ss bytes)"
+  else
+    HR_WHY="the kernel sees ${sz:-an unreadable number of} bytes, not the whole drive ($nat sectors of ${ss:-unknown size})"
+  fi
   return 1
 }
 
@@ -1804,7 +1870,9 @@ gui_wipe_one() {
   # DCO hides sectors from the kernel, so neither the firmware erase on many
   # drives nor an overwrite would reach them - and the drive used to be
   # certified all the same. Owner decision D34 (reversible):
-  #   HPA only    -> removed TEMPORARILY and verified, or the wipe fails
+  #   HPA only    -> removed TEMPORARILY and verified, or the wipe fails -
+  #                  and on an ACS-3 ACCESSIBLE MAX ADDRESS drive, where only a
+  #                  permanent change exists, it fails without touching it
   #   DCO present -> the wipe fails, naming it (never --dco-restore)
   #   unknown     -> the wipe goes ahead, with the limitation recorded - an
   #                  unreadable answer is common behind RAID/RST controllers,
@@ -1815,6 +1883,23 @@ gui_wipe_one() {
     *)
       echo "Checking $dev for hidden areas (HPA / DCO) …"
       ata_hidden_areas "$dev" >/dev/null
+      # Whenever the drive's native size is known and no removal is due,
+      # the kernel must see all of it: hdparm -N compares only the drive's
+      # own two numbers, and a drive whose HPA an earlier attempt in this
+      # boot removed answers current = native while the kernel still holds
+      # the old, smaller size - the overwrite and the read-back would stop
+      # there and the drive be certified "hidden areas: none".
+      case "$HA_STATE" in
+        none|unknown)
+          if [ -n "$HA_NATIVE" ] && ! ata_kernel_whole "$dev" "$d" "$HA_NATIVE"; then
+            WR_HIDDEN="$HA_STATE"
+            WR_HIDDEN_TXT="the kernel sees less than the drive's $HA_NATIVE sectors"
+            echo "✗ The kernel does not see the whole of $dev: $HR_WHY. Nothing has been erased."
+            wipe_result failed "none" "the end of the drive is out of the wipe's reach: $HR_WHY (usually a hidden area removed earlier in this boot, whose new size the kernel has not taken up)"
+            return 1
+          fi
+          ;;
+      esac
       case "$HA_STATE" in
         none)
           WR_HIDDEN=none; WR_HIDDEN_TXT="none" ;;
@@ -1837,7 +1922,11 @@ gui_wipe_one() {
             fi
           else
             WR_HIDDEN=hpa-present
-            WR_HIDDEN_TXT="HPA present ($HA_CUR of $HA_NATIVE sectors visible), could not be removed"
+            if [ "$HR_AMA" = 1 ]; then
+              WR_HIDDEN_TXT="accessible max address lowered ($HA_CUR of $HA_NATIVE sectors visible), not changed: only a permanent change is possible"
+            else
+              WR_HIDDEN_TXT="HPA present ($HA_CUR of $HA_NATIVE sectors visible), could not be removed"
+            fi
             echo "✗ The hidden area (HPA) could not be removed: $HR_WHY. Nothing has been erased."
             wipe_result failed "none" "a hidden area (HPA) of $(( HA_NATIVE - HA_CUR )) sectors could not be removed: $HR_WHY"
             return 1
