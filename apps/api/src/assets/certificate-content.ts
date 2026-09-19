@@ -219,15 +219,24 @@ export const UNQUALIFIED_DRIVE_RESULT =
 const known = (map: Record<string, string>, v: string | null | undefined) =>
   v ? (map[v] ?? v) : NOT_ASSESSED;
 
+// Hidden-area outcomes that leave part of the drive possibly not erased: an
+// HPA or DCO still in place, or areas that could not be checked (owner
+// decision D34 records 'unknown' as a limitation rather than a failure).
+const HIDDEN_DOUBT = new Set(['hpa-present', 'dco-present', 'unknown']);
+
 // Did the engine record ANY reason to doubt "unrecoverable" for this drive?
-// Any limitation does (spec step 39); so does a level of 'none' or a
-// read-back that still found data - which should never come with 'wiped', but
-// if it ever does, the certificate must not say unrecoverable.
+// Any limitation does (spec step 39); so does a level of 'none', a read-back
+// that still found data, or a hidden area that may still hold data. The last
+// three should always come with a limitation (or not with 'wiped' at all),
+// but an older engine - or one that does not add the D34 limitation - can
+// send them without one, and the certificate must not say unrecoverable
+// next to "Hidden areas: Host Protected Area present" (review, wave 2).
 export function isQualified(r: AssetAudit): boolean {
   return (
     (Array.isArray(r.wipeLimitations) && r.wipeLimitations.length > 0) ||
     r.sanitisationLevel === 'none' ||
-    r.wipeVerification === 'found'
+    r.wipeVerification === 'found' ||
+    (!!r.hiddenAreas && HIDDEN_DOUBT.has(r.hiddenAreas))
   );
 }
 
@@ -257,15 +266,14 @@ function achievedRows(r: AssetAudit): Row[] {
   ];
 }
 
-// The lot certificate's line when some listed devices carry limitations: the
-// lot's lead sentence (manual-wipe.ts) says "unrecoverable" for station
-// wipes, and must not be read as covering those rows.
-export function limitationsNotice(n: number): string {
-  return `${n} listed device${n === 1 ? ' is' : 's are'} marked "(limitations recorded)": limitations were recorded for ${
-    n === 1 ? 'its' : 'their'
-  } erasure, so ${n === 1 ? 'it is' : 'they are'} not covered by the statement that previously stored data is unrecoverable. ${
-    n === 1 ? 'Its' : 'Their'
-  } individual certificate${n === 1 ? ' lists' : 's list'} the limitations.`;
+// The lot certificate's line for listed devices marked "(device LOCKED)" -
+// the lot form of LOCK_NOTICE (owner decision D39).
+export function lockedNotice(n: number): string {
+  return `${n} listed device${n === 1 ? '' : 's'} marked "(device LOCKED)" reported an ownership or firmware lock (for example a firmware password, a remote-management enrolment or an anti-theft service) when ${
+    n === 1 ? 'it was' : 'they were'
+  } audited. The lock is separate from the data erasure certified here: the erasure did not remove it, and ${
+    n === 1 ? 'the device' : 'those devices'
+  } may not be usable by a new owner until it is released.`;
 }
 
 function driveSection(
@@ -387,11 +395,7 @@ export function buildDeviceCertificate(
       ? `This certifies that ${which} identified below, in the device identified below, has been sanitised using the method stated. Limitations were recorded for this erasure and are listed below; this certificate therefore makes no claim that previously stored data cannot be recovered.`
       : `This certifies that ${which} identified below, in the device identified below, has been sanitised using the method stated, rendering previously stored data unrecoverable by generally available means.`;
 
-  // The device-lock state as the station found it when it wiped (D39).
-  const lockStatus =
-    snap?.lockStatus ??
-    drives.map((d) => d.row!.lockStatus).find(Boolean) ??
-    null;
+  const lockStatus = wipeTimeLockStatus(rollup);
 
   const erasure: Row[] = [
     ['Result', qualified ? QUALIFIED_RESULT : att.result],
@@ -463,4 +467,37 @@ export function storageFittedOf(
         .filter(Boolean)
         .join(', ')
     : (certRow.storageCapacity ?? '');
+}
+
+// The device-lock state as the station found it when it wiped (D39): from
+// the wipe-time snapshot row, else any listed drive's record.
+export function wipeTimeLockStatus(
+  rollup: WipeRollup<AssetAudit>,
+): string | null {
+  const drives = rollup.drives.filter((d) => d.row);
+  return (
+    snapshotRow(drives)?.lockStatus ??
+    drives.map((d) => d.row!.lockStatus).find(Boolean) ??
+    null
+  );
+}
+
+// The date a lot row prints - the same rule as the device certificate's
+// dateRows: the station's own time for the wipe (the latest of the drives
+// listed) when every listed drive's record carries one; otherwise the time
+// the latest record reached the server, flagged as a recorded date. An
+// offline-queued record can arrive days after the wipe, and the lot and
+// device certificates for one machine used to print different wipe dates.
+export function lotRowDate(rollup: WipeRollup<AssetAudit>): {
+  date: Date;
+  recorded: boolean;
+} {
+  const rows = rollup.drives
+    .map((d) => d.row)
+    .filter((r): r is AssetAudit => !!r);
+  const latest = (ds: Array<Date | string>) =>
+    new Date(Math.max(...ds.map((d) => new Date(d).getTime())));
+  if (rows.every((r) => sourceOf(r) === 'station' && r.wipedAt))
+    return { date: latest(rows.map((r) => r.wipedAt!)), recorded: false };
+  return { date: latest(rows.map((r) => r.createdAt)), recorded: true };
 }

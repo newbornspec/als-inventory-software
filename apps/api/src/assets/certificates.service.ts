@@ -6,7 +6,12 @@ import { Asset } from './asset.entity';
 import { AssetAudit, DataWipeStatus } from './asset-audit.entity';
 import { Batch } from '../batches/batch.entity';
 import { COMPANY } from '../common/company';
-import { lotAttestation, sourceOf, wipeAttestation } from './manual-wipe';
+import {
+  lotAttestation,
+  sourceOf,
+  wipeAttestation,
+  type LotAttestation,
+} from './manual-wipe';
 import { discardedNotice } from './wipe-method';
 import { latestWipe, mixedNotice } from './certificate-eligibility';
 import {
@@ -19,9 +24,11 @@ import {
   buildDeviceCertificate,
   driveSerialsOf,
   isQualified,
-  limitationsNotice,
+  lockedNotice,
+  lotRowDate,
   storageFittedOf,
   unfinishedNotice,
+  wipeTimeLockStatus,
   type DeviceCertificate,
 } from './certificate-content';
 import {
@@ -140,6 +147,12 @@ export class CertificatesService {
         // Each drive's own method (a machine's drives can be erased
         // differently), marked as a hand record where it is one.
         const drives = rollup.drives.filter((d) => d.row);
+        const limited = drives.some(
+          (d) => sourceOf(d.row!) === 'station' && isQualified(d.row!),
+        );
+        // D39: a LOCKED device is still listed, and marked.
+        const locked = wipeTimeLockStatus(rollup) === 'LOCKED';
+        const when = lotRowDate(rollup);
         const methods = [
           ...new Set(
             drives.map(
@@ -151,23 +164,24 @@ export class CertificatesService {
         ];
         return {
           serial: a.serialNumber ?? ident.serialNumber ?? a.tag,
-          device: [ident.manufacturer ?? w.manufacturer, ident.model ?? w.model ?? a.name]
-            .filter(Boolean)
-            .join(' '),
+          device:
+            [
+              ident.manufacturer ?? w.manufacturer,
+              ident.model ?? w.model ?? a.name,
+            ]
+              .filter(Boolean)
+              .join(' ') + (locked ? ' (device LOCKED)' : ''),
           // What was fitted when it was wiped, not what a later capture saw.
           storage: storageFittedOf(rollup, w),
           drives: driveSerialsOf(rollup),
-          // Limitations on any drive: the lot's "unrecoverable" sentence
-          // must not be read as covering this row (step 39).
+          // Limitations on any drive: the lot's lead sentence scopes its
+          // "unrecoverable" claim to rows without this mark (step 39).
           method:
-            methods.join('; ') +
-            (drives.some(
-              (d) => sourceOf(d.row!) === 'station' && isQualified(d.row!),
-            )
-              ? ' (limitations recorded)'
-              : ''),
+            methods.join('; ') + (limited ? ' (limitations recorded)' : ''),
           manual: drives.every((d) => sourceOf(d.row!) === 'manual'),
-          date: new Date(w.createdAt),
+          limited,
+          locked,
+          when,
         };
       });
 
@@ -192,13 +206,39 @@ export class CertificatesService {
       );
     }
 
+    // Headline, lead sentence and date column all depend on the mix of
+    // station wipes, hand records and rows with limitations - see
+    // lotAttestation in manual-wipe.ts.
+    const lot = lotAttestation(
+      rows.filter((r) => r.manual).length,
+      rows.length,
+      rows.filter((r) => r.limited).length,
+    );
+    const locked = rows.filter((r) => r.locked).length;
+    const notices = [
+      ...(discarded.length ? [discardedNotice(discarded.length)] : []),
+      ...(mixed.length ? [mixedNotice(mixed.length)] : []),
+      ...(unfinished.length ? [unfinishedNotice(unfinished.length)] : []),
+      ...(locked ? [lockedNotice(locked)] : []),
+    ];
     const buffer = await this.renderLot(
       batch,
-      rows,
-      discarded.length,
-      mixed.length,
-      unfinished.length,
-      rows.filter((r) => r.method.endsWith(' (limitations recorded)')).length,
+      rows.map((r) => ({
+        serial: r.serial as string,
+        device: r.device,
+        storage: r.storage,
+        drives: r.drives,
+        method: r.method,
+        // A date that is only when the record arrived says so, unless the
+        // column itself is headed "Recorded".
+        date:
+          r.when.date.toLocaleDateString('en-GB') +
+          (r.when.recorded && lot.dateHeader !== 'Recorded'
+            ? ' (recorded)'
+            : ''),
+      })),
+      lot,
+      notices,
     );
     return { buffer, filename: `erasure-certificate-${batch.batchNumber}.pdf` };
   }
@@ -381,13 +421,10 @@ export class CertificatesService {
       storage: string;
       drives: string;
       method: string;
-      manual: boolean;
-      date: Date;
+      date: string;
     }>,
-    discarded = 0,
-    mixed = 0,
-    unfinished = 0,
-    limited = 0,
+    lot: LotAttestation,
+    notices: string[],
   ): Promise<Buffer> {
     return new Promise((resolve, reject) => {
       const doc = new PDFDocument({ size: 'A4', margin: 40 });
@@ -398,7 +435,6 @@ export class CertificatesService {
 
       const left = 40;
       const right = doc.page.width - 40;
-      const lot = lotAttestation(rows.filter((r) => r.manual).length, rows.length);
       const t = new Date();
       const ymd = `${t.getFullYear()}${String(t.getMonth() + 1).padStart(2, '0')}${String(
         t.getDate(),
@@ -429,40 +465,14 @@ export class CertificatesService {
         .text(`Lot: ${batch.batchNumber}${batch.source ? '     Supplier: ' + batch.source : ''}`)
         .text(lot.headline);
       doc.moveDown(0.5);
-      // Headline, lead sentence and date column all depend on the mix of
-      // station wipes and hand records - see lotAttestation in manual-wipe.ts.
       doc.font('Helvetica').fontSize(9.5).fillColor('#222222').text(lot.intro, { width: right - left });
-      if (discarded > 0) {
+      for (const n of notices) {
         doc.moveDown(0.4);
         doc
           .font('Helvetica')
           .fontSize(9.5)
           .fillColor('#222222')
-          .text(discardedNotice(discarded), { width: right - left });
-      }
-      if (mixed > 0) {
-        doc.moveDown(0.4);
-        doc
-          .font('Helvetica')
-          .fontSize(9.5)
-          .fillColor('#222222')
-          .text(mixedNotice(mixed), { width: right - left });
-      }
-      if (unfinished > 0) {
-        doc.moveDown(0.4);
-        doc
-          .font('Helvetica')
-          .fontSize(9.5)
-          .fillColor('#222222')
-          .text(unfinishedNotice(unfinished), { width: right - left });
-      }
-      if (limited > 0) {
-        doc.moveDown(0.4);
-        doc
-          .font('Helvetica')
-          .fontSize(9.5)
-          .fillColor('#222222')
-          .text(limitationsNotice(limited), { width: right - left });
+          .text(n, { width: right - left });
       }
       doc.moveDown(0.6);
 
@@ -497,7 +507,7 @@ export class CertificatesService {
           storage: r.storage || '—',
           drives: r.drives || '—',
           method: r.method,
-          date: r.date.toLocaleDateString('en-GB'),
+          date: r.date,
         };
         doc.font('Helvetica').fontSize(8).fillColor('#222222');
         const h = Math.max(...cols.map((c) => doc.heightOfString(vals[c.key], { width: c.w - 4 })));

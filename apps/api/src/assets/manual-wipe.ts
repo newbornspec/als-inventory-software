@@ -121,7 +121,19 @@ export interface LotAttestation {
 // hand records. Three cases, because one sentence cannot be true of all of
 // them: the headline, the lead sentence and the date column all used to say
 // "erased" / "unrecoverable" / "Wiped" regardless of who recorded each row.
-export function lotAttestation(manualCount: number, total: number): LotAttestation {
+//
+// limitedCount: station rows marked "(limitations recorded)" (plan step 39).
+// Any limitation removes "unrecoverable" for that row, and the lead sentence
+// is where a reader - or anyone quoting the certificate - takes the claim
+// from, so it is scoped there, not only in a later paragraph. With none, the
+// wording below is exactly what lots have always said.
+export function lotAttestation(
+  manualCount: number,
+  total: number,
+  limitedCount = 0,
+): LotAttestation {
+  if (limitedCount > 0)
+    return limitedLotAttestation(manualCount, total, limitedCount);
   const station =
     'This certifies that the data-storage media in each device listed below has been sanitised using the method stated, rendering previously stored data unrecoverable by generally available means.';
   if (manualCount === 0) {
@@ -140,5 +152,36 @@ export function lotAttestation(manualCount: number, total: number): LotAttestati
     intro:
       'This certifies that the data-storage media in each device listed below, other than rows marked "(manual record)", has been sanitised using the method stated, rendering previously stored data unrecoverable by generally available means. Rows marked "(manual record)" were entered by hand: they were not performed or verified by the ALS audit station, are certified only as recorded, and are dated when they were recorded.',
     dateHeader: 'Date',
+  };
+}
+
+function limitedLotAttestation(
+  manualCount: number,
+  total: number,
+  limited: number,
+): LotAttestation {
+  const stationCount = total - manualCount;
+  const unlimited = stationCount - limited;
+  const excluded = [
+    '"(limitations recorded)"',
+    ...(manualCount ? ['"(manual record)"'] : []),
+  ].join(' or ');
+  const lead =
+    unlimited > 0
+      ? `This certifies that the data-storage media in each device listed below, other than rows marked ${excluded}, has been sanitised using the method stated, rendering previously stored data unrecoverable by generally available means.`
+      : `This certifies that the data-storage media in each device listed below${
+          manualCount ? ', other than rows marked "(manual record)",' : ''
+        } has been sanitised using the method stated.`;
+  const limitedSentence =
+    'Rows marked "(limitations recorded)" were sanitised using the method stated, but limitations were recorded for their erasure: this certificate makes no claim that previously stored data on them cannot be recovered, and each such device\'s own certificate lists the limitations.';
+  const manualSentence = manualCount
+    ? ' Rows marked "(manual record)" were entered by hand: they were not performed or verified by the ALS audit station, are certified only as recorded, and are dated when they were recorded.'
+    : '';
+  return {
+    headline: manualCount
+      ? `Devices listed: ${total} (${stationCount} erased by the ALS audit station (${limited} with limitations recorded), ${manualCount} recorded manually)`
+      : `Devices listed: ${total} (${limited} with limitations recorded)`,
+    intro: `${lead} ${limitedSentence}${manualSentence}`,
+    dateHeader: manualCount ? 'Date' : 'Wiped',
   };
 }

@@ -327,14 +327,16 @@ describe('the certificate routes apply the mixed-result guard', () => {
       { ...audit('a2', DataWipeStatus.WIPED, 48), wipedAt: at(0.2) },
     ] as never);
     await svc.lotErasureCertificate('b1');
-    const [, rows, , mixed] = renderLot.mock.calls[0] as [
+    // The renderer is handed the lot's notices as sentences (the counts
+    // used to be passed one by one).
+    const [, rows, , notices] = renderLot.mock.calls[0] as [
       unknown,
       Array<{ serial: string }>,
-      number,
-      number,
+      unknown,
+      string[],
     ];
     expect(rows.map((r) => r.serial)).toEqual(['SN-a1']);
-    expect(mixed).toBe(1);
+    expect(notices).toEqual([mixedNotice(1)]);
   });
 
   it('[A wiped] alone still produces a PDF', async () => {
@@ -382,15 +384,15 @@ describe('the certificate routes apply the mixed-result guard', () => {
       ],
     );
     await svc.lotErasureCertificate('b1');
-    const [, rows, discarded, mixed] = renderLot.mock.calls[0] as [
+    const [, rows, , notices] = renderLot.mock.calls[0] as [
       unknown,
       Array<{ serial: string }>,
-      number,
-      number,
+      unknown,
+      string[],
     ];
     expect(rows.map((r) => r.serial)).toEqual(['SN-a1']);
-    expect(discarded).toBe(0);
-    expect(mixed).toBe(2);
+    // No discard notice; the mixed one counts both.
+    expect(notices).toEqual([mixedNotice(2)]);
   });
 
   it('refuses a lot where every wiped device is mixed, and says why', async () => {

@@ -3,7 +3,6 @@ import type { AssetAudit } from './asset-audit.entity';
 import { DataWipeStatus } from './asset-audit.entity';
 import {
   buildDeviceCertificate,
-  limitationsNotice,
   LOCK_NOTICE,
   NOT_ASSESSED,
   QUALIFIED_RESULT,
@@ -103,6 +102,19 @@ describe('what the erasure achieved (step 39)', () => {
     expect(drive(c, 0).Result).toBe(UNQUALIFIED_DRIVE_RESULT);
     expect(JSON.stringify(c)).not.toMatch(/unrecoverable/i);
     expect(drive(c, 1).Result).toBe(QUALIFIED_RESULT);
+  });
+
+  // Review, wave 2: a hidden area that may still hold data is a reason to
+  // doubt "unrecoverable" even when the engine listed no limitation for it
+  // (an older engine, or one that does not add the D34 limitation).
+  it('a hidden area present or unchecked removes "unrecoverable"', () => {
+    for (const hiddenAreas of ['hpa-present', 'dco-present', 'unknown']) {
+      const c = certify(row({ hiddenAreas, wipeLimitations: [] }));
+      expect(everything(c)).not.toMatch(/unrecoverable/i);
+      expect(drive(c).Result).toBe(QUALIFIED_RESULT);
+    }
+    for (const hiddenAreas of ['none', 'hpa-removed', null])
+      expect(certify(row({ hiddenAreas })).intro).toContain('unrecoverable');
   });
 
   it('prints the fallback reason and the requested method', () => {
@@ -233,21 +245,23 @@ describe('an old payload with none of the new fields', () => {
 });
 
 describe('lot certificate and limitations', () => {
-  it('marks a device with limitations and says what that means', async () => {
-    const a1 = { ...ASSET, id: 'a1', serialNumber: 'SN-a1', batchId: 'b1' };
-    const a2 = { ...ASSET, id: 'a2', serialNumber: 'SN-a2', batchId: 'b1' };
-    const rows = [
-      row({ assetId: 'a1' }),
-      row({
-        id: 'r2',
-        assetId: 'a2',
-        wipeLimitations: ['Hidden areas unknown'],
-      }),
-    ];
+  type Listed = {
+    serial: string;
+    device: string;
+    method: string;
+    date: string;
+  };
+  type Lot = { headline: string; intro: string; dateHeader: string };
+
+  // The lot route with the renderer stubbed: returns what it was handed.
+  async function lotOf(
+    assets: Array<Record<string, unknown>>,
+    rows: AssetAudit[],
+  ): Promise<{ listed: Listed[]; lot: Lot; notices: string[] }> {
     const qb = {
       addSelect: () => qb,
       where: () => qb,
-      getMany: () => Promise.resolve([a1, a2]),
+      getMany: () => Promise.resolve(assets),
     };
     const svc = new CertificatesService(
       { createQueryBuilder: () => qb } as never,
@@ -265,11 +279,87 @@ describe('lot certificate and limitations', () => {
       .mockResolvedValue(Buffer.from('pdf'));
     await svc.lotErasureCertificate('b1');
     const args = renderLot.mock.calls[0] as unknown[];
-    const listed = args[1] as Array<{ serial: string; method: string }>;
+    return {
+      listed: args[1] as Listed[],
+      lot: args[2] as Lot,
+      notices: args[3] as string[],
+    };
+  }
+  const a1 = { ...ASSET, id: 'a1', serialNumber: 'SN-a1', batchId: 'b1' };
+  const a2 = { ...ASSET, id: 'a2', serialNumber: 'SN-a2', batchId: 'b1' };
+
+  it('marks a device with limitations, and the lead sentence excludes it', async () => {
+    const { listed, lot } = await lotOf(
+      [a1, a2],
+      [
+        row({ assetId: 'a1' }),
+        row({
+          id: 'r2',
+          assetId: 'a2',
+          wipeLimitations: ['Hidden areas unknown'],
+        }),
+      ],
+    );
     expect(
       listed.map((r) => r.method.endsWith('(limitations recorded)')),
     ).toEqual([false, true]);
-    expect(args[5]).toBe(1);
-    expect(limitationsNotice(1)).toContain('not covered by the statement');
+    // The sentence the renderer draws first scopes "unrecoverable".
+    expect(lot.intro).toMatch(
+      /^[^.]*other than rows marked "\(limitations recorded\)"[^.]*unrecoverable/,
+    );
+    expect(lot.headline).toMatch(/1 with limitations recorded/);
+  });
+
+  it('every listed device limited: the lead sentence never says unrecoverable', async () => {
+    const { lot } = await lotOf(
+      [a1],
+      [row({ assetId: 'a1', wipeLimitations: ['Hidden areas unknown'] })],
+    );
+    expect(`${lot.headline} ${lot.intro}`).not.toMatch(/unrecoverable/i);
+  });
+
+  it('a LOCKED device is listed with a lock mark and a lock note (D39)', async () => {
+    const { listed, notices } = await lotOf(
+      [a1, a2],
+      [
+        row({ assetId: 'a1', lockStatus: 'LOCKED' }),
+        row({ id: 'r2', assetId: 'a2' }),
+      ],
+    );
+    expect(listed[0].device).toContain('(device LOCKED)');
+    expect(listed[1].device).not.toContain('LOCKED');
+    expect(notices.join(' ')).toMatch(
+      /1 listed device marked "\(device LOCKED\)"/,
+    );
+  });
+
+  it("dates a station row by the station's wipe time, not its arrival", async () => {
+    // Wiped 1 Sep, sat in the stick's offline queue until 4 Sep.
+    const { listed } = await lotOf(
+      [a1, a2],
+      [
+        row({
+          assetId: 'a1',
+          wipedAt: new Date('2026-09-01T10:00:00Z'),
+          createdAt: new Date('2026-09-04T09:00:00Z'),
+        }),
+        // A legacy record: no station time, so it is dated when recorded,
+        // and says so.
+        row({
+          id: 'r2',
+          assetId: 'a2',
+          wipedAt: null,
+          wipedDriveSerial: null,
+          wipedDrive: null,
+          createdAt: new Date('2026-09-04T09:00:00Z'),
+        }),
+      ],
+    );
+    expect(listed[0].date).toBe(
+      new Date('2026-09-01T10:00:00Z').toLocaleDateString('en-GB'),
+    );
+    expect(listed[1].date).toBe(
+      `${new Date('2026-09-04T09:00:00Z').toLocaleDateString('en-GB')} (recorded)`,
+    );
   });
 });
