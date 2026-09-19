@@ -285,6 +285,15 @@ const hidden = (id) => document.getElementById(id).classList.contains('hidden');
   await run(`checkPrior()`);
   out.priorHtml = document.getElementById('aPrior').innerHTML;
 
+  // The Rescan button re-runs the capture (POST /api/rescan) and re-polls.
+  run(`RSC=[]; jpost=async(u,b)=>{RSC.push(u);return {ok:true,status:200,data:{started:true}};};
+       BOOTS=0; bootstrap=()=>{BOOTS++;};`);
+  timers.length = 0;
+  await run(`rescan()`);
+  flush();
+  out.rescanPosts = run(`RSC`);
+  out.rescanBoots = run(`BOOTS`);
+
   process.stdout.write(JSON.stringify(out));
 })().catch((e) => { process.stdout.write(JSON.stringify({ error: String(e && e.stack || e) })); });
 """
@@ -295,6 +304,22 @@ def main():
         html = fh.read()
     js = inline_script(html)
     check("index.html has an inline script", len(js) > 1000, len(js))
+
+    # The station's refusals tell the operator to "press Rescan" (no profile
+    # captured; a drive that was not in the capture). The page had no control
+    # of that name - only "Retry connection" inside the offline banner and a
+    # Save in the PIN-locked Settings - so the instruction led nowhere.
+    with open(os.path.join(HERE, "gui", "server.py"), encoding="utf-8") as fh:
+        server = fh.read()
+    told = re.findall(r"[Pp]ress Rescan|then Rescan", server)
+    btn = re.search(r'<button[^>]*onclick="rescan\(\)"[^>]*>\s*Rescan\s*</button>', html)
+    check("the station's messages name Rescan (the thing this checks exists)", len(told) >= 2, told)
+    check("the main screen has a button labelled exactly 'Rescan'", bool(btn), "")
+    check("...outside the offline banner and the Settings panel",
+          bool(btn) and html.rfind('id="errBanner"', 0, btn.start()) == -1
+          and html.rfind('id="ovSet"', 0, btn.start()) == -1, "")
+    check("...and it posts /api/rescan", re.search(
+        r"async function rescan\(\)\{[^}]*jpost\('/api/rescan'", js, re.S) is not None, "")
 
     node = shutil.which("node")
     if not node:
@@ -481,6 +506,9 @@ def main():
           and o["auditFlagOff"] is False,
           (o["auditOffWhenSignedOut"], o["auditOnWhenSignedIn"], o["auditFlagOff"]))
 
+    check("Rescan: re-runs the capture on the station (POST /api/rescan)",
+          o["rescanPosts"] == ["/api/rescan"], o["rescanPosts"])
+    check("Rescan: the screen re-reads the state afterwards", o["rescanBoots"] >= 1, o["rescanBoots"])
     check("prior banner: the roll-up verdict names the machine's state",
           o["pwRollup"] == ["wipe: a drive FAILED its wipe"], o["pwRollup"])
     check("prior banner: incomplete is said in words",

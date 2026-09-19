@@ -60,6 +60,7 @@ PowerShell (change `E:` if needed). It only reads files.
 $s = 'E:'
 $e = Get-Content "$s\hardware-audit.sh" -Raw
 $k = Get-Content "$s\gui\server.py" -Raw
+$g = Get-Content "$s\gui\index.html" -Raw
 "stick commit            : " + (Get-Content "$s\gui\.stick-version" -Raw).Trim()
 "read-back (test 1, 7)   : " + ($e -match 'verify_erased')
 "NVMe namespaces (9)     : " + ($k -match 'it is on the same NVMe drive')
@@ -67,6 +68,8 @@ $k = Get-Content "$s\gui\server.py" -Raw
 "limitations (test 10)   : " + ($e -match 'smart_counts')
 "operator sign-in (4)    : " + ($k -match 'AUDIT_OPERATOR_SIGNIN')
 "suspend guard (test 11) : " + ($e -match 'mem_sleep')
+"Rescan button (2D)      : " + ($g -match 'onclick="rescan\(\)"')
+"403 signs out (4, 7.2)  : " + ($k -match 'SESSION_ENDED_403')
 ```
 
 `False` means that change is not on the stick. Skip that test for now. (The
@@ -279,10 +282,12 @@ the upload has to happen on a later day to show which date it uses.
 the drive *was not in the hardware profile captured for this machine* and to
 press Rescan.
 
-Then rescan. **There is no Rescan button on the main screen of this kiosk
-version.** Open **Settings** (the gear), enter the admin PIN, change nothing,
-and press **Save**. That re-reads the hardware. (Restarting the machine with
-the drive in also works.) Now the same wipe is allowed.
+Then press **Rescan** (top right of the screen, next to the Settings gear)
+and wait until the hardware card is filled in again. That re-reads the
+hardware and the drive list. (On a stick older than this change there is no
+Rescan button: open **Settings**, enter the admin PIN, change nothing, press
+**Save**; or restart the machine with the drive in.) Now the same wipe is
+allowed.
 
 **Send back (all of 2):** the label photos; a photo of the screen after 2A
 showing both blocks and the summary; a screenshot of the asset page after 2A

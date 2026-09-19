@@ -245,6 +245,14 @@
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
           stroke-linecap="round"><path d="M12 7v5l3 2"/><circle cx="12" cy="12" r="9"/></svg>
         <span id="hQueueN"></span></span>
+      <!-- Rescan: reads this machine's hardware again (the profile every wipe
+           and audit is filed under, and the drive list) and reconnects. The
+           station's own messages say "press Rescan" - after a failed capture,
+           or for a drive plugged in after the capture - so the control has
+           exactly that name, on the main screen, with no PIN. -->
+      <button class="btn gho sm" id="hRescan"
+        title="Read this machine's hardware and drives again, and reconnect"
+        onclick="rescan()">Rescan</button>
       <button class="iconbtn" title="Settings" onclick="openSettings()">
         <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
           stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1A1.7 1.7 0 0 0 9 19.4a1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
@@ -1625,6 +1633,11 @@ async function saveSettings(){
 }
 async function retry(){toast('Reconnecting…');try{await jpost('/api/rescan',{});}catch(e){}
   setTimeout(bootstrap,3500);}
+/* The header's Rescan button: the same /api/rescan (re-capture the profile,
+   re-read the drives, reconnect), said as what the operator asked for. */
+async function rescan(){toast('Rescanning — reading this machine\'s hardware again…');
+  try{await jpost('/api/rescan',{});}catch(e){}
+  setTimeout(bootstrap,1500);}
 
 /* ----------------------------------------------------------- power --- */
 function power(action){
