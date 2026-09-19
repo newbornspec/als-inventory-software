@@ -22,6 +22,7 @@ Run:  python3 server.py   then open http://127.0.0.1:8800
 """
 import json
 import glob
+import hashlib
 import os
 import re
 import shutil
@@ -578,6 +579,107 @@ def queue_count():
     return len(queue_load())
 
 
+# ------------------------------------------- records the server refused ----
+# The queue used to treat every failed upload the same way: keep it, retry it
+# every 45 s, say nothing but "N waiting to upload". That is right for a
+# network outage and wrong for a record the SERVER refused: the same bytes get
+# the same 400 every time, forever, while the header suggests the network is
+# the problem. On the station a sanitized, verified NVMe wipe did exactly
+# that ("No audit lot selected") and nobody was told.
+#
+# A refused record is still KEPT - a wipe that physically happened must end up
+# on record, and the fix for a refusal is usually on the server (a permission,
+# a lot, a new API that accepts it). It is still retried, less often (below).
+# What changes is that the refusal is remembered and shown.
+#
+# Where the reason lives: HERE, in memory, keyed by a hash of the queued
+# record - never in the queued record itself. The record on the stick is the
+# exact payload that was made when the wipe finished, and post_record sends
+# it as it is; a reason stored inside it could reach the API one day, and a
+# rewrite of the queue file to add one is one more chance to damage the only
+# copy. After a restart the map is empty and the first flush re-asks the
+# server, which puts the reason back (and it is the CURRENT answer then).
+#
+# Nothing here ever edits a queued record (no workflow or lot stamped on at
+# flush time): changing what a record says after it was made could file it
+# against a different lot, or as a different kind of audit, than the one it
+# was made for.
+REJECTED = {}                    # record key -> {"code", "reason", "at" (monotonic)}
+REJECTED_LOCK = threading.Lock()
+# A refused record is retried at most this often (seconds), not every 45 s:
+# retrying cannot help until something changes on the server, and a stuck
+# record should not hammer it. Short enough that a fixed API picks it up soon.
+REJECT_RETRY_SECS = 600
+
+
+def record_key(item):
+    """A stable name for one queued record: the hash of its content. Two byte-
+    identical records share it, which is fine - the server says the same to
+    both."""
+    raw = json.dumps(item, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(raw.encode("utf-8", "replace")).hexdigest()
+
+
+def note_rejection(item, rejection):
+    code, reason = rejection
+    with REJECTED_LOCK:
+        REJECTED[record_key(item)] = {"code": code, "reason": reason,
+                                      "at": time.monotonic()}
+
+
+def rejection_of(item):
+    """The server's last refusal of this record, or None."""
+    with REJECTED_LOCK:
+        r = REJECTED.get(record_key(item))
+        return dict(r) if r else None
+
+
+def _rejected_prune(items):
+    """Forget refusals of records no longer in the queue (sent at last). One
+    noted in the last minute is kept: upload_audit notes a refusal a moment
+    BEFORE it queues the record, and a flush finishing in between must not
+    forget it. (A stale entry is harmless anyway - queue_status only counts
+    records that are in the queue.)"""
+    keep = {record_key(it) for it in items}
+    now = time.monotonic()
+    with REJECTED_LOCK:
+        for k in [k for k, v in REJECTED.items()
+                  if k not in keep and now - v["at"] > 60]:
+            del REJECTED[k]
+
+
+def rejected_text(rej):
+    return "the server did not accept it (HTTP %s): %s" % (rej.get("code"), rej.get("reason"))
+
+
+def queue_status():
+    """What the page shows about the offline queue: how many records wait,
+    how many of those belong to another operator (held_reason), and how many
+    the SERVER refused and why - so a refused wipe record is never just "1
+    waiting to upload"."""
+    items = queue_load()
+    held = sum(1 for it in items if held_reason(it))
+    with REJECTED_LOCK:
+        refused = [(it, dict(REJECTED[record_key(it)])) for it in items
+                   if record_key(it) in REJECTED]
+    reasons = {}
+    for it, rej in refused:
+        key = (rej["code"], rej["reason"])
+        r = reasons.setdefault(key, {"code": rej["code"], "reason": rej["reason"],
+                                     "count": 0, "wipes": 0})
+        r["count"] += 1
+        if isinstance(it, dict) and it.get("dataWipeStatus"):
+            r["wipes"] += 1
+    return {
+        "waiting": len(items),
+        "waitingHeld": held,
+        "waitingRejected": len(refused),
+        "waitingRejectedWipes": sum(r["wipes"] for r in reasons.values()),
+        "rejected": list(reasons.values()),
+        "queueDurable": queue_durable(),
+    }
+
+
 # ------------------------------------------------- wipes in progress ----
 # A wipe's record used to exist only in memory until its upload finished:
 # JOBS held the result, on_done filed it, and only a FAILED upload reached
@@ -986,7 +1088,18 @@ def upload_audit(payload):
         with UPLOAD_LOCK:
             return post_record(payload), False, ""
     except Exception as exc:  # noqa: BLE001
+        # Kept whatever the failure - including a server refusal: the record
+        # is the only proof the work happened (see REJECTED). A refusal is
+        # remembered BEFORE the record is queued, so the flush the queue
+        # worker may start the moment it lands already knows to wait.
+        rej = server_rejection(exc)
+        if rej:
+            note_rejection(payload, rej)
         queue_add(payload)
+        if rej:
+            return None, True, ("The server did not accept this record (HTTP %d): %s. It is "
+                                "kept on this station and retried - tell a supervisor."
+                                % rej)
         return None, True, str(exc)
 
 
@@ -1037,12 +1150,23 @@ def _queue_flush():
             # whoever is signed in now (post_record raises; it stays queued).
             if held_reason(it):
                 continue
+            # Refused by the server not long ago: wait before asking again
+            # (REJECT_RETRY_SECS). Still in the queue, still retried.
+            rej = rejection_of(it)
+            if rej and time.monotonic() - rej["at"] < REJECT_RETRY_SECS:
+                continue
             with UPLOAD_LOCK:
                 post_record(it)
             sent += 1
             done.append(it)
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001
+            # The record is left exactly as it is on the stick. A refusal is
+            # noted beside it (REJECTED); a network error or a 5xx changes
+            # nothing, so a reason the server gave earlier stays shown - it
+            # is still the last thing the server said about this record.
+            rej = server_rejection(exc)
+            if rej:
+                note_rejection(it, rej)
     # Remove what was sent from the queue AS IT IS NOW, rather than writing
     # back the list read before the uploads. A record queued while this flush
     # was running (upload_audit failing in another thread) was not in `items`,
@@ -1055,6 +1179,7 @@ def _queue_flush():
             except ValueError:
                 pass
         _queue_write_unlocked(current)
+    _rejected_prune(current)
     return sent
 
 
@@ -1165,27 +1290,64 @@ SESSION_ENDED_403 = ("has been disabled", "no longer exists", "password was chan
                      "not authenticated")
 
 
+def http_error_message(exc):
+    """The server's own `message` from an HTTPError's JSON body ("" when there
+    is none). The body can be read only once, so the answer is kept on the
+    exception and every later caller - server_ended_session, then
+    server_rejection further up - gets the same text. NestJS sends a string,
+    or a list of strings for a validation failure; a list is joined."""
+    msg = getattr(exc, "als_message", None)
+    if msg is not None:
+        return msg
+    msg = ""
+    try:
+        data = json.loads(exc.read().decode(errors="replace") or "{}")
+        m = data.get("message") if isinstance(data, dict) else None
+        if isinstance(m, list):
+            m = "; ".join(str(x) for x in m if x is not None)
+        msg = m.strip() if isinstance(m, str) else ""
+    except Exception:  # noqa: BLE001 - no body, not JSON: no message
+        msg = ""
+    try:
+        exc.als_message = msg
+    except Exception:  # noqa: BLE001
+        pass
+    return msg
+
+
 def server_ended_session(exc):
     """The server's own message when `exc` is a 403 that ends the session
     (SESSION_ENDED_403), else None. Reads the error body once and keeps it on
     the exception, so a caller further up can still ask."""
     if getattr(exc, "code", None) != 403:
         return None
-    msg = getattr(exc, "als_message", None)
-    if msg is None:
-        msg = ""
-        try:
-            data = json.loads(exc.read().decode(errors="replace") or "{}")
-            m = data.get("message") if isinstance(data, dict) else None
-            msg = m.strip() if isinstance(m, str) else ""
-        except Exception:  # noqa: BLE001 - no body, not JSON: not a session end
-            msg = ""
-        try:
-            exc.als_message = msg
-        except Exception:  # noqa: BLE001
-            pass
+    msg = http_error_message(exc)
     low = msg.lower()
     return msg if msg and any(k in low for k in SESSION_ENDED_403) else None
+
+
+# HTTP answers that say "not now" rather than "not this record": sign in again
+# (401, and the session-ending 403s above), the request timed out (408), a
+# conflict another try may clear (409), or slow down (429). Every OTHER 4xx is
+# the server looking at this record and refusing it - retrying the same bytes
+# gets the same answer until something changes on the server.
+RETRYABLE_4XX = (401, 408, 409, 429)
+
+
+def server_rejection(exc):
+    """(status, reason) when `exc` is the API refusing the record itself (see
+    RETRYABLE_4XX), else None - a network error, a 5xx, an expired session and
+    the station's own "held for another operator" are all None: those are
+    about the moment, not the record."""
+    if not isinstance(exc, urllib.error.HTTPError):
+        return None
+    code = getattr(exc, "code", None)
+    if not isinstance(code, int) or not 400 <= code < 500 or code in RETRYABLE_4XX:
+        return None
+    if code == 403 and server_ended_session(exc):
+        return None
+    msg = http_error_message(exc) or ("HTTP %d" % code)
+    return code, msg[:300]
 
 
 def _ended_text(msg):
@@ -1481,10 +1643,6 @@ def held_reason(item):
         return None
     return ("made by %s; it is sent only under their own sign-in"
             % (tag.get("name") or tag.get("email") or "another operator"))
-
-
-def queue_held_count():
-    return sum(1 for it in queue_load() if held_reason(it))
 
 
 def signin_state():
@@ -3704,20 +3862,28 @@ class Handler(BaseHTTPRequestHandler):
                 (STATE.get("userName") or STATE["conf"].get("AUDIT_EMAIL", "") or "Operator"),
                 "operator": STATE.get("operator", ""),
                 "signin": signin_state(),
-                # Of `waiting`, how many belong to someone other than whoever
-                # may send right now (see held_reason). Shown, never sent.
-                "waitingHeld": queue_held_count(),
                 "workflow": current_workflow(),
                 "workflows": allowed_workflows(),
                 "adminPinSet": bool(STATE["conf"].get("AUDIT_ADMIN_PIN", "")),
                 "launch": launch_info(),
-                "waiting": queue_count(),   # records held offline, retrying
-                # False = the stick would not take the write, so the queue is in
-                # RAM and a reboot would lose it. The operator needs to know.
-                "queueDurable": queue_durable(),
                 "imageSource": IMAGE_STATE["source"],   # "server" | "usb"
                 "imageError": IMAGE_STATE["error"],
+                # The offline queue (queue_status): `waiting` = records held
+                # on this machine, retrying; `waitingHeld` = of those, how many
+                # belong to someone other than whoever may send right now
+                # (held_reason - shown, never sent); `queueDurable` False = the
+                # stick would not take the write, so a reboot would lose them;
+                # `waitingRejected`/`waitingRejectedWipes`/`rejected` ([{code,
+                # reason, count, wipes}]) = records the SERVER refused, and why.
+                **queue_status(),
             })
+
+        if u.path == "/api/queue":
+            # The offline queue alone, polled by the page every ~20 s so a
+            # refused record shows up without waiting for the next full
+            # bootstrap (which also re-reads drives and images). Reads the
+            # queue file and memory only: no network, no hardware.
+            return self._send(200, queue_status())
 
         if u.path == "/api/drives":
             return self._send(200, list_drives())
@@ -3915,6 +4081,10 @@ class Handler(BaseHTTPRequestHandler):
             if queued:
                 # Never lose the unit: it is on disk and will upload itself.
                 return self._send(200, {"queued": True, "waiting": queue_count(),
+                                        # True = the server refused it, not
+                                        # the network: the page must not say
+                                        # "no connection".
+                                        "rejected": bool(rejection_of(payload)),
                                         "message": err})
             return self._send(200, dict(out or {}, queued=False))
 
@@ -4125,9 +4295,16 @@ class Handler(BaseHTTPRequestHandler):
                         # the upload (post_record then keeps it queued), and
                         # "no connection" would send them to the network.
                         held = held or held_reason(payload)
+                        rej = None if held else rejection_of(payload)
                         result["recordError"] = (
                             ("the wipe record is saved on this machine; it was " + held)
                             if held else
+                            # Not the network: the server looked at the
+                            # record and said no. Retrying alone will not fix
+                            # that, so say what it said.
+                            ("the wipe record is saved on this machine, but " +
+                             rejected_text(rej) + " - tell a supervisor")
+                            if rej else
                             ("no connection — the wipe record is saved "
                              "on this machine and will upload automatically"))
                         return
@@ -4242,8 +4419,12 @@ class Handler(BaseHTTPRequestHandler):
                 if queued:
                     result["queued"] = True
                     result["waiting"] = queue_count()
-                    result["recordError"] = ("no connection -- the restore record is saved "
-                                             "on this machine and will upload automatically")
+                    rej = rejection_of(payload)
+                    result["recordError"] = (
+                        ("the restore record is saved on this machine, but " +
+                         rejected_text(rej) + " - tell a supervisor") if rej else
+                        ("no connection -- the restore record is saved "
+                         "on this machine and will upload automatically"))
                     return
                 result["recorded"] = bool(out and out.get("assetId"))
 

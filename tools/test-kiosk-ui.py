@@ -318,6 +318,18 @@ const hidden = (id) => document.getElementById(id).classList.contains('hidden');
   run(`BOOT={device:{name:'x'},workflows:[],workflow:''}; applyWipeGate();`);
   out.wgNoPerm = document.getElementById('wGateMsg').textContent;
 
+  // Queued records the server refused: a banner with the reason, not only
+  // "1 waiting to upload".
+  document.getElementById('rejBanner').className = 'alert hidden';
+  run(`renderQueue({waiting:1,waitingHeld:0,waitingRejected:1,waitingRejectedWipes:1,queueDurable:true,
+       rejected:[{code:400,count:1,wipes:1,reason:'No audit lot selected'}]})`);
+  out.rqShown = !hidden('rejBanner');
+  out.rqTitle = document.getElementById('rejTitle').textContent;
+  out.rqMsg = document.getElementById('rejMsg').textContent;
+  out.rqChip = document.getElementById('hQueueN').textContent;
+  run(`renderQueue({waiting:1,waitingHeld:0,waitingRejected:0,queueDurable:true,rejected:[]})`);
+  out.rqNetOnly = !hidden('rejBanner');
+
   process.stdout.write(JSON.stringify(out));
 })().catch((e) => { process.stdout.write(JSON.stringify({ error: String(e && e.stack || e) })); });
 """
@@ -547,6 +559,14 @@ def main():
     check("wipe gate: Goods In with a batch - enabled", o["wgBatch"] is False, o["wgBatch"])
     check("wipe gate: no audit permission - says so", "no audit permission" in o["wgNoPerm"],
           o["wgNoPerm"])
+    check("refused record: banner shown, '1 wipe record was not accepted by the server'",
+          o["rqShown"] and "1 wipe record was not accepted by the server" in o["rqTitle"],
+          (o["rqShown"], o["rqTitle"]))
+    check("refused record: the server's reason and status are on screen",
+          "No audit lot selected" in o["rqMsg"] and "HTTP 400" in o["rqMsg"], o["rqMsg"])
+    check("refused record: the header chip counts it as refused",
+          "1 waiting to upload (1 refused)" == o["rqChip"], o["rqChip"])
+    check("only waiting for the network: no refusal banner", o["rqNetOnly"] is False)
     check("prior banner: the roll-up verdict names the machine's state",
           o["pwRollup"] == ["wipe: a drive FAILED its wipe"], o["pwRollup"])
     check("prior banner: incomplete is said in words",

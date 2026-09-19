@@ -625,7 +625,17 @@ try:
     check("no permission for one call: still signed in", (srv.operator_identity() or {}).get("id") == "u-ann",
           srv.OPERATOR)
     check("...the record is kept to retry", POSTS == [] and len(srv.queue_load()) == 1, srv.queue_load())
+    # It is a refusal of THIS record, not a session end: shown with the
+    # server's reason and retried less often (test-queue-rejection.py). Wind
+    # the clock past that interval instead of waiting it out.
+    check("...and the server's reason is shown with it",
+          srv.queue_status()["rejected"][:1] == [{"code": 403, "count": 1, "wipes": 1,
+                                                  "reason": "You don't have permission to do this."}],
+          srv.queue_status())
     FORBID.clear()
+    with srv.REJECTED_LOCK:
+        for v in srv.REJECTED.values():
+            v["at"] -= srv.REJECT_RETRY_SECS + 1
     srv.queue_flush()
     check("...and goes once the server accepts it", [u for u, _b in POSTS] == ["u-ann"], POSTS)
     srv.operator_signout()

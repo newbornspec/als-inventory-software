@@ -275,6 +275,13 @@
       </div>
     </div>
 
+    <!-- queued records the SERVER refused (renderQueue): kept and retried,
+         but not a network problem, so it is said here, not only in the chip -->
+    <div class="alert hidden" id="rejBanner">
+      <h4 id="rejTitle"></h4>
+      <p id="rejMsg" style="white-space:pre-line"></p>
+    </div>
+
     <div class="grid">
       <!-- ======================= LEFT COLUMN ======================= -->
       <div class="col">
@@ -639,11 +646,42 @@ async function bootstrap(){
   $('hUser').textContent=b.currentUser||'Operator';
   $('hOperator').textContent='Operator: '+(b.operator||'— tap to set');
   renderSignin(b.signin);
+  renderQueue(b);
+  if(b.error){$('errBanner').classList.remove('hidden');$('errMsg').textContent=b.error;}
+  else $('errBanner').classList.add('hidden');
+
+  fillBatches(); fillDrives(); fillImages(); fillHardware(); renderImageSource();
+  renderWorkflow();
+  bootstrapTail(b);
+}
+
+/* The offline queue: the header chip, and the banner for records the SERVER
+   refused. Drawn from /api/bootstrap and from /api/queue, which the page polls
+   on its own (below) - bootstrap is not re-polled once the page has settled,
+   and a record the server refuses must not wait for the next click to show. */
+function renderQueue(b){
   // Records held on this machine because the network was down.
   const q=b.waiting||0;
+  const rej=b.waitingRejected||0;
   $('hQueue').classList.toggle('hidden',!q);
+  // Refused records: not a network problem, so not just "N waiting". Retried
+  // anyway (the fix is usually on the server), but the operator is told what
+  // the server said, prominently, until it accepts them.
+  $('rejBanner').classList.toggle('hidden',!rej);
+  if(rej){
+    const w=b.waitingRejectedWipes||0;
+    const noun=w===rej?(rej===1?'wipe record was':'wipe records were')
+      :(rej===1?'record was':'records were');
+    $('rejTitle').textContent='⚠ '+rej+' '+noun+' not accepted by the server';
+    $('rejMsg').textContent=(b.rejected||[]).map(r=>
+      (r.count>1?r.count+' × ':'')+(r.reason||'no reason given')+
+      (r.code?' (HTTP '+r.code+')':'')).join('\n')+
+      '\n\n'+(rej===1?'It is':'They are')+' kept on this station and retried every few '+
+      'minutes. Nothing is lost - but the server will not take '+(rej===1?'it':'them')+
+      ' until the problem above is fixed. Tell a supervisor.';
+  }
   if(q){
-    $('hQueueN').textContent=q+' waiting to upload';
+    $('hQueueN').textContent=q+' waiting to upload'+(rej?' ('+rej+' refused)':'');
     /* Whether these survive a power-off is the only thing the operator can act
        on, so say it rather than hiding it in a tooltip. */
     const safe=b.queueDurable!==false;
@@ -658,12 +696,17 @@ async function bootstrap(){
       (held?' '+held+' of them belong to another operator and upload only when that person signs in.':'');
     $('hQueue').style.color=safe?'var(--amber)':'var(--red)';
   }
-  if(b.error){$('errBanner').classList.remove('hidden');$('errMsg').textContent=b.error;}
-  else $('errBanner').classList.add('hidden');
+}
+// Its own poll: cheap on the station (the queue file and memory, no network,
+// no hardware), and the only way a refusal found by the background retry
+// reaches a screen nobody is clicking on.
+async function pollQueue(){
+  try{ const s=await jget('/api/queue'); if(s&&typeof s.waiting==='number')renderQueue(s); }
+  catch(e){}
+}
+setInterval(pollQueue,20000);
 
-  fillBatches(); fillDrives(); fillImages(); fillHardware(); renderImageSource();
-  renderWorkflow();
-
+function bootstrapTail(b){
   auditGate();
   // NOTE: the old line here was  $('wStart').disabled=!$('wDrive').value;
   // #wDrive only exists on the single-drive branch of fillWipeDrives(); with two or
@@ -1141,6 +1184,13 @@ async function doAudit(){
   try{ res=await jpost('/api/audit',body); }
   catch(e){ res={ok:false,data:{message:'Could not reach the audit service.'}}; }
   $('aRun').classList.add('hidden'); auditGate();
+  if(res.ok&&res.data&&res.data.queued&&res.data.rejected){
+    // Not the network: the server refused the record. It is kept and retried,
+    // but the operator is told what the server said instead of "no connection".
+    openOv('The server did not accept this audit',(res.data.message||'')+
+      '\n\nThe record is saved on this station.',false,closeOv,'OK');
+    bootstrap(); checkPrior(); return;
+  }
   if(res.ok&&res.data&&res.data.queued){
     // Offline: the record is on disk and uploads itself once back on the network.
     toast('No connection — audit saved on this machine and will upload automatically ('+
