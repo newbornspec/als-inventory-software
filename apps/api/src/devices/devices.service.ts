@@ -2,7 +2,9 @@ import {
   BadRequestException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
@@ -26,6 +28,7 @@ import {
 } from './wipe-detail';
 import { hostTag } from './host-identity';
 import { expectedDrivesFromRows, rollupWipe } from './wipe-rollup';
+import { CertificateLedger } from '../certificates/certificate-ledger';
 
 // What a capture proves on its own, for the normal case where the tool sends no
 // explicit call. Deliberately the floor rather than a guess: nothing here claims a
@@ -90,7 +93,12 @@ export class DevicesService {
     @InjectRepository(AssetHistory) private history: Repository<AssetHistory>,
     private activity: ActivityService,
     private permissions: PermissionsService,
+    // Optional so the in-memory specs can leave it out; absent, or present
+    // with signing off, it does nothing.
+    @Optional() private ledger?: CertificateLedger,
   ) {}
+
+  private readonly log = new Logger(DevicesService.name);
 
   async setActiveLot(userId: string, batchId: string) {
     const batch = await this.batches.findOne({ where: { id: batchId } });
@@ -371,7 +379,10 @@ export class DevicesService {
       }),
     );
 
-    if (wipeOutcome) await this.settleWipeStatus(asset.id);
+    if (wipeOutcome) {
+      await this.settleWipeStatus(asset.id);
+      await this.issueCertificate(asset.id);
+    }
 
     await this.history.save(
       this.history.create({
@@ -406,6 +417,24 @@ export class DevicesService {
       deviceType,
       lot: batch?.batchNumber ?? null,
     };
+  }
+
+  // Plan step 29: with CERT_SIGNING_KEY set, the machine's signed certificate
+  // is issued the moment it becomes certifiable - here, right after its wipe
+  // status settles - so its issued date is the day it was erased, not the day
+  // someone first downloaded it. In its OWN transaction, after the record is
+  // committed, and never fatal: a failure here must not turn a filed wipe
+  // into a 500 the stick retries forever (filing a duplicate row each time).
+  // The first download issues it instead if this did not.
+  private async issueCertificate(assetId: string): Promise<void> {
+    if (!this.ledger?.enabled) return;
+    try {
+      await this.ledger.ensure(assetId);
+    } catch (e) {
+      this.log.error(
+        `could not issue the signed certificate for asset ${assetId} at ingest (the first download will): ${(e as Error).message}`,
+      );
+    }
   }
 
   // The asset's wipe status, from every drive's record (plan step 23, owner

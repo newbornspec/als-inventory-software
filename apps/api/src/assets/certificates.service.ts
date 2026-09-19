@@ -1,4 +1,9 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+  Optional,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import PDFDocument from 'pdfkit';
@@ -37,6 +42,17 @@ import {
   managerCanAccessBatch,
   type RequestUser,
 } from '../common/ownership';
+import { CertificateLedger } from '../certificates/certificate-ledger';
+import { SIGNATURE_ALGORITHM } from '../certificates/certificate-signing';
+import type { ErasureCertificate } from '../certificates/erasure-certificate.entity';
+
+// What a SIGNED certificate prints about its signature (plan step 29). Only
+// ever present when CERT_SIGNING_KEY is set; without it the PDF says nothing
+// about signatures at all.
+export interface CertificateSeal {
+  keyId: string;
+  sha256: string;
+}
 
 // The answer GET /assets/:id/certificate-eligibility gives (contract C4 of the
 // remediation brief). The web asset page and the kiosk read this instead of
@@ -74,6 +90,10 @@ export class CertificatesService {
     @InjectRepository(Asset) private assets: Repository<Asset>,
     @InjectRepository(AssetAudit) private audits: Repository<AssetAudit>,
     @InjectRepository(Batch) private batches: Repository<Batch>,
+    // Signed, stored certificates (plan step 29). Optional so the specs that
+    // build this service by hand can leave it out; absent, or present with
+    // signing off, the certificate is built on every download as before.
+    @Optional() private ledger?: CertificateLedger,
   ) {}
 
   // One bundled certificate listing every device in a lot that has a completed
@@ -263,9 +283,32 @@ export class CertificatesService {
     // certificateNumber in certificate-content.ts), so a certificate
     // downloaded again keeps the number it was first issued with.
     const certRow = latestWipe(outcomes) as AssetAudit;
+    const filename = `erasure-certificate-${asset.tag}.pdf`;
 
-    const buffer = await this.render(buildDeviceCertificate(asset, rollup, certRow));
-    return { buffer, filename: `erasure-certificate-${asset.tag}.pdf` };
+    // Signing on (plan step 29): the certificate issued for these wipe
+    // records - issued now if it was not at ingest - drawn from its stored
+    // snapshot, so every download carries the same number and issued date.
+    if (this.ledger?.enabled) {
+      const stored = await this.ledger.ensure(assetId);
+      // Only if a drive failed between the check above and the lock.
+      if (!stored)
+        throw new BadRequestException(
+          refusalFor(rollupFor(await this.wipeRows(assetId))) ??
+            'This device cannot be certified right now.',
+        );
+      const buffer = await this.render(
+        stored.payload.certificate,
+        new Date(stored.issuedAt),
+        sealOf(stored),
+      );
+      return { buffer, filename };
+    }
+
+    const buffer = await this.render(
+      buildDeviceCertificate(asset, rollup, certRow),
+      new Date(),
+    );
+    return { buffer, filename };
   }
 
   // GET /assets/:id/certificate-eligibility (contract C4): the same roll-up
@@ -320,7 +363,11 @@ export class CertificatesService {
     });
   }
 
-  private render(c: DeviceCertificate): Promise<Buffer> {
+  private render(
+    c: DeviceCertificate,
+    issued: Date,
+    seal?: CertificateSeal,
+  ): Promise<Buffer> {
     return new Promise((resolve, reject) => {
       const doc = new PDFDocument({ size: 'A4', margin: 56 });
       const chunks: Buffer[] = [];
@@ -328,7 +375,7 @@ export class CertificatesService {
       doc.on('end', () => resolve(Buffer.concat(chunks)));
       doc.on('error', reject);
 
-      const issuedOn = new Date().toLocaleDateString('en-GB', {
+      const issuedOn = issued.toLocaleDateString('en-GB', {
         day: '2-digit',
         month: 'long',
         year: 'numeric',
@@ -401,6 +448,19 @@ export class CertificatesService {
         .text(`Issued by ${COMPANY.name} (Company No. ${COMPANY.registration}). ${c.footer}`, left, doc.y, {
           width: right - left,
         });
+      if (seal) {
+        doc.moveDown(0.6);
+        doc
+          .font('Helvetica')
+          .fontSize(8)
+          .fillColor('#666666')
+          .text(
+            `Digitally signed (${SIGNATURE_ALGORITHM}, key ID ${seal.keyId}). This certificate was stored when it was issued and cannot be altered; SHA-256 of its signed content: ${seal.sha256}`,
+            left,
+            doc.y,
+            { width: right - left },
+          );
+      }
 
       doc.moveDown(2);
       const sigY = doc.y;
@@ -541,4 +601,8 @@ export class CertificatesService {
       doc.end();
     });
   }
+}
+
+function sealOf(c: ErasureCertificate): CertificateSeal {
+  return { keyId: c.keyId, sha256: c.payloadSha256 };
 }
