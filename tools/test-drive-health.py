@@ -325,9 +325,11 @@ for i, nm, v, pct, status in [(231, "SSD_Life_Left", 88, 88, "caution"),
     expect("SATA SSD attribute %d %s" % (i, nm),
            keep(smart(ata(0, ssd_attrs([attr(i, nm, v, v, 0, 4000)])))), pct, status,
            "life remaining %d%% reported by the drive" % pct, [])
+# (ssd_attrs carries attribute 5 but no 197/198, so the basis names the one
+# counter the drive actually reported - not the full all-clear sentence.)
 expect("SATA SSD, id reused for another counter (233 NAND_Writes_GiB)",
        keep(smart(ata(0, ssd_attrs([attr(233, "NAND_Writes_GiB", 100, 100, 0, 51234)])))), 100, "good",
-       "no wear figure reported by the drive; " + HDD_CLEAN + "; SMART passed", [])
+       "no wear figure reported by the drive; no reallocated sectors; SMART passed", [])
 expect("SATA SSD with 3 reallocated sectors",
        keep(smart(ata(0, [attr(5, "Reallocated_Sector_Ct", 99, 99, 10, 3),
                           attr(177, "Wear_Leveling_Count", 97, 97, 0, 30)]))), 94, "good",
@@ -387,6 +389,85 @@ expect("hot HDD (58 C, limit 55)", keep(smart(ata(7200, hdd_attrs(), temp=58), k
 expect("SSD at 60 C is not hot (limit 70)",
        keep(smart(ata(0, ssd_attrs([attr(177, "Wear_Leveling_Count", 99, 99, 0, 3)]), temp=60))), 99, "good",
        "life remaining 99% reported by the drive", [])
+
+
+# A SAS/SCSI disk (server pull-outs reach this station: the engine already
+# handles MegaRAID/PERC) has NO ata_smart_attributes table at all. Its tallies
+# live in its own logs: the grown defect list (blocks retired since the
+# factory - the SCSI name for reallocated sectors) and the error counter log's
+# uncorrected read/write/verify errors. Reading neither, the first version of
+# this helper graded such a drive 100% Good and printed the all-clear sentence
+# "no reallocated, pending or uncorrectable sectors" - a claim about counters
+# it had never read.
+def sas(defects=0, unc=0, rotation=10000, passed=True, logs=True, temp=34):
+    d = base("SCSI", "scsi", "/dev/sdb")
+    d.update({"scsi_vendor": "HGST", "scsi_product": "HUC101830CSS200",
+              "scsi_model_name": "HGST HUC101830CSS200", "scsi_revision": "A3B0",
+              "scsi_version": "SPC-4", "user_capacity": {"blocks": 585937500, "bytes": 300000000000},
+              "rotation_rate": rotation, "form_factor": {"scsi_value": 3, "name": "2.5 inches"},
+              "smart_support": {"available": True, "enabled": True},
+              "smart_status": {"passed": passed},
+              "temperature": {"current": temp, "drive_trip": 65},
+              "power_on_time": {"hours": 48213}})
+    if logs:
+        d["scsi_grown_defect_list"] = defects
+        d["scsi_error_counter_log"] = {
+            "read": {"errors_corrected_by_eccfast": 0, "errors_corrected_by_eccdelayed": 121,
+                     "errors_corrected_by_rereads_rewrites": 3, "total_errors_corrected": 124,
+                     "correction_algorithm_invocations": 3, "gigabytes_processed": "12000.000",
+                     "total_uncorrected_errors": unc},
+            "write": {"errors_corrected_by_eccfast": 0, "errors_corrected_by_eccdelayed": 0,
+                      "errors_corrected_by_rereads_rewrites": 0, "total_errors_corrected": 0,
+                      "correction_algorithm_invocations": 0, "gigabytes_processed": "8000.000",
+                      "total_uncorrected_errors": 0},
+            "verify": {"errors_corrected_by_eccfast": 0, "errors_corrected_by_eccdelayed": 0,
+                       "errors_corrected_by_rereads_rewrites": 0, "total_errors_corrected": 0,
+                       "correction_algorithm_invocations": 0, "gigabytes_processed": "100.000",
+                       "total_uncorrected_errors": 0}}
+    return d
+
+
+res = keep(smart(sas(defects=1204, unc=13), kind="ata-hdd"))
+expect("SAS disk: 1204 grown defects and 13 uncorrected errors", res, 10, "bad",
+       "1204 grown defects (reallocated sectors), 13 uncorrected read/write errors; SMART passed",
+       ["1204 grown defects (reallocated sectors)", "13 uncorrected read/write errors"])
+check("SAS disk: the counts are the drive's own, in the contract's fields",
+      res["health"].get("reallocatedSectors") == 1204
+      and res["health"].get("uncorrectableSectors") == 13
+      and res["health"].get("pendingSectors") is None
+      and res["flat"].get("reallocatedSectors") == 1204
+      and res["health"].get("powerOnHours") == 48213, res["health"])
+expect("SAS disk: clean", keep(smart(sas(), kind="ata-hdd")), 100, "good",
+       "no grown defects or uncorrected errors; SMART passed", [])
+expect("SAS disk: one grown defect reads as one", keep(smart(sas(defects=1), kind="ata-hdd")), 98,
+       "good", "1 grown defect (reallocated sector); SMART passed",
+       ["1 grown defect (reallocated sector)"])
+expect_nm("SAS disk that reports neither log (nothing to compute a percentage from)",
+          keep(smart(sas(logs=False), kind="ata-hdd")), "the drive does not report health data",
+          u"none on this machine — test it on another machine or replace", "ata-hdd")
+
+# The same rule for ATA: a table that does not carry 5/197/198 is not an
+# all-clear. Either the drive reports SOME counter (then the basis names only
+# what was read) or there is nothing to compute a percentage from at all.
+expect_nm("ATA drive whose table has no error counter and no wear figure",
+          keep(smart(ata(7200, [attr(9, "Power_On_Hours", 80, 80, 0, 20000)]), kind="ata-hdd")),
+          "the drive does not report health data",
+          u"none on this machine — test it on another machine or replace", "ata-hdd")
+expect("ATA drive that reports only the reallocated count",
+       keep(smart(ata(7200, [attr(5, "Reallocated_Sector_Ct", 200, 200, 140, 0),
+                             attr(9, "Power_On_Hours", 80, 80, 0, 20000)]), kind="ata-hdd")),
+       100, "good", "no reallocated sectors; SMART passed", [])
+res = keep(smart(ata(7200, [attr(5, "Reallocated_Sector_Ct", 200, 200, 140, 0),
+                            attr(197, "Current_Pending_Sector", 200, 200, 0, 0)]), kind="ata-hdd"))
+check("a counter the drive never reported stays null, and the basis does not claim it",
+      res["health"].get("uncorrectableSectors") is None
+      and res["health"]["basis"] == "no reallocated or pending sectors; SMART passed", res["health"])
+# A drive whose only answer is the overall verdict: its FAILED verdict is real
+# data (cap 20), a PASSED verdict on its own is not a percentage.
+expect("a drive whose only answer is a FAILED verdict",
+       keep(smart(ata(7200, [attr(9, "Power_On_Hours", 80, 80, 0, 900)], passed=False), kind="ata-hdd")),
+       20, "bad", "the drive's own SMART self-check FAILED",
+       ["the drive's own SMART self-check FAILED"])
 
 # Not measurable: reason + action, never a number, never "unknown".
 off = ata(7200, [], support={"available": True, "enabled": False})

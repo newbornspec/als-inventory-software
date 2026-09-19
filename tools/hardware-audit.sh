@@ -2399,8 +2399,21 @@ def emit(h, flat=None):
         out(("N %s %d" if isinstance(v, int) else "S %s %s") % (k, v))
 
 
-def finish(source, L, E, deductions, caps, notes, fields, tool, flat_extra):
-    """Apply the formula's last step and build the object."""
+def nothing_of(kinds):
+    """"no reallocated, pending or uncorrectable sectors" - built from the
+    counters the drive ACTUALLY reported, so the all-clear never covers a
+    counter that was never read."""
+    if not kinds:
+        return None
+    if len(kinds) == 1:
+        return "no " + kinds[0]
+    return "no " + ", ".join(kinds[:-1]) + " or " + kinds[-1]
+
+
+def finish(source, L, E, deductions, caps, notes, fields, tool, flat_extra, clean=None):
+    """Apply the formula's last step and build the object. `clean` is the
+    all-clear sentence for THIS drive's readable counters (None when it
+    reports none: then the basis says only what was read)."""
     pct = min([L if L is not None else 100, E] + [c for c, _ in caps])
     pct = int(round(max(0, min(100, pct))))
     reasons = list(deductions) + [t for _, t in caps] + list(notes)
@@ -2413,8 +2426,10 @@ def finish(source, L, E, deductions, caps, notes, fields, tool, flat_extra):
         parts = []
         if source != "ata-hdd":
             parts.append("no wear figure reported by the drive")
-        parts.append(", ".join(deductions) if deductions
-                     else "no reallocated, pending or uncorrectable sectors")
+        if deductions:
+            parts.append(", ".join(deductions))
+        elif clean:
+            parts.append(clean)
         parts += [t for _, t in caps]
         if fields.get("smartPassed") is True:
             parts.append("SMART passed")
@@ -2453,7 +2468,12 @@ def smart(raw, rc, kind, tried):
     table = [a for a in ((d.get("ata_smart_attributes") or {}).get("table") or [])
              if isinstance(a, dict)]
     status = d.get("smart_status") if isinstance(d.get("smart_status"), dict) else {}
-    has_data = bool(nv or table or "passed" in status)
+    # A SAS/SCSI disk has no attribute table at all: its tallies are in its own
+    # logs (see scsi_counters). Reading neither, the first version of this
+    # helper graded a SAS disk with 1204 grown defects 100% Good.
+    scsi = scsi_counters(d) if (nv is None and not table and proto == "SCSI") else None
+    has_data = bool(nv or table or (scsi and any(x is not None for x in scsi))
+                    or "passed" in status)
     # exit_status bit 0: smartctl could not even tell what the device is
     # ("Unable to detect device type"); bit 1: the open failed. Either way
     # the drive was never asked, so it is not "does not report health data".
@@ -2528,7 +2548,33 @@ def smart(raw, rc, kind, tried):
         limit = num((d.get("temperature") or {}).get("op_limit_max")) or 70
         fields.update(lifeUsedPct=used, availableSparePct=spare, mediaErrors=media,
                       criticalWarning=cw)
+        evidence = [x is not None for x in (used, spare, media, cw)]
+        clean = "no media errors" if media == 0 else None
+        flat = [("powerOnHours", poh), ("powerCycles", pcy), ("ssdLifeUsedPct", used),
+                ("temperatureC", temp)]
         st = selftest_nvme(d)
+    elif scsi is not None:
+        # SAS/SCSI. The contract's `source` names the four kinds the web app
+        # knows, so a SAS disk is filed under the media it is (spinning or
+        # flash); the basis names the SCSI logs the numbers came from.
+        defects, unc = scsi
+        if defects:
+            E -= min(40, 2 * defects)
+            deductions.append("%d grown defect%s (reallocated sector%s)"
+                              % (defects, "" if defects == 1 else "s", "" if defects == 1 else "s"))
+        if unc:
+            E -= min(50, 10 * unc)
+            deductions.append(plural(unc, "uncorrected read/write error"))
+        if passed is False:
+            caps.append((20, "the drive's own SMART self-check FAILED"))
+        fields.update(reallocatedSectors=defects, uncorrectableSectors=unc)
+        evidence = [defects is not None, unc is not None]
+        clean = nothing_of([n for n, v in (("grown defects", defects),
+                                           ("uncorrected errors", unc)) if v == 0])
+        limit = 55 if source == "ata-hdd" else 70
+        flat = [("powerOnHours", poh), ("powerCycles", pcy),
+                ("reallocatedSectors", defects), ("temperatureC", temp)]
+        st = ("none", "")
     else:
         attrs = {}
         for a in table:
@@ -2591,20 +2637,48 @@ def smart(raw, rc, kind, tried):
                         break
         fields.update(lifeUsedPct=used, reallocatedSectors=realloc, pendingSectors=pending,
                       uncorrectableSectors=unc)
+        evidence = [L is not None] + [x is not None for x in (realloc, pending, unc, spin)]
+        # Only the counters this table actually carries: a drive whose table
+        # has no 5/197/198 must not be handed the full all-clear sentence.
+        clean = nothing_of([n for n, v in (("reallocated", realloc), ("pending", pending),
+                                           ("uncorrectable", unc)) if v == 0])
+        clean = clean + " sectors" if clean else None
         limit = 55 if source == "ata-hdd" else 70
+        flat = [("powerOnHours", poh), ("powerCycles", pcy), ("reallocatedSectors", realloc),
+                ("pendingSectors", pending),
+                ("ssdLifeUsedPct", used if source != "ata-hdd" else None), ("temperatureC", temp)]
         st = selftest_ata(d)
     fields.update(temperatureC=temp, powerOnHours=poh, powerCycles=pcy, selfTest=st[0])
     if st[0] == "failed":
         caps.append((25, "the last self-test failed%s" % st[1]))
+    # Nothing a percentage could honestly be computed from: the drive answered,
+    # but it reports no wear figure, no error counter and no alarm of its own.
+    # A bare "SMART passed" is a verdict, not a measurement - and before this
+    # it came out as a confident 100% Good.
+    if not any(evidence) and not caps:
+        return emit(not_measured(R_UNSUP, source))
     if temp is not None and temp >= limit:
         caps.append((89, "running hot: %d °C (the drive's limit is %d °C)" % (temp, limit)))
 
-    flat = [("powerOnHours", poh), ("powerCycles", pcy),
-            ("reallocatedSectors", fields["reallocatedSectors"]),
-            ("pendingSectors", fields["pendingSectors"]),
-            ("ssdLifeUsedPct", fields["lifeUsedPct"] if source != "ata-hdd" else None),
-            ("temperatureC", temp)]
-    finish(source, L, E, deductions, caps, notes, fields, tool, flat)
+    finish(source, L, E, deductions, caps, notes, fields, tool, flat, clean)
+
+
+def scsi_counters(d):
+    """A SAS/SCSI disk's own tallies, which smartctl reports instead of an ATA
+    attribute table: the grown defect list (blocks retired since the factory -
+    the SCSI name for reallocated sectors) and the error counter log's
+    uncorrected read/write/verify errors. Either is None when the drive did
+    not report it, which is NOT the same as zero."""
+    defects = num(d.get("scsi_grown_defect_list"))
+    unc = None
+    log = d.get("scsi_error_counter_log")
+    if isinstance(log, dict):
+        for key in ("read", "write", "verify"):
+            row = log.get(key)
+            v = num(row.get("total_uncorrected_errors")) if isinstance(row, dict) else None
+            if v is not None:
+                unc = v if unc is None else unc + v
+    return defects, unc
 
 
 def selftest_ata(d):

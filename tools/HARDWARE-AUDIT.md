@@ -404,13 +404,19 @@ The percentage is the drive's own data put through one formula
 2. **Error score**, from 100: 2 per reallocated sector (max 40), 10 per
    pending sector (max 40), 10 per uncorrectable sector/error (198 + 187,
    max 50), 10 per NVMe media error (max 50), 10 for any spin retry. CRC
-   errors are a cable fault and are only noted.
+   errors are a cable fault and are only noted. A SAS/SCSI disk has no
+   attribute table: its grown defect list counts as reallocated sectors and
+   its error counter log's uncorrected read/write errors as uncorrectable.
 3. **Caps**: SMART FAILED or an attribute failing now 20; an attribute that
    failed in the past 49; NVMe critical warning 25; last self-test failed 25;
    eMMC pre-EOL urgent 25 / warning 89; running hot (NVMe limit, else HDD
    55 °C, SSD 70 °C) 89.
 4. **Percent** = the lowest of the three; the status comes only from the
    percent (Good 90-100, Caution 50-89, Bad 0-49).
+
+The basis only ever names counters the drive actually reported: a drive that
+reports no wear figure, no error counter and no alarm of its own is recorded
+as not measurable, never as a confident 100%.
 
 When a percentage cannot be measured the record says why and what to do
 (behind a RAID/Intel RST controller → set AHCI in the BIOS and Rescan; the
