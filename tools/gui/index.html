@@ -1097,6 +1097,12 @@ function confirmWipe(){
                     (batch?batch.textContent:'the batch')+'. Erasure certificate now available ✓');
             else if(r.recordError)toast(name+'Wiped, but not saved: '+r.recordError,false);
             else toast(name+'Wipe complete ✓');
+          }else if(r.status==='refused'){
+            /* The engine wrote nothing (wrong drive, USB, boot disk...), so
+               nothing is recorded either - say both, or "failed" would send
+               the operator looking for a damaged drive. */
+            toast(name+'Not wiped — '+(r.reason||r.method||'the drive was refused')+
+                  '. Nothing was written to the drive and nothing was recorded.',false);
           }else{
             const why=r.reason||r.message||r.method||'reason not reported';
             toast(name+'Wipe failed — '+why+(r.recorded?' (recorded against the batch)':''),false);

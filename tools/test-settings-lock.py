@@ -149,6 +149,24 @@ srv.STATE["conf"]["AUDIT_URL"] = PROD           # as save_conf would reload it
 r = post("/api/settings", form(serverUrl="https://staging-als.example", pin="4417"))
 check("the server audit.conf STARTED with stays allowed", r[0] == 200, r)
 
+print("the text-mode wipe switch is retired (owner decision D9)")
+# AUDIT_WIPE turned on the text-mode wipe, which no longer wipes anything. The
+# kiosk must neither offer the switch nor write it - with or without a PIN, and
+# even when a stale page still sends the old field.
+conf()
+h = Fake("/api/settings", {})
+h.do_GET()
+check("GET /api/settings: no wipeEnabled offered", h.sent[0] == 200 and "wipeEnabled" not in h.sent[1], h.sent)
+check("GET /api/settings: the kiosk's default wipe method is still offered",
+      h.sent[1].get("wipeMethod") == "auto", h.sent)
+r = post("/api/settings", form(wipeEnabled=True))
+check("no PIN, stale page sends wipeEnabled: AUDIT_WIPE not written",
+      r[0] == 200 and SAVED and "AUDIT_WIPE" not in SAVED[0], (r, SAVED))
+conf(pin="4417")
+r = post("/api/settings", form(wipeEnabled=True, pin="4417"))
+check("right PIN, wipeEnabled sent: AUDIT_WIPE still not written",
+      r[0] == 200 and SAVED and "AUDIT_WIPE" not in SAVED[0], (r, SAVED))
+
 print("the power button is not locked out")
 conf()
 POWER.clear()

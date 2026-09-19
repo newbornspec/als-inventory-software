@@ -14,16 +14,27 @@ edges: what list_drives() enumerates, and start_job() so nothing is ever wiped.
 
     python3 tools/test-wipe-gate.py
 """
+import atexit
 import importlib.util
 import io
 import json
 import os
+import shutil
 import sys
+import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 spec = importlib.util.spec_from_file_location("als_server", os.path.join(HERE, "gui", "server.py"))
 srv = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(srv)
+
+# In-progress wipe markers (and any queued record) go to a scratch folder, never
+# beside a real audit.conf or into the machine's /tmp.
+_TMP = tempfile.mkdtemp(prefix="als-test-")
+atexit.register(shutil.rmtree, _TMP, True)
+srv.CONF_PATH = None
+srv.PENDING_FALLBACK = os.path.join(_TMP, "wipe-pending.jsonl")
+srv.QUEUE_FALLBACK = os.path.join(_TMP, "audit-queue.jsonl")
 
 PASS, FAIL = [0], []
 
@@ -48,10 +59,14 @@ def fake_start_job(kind, cmd, marker, device, **kw):
     return True
 
 
-srv.list_drives = lambda: OFFERED
+srv.list_drives = lambda *a, **k: OFFERED
 srv.start_job = fake_start_job
 srv.SCRIPT = "/fake/hardware-audit.sh"      # the handler 500s without an engine
 srv.audit_cmd = lambda *a, **k: ["true"]
+# The handler refuses to erase anything on a machine it has not identified
+# (test-capture.py covers that); these cases are about WHICH disk, so give it
+# an identified machine.
+srv.STATE["profile"] = {"identification": {"serialNumber": "HOST-1"}, "storage": []}
 
 
 class Fake(srv.Handler):
@@ -105,7 +120,7 @@ check("injection attempt: refused before anything else", sent and sent[0] == 400
 
 # 6. Nothing offered at all (list_drives() found no disks, or failed): nothing
 #    can be wiped, rather than everything.
-srv.list_drives = lambda: None
+srv.list_drives = lambda *a, **k: None
 sent, started = post({"devices": ["/dev/nvme0n1"]})
 check("no disks enumerated: refuses, does not fail open", sent and sent[0] == 400 and started == [], (sent, started))
 
