@@ -147,6 +147,26 @@ on every boot too, because the layer's `/usr` is newer than the image's
    mask: nothing that depends on cloud-init fails, its units are simply not
    started. The build prints
    `cloud-init: switched off (/etc/cloud/cloud-init.disabled)`.
+6. Packs the layer with **lz4** instead of xz, so Firefox starts faster. On
+   the station Firefox took 13.6 s from launch to its first request, most of
+   it the kernel unpacking xz on one core. Off the station, same ESR, cold
+   cache: 6.7 s on the old xz layer, 1.8 s on lz4. The layer grows from about
+   108 MB to about 160 MB. lz4 is used **only** when the stick's own
+   `casper/vmlinuz` is the 24.04.2 kernel (6.11.0-17-generic #17~24.04.2),
+   proven to have lz4 squashfs support built in, or when the build machine's
+   `/boot/config-<that kernel>` says so. Otherwise the build uses xz as before
+   and says why. A kernel that cannot read the layer would stop the boot,
+   which is why this is checked rather than assumed. The build prints
+   `compressor: lz4 -Xhc` and `superblock: compression id 5 (lz4)`.
+7. Ships a **Firefox profile template** at
+   `/usr/share/als/firefox-profile-esr`: Firefox's first-run work (startup
+   cache, add-on database, settings migrations), done once at build time by
+   running the layer's own Firefox. Every boot starts with a brand-new profile,
+   and `gui/als-autostart.sh` now copies the template into it before launching,
+   then writes `user.js` on top as before. Measured: 1.8 s becomes 1.05 s. If
+   the template is missing or the copy fails, Firefox starts from an empty
+   profile, exactly as before. The build prints
+   `profile template: /usr/share/als/firefox-profile-esr`.
 
 `gui/als-autostart.sh` picks `firefox-esr` first, so the kiosk opens it with
 its own profile (`~/als-kiosk-profile-esr`); on a layer without ESR it opens the
@@ -162,10 +182,24 @@ the pending boot changes".
 - Build without it: `sudo env ALS_ESR=0 bash /cdrom/make-als-layer.sh build --with-session`
   — no ESR, snapd untouched, snaps seed as before. `ALS_UPDATE_STAMPS=0` leaves
   the update stamps out as well, and `ALS_CLOUD_INIT=1` leaves cloud-init
-  running as stock.
+  running as stock. `ALS_LAYER_COMP=xz` packs the layer with xz as before,
+  and `ALS_FF_SEED=0` leaves the Firefox profile template out.
+  (`ALS_LAYER_COMP=lz4` insists on lz4 and stops the build if the stick's
+  kernel is not proven to read it. Any other value is refused.)
 - Put an older `casper/minimal.standard.live.als.squashfs` back on the stick
   from Windows (keep a copy of the current one before rebuilding). The layer
   file is the whole change; the next boot behaves like the old one.
+
+**A layer built anywhere but on the stick** (for example in Docker on the PC)
+had its compressor chosen by reading a *copy* of a `casper/vmlinuz`, not the
+stick's own. Before putting such a layer on a stick, compare the build log's
+`kernel image sha256:` line with the stick's kernel:
+`Get-FileHash E:\casper\vmlinuz` (PowerShell). If they differ, do not copy the
+layer: rebuild it against that stick's vmlinuz, or with `ALS_LAYER_COMP=xz`.
+A kernel that cannot read the layer stops the boot. Also check `E:` has room
+for it (about 161 MB, less the old layer it replaces) - a copy that runs out
+of space part-way leaves a layer the stick cannot boot until the old one is
+put back. Built on the stick itself, the build checks both.
 - `sudo bash /cdrom/make-als-layer.sh undo` removes the layer entirely.
 
 **If the Mozilla key check fails**, do not work around it: it means the key

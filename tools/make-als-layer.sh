@@ -710,6 +710,306 @@ als_disable_cloud_init() {
   return 0
 }
 
+# =============================================================================
+# LAYER COMPRESSION: lz4 when the stick's kernel is PROVEN to read it, else xz.
+#
+# MEASURED (2026-09-19). On the station, Firefox took 13.6 s from launch to its
+# first request (boot report: browser launched 34.8 s, APP READY 48.4 s). Off
+# the station, same ESR build, station-class cores (i5-10210U, same Skylake
+# core as the i3-8145U), a brand-new profile every run, cold page cache:
+#     layer tree on xz squashfs (what shipped)    5.9 - 6.75 s
+#     the same tree on lz4 -Xhc squashfs          1.74 s
+#     a plain directory (the upper bound)         1.58 s
+#     warm cache, any of them                     1.23 s
+# The difference is the kernel decompressing xz at ~25 MB/s on ONE core -
+# casper mounts every layer threads=single - to pull ~143 MB of libxul.so and
+# the two omni.ja files into memory. That part is CPU and was measured: sys
+# time grew 5.3-6 s for 4.1-5.2 s of wall time, and the measuring kernel runs
+# the same squashfs code path as the station's (single decompressor,
+# FILE_DIRECT). On the station it also
+# competes with the backend's own start-up on the same two cores.
+# NOT measured: the cost of reading from the USB stick. The test images sat
+# in the Windows host's file cache (a plain copy read 250 MB in 0.13 s), so
+# every figure above is decompression with the reads nearly free. lz4 makes
+# Firefox read 74 MB off the image instead of 56 MB before its first request,
+# and the profile template adds ~19 MB more; on a slow stick that is maybe
+# ~1 s back. The net saving on the station is an estimate until its boot
+# report shows it (HARDWARE-TESTS.md, "Firefox start").
+# The price is size: the layer grows from ~108 MB to ~161 MB (160,563,200
+# bytes as built on 2026-09-19), which the copy step checks the stick has
+# room for (als_stick_room).
+#
+# WHY lz4 AND NOT zstd. zstd is smaller (116 MB) and nearly as fast, and the
+# stick's kernel has it too - but the layer is now built on the Windows PC in
+# Docker, whose WSL2 kernel has "# CONFIG_SQUASHFS_ZSTD is not set", so the
+# build's own mount check below would refuse a zstd layer. lz4 mounts on both.
+#
+# WHY THIS IS NOT A GUESS - a layer the kernel cannot decompress does not
+# degrade, casper's mount fails and the boot panics. Every ALS boot entry in
+# tools/boot/grub.cfg boots /casper/vmlinuz. The one on the stick is Ubuntu's
+# 24.04.2 kernel, "6.11.0-17-generic #17~24.04.2-Ubuntu" (read out of the
+# ISO's casper/vmlinuz). Its config, from the matching linux-modules
+# 6.11.0-17.17~24.04.2 .deb, has CONFIG_SQUASHFS=y and CONFIG_SQUASHFS_LZ4=y
+# (and LZ4_DECOMPRESS=y) - BUILT IN, so no initrd module can be missing. That
+# exact kernel was booted under QEMU and mounted an lz4 -Xhc repack of the real
+# layer the way casper does (losetup; mount -t squashfs -o ro,noatime):
+# libxul.so came back byte-identical, and an lz4 layer over the three stock xz
+# layers stacked under overlayfs. Casper has no compressor setting anywhere -
+# each layer is its own squashfs mount, and its fstype check reads only the
+# magic - so mixing compressors between layers is fine.
+#
+# THE GUARD. The build reads the release string out of the stick's own
+# casper/vmlinuz and uses lz4 only when that kernel is one of the proven ones
+# below, or its /boot/config-<release> on the build host says both options are
+# =y. Anything else - a stick rewritten from another ISO, an unreadable
+# vmlinuz - builds xz exactly as before and says so. And the build host's
+# mount check still runs on the finished file.
+#
+# Opt-out: ALS_LAYER_COMP=xz (the old layer, bit for bit the same settings).
+# ALS_LAYER_COMP=lz4 insists, and stops the build rather than fall back.
+# Anything else is refused. Rollback on the stick: put the previous xz layer
+# file back (UBUNTU-STICK.md).
+# =============================================================================
+ALS_LZ4_PROVEN_KERNELS="6.11.0-17-generic#17~24.04.2-Ubuntu"
+ALS_SQUASH_BLOCK=131072
+
+# Print "<release>#<build>" (e.g. 6.11.0-17-generic#17~24.04.2-Ubuntu) of an
+# x86 bzImage, from its setup header: "HdrS" at 0x202, and at 0x20E a pointer
+# (+0x200) to the version string. No tool needed beyond od/tail/head.
+als_kernel_release() {
+  local f="$1" off
+  [ -f "$f" ] || return 1
+  [ "$(tail -c +515 "$f" 2>/dev/null | head -c 4 | tr -d '\000')" = "HdrS" ] || return 1
+  off=$(od -An -tu2 -j 526 -N 2 "$f" 2>/dev/null | tr -d ' ')
+  case "$off" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$off" -gt 0 ] || return 1
+  tail -c +$((off + 513)) "$f" 2>/dev/null | head -c 256 | tr '\0' '\n' | head -1 \
+    | awk '{ r = $1; b = ""; for (i = 2; i <= NF; i++) if ($i ~ /^#/) { b = $i; break }
+             if (r ~ /^[0-9]+\.[0-9]+/) print r b }' | grep .
+}
+
+# 0 when a kernel config file has squashfs AND its lz4 decompressor BUILT IN.
+# =m is not enough: the layer is mounted from the initrd, before any module
+# that is not in it could load.
+als_kconfig_lz4() {
+  [ -f "$1" ] && grep -qx 'CONFIG_SQUASHFS=y' "$1" && grep -qx 'CONFIG_SQUASHFS_LZ4=y' "$1"
+}
+
+# Choose the compressor. $1 = the stick's casper/vmlinuz, $2 = the host root
+# whose /boot/config-* to read. Sets LAYER_COMP (lz4|xz) and LAYER_COMP_ARGS.
+als_pick_layer_comp() {
+  local vmlinuz="$1" root="${2:-/}" want="${ALS_LAYER_COMP:-auto}" id rel proven="" k
+  case "$want" in
+    xz)
+      LAYER_COMP=xz; LAYER_COMP_ARGS="-comp xz"
+      say "  compressor: xz (ALS_LAYER_COMP=xz)"
+      return 0 ;;
+    lz4|auto) : ;;
+    *) die "ALS_LAYER_COMP='$want' is not a compressor this build knows. Use xz, lz4 or
+      leave it unset (auto: lz4 when the stick's kernel is proven to read it)." ;;
+  esac
+  # The exact file judged, by hash. A layer built OFF the stick (in Docker on
+  # the PC) is judged against a COPY of the ISO's vmlinuz; this line is what
+  # the stick's own E:\casper\vmlinuz must match before that layer goes on it.
+  [ -f "$vmlinuz" ] && say "  kernel image sha256: $(sha256sum "$vmlinuz" 2>/dev/null | cut -d' ' -f1)  ($vmlinuz)"
+  id=$(als_kernel_release "$vmlinuz")
+  rel=${id%%#*}
+  if [ -z "$id" ]; then
+    proven="cannot read a kernel version out of $vmlinuz"
+  elif [ -f "$root/boot/config-$rel" ]; then
+    # The config, when present, is the authority - also over the list below.
+    if als_kconfig_lz4 "$root/boot/config-$rel"; then
+      proven=yes; say "  kernel $rel: /boot/config-$rel has SQUASHFS=y and SQUASHFS_LZ4=y"
+    else
+      proven="/boot/config-$rel does not have SQUASHFS and SQUASHFS_LZ4 built in (=y)"
+    fi
+  else
+    for k in $ALS_LZ4_PROVEN_KERNELS; do
+      [ "$k" = "$id" ] && proven=yes
+    done
+    if [ "$proven" = "yes" ]; then
+      say "  kernel $id: proven to mount an lz4 layer (see LAYER COMPRESSION)"
+    else
+      proven="kernel $id is not one proven to read lz4, and no /boot/config-$rel to check"
+    fi
+  fi
+  if [ "$proven" = "yes" ]; then
+    LAYER_COMP=lz4; LAYER_COMP_ARGS="-comp lz4 -Xhc"
+    say "  compressor: lz4 -Xhc (off the station, Firefox started ~4-5 s sooner than from xz)"
+    return 0
+  fi
+  [ "$want" = "lz4" ] && die "ALS_LAYER_COMP=lz4 was asked for, but $proven.
+      A layer this kernel cannot decompress panics the boot. Build xz instead:
+          sudo env ALS_LAYER_COMP=xz bash $0 build ..."
+  LAYER_COMP=xz; LAYER_COMP_ARGS="-comp xz"
+  say "  compressor: xz - $proven"
+  return 0
+}
+
+# Print "<compression id> <block size>" from a squashfs superblock (id 4 = xz,
+# 5 = lz4; block size at byte 12, compression at byte 20, little-endian).
+als_squashfs_comp() {
+  local id bs
+  [ "$(head -c 4 "$1" 2>/dev/null | tr -d '\000')" = "hsqs" ] || return 1
+  bs=$(od -An -tu4 -j 12 -N 4 "$1" 2>/dev/null | tr -d ' ')
+  id=$(od -An -tu2 -j 20 -N 2 "$1" 2>/dev/null | tr -d ' ')
+  [ -n "$id" ] && [ -n "$bs" ] && printf '%s %s\n' "$id" "$bs"
+}
+als_comp_id() { case "$1" in xz) echo 4 ;; lz4) echo 5 ;; *) return 1 ;; esac; }
+
+# 0 when the filesystem holding <dest> can take <new> in place of <dest>.
+# cp truncates the old layer and then writes: if the stick fills up part-way,
+# the file grub.cfg names is left truncated and the next boot cannot mount it.
+# So check BEFORE the old file is touched: free space plus what the old file
+# frees when it is truncated must cover the new file plus a margin (the
+# manifest copied beside it, FAT cluster rounding). lz4 made the layer ~52 MB
+# bigger, which is what made this worth checking. df that cannot be read is a
+# refusal, not a guess.
+als_stick_room() {  # als_stick_room <dest file> <new file>
+  local dest="$1" new="$2" need old=0 avail_k margin="${ALS_STICK_MARGIN:-8388608}"
+  need=$(stat -c %s "$new" 2>/dev/null) || return 1
+  [ -f "$dest" ] && old=$(stat -c %s "$dest" 2>/dev/null)
+  avail_k=$(df -Pk "$(dirname "$dest")" 2>/dev/null | awk 'NR == 2 {print $4}')
+  case "$avail_k$need$old" in ''|*[!0-9]*)
+    say "  cannot read the free space on $(dirname "$dest") - not copying"; return 1 ;;
+  esac
+  [ -n "$avail_k" ] || { say "  cannot read the free space on $(dirname "$dest") - not copying"; return 1; }
+  if [ $((avail_k * 1024 + old)) -lt $((need + margin)) ]; then
+    say "  not enough room: the new layer is $((need / 1048576)) MB, the stick has $((avail_k / 1024)) MB free" \
+        "plus $((old / 1048576)) MB from the layer it replaces (and $((margin / 1048576)) MB kept spare)"
+    return 1
+  fi
+  return 0
+}
+
+# =============================================================================
+# KIOSK PROFILE TEMPLATE: Firefox's first-run work done once, at build time.
+#
+# $HOME is RAM on the live session, so the kiosk's Firefox profile is brand
+# new on every boot and Firefox rebuilds its startup cache, add-on database
+# and prefs migrations before its first request - every time. MEASURED off
+# the station (same ESR, cold cache, lz4 layer): 1.76 s to the first request
+# with a fresh profile, 0.94 s from a copy of a template made by one earlier
+# run of the SAME build at the SAME path, plus 0.04 s for the copy. A copy at
+# a different profile path stayed valid: the startup cache was reused as-is
+# (same hashes), compatibility.ini unchanged, no crash or safe-mode counter.
+#
+# So the build runs the layer's own firefox-esr once, headless, at
+# /usr/lib/firefox-esr (bind-mounted read-only from the stage inside a private
+# mount namespace - compatibility.ini records that path, and a different one
+# makes Firefox discard the cache), quits it cleanly, and keeps only the files
+# that save work (gui/layer/ff-seed.py). They ship read-only at
+# /usr/share/als/firefox-profile-esr; gui/als-autostart.sh copies them into a
+# NEW profile under $HOME before launch and writes user.js on top, so the
+# kiosk's prefs always apply. Firefox never runs on the template itself.
+#
+# It is built with the ESR in the same layer, so it cannot go stale on the
+# station; if it ever did, compatibility.ini makes Firefox rebuild its caches
+# (a normal first run). Every failure here - no network-free Firefox run, no
+# unshare, an unclean quit, a template that does not check out - ships NO
+# template, and the kiosk starts from an empty profile exactly as before.
+# Opt-out: ALS_FF_SEED=0.
+# =============================================================================
+FF_SEED_DIR="usr/share/als/firefox-profile-esr"
+FF_SEED_FILES="startupCache compatibility.ini prefs.js extensions.json addonStartup.json.lz4 xulstore.json times.json"
+# Per-install identifiers that must not be in the template (every station
+# would share them) - the same expression ff-seed.py strips by. The built-in
+# add-ons' extensions.webextensions.uuids is kept on purpose (the startup
+# caches embed those UUIDs; see ff-seed.py).
+FF_SEED_ID_RE='user_pref\("[^"]*(user_?id|client_?id|profile_?(group_?)?id|uuid|impression_?id|context_?id|agent_?id|store_?id)"'
+
+# Print the kiosk's user.js - the heredoc in write_ff_prefs - from $1
+# (gui/als-autostart.sh), so the template is made with the kiosk's own prefs.
+als_kiosk_userjs() {
+  [ -r "$1" ] || return 1
+  sed 's/\r$//' "$1" | awk '/<<.PREFS.$/ { p = 1; next } /^PREFS$/ { if (p) exit } p' \
+    | grep '^user_pref(' | grep .
+}
+
+# 0 when $1 is a template this build may ship for the ESR in $2 (a stage, or
+# the mounted layer): only the known files; a startup cache; compatibility.ini
+# naming /usr/lib/firefox-esr and exactly the ESR version and build in $2;
+# no per-install identifier in prefs.js.
+als_ff_seed_ok() {
+  local seed="$1" root="$2" ver bid f
+  [ -d "$seed" ] && [ ! -L "$seed" ] || return 1
+  [ -f "$seed/compatibility.ini" ] && [ -f "$seed/prefs.js" ] || return 1
+  [ -d "$seed/startupCache" ] && [ -n "$(ls -A "$seed/startupCache" 2>/dev/null)" ] || return 1
+  for f in "$seed"/* "$seed"/.[!.]*; do
+    [ -e "$f" ] || [ -L "$f" ] || continue
+    [ -L "$f" ] && return 1
+    case " $FF_SEED_FILES " in *" ${f##*/} "*) : ;; *) return 1 ;; esac
+  done
+  [ -z "$(find "$seed" -type l 2>/dev/null | head -1)" ] || return 1
+  ver=$(sed -n 's/^Version=//p' "$root/usr/lib/firefox-esr/application.ini" 2>/dev/null | head -1 | tr -d '\r')
+  bid=$(sed -n 's/^BuildID=//p' "$root/usr/lib/firefox-esr/application.ini" 2>/dev/null | head -1 | tr -d '\r')
+  [ -n "$ver" ] && [ -n "$bid" ] || return 1
+  tr -d '\r' < "$seed/compatibility.ini" | grep -qx "LastVersion=${ver}_${bid}/${bid}" || return 1
+  tr -d '\r' < "$seed/compatibility.ini" | grep -qx 'LastPlatformDir=/usr/lib/firefox-esr' || return 1
+  tr -d '\r' < "$seed/compatibility.ini" | grep -qx 'LastAppDir=/usr/lib/firefox-esr/browser' || return 1
+  ! grep -Eqi "$FF_SEED_ID_RE" "$seed/prefs.js"
+}
+
+# Put a checked template $2 into stage $1 at FF_SEED_DIR: directories 0755,
+# files 0644 (the desktop user copies it; Firefox writes profile files 0600).
+als_stage_ff_seed() {
+  local stage="$1" seed="$2"
+  rm -rf "${stage:?}/$FF_SEED_DIR"
+  mkdir -p "$stage/$FF_SEED_DIR" || return 1
+  cp -R "$seed/." "$stage/$FF_SEED_DIR/" || { rm -rf "${stage:?}/$FF_SEED_DIR"; return 1; }
+  find "$stage/usr/share/als" -type d -exec chmod 0755 {} + || return 1
+  find "$stage/$FF_SEED_DIR" -type f -exec chmod 0644 {} + || return 1
+  return 0
+}
+
+# The whole step. $1 stage, $2 the ESR file list, $3 gui/als-autostart.sh,
+# $4 gui/layer/ff-seed.py. 0 = template staged; 1 = none (never fatal).
+als_make_ff_seed() {
+  local stage="$1" list="$2" auto="$3" helper="$4" mp=/usr/lib/firefox-esr made=0 work rc t
+  if [ "${ALS_FF_SEED:-1}" = "0" ]; then
+    say "  profile template: not built (ALS_FF_SEED=0)"; return 1
+  fi
+  if ! als_esr_complete "$stage" "$list"; then
+    say "  profile template: no complete firefox-esr in the layer - none"; return 1
+  fi
+  for t in python3 unshare mount timeout; do
+    command -v "$t" >/dev/null 2>&1 || { say "  profile template: $t is missing - none"; return 1; }
+  done
+  [ -r "$helper" ] || { say "  profile template: $helper is missing - none"; return 1; }
+  # The bind mount needs an EMPTY directory at the real path. The build has
+  # already refused a live session with firefox-esr installed; anything else
+  # there is not ours to cover up.
+  if [ -e "$mp" ] || [ -L "$mp" ]; then
+    if [ -L "$mp" ] || [ ! -d "$mp" ] || [ -n "$(ls -A "$mp" 2>/dev/null)" ]; then
+      say "  profile template: $mp already exists on this system - none"; return 1
+    fi
+  else
+    mkdir "$mp" 2>/dev/null && made=1 || { say "  profile template: cannot create $mp - none"; return 1; }
+  fi
+  work=$(mktemp -d) || { [ "$made" = 1 ] && rmdir "$mp"; return 1; }
+  if ! als_kiosk_userjs "$auto" > "$work/user.js"; then
+    say "  profile template: no kiosk prefs found in $auto - none"
+    rm -rf "$work"; [ "$made" = 1 ] && rmdir "$mp"; return 1
+  fi
+  # A PRIVATE mount namespace: the bind mount exists only for this one
+  # command and vanishes with it, on the build host as on the station.
+  timeout -k 10 240 unshare -m --propagation private sh -c \
+    'mount --bind "$1" "$2" && mount -o remount,bind,ro "$2" && exec python3 "$3" --firefox "$2/firefox" --home "$4/home" --userjs "$4/user.js" --out "$4/seed"' \
+    _ "$stage/usr/lib/firefox-esr" "$mp" "$helper" "$work"
+  rc=$?
+  [ "$made" = 1 ] && rmdir "$mp" 2>/dev/null
+  if [ "$rc" = "0" ] && als_ff_seed_ok "$work/seed" "$stage" && als_stage_ff_seed "$stage" "$work/seed"; then
+    rm -rf "$work"
+    say "  profile template: /$FF_SEED_DIR ($(du -sh "$stage/$FF_SEED_DIR" 2>/dev/null | cut -f1))"
+    return 0
+  fi
+  rm -rf "$work" "${stage:?}/$FF_SEED_DIR"
+  rmdir "$stage/usr/share/als" 2>/dev/null
+  say "  profile template: NOT built (rc $rc, or it did not check out) - the kiosk"
+  say "  starts from an empty profile, as before"
+  return 1
+}
+
 # Test hook: stop here when sourced by tools/test-layer-*.sh.
 if [ "${ALS_LAYER_LIB:-0}" = "1" ]; then
   return 0 2>/dev/null || exit 0
@@ -750,6 +1050,10 @@ do_build() {
     apt-get install -y -qq squashfs-tools >/dev/null 2>&1
   }
   command -v mksquashfs >/dev/null 2>&1 || die "mksquashfs is still missing - connect to the network and retry."
+
+  # First, so a refused ALS_LAYER_COMP stops the build before any download.
+  step "Layer compressor (see LAYER COMPRESSION at the top)"
+  als_pick_layer_comp "$CASPER/vmlinuz" "${ALS_HOST_ROOT:-/}"
 
   STAGE=$(mktemp -d) || die "mktemp failed"
   MOZ_WORK=""
@@ -999,12 +1303,6 @@ do_build() {
     say "  $got package(s) baked in"
   fi
 
-  # xz at 128K blocks, because that is what the three layers already on the
-  # stick use - their superblocks all read compression id 4, block_size 131072.
-  # This is not cosmetic: squashfs decompressor support is per-compressor in the
-  # kernel config, and xz is the only one PROVEN present here, since the running
-  # system is mounted from it. A layer the kernel cannot decompress does not
-  # degrade, it panics the boot.
   # MERGED-/usr: fold /lib back into /usr/lib, and refuse any other alias dir.
   #
   # THIS IS THE ONE THAT COST FIVE BOOTS, and it is invisible unless you look.
@@ -1067,6 +1365,16 @@ do_build() {
     say "  firefox-esr baked in (/$ESR_BIN)"
   fi
   als_mask_snapd "$STAGE" "$ESR_LIST" || true
+
+  # Also before the permission pass and the stamps. Only with the autostart:
+  # it is als-autostart that copies the template, so a packages-only layer
+  # has no use for it. See KIOSK PROFILE TEMPLATE at the top.
+  FF_SEED_STAGED=0
+  if [ "$WANT_AUTOSTART" != "0" ]; then
+    step "Kiosk Firefox profile template"
+    als_make_ff_seed "$STAGE" "$ESR_LIST" "$SELF_DIR/gui/als-autostart.sh" \
+      "$SELF_DIR/gui/layer/ff-seed.py" && FF_SEED_STAGED=1
+  fi
 
   # Also before the permission pass (it creates etc/cloud), and before the
   # stamps, which must stay the last write. See "cloud-init" at the top.
@@ -1142,15 +1450,25 @@ do_build() {
       -o -printf 'f %04m %p\n' \) | LC_ALL=C sort ) > "$MANIFEST" 2>/dev/null
   say "  manifest: $(wc -l < "$MANIFEST" 2>/dev/null || echo 0) entries"
 
-  step "Building $LAYER_FILE (xz, 128K blocks, matching the stock layers)"
+  # 128K blocks whatever the compressor, as in the stock layers: Firefox
+  # page-faults libxul.so in at random, and every fault decompresses a whole
+  # block - bigger blocks would make each one dearer. The compressor was chosen
+  # (and proven for this stick's kernel) at the start of the build.
+  step "Building $LAYER_FILE ($LAYER_COMP, 128K blocks)"
   OUT="$STAGE.squashfs"
-  mksquashfs "$STAGE" "$OUT" -noappend -no-progress -comp xz -b 131072 >/dev/null 2>&1 \
+  # shellcheck disable=SC2086
+  mksquashfs "$STAGE" "$OUT" -noappend -no-progress $LAYER_COMP_ARGS -b "$ALS_SQUASH_BLOCK" >/dev/null 2>&1 \
     || die "mksquashfs failed"
+  # Read the superblock back: the file must be exactly what the guard allowed.
+  sb=$(als_squashfs_comp "$OUT")
+  [ "$sb" = "$(als_comp_id "$LAYER_COMP") $ALS_SQUASH_BLOCK" ] \
+    || die "the built layer's superblock reads '$sb', not $LAYER_COMP with $ALS_SQUASH_BLOCK-byte blocks - refusing it"
+  say "  superblock: compression id ${sb% *} ($LAYER_COMP), block size ${sb#* }"
 
   # Prove it mounts BEFORE putting it anywhere near the boot chain.
   step "Verifying the layer mounts"
   MP=$(mktemp -d)
-  mount -t squashfs -o loop,ro "$OUT" "$MP" 2>/dev/null || { rmdir "$MP"; die "The layer does not mount - refusing to install it."; }
+  mount -t squashfs -o loop,ro "$OUT" "$MP" 2>/dev/null || { rmdir "$MP"; die "The layer ($LAYER_COMP) does not mount on this kernel - refusing to install it. To build the old xz layer:  sudo env ALS_LAYER_COMP=xz bash $0 build ..."; }
   fail=""
   if [ "$WANT_AUTOSTART" != "0" ]; then
     [ -f "$MP/etc/xdg/autostart/als-audit-station.desktop" ] || fail="the autostart entry is missing"
@@ -1193,11 +1511,23 @@ $(printf '%s' "$bad" | sed "s|^$MP|  |")"
       fail="/$CLOUD_INIT_MARKER is not a regular file in the layer - cloud-init would still run"
     fi
   fi
+  # The profile template, read back: still a valid template for the ESR in
+  # this very layer, and readable by the desktop user who copies it.
+  if [ -z "$fail" ] && [ "$FF_SEED_STAGED" = "1" ]; then
+    if ! als_ff_seed_ok "$MP/$FF_SEED_DIR" "$MP"; then
+      fail="the Firefox profile template does not check out against the layer's ESR"
+    elif [ -n "$(find "$MP/$FF_SEED_DIR" -type f ! -perm -0004 2>/dev/null | head -1)" ]; then
+      fail="the Firefox profile template has files the desktop user cannot read"
+    fi
+  fi
   umount "$MP"; rmdir "$MP"
   [ -n "$fail" ] && die "The layer mounted but $fail"
   say "  mounts clean, autostart present, every directory traversable"
 
   step "Copying onto the stick"
+  als_stick_room "$CASPER/$LAYER_FILE" "$OUT" || die "Not copied - the layer on the stick is untouched.
+      Free some space on the stick (from Windows), or keep the backup of the
+      old layer on the PC rather than on the stick, then build again."
   media_rw
   cp "$OUT" "$CASPER/$LAYER_FILE" || die "copy failed"
   [ -f "$MANIFEST" ] && cp "$MANIFEST" "$CASPER/$LAYER_NAME.manifest" 2>/dev/null

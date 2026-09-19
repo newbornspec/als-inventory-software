@@ -227,6 +227,30 @@ fi
 # Firefox Terms of Use on behalf of the station's users - which operators were
 # already doing by clicking Continue. dataSubmissionPolicyBypassNotification
 # stops the older data-reporting info bar for the same reason.
+#
+# Less background network chatter. A brand-new profile - every boot, here -
+# goes on to fetch a lot right after the kiosk page loads: the Suggest
+# database, the OpenH264 plugin, the Safe Browsing lists, new-tab stories and
+# their images from ~60 news sites, Normandy, telemetry, add-on and search
+# updates, region lookups and captive-portal/connectivity probes. The kiosk
+# loads one page on 127.0.0.1 and has no URL bar, so none of it serves
+# anything, and all of it competes with the operator's first minutes on a
+# 2-core machine. Safe Browsing off is a trade-off only for pages other than
+# the local kiosk, which it never shows. network.proxy.type is deliberately
+# NOT set, so a station that needs the system proxy keeps it.
+#
+# MEASURED (2026-09-19, this ESR, headless, fresh profile, 60 s after the
+# first request, twice each): without these prefs ~40 MB received from ~60
+# hosts, and suggest.sqlite, gmp-gmpopenh264 and safebrowsing/ were created;
+# with them ~23 MB, none of those three, and the only remote hosts left are
+# Remote Settings (firefox.settings.services / -attachments.cdn /
+# content-signature-2.cdn.mozilla.net - the ~17 MB security_state
+# certificate data and the add-on blocklist), Google's CDM updater
+# (update.googleapis.com, dl.google.com) and a handful of top-site icons.
+# Remote Settings is left ON on purpose: it is how Firefox keeps its
+# certificate-revocation data current, and turning it off is a separate
+# decision from saving bandwidth. The first-request time: ~0.1 s earlier
+# warm; cold it is inside the noise.
 write_ff_prefs() {  # write_ff_prefs <profile dir>
     mkdir -p "$1"
     cat > "$1/user.js" <<'PREFS'
@@ -244,7 +268,80 @@ user_pref("signon.autofillForms", false);
 user_pref("signon.formlessCapture.enabled", false);
 user_pref("signon.generation.enabled", false);
 user_pref("browser.formfill.enable", false);
+user_pref("browser.safebrowsing.malware.enabled", false);
+user_pref("browser.safebrowsing.phishing.enabled", false);
+user_pref("browser.safebrowsing.downloads.enabled", false);
+user_pref("browser.safebrowsing.blockedURIs.enabled", false);
+user_pref("browser.safebrowsing.provider.mozilla.updateURL", "");
+user_pref("browser.safebrowsing.provider.google4.updateURL", "");
+user_pref("browser.safebrowsing.provider.google5.updateURL", "");
+user_pref("app.normandy.enabled", false);
+user_pref("app.shield.optoutstudies.enabled", false);
+user_pref("messaging-system.rsexperimentloader.enabled", false);
+user_pref("datareporting.healthreport.uploadEnabled", false);
+user_pref("datareporting.usage.uploadEnabled", false);
+user_pref("toolkit.telemetry.enabled", false);
+user_pref("toolkit.telemetry.unified", false);
+user_pref("toolkit.telemetry.archive.enabled", false);
+user_pref("extensions.update.enabled", false);
+user_pref("extensions.getAddons.cache.enabled", false);
+user_pref("extensions.systemAddon.update.enabled", false);
+user_pref("network.captive-portal-service.enabled", false);
+user_pref("network.connectivity-service.enabled", false);
+user_pref("browser.region.update.enabled", false);
+user_pref("browser.region.network.url", "");
+user_pref("media.gmp-manager.url", "");
+user_pref("media.gmp-gmpopenh264.enabled", false);
+user_pref("browser.search.update", false);
+user_pref("browser.topsites.contile.enabled", false);
+user_pref("browser.urlbar.quicksuggest.enabled", false);
+user_pref("extensions.pocket.enabled", false);
+user_pref("dom.push.connection.enabled", false);
 PREFS
+}
+
+# A NEW Firefox profile starts as a copy of the template the layer build made
+# (make-als-layer.sh, "KIOSK PROFILE TEMPLATE"): the startup cache, add-on
+# database and finished prefs migrations of one earlier run of this same ESR
+# at this same path. Measured off the station: 1.76 s to the first request
+# from an empty profile, 0.94 s from the copy (+0.04 s copying it).
+#
+# Rules, each for a reason:
+#   - only a profile that does not exist yet. One this session already used
+#     (the launcher run twice) is Firefox's own and is left exactly as it is.
+#   - copied into a temporary directory and RENAMED into place only when the
+#     whole copy succeeded, so Firefox never sees half a template. A failed
+#     copy leaves no profile at all, and write_ff_prefs then makes an empty
+#     one - today's behaviour.
+#   - Firefox runs on the COPY, never on the read-only template.
+#   - write_ff_prefs runs after it, so user.js - the prefs the kiosk depends
+#     on - is always written on top of whatever the template holds.
+# ALS_FF_TEMPLATE overrides the location (tests); a layer without a template
+# simply has none, and nothing changes.
+seed_ff_profile() {  # seed_ff_profile <profile dir>
+    local tpl="${ALS_FF_TEMPLATE:-/usr/share/als/firefox-profile-esr}" tmp t0 t1
+    [ -f "$tpl/compatibility.ini" ] || return 0
+    if [ -e "$1" ] || [ -L "$1" ]; then
+        log "profile $1 already exists - left as it is"
+        return 0
+    fi
+    tmp="$1.template.$$"
+    rm -rf "$tmp"
+    # Timed: on the station the copy reads ~19 MB cold off the layer over USB,
+    # a cost no off-station measurement saw. The boot report's "browser
+    # launched" is logged before this, so it counts there too.
+    t0=$(date +%s%N 2>/dev/null)
+    if mkdir -p "$tmp" && cp -R "$tpl/." "$tmp/" && mv "$tmp" "$1"; then
+        t1=$(date +%s%N 2>/dev/null)
+        case "$t0$t1" in
+            ''|*[!0-9]*) log "profile $1 started from the template $tpl" ;;
+            *) log "profile $1 started from the template $tpl in $(( (t1 - t0) / 1000000 )) ms" ;;
+        esac
+    else
+        rm -rf "$tmp"
+        log "could not copy the profile template $tpl - starting from an empty profile"
+    fi
+    return 0
 }
 write_chromium_prefs() {  # write_chromium_prefs <user-data-dir>
     mkdir -p "$1/Default"
@@ -261,6 +358,11 @@ if [ "$MODE" = "kiosk" ]; then
         log "kiosk: no browser found - falling back to a normal window"
         note "ALS Audit Station" "No browser found for kiosk mode. Opening normally."
     else
+        # The boot report's "browser launched" is the FIRST journal line that
+        # starts "kiosk: " (server.py TIMELINE_MARKS). Logged here, before the
+        # profile is prepared, so "APP READY minus browser launched" counts
+        # the profile-template copy as well as Firefox's own start.
+        log "kiosk: preparing $BROWSER"
         case "$BROWSER" in
             firefox|firefox-esr)
                 # $HOME, never /tmp. The SNAP Firefox has its own private /tmp,
@@ -277,7 +379,12 @@ if [ "$MODE" = "kiosk" ]; then
                 # meet, but a persistent home, or switching browsers within a
                 # session, would otherwise stop the kiosk on a dialog.
                 PROFILE="${HOME:-/tmp}/als-kiosk-profile"
-                [ "$BROWSER" = "firefox-esr" ] && PROFILE="${HOME:-/tmp}/als-kiosk-profile-esr"
+                # The template is made by, and only valid for, the layer's
+                # firefox-esr - never the snap.
+                if [ "$BROWSER" = "firefox-esr" ]; then
+                    PROFILE="${HOME:-/tmp}/als-kiosk-profile-esr"
+                    seed_ff_profile "$PROFILE"
+                fi
                 write_ff_prefs "$PROFILE"
                 ARGS="--profile $PROFILE --kiosk"
                 ;;
@@ -315,6 +422,7 @@ note "ALS Audit Station is ready" "Opening $URL in a normal window."
 # fight over one profile's lock.
 if command -v firefox-esr >/dev/null 2>&1; then
     FULLPROFILE="${HOME:-/tmp}/als-full-profile-esr"
+    seed_ff_profile "$FULLPROFILE"
     write_ff_prefs "$FULLPROFILE"
     setsid firefox-esr --profile "$FULLPROFILE" --new-window "$URL" >>"${HOME:-/tmp}/als-browser.log" 2>&1 &
     log "firefox-esr pid $! - done"

@@ -38,7 +38,7 @@ BASE="$T/base"; mkdir -p "$BASE"
 # cannot find its DLLs on Git Bash); anything not listed here - notably any
 # real firefox on the machine running the test - is unreachable.
 REAL_BASH=$(command -v bash)
-for t in sed tr date mkdir cat seq sleep id; do
+for t in sed tr date mkdir cat seq sleep id cp mv rm; do
   p=$(command -v "$t") || { echo "missing $t"; exit 1; }
   printf '#!/bin/sh\nexec "%s" "$@"\n' "$p" > "$BASE/$t"; chmod +x "$BASE/$t"
 done
@@ -49,7 +49,9 @@ run() {  # run <mode> <browsers...>
   for b in "$@"; do mkstub "$b"; done
   rm -rf "$T/home"; mkdir -p "$T/home"
   echo "$mode" > "$T/home/als-autostart.mode"
-  env -i HOME="$T/home" PATH="$STUB:$BASE" ALS_SETTLE=0 \
+  [ -n "${PRE_HOME:-}" ] && eval "$PRE_HOME"
+  # shellcheck disable=SC2086
+  env -i HOME="$T/home" PATH="$STUB:$BASE" ALS_SETTLE=0 ${RUN_ENV:-} \
     "$REAL_BASH" "$HERE/gui/als-autostart.sh" "$MEDIA" >/dev/null 2>&1
   settle
 }
@@ -127,6 +129,94 @@ nopw "full firefox-esr" "$T/home/als-full-profile-esr/user.js"
 run full firefox
 l=$(browser_line)
 case "$l" in "xdg-open http://127.0.0.1:8800") ok "without ESR: xdg-open, as before" ;; *) bad "full without esr" "$l" ;; esac
+
+echo "no background network chatter from a brand-new profile"
+# A fresh profile fetches ~40 MB from ~60 hosts in its first minute (Suggest,
+# OpenH264, Safe Browsing lists, new-tab stories, ...); with these prefs
+# ~23 MB, mostly Remote Settings, which is kept on purpose -
+# measured, see write_ff_prefs. None of the rest serves a one-page local kiosk.
+run kiosk firefox-esr
+UJ="$T/home/als-kiosk-profile-esr/user.js"
+miss=""
+for p in 'browser.safebrowsing.malware.enabled", false' 'browser.safebrowsing.phishing.enabled", false' \
+         'browser.safebrowsing.provider.google4.updateURL", ""' 'app.normandy.enabled", false' \
+         'toolkit.telemetry.enabled", false' 'datareporting.healthreport.uploadEnabled", false' \
+         'extensions.update.enabled", false' 'extensions.systemAddon.update.enabled", false' \
+         'network.captive-portal-service.enabled", false' 'network.connectivity-service.enabled", false' \
+         'media.gmp-gmpopenh264.enabled", false' 'browser.region.update.enabled", false' \
+         'browser.search.update", false' 'extensions.pocket.enabled", false' 'dom.push.connection.enabled", false'; do
+  grep -q "$p" "$UJ" 2>/dev/null || miss="$miss [$p]"
+done
+[ -z "$miss" ] && ok "kiosk user.js turns off the background fetches" || bad "network prefs" "missing$miss"
+grep -q 'network.proxy.type' "$UJ" && bad "proxy left alone" "network.proxy.type is set" \
+  || ok "network.proxy.type NOT set (a station behind a proxy keeps it)"
+run full firefox-esr
+grep -q 'app.normandy.enabled", false' "$T/home/als-full-profile-esr/user.js" 2>/dev/null \
+  && ok "the 'full' profile gets them too" || bad "full network prefs" "missing"
+
+echo "a new ESR profile starts from the layer's template"
+TPL="$T/tpl"; rm -rf "$TPL"; mkdir -p "$TPL/startupCache"
+printf '[Compatibility]\nLastPlatformDir=/usr/lib/firefox-esr\n' > "$TPL/compatibility.ini"
+printf 'user_pref("browser.migration.version", 160);\n' > "$TPL/prefs.js"
+printf 'cache' > "$TPL/startupCache/scriptCache.bin"
+tpl_sum() { (cd "$TPL" && find . -type f | sort | while read -r f; do printf '%s %s\n' "$f" "$(cat "$f")"; done); }
+before=$(tpl_sum)
+RUN_ENV="ALS_FF_TEMPLATE=$TPL"
+run kiosk firefox-esr
+P="$T/home/als-kiosk-profile-esr"
+[ -f "$P/startupCache/scriptCache.bin" ] && [ -f "$P/compatibility.ini" ] && grep -q migration "$P/prefs.js" 2>/dev/null \
+  && ok "kiosk: startup cache, compatibility.ini and prefs.js copied in" || bad "template copied" "$(find "$P" 2>&1 | head)"
+grep -q 'signon.rememberSignons", false' "$P/user.js" 2>/dev/null && ok "kiosk: user.js still written on top" \
+  || bad "user.js on top of the template" "$(cat "$P/user.js" 2>&1)"
+l=$(browser_line)
+case "$l" in "firefox-esr --profile $P --kiosk "*) ok "kiosk: Firefox runs on the copy, not the template" ;; *) bad "profile arg" "$l" ;; esac
+[ "$(tpl_sum)" = "$before" ] && [ ! -e "$TPL/user.js" ] && ok "the template itself is untouched" || bad "template changed" "$(find "$TPL")"
+ls -d "$T/home"/*.template.* >/dev/null 2>&1 && bad "no temp copy left" "$(ls -d "$T/home"/*.template.*)" \
+  || ok "no half-copied temp directory left behind"
+# The boot report's "browser launched" is the FIRST journal line starting
+# "kiosk: " (server.py TIMELINE_MARKS). It must be logged BEFORE the template
+# copy, or "APP READY minus browser launched" - the number the station check
+# reads - silently leaves the copy's cost out. And the copy times itself.
+lg=$(grep '^logger ' "$CALLS")
+n_kiosk=$(printf '%s\n' "$lg" | grep -n -- '-- kiosk: ' | head -1 | cut -d: -f1)
+n_tpl=$(printf '%s\n' "$lg" | grep -n 'started from the template' | head -1 | cut -d: -f1)
+if [ -n "$n_kiosk" ] && [ -n "$n_tpl" ] && [ "$n_kiosk" -lt "$n_tpl" ]; then
+  ok "the first 'kiosk: ' journal line (browser launched) comes before the template copy"
+else
+  bad "browser-launched marker before the copy" "kiosk line $n_kiosk, template line $n_tpl"
+fi
+printf '%s\n' "$lg" | grep -Eq 'started from the template .* in [0-9]+ ms' \
+  && ok "the template copy logs how long it took" || bad "copy duration logged" "$(printf '%s\n' "$lg" | grep template)"
+run full firefox-esr
+[ -f "$T/home/als-full-profile-esr/startupCache/scriptCache.bin" ] && ok "full: the ESR profile starts from it too" \
+  || bad "full template" "$(find "$T/home/als-full-profile-esr" 2>&1 | head)"
+run kiosk firefox
+[ -e "$T/home/als-kiosk-profile/startupCache" ] && bad "snap profile" "got the ESR template" \
+  || ok "the snap Firefox never gets the ESR template"
+
+echo "  a profile that already exists is left as it is"
+PRE_HOME='mkdir -p "$T/home/als-kiosk-profile-esr"; echo "user_pref(\"mine\", 1);" > "$T/home/als-kiosk-profile-esr/prefs.js"'
+run kiosk firefox-esr
+PRE_HOME=""
+grep -q '"mine"' "$P/prefs.js" 2>/dev/null && [ ! -e "$P/startupCache" ] \
+  && ok "existing profile: nothing copied over it" || bad "existing profile" "$(cat "$P/prefs.js" 2>&1)"
+
+echo "  a copy that fails leaves an empty profile, as before"
+printf '#!/bin/sh\nexit 1\n' > "$STUB/cp"; chmod +x "$STUB/cp"
+run kiosk firefox-esr
+rm -f "$STUB/cp"
+[ ! -e "$P/startupCache" ] && [ -f "$P/user.js" ] && ok "failed copy: an empty profile plus user.js" \
+  || bad "failed copy" "$(find "$P" 2>&1 | head)"
+ls -d "$T/home"/*.template.* >/dev/null 2>&1 && bad "failed copy cleaned up" "$(ls -d "$T/home"/*.template.*)" \
+  || ok "failed copy: the temp directory is removed"
+case "$(browser_line)" in "firefox-esr "*) ok "failed copy: the kiosk still opens" ;; *) bad "failed copy launch" "$(browser_line)" ;; esac
+
+echo "  no template on the layer (older layer, or the build made none)"
+RUN_ENV="ALS_FF_TEMPLATE=$T/does-not-exist"
+run kiosk firefox-esr
+RUN_ENV=""
+[ "$(ls -A "$P" 2>/dev/null)" = "user.js" ] && ok "profile holds only user.js - exactly as before" \
+  || bad "no template" "$(ls -A "$P" 2>&1)"
 
 echo "start-gui.sh (the older launcher) writes the same password prefs"
 # kiosk_args writes the profile and prints the flags; run just that function
