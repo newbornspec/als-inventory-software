@@ -17,6 +17,8 @@ import {
 } from '../devices/wipe-rollup';
 import {
   buildDeviceCertificate,
+  driveSerialsOf,
+  storageFittedOf,
   unfinishedNotice,
   type DeviceCertificate,
 } from './certificate-content';
@@ -110,13 +112,17 @@ export class CertificatesService {
     //     the machine has no wipe on record at all.
     // A device with only failures and no wipe at all was never listed and is
     // still not counted, as before.
-    const latest = new Map<string, AssetAudit>();
+    const latest = new Map<
+      string,
+      { cert: AssetAudit; rollup: WipeRollup<AssetAudit> }
+    >();
     const discarded: string[] = [];
     const mixed: string[] = [];
     const unfinished: string[] = [];
     for (const [id, list] of byAsset) {
       const r = rollupFor(list);
-      if (r.verdict === 'wiped') latest.set(id, latestWipe(list) as AssetAudit);
+      if (r.verdict === 'wiped')
+        latest.set(id, { cert: latestWipe(list) as AssetAudit, rollup: r });
       else if (!latestWipe(list)) continue;
       else if (r.reason === 'discard') discarded.push(id);
       else if (r.reason === 'mixed') mixed.push(id);
@@ -126,23 +132,31 @@ export class CertificatesService {
     const rows = assets
       .filter((a) => latest.has(a.id))
       .map((a) => {
-        const w = latest.get(a.id)!;
+        const { cert: w, rollup } = latest.get(a.id)!;
         const hp = (a.hardwareProfile ?? {}) as Record<string, any>;
         const ident = (hp.identification ?? {}) as Record<string, any>;
-        const storage = Array.isArray(hp.storage)
-          ? hp.storage
-              .map((d: any) => [d.capacity, d.type].filter(Boolean).join(' '))
-              .filter(Boolean)
-              .join(', ')
-          : w.storageCapacity ?? '';
+        // Each drive's own method (a machine's drives can be erased
+        // differently), marked as a hand record where it is one.
+        const drives = rollup.drives.filter((d) => d.row);
+        const methods = [
+          ...new Set(
+            drives.map(
+              (d) =>
+                (d.row!.dataWipeMethod?.trim() || 'Not specified') +
+                wipeAttestation(sourceOf(d.row!)).methodSuffix,
+            ),
+          ),
+        ];
         return {
           serial: a.serialNumber ?? ident.serialNumber ?? a.tag,
           device: [ident.manufacturer ?? w.manufacturer, ident.model ?? w.model ?? a.name]
             .filter(Boolean)
             .join(' '),
-          storage,
-          method: (w.dataWipeMethod?.trim() || 'Not specified') + wipeAttestation(sourceOf(w)).methodSuffix,
-          manual: sourceOf(w) === 'manual',
+          // What was fitted when it was wiped, not what a later capture saw.
+          storage: storageFittedOf(rollup, w),
+          drives: driveSerialsOf(rollup),
+          method: methods.join('; '),
+          manual: drives.every((d) => sourceOf(d.row!) === 'manual'),
           date: new Date(w.createdAt),
         };
       });
@@ -350,7 +364,15 @@ export class CertificatesService {
 
   private renderLot(
     batch: Batch,
-    rows: Array<{ serial: string; device: string; storage: string; method: string; manual: boolean; date: Date }>,
+    rows: Array<{
+      serial: string;
+      device: string;
+      storage: string;
+      drives: string;
+      method: string;
+      manual: boolean;
+      date: Date;
+    }>,
     discarded = 0,
     mixed = 0,
     unfinished = 0,
@@ -426,11 +448,14 @@ export class CertificatesService {
 
       const cols = [
         { key: 'idx', label: '#', x: left, w: 20 },
-        { key: 'serial', label: 'Serial / Tag', x: left + 20, w: 108 },
-        { key: 'device', label: 'Device', x: left + 128, w: 150 },
-        { key: 'storage', label: 'Storage', x: left + 278, w: 85 },
-        { key: 'method', label: 'Method', x: left + 363, w: 92 },
-        { key: 'date', label: lot.dateHeader, x: left + 455, w: right - (left + 455) },
+        { key: 'serial', label: 'Serial / Tag', x: left + 20, w: 88 },
+        { key: 'device', label: 'Device', x: left + 108, w: 112 },
+        // Which drive(s) the row certifies (plan step 20): a lot line used
+        // to name the machine only.
+        { key: 'drives', label: 'Drive serial(s)', x: left + 220, w: 92 },
+        { key: 'storage', label: 'Storage', x: left + 312, w: 62 },
+        { key: 'method', label: 'Method', x: left + 374, w: 88 },
+        { key: 'date', label: lot.dateHeader, x: left + 462, w: right - (left + 462) },
       ] as const;
       const bottom = doc.page.height - doc.page.margins.bottom - 80;
 
@@ -450,6 +475,7 @@ export class CertificatesService {
           serial: r.serial,
           device: r.device || '—',
           storage: r.storage || '—',
+          drives: r.drives || '—',
           method: r.method,
           date: r.date.toLocaleDateString('en-GB'),
         };

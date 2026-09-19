@@ -91,27 +91,126 @@ function pretty(value: string | null | undefined): string {
     .join(' ');
 }
 
+// Owner decision D20: a record from before per-drive tracking keeps its
+// certificate, but says plainly that it does not name the drive.
+export const LEGACY_DRIVE =
+  'Drive not individually recorded (record predates per-drive tracking)';
+export const MANUAL_DRIVE =
+  'Not individually recorded (the erasure was entered manually for the whole device)';
+// Owner decision D18: a drive that reports no serial is still wiped, and the
+// certificate says so rather than printing a blank.
+export const NO_SERIAL = 'serial not reported by the drive';
+export const CLOCK_NOTE =
+  "The station's clock was not confirmed as network-synchronised when it wiped this drive; the date is the station's own.";
+
+// "512GB", as the station's hardware profile writes capacities.
+function capacityOf(bytes: number | undefined): string | undefined {
+  return typeof bytes === 'number' && bytes > 0
+    ? `${Math.round(bytes / 1e9)}GB`
+    : undefined;
+}
+
+const TRANSPORTS: Record<string, string> = {
+  nvme: 'NVMe',
+  sata: 'SATA',
+  ata: 'SATA',
+  sas: 'SAS',
+  scsi: 'SCSI',
+  mmc: 'eMMC',
+  usb: 'USB',
+};
+
+function interfaceOf(
+  transport: string | undefined,
+  rotational: boolean | undefined,
+): string | undefined {
+  if (!transport) return undefined;
+  const bus =
+    TRANSPORTS[transport.toLowerCase()] ?? transport.trim().toUpperCase();
+  if (bus === 'NVMe' || rotational === undefined) return bus;
+  return `${bus} ${rotational ? 'HDD' : 'SSD'}`;
+}
+
+// The wipe-time hardware profile's entry for a drive, matched by serial - the
+// fallback for drive details an older stick did not send with the record.
+function profileEntry(profile: Obj, serial: string | null): Obj | undefined {
+  if (!serial || !Array.isArray(profile.storage)) return undefined;
+  return (profile.storage as Obj[]).find(
+    (s) => txt(s.serialNumber)?.toUpperCase() === serial.toUpperCase(),
+  );
+}
+
+// The date a drive's section prints. The station's own time for the wipe
+// ("Date performed") when the record carries it; otherwise - legacy and
+// manual records - the time the record reached the server, labelled as what
+// it is ("Date recorded"): an offline-queued record can arrive days after
+// the wipe, so receipt time is not a wipe date.
+function dateRows(r: AssetAudit): Row[] {
+  if (sourceOf(r) === 'station' && r.wipedAt) {
+    const rows: Row[] = [['Date performed', longDate(r.wipedAt)]];
+    if (r.wipedAtClock !== 'network') rows.push(['Clock', CLOCK_NOTE]);
+    return rows;
+  }
+  return [['Date recorded', longDate(r.createdAt)]];
+}
+
 function driveSection(
   d: DriveOutcome<AssetAudit>,
   index: number,
   count: number,
+  snapshot: Obj,
 ): CertificateSection {
   const r = d.row!;
-  const att = wipeAttestation(sourceOf(r));
+  const source = sourceOf(r);
+  const att = wipeAttestation(source);
   const title =
     count > 1
       ? `Storage medium erased (${index + 1} of ${count})`
       : 'Storage medium erased';
+  const identity: Row[] = [];
+  if (d.unidentified) {
+    identity.push(['Drive', source === 'manual' ? MANUAL_DRIVE : LEGACY_DRIVE]);
+  } else {
+    const wd = r.wipedDrive ?? {};
+    const listed = profileEntry(snapshot, d.serialNumber);
+    identity.push(
+      ['Model', txt(wd.model) ?? d.model ?? txt(listed?.model) ?? '—'],
+      ['Serial number', d.serialNumber ?? NO_SERIAL],
+      ['Capacity', capacityOf(wd.sizeBytes) ?? txt(listed?.capacity) ?? '—'],
+      [
+        'Interface',
+        interfaceOf(txt(wd.transport), wd.rotational) ??
+          txt(listed?.interface) ??
+          '—',
+      ],
+    );
+  }
   const rows: Row[] = [
-    ['Model', d.model ?? '—'],
-    ['Serial number', d.serialNumber ?? '—'],
+    ...identity,
     [
       'Method',
       (r.dataWipeMethod?.trim() || 'Not specified') + att.methodSuffix,
     ],
-    [att.dateLabel, longDate(r.createdAt)],
+    ['Result', att.result],
+    ...dateRows(r),
+    ...erasurePeople(source, att, r.operatorName, r.auditedBy?.name ?? null),
   ];
   return { title, rows };
+}
+
+// The station row whose hardware profile is the machine AS IT WAS WIPED: the
+// latest (by the station's clock) of the rows the certificate lists. Not
+// asset.hardware_profile, which the next capture overwrites - a drive fitted
+// after the wipe must not appear on the wipe's certificate.
+function snapshotRow(
+  drives: DriveOutcome<AssetAudit>[],
+): AssetAudit | undefined {
+  const withProfile = drives
+    .map((d) => d.row)
+    .filter((r): r is AssetAudit => !!r && sourceOf(r) === 'station')
+    .filter((r) => r.hardwareProfile && typeof r.hardwareProfile === 'object');
+  const time = (r: AssetAudit) => new Date(r.wipedAt ?? r.createdAt).getTime();
+  return withProfile.sort((a, b) => time(b) - time(a))[0];
 }
 
 export function buildDeviceCertificate(
@@ -119,27 +218,42 @@ export function buildDeviceCertificate(
   rollup: WipeRollup<AssetAudit>,
   certRow: AssetAudit,
 ): DeviceCertificate {
-  const hp: Obj = (asset.hardwareProfile as Obj | null) ?? {};
-  const ident: Obj = (hp.identification as Obj | undefined) ?? {};
-  const storage = Array.isArray(hp.storage)
-    ? (hp.storage as Obj[])
+  const drives = rollup.drives.filter((d) => d.row);
+  const snap = snapshotRow(drives);
+  const snapshot: Obj = (snap?.hardwareProfile as Obj | undefined) ?? {};
+  // Identity falls back to the asset's current profile (the machine is the
+  // same machine); the storage line never does.
+  const current: Obj = (asset.hardwareProfile as Obj | null) ?? {};
+  const ident: Obj =
+    (snapshot.identification as Obj | undefined) ??
+    (current.identification as Obj | undefined) ??
+    {};
+  const storage = Array.isArray(snapshot.storage)
+    ? (snapshot.storage as Obj[])
         .map((d) => [txt(d.capacity), txt(d.type)].filter(Boolean).join(' '))
         .filter(Boolean)
         .join(', ')
     : (certRow.storageCapacity ?? '');
 
-  const source = sourceOf(certRow);
-  const att = wipeAttestation(source);
-  const drives = rollup.drives.filter((d) => d.row);
+  // Manual wording only when every drive the certificate lists rests on a
+  // hand record (a manual record covering the machine). certRow can be a
+  // manual row that the station's per-drive records superseded; it only
+  // supplies the certificate number.
+  const manual =
+    drives.length > 0 && drives.every((d) => sourceOf(d.row!) === 'manual');
+  const att = wipeAttestation(manual ? 'manual' : 'station');
+  const many = drives.length > 1;
+  // A hand-recorded erasure keeps manual-wipe.ts's own wording. A station
+  // erasure now certifies the storage media it names, not "the data-storage
+  // media contained in the device" - which on a legacy record, or a machine
+  // with a drive fitted after the wipe, claimed drives nobody had erased.
+  const intro = manual
+    ? att.intro
+    : `This certifies that ${many ? 'each storage medium' : 'the storage medium'} identified below, in the device identified below, has been sanitised using the method stated, rendering previously stored data unrecoverable by generally available means.`;
 
   const erasure: Row[] = [
     ['Result', att.result],
-    ...erasurePeople(
-      source,
-      att,
-      certRow.operatorName,
-      certRow.auditedBy?.name ?? null,
-    ),
+    ['Storage media erased', String(drives.length)],
   ];
 
   const extra: Row[] = [];
@@ -150,7 +264,7 @@ export function buildDeviceCertificate(
 
   return {
     certNo: certificateNumber(asset.id, certRow),
-    intro: att.intro,
+    intro,
     device: [
       ['Manufacturer', txt(ident.manufacturer) ?? certRow.manufacturer ?? ''],
       ['Model', txt(ident.model) ?? certRow.model ?? asset.name ?? ''],
@@ -166,12 +280,42 @@ export function buildDeviceCertificate(
           asset.tag,
       ],
       ['Asset tag', asset.tag],
-      ['Storage media', storage],
+      ['Storage fitted', storage],
     ],
     erasure,
-    drives: drives.map((d, i) => driveSection(d, i, drives.length)),
+    drives: drives.map((d, i) => driveSection(d, i, drives.length, snapshot)),
     notices: [],
     extra,
-    footer: 'This certificate relates solely to the device identified above.',
+    footer: `This certificate relates solely to the storage ${
+      many ? 'media' : 'medium'
+    } identified above, in the device identified above.`,
   };
+}
+
+// One lot-certificate row's drive column: every drive the machine's
+// certificate lists, by serial.
+export function driveSerialsOf(rollup: WipeRollup<AssetAudit>): string {
+  return rollup.drives
+    .filter((d) => d.row)
+    .map((d) =>
+      d.unidentified
+        ? 'Not individually recorded'
+        : (d.serialNumber ?? 'Serial not reported'),
+    )
+    .join(', ');
+}
+
+// The lot row's storage line, from the same wipe-time snapshot.
+export function storageFittedOf(
+  rollup: WipeRollup<AssetAudit>,
+  certRow: AssetAudit,
+): string {
+  const snap = snapshotRow(rollup.drives.filter((d) => d.row));
+  const snapshot: Obj = (snap?.hardwareProfile as Obj | undefined) ?? {};
+  return Array.isArray(snapshot.storage)
+    ? (snapshot.storage as Obj[])
+        .map((d) => [txt(d.capacity), txt(d.type)].filter(Boolean).join(' '))
+        .filter(Boolean)
+        .join(', ')
+    : (certRow.storageCapacity ?? '');
 }
