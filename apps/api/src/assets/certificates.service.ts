@@ -9,6 +9,11 @@ import { COMPANY } from '../common/company';
 import { lotAttestation, sourceOf, wipeAttestation } from './manual-wipe';
 import { DISCARD_REFUSAL, discardedNotice, isNotAnErase } from './wipe-method';
 import {
+  MIXED_REFUSAL,
+  failedNearWipe,
+  mixedNotice,
+} from './certificate-eligibility';
+import {
   assertOwnsBatch,
   isScopedManager,
   managerCanAccessBatch,
@@ -50,14 +55,27 @@ export class CertificatesService {
       .where('asset.batchId = :id', { id: batchId })
       .getMany();
 
-    const wipes = assets.length
+    // FAILED rows too: the mixed-result guard below needs them.
+    const outcomes = assets.length
       ? await this.audits.find({
-          where: { assetId: In(assets.map((a) => a.id)), dataWipeStatus: DataWipeStatus.WIPED },
+          where: {
+            assetId: In(assets.map((a) => a.id)),
+            dataWipeStatus: In([DataWipeStatus.WIPED, DataWipeStatus.FAILED]),
+          },
           order: { createdAt: 'DESC' },
         })
       : [];
+    const byAsset = new Map<string, AssetAudit[]>();
+    for (const o of outcomes) {
+      const list = byAsset.get(o.assetId) ?? [];
+      list.push(o);
+      byAsset.set(o.assetId, list);
+    }
     const latest = new Map<string, AssetAudit>();
-    for (const w of wipes) if (!latest.has(w.assetId)) latest.set(w.assetId, w);
+    for (const o of outcomes) {
+      if (o.dataWipeStatus === DataWipeStatus.WIPED && !latest.has(o.assetId))
+        latest.set(o.assetId, o);
+    }
 
     // A device whose latest recorded wipe was a block discard (TRIM) is left
     // off: that was never an erase - see wipe-method.ts. The LATEST wipe
@@ -68,6 +86,14 @@ export class CertificatesService {
       isNotAnErase(w.dataWipeMethod),
     );
     for (const w of discarded) latest.delete(w.assetId);
+
+    // A device where a drive failed its wipe close to (or after) the wipe on
+    // record is left off the same way: another drive of it may still hold
+    // data. See certificate-eligibility.ts (owner decision D11, interim).
+    const mixed = [...latest.values()].filter((w) =>
+      failedNearWipe(w, byAsset.get(w.assetId) ?? []),
+    );
+    for (const w of mixed) latest.delete(w.assetId);
 
     const rows = assets
       .filter((a) => latest.has(a.id))
@@ -94,14 +120,28 @@ export class CertificatesService {
       });
 
     if (rows.length === 0) {
+      const why: string[] = [];
+      if (discarded.length)
+        why.push(
+          `${discarded.length} recorded wipe${discarded.length === 1 ? ' was a block discard' : 's were block discards'} (TRIM), which ${discarded.length === 1 ? 'is' : 'are'} not an erase`,
+        );
+      if (mixed.length)
+        why.push(
+          `${mixed.length} device${mixed.length === 1 ? ' has' : 's have'} a drive that failed its wipe close to (or after) the wipe on record`,
+        );
       throw new BadRequestException(
-        discarded.length
-          ? `No device in this lot can be certified: the only wipes recorded (${discarded.length}) were block discards (TRIM), which are not an erase. Wipe those drives again with the ALS audit station.`
+        why.length
+          ? `No device in this lot can be certified: ${why.join('; ')}. Wipe those drives again with the ALS audit station.`
           : 'No wiped devices in this lot — record data-wipe audits with status "Wiped" first.',
       );
     }
 
-    const buffer = await this.renderLot(batch, rows, discarded.length);
+    const buffer = await this.renderLot(
+      batch,
+      rows,
+      discarded.length,
+      mixed.length,
+    );
     return { buffer, filename: `erasure-certificate-${batch.batchNumber}.pdf` };
   }
 
@@ -135,6 +175,15 @@ export class CertificatesService {
     }
     if (isNotAnErase(wipe.dataWipeMethod))
       throw new BadRequestException(DISCARD_REFUSAL);
+    // The mixed-result guard: any FAILED row for the device newer than this
+    // wipe, or within 24 hours before it, and there is no certificate. See
+    // certificate-eligibility.ts (owner decision D11, interim).
+    const failures = await this.audits.find({
+      where: { assetId, dataWipeStatus: DataWipeStatus.FAILED },
+      order: { createdAt: 'DESC' },
+    });
+    if (failedNearWipe(wipe, failures))
+      throw new BadRequestException(MIXED_REFUSAL);
 
     const buffer = await this.render(asset, wipe);
     return { buffer, filename: `erasure-certificate-${asset.tag}.pdf` };
@@ -273,6 +322,7 @@ export class CertificatesService {
     batch: Batch,
     rows: Array<{ serial: string; device: string; storage: string; method: string; manual: boolean; date: Date }>,
     discarded = 0,
+    mixed = 0,
   ): Promise<Buffer> {
     return new Promise((resolve, reject) => {
       const doc = new PDFDocument({ size: 'A4', margin: 40 });
@@ -324,6 +374,14 @@ export class CertificatesService {
           .fontSize(9.5)
           .fillColor('#222222')
           .text(discardedNotice(discarded), { width: right - left });
+      }
+      if (mixed > 0) {
+        doc.moveDown(0.4);
+        doc
+          .font('Helvetica')
+          .fontSize(9.5)
+          .fillColor('#222222')
+          .text(mixedNotice(mixed), { width: right - left });
       }
       doc.moveDown(0.6);
 

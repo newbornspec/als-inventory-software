@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { AuditForm } from '@/app/components/audit-form';
+import { certificateBlock } from '@/lib/certificate-eligibility';
 
 export interface AssetAuditRecord {
   id: string;
@@ -13,6 +14,9 @@ export interface AssetAuditRecord {
   screenGrade: string | null;
   finalDisposition: string | null;
   dataWipeStatus: string | null;
+  // The recorded method - a block discard (TRIM) is never certified. Optional
+  // only so older callers type-check; the API always sends it.
+  dataWipeMethod?: string | null;
   // 'amazon' | 'goods_in' | null (Unclassified). The detail page uses it to
   // tell an Amazon-workspace device from one hand-created outside Goods In.
   auditKind?: string | null;
@@ -38,7 +42,10 @@ export function AuditSection({
   const router = useRouter();
   const addRef = useRef<HTMLButtonElement>(null);
   const [saved, setSaved] = useState(false);
-  const hasWipe = audits.some((a) => a.dataWipeStatus === 'wiped');
+  // The same rule the certificate route applies (lib/certificate-eligibility.ts
+  // is a tested copy of the API's), so the page never offers a link that
+  // answers 400. 'none' simply shows no link, as before.
+  const block = certificateBlock(audits);
 
   // Focus the reopened "+ Record audit" button AFTER React has re-mounted it —
   // calling focus() inside onSaved ran before the re-render, when the ref was
@@ -66,13 +73,27 @@ export function AuditSection({
         )}
       </div>
 
-      {hasWipe && (
+      {block === null && (
         <a
           href={`/api/assets/${assetId}/erasure-certificate`}
           className="mt-2 inline-block rounded-md border border-emerald-200 px-3 py-1.5 text-xs text-emerald-700 hover:bg-emerald-50"
         >
           ↓ Data-erasure certificate (PDF)
         </a>
+      )}
+      {/* Say why the link is missing: a wiped device with no certificate
+          otherwise reads as a bug. */}
+      {block === 'discard' && (
+        <p className="mt-2 text-xs text-amber-800">
+          No erasure certificate: the latest wipe was a block discard (TRIM), which is not an erase. Wipe the
+          drive again with the ALS audit station.
+        </p>
+      )}
+      {block === 'mixed' && (
+        <p className="mt-2 text-xs text-amber-800">
+          No erasure certificate: a drive in this device failed its wipe close to (or after) the wipe on record,
+          so it may still hold data. Wipe the failed drive again with the ALS audit station.
+        </p>
       )}
 
       {showForm && (
