@@ -52,25 +52,41 @@ const connection = (database: string, max = 10) => ({
 // Two int4 keys for pg_advisory_lock; distinct from the app's own pairs
 // (0x414c53 + n in certificate-ledger.ts).
 const LOCK_TEST_DB = [0x414c54, 1] as const;
+// Taken on the maintenance database while the test database is created.
+const LOCK_CREATE_DB = [0x414c54, 2] as const;
 
 export async function openPgTestDatabase(): Promise<DataSource> {
   const database = pgTestDatabaseName();
 
-  // Create it if missing, from the server's maintenance database.
+  // Create it if missing, from the server's maintenance database - under an
+  // advisory lock held on that database, so jest workers starting together
+  // take turns. Catching "already exists" alone was not enough: two CREATE
+  // DATABASE racing each other usually fail with 23505 on pg_database's own
+  // unique index, not 42P04, and CI went red on exactly that (15 specs, one
+  // lost race) once a fifth Postgres spec file made the collision likely.
+  // Both codes still mean "another worker made it", as a second line of
+  // defence. The single-connection pool keeps lock and unlock on one session.
   const admin = new DataSource({ ...connection('postgres', 1) });
   await admin.initialize();
   try {
-    const found: unknown[] = await admin.query(
-      'SELECT 1 FROM pg_database WHERE datname = $1',
-      [database],
-    );
-    if (!found.length) {
-      try {
-        await admin.query(`CREATE DATABASE "${database}"`);
-      } catch (e) {
-        // Another jest worker created it first.
-        if ((e as { code?: string }).code !== '42P04') throw e;
+    await admin.query('SELECT pg_advisory_lock($1, $2)', [...LOCK_CREATE_DB]);
+    try {
+      const found: unknown[] = await admin.query(
+        'SELECT 1 FROM pg_database WHERE datname = $1',
+        [database],
+      );
+      if (!found.length) {
+        try {
+          await admin.query(`CREATE DATABASE "${database}"`);
+        } catch (e) {
+          const code = (e as { code?: string }).code;
+          if (code !== '42P04' && code !== '23505') throw e;
+        }
       }
+    } finally {
+      await admin.query('SELECT pg_advisory_unlock($1, $2)', [
+        ...LOCK_CREATE_DB,
+      ]);
     }
   } finally {
     await admin.destroy();
