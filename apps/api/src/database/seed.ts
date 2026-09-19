@@ -7,9 +7,30 @@ import { Asset, AssetAuditStatus, AssetConditionGrade, AssetStockStatus } from '
 import { AssetHistory, AssetEventType } from '../assets/asset-history.entity';
 import { AssetAudit, DataWipeStatus, FinalDisposition } from '../assets/asset-audit.entity';
 
-const SEED_PASSWORD = 'password123';
+// LOCAL DEVELOPMENT ONLY.
+//
+// A seed password is public by definition - it is in this file, in git history,
+// and it used to be printed in the README. So it must never be the password of
+// any real account, and this script must never run against a real database.
+//
+// Two independent refusals, because NODE_ENV alone is not dependable here: the
+// TypeORM CLI does not set it, and nothing guarantees Railway does.
+const SEED_PASSWORD = process.env.SEED_PASSWORD || 'password123';
+
+function refuseProduction() {
+  const host = process.env.DB_HOST ?? 'localhost';
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('Refusing to seed: NODE_ENV is production.');
+  }
+  // Railway's private network. Every production service reaches its database
+  // through a *.railway.internal hostname; a developer's machine never does.
+  if (/\.railway\.internal$/i.test(host) || /\.rlwy\.net$/i.test(host)) {
+    throw new Error(`Refusing to seed: ${host} is a Railway database, not a local one.`);
+  }
+}
 
 async function seed() {
+  refuseProduction();
   await AppDataSource.initialize();
 
   const userRepo = AppDataSource.getRepository(User);

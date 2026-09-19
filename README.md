@@ -22,10 +22,15 @@ npm run migration:run --workspace=apps/api    # creates schema + powersync_publi
 npm run seed --workspace=apps/api             # creates test users, locations, assets
 ```
 
-Seeded logins (password `password123` for all):
-- `admin@als.com` — full access
-- `manager@als.com` — can create/edit assets
-- `tech@als.com` — assigned to "Main Warehouse", scoped in PowerSync sync rules
+The seed creates three LOCAL development logins - `admin@als.com` (full
+access), `manager@als.com` (create/edit assets) and `tech@als.com` (scoped to
+"Main Warehouse" in the PowerSync sync rules) - with the password taken from
+`SEED_PASSWORD` in your local `.env`.
+
+**Never seed a production database, and never reuse a seed password anywhere
+real.** The seed refuses to run against production. Real accounts are created
+by an admin under Users, and the audit stations use a dedicated, restricted
+station account (see `tools/audit.conf.example`), never an admin login.
 
 ## Running
 
