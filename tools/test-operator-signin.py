@@ -82,6 +82,10 @@ LOGINS = []       # emails that logged in (never the password)
 REFRESHES = []    # user ids refreshed
 POSTS = []        # (user id, body) accepted by /devices/hardware-audit
 REJECTED = []     # hardware-audit calls refused with 401
+# user id -> the 403 message the API's PermissionsGuard answers for that
+# account now (apps/api/src/auth/guards/permissions.guard.ts): its token is
+# still valid, the account behind it is not.
+FORBID = {}
 
 
 def jwt_like(uid, life):
@@ -110,7 +114,16 @@ class FakeApi(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(raw)
 
+    def _forbidden(self):
+        uid = ACCESS.get((self.headers.get("Authorization") or "")[len("Bearer "):])
+        if uid in FORBID:
+            self._json(403, {"statusCode": 403, "message": FORBID[uid], "error": "Forbidden"})
+            return True
+        return False
+
     def do_GET(self):  # noqa: N802
+        if self._forbidden():
+            return None
         if self.path == "/devices/lots":
             return self._json(200, [])
         return self._json(200, {"hello": True})
@@ -139,6 +152,8 @@ class FakeApi(BaseHTTPRequestHandler):
                 hook()
             if API["auditDown"]:
                 return self._json(503, {"message": "down"})
+            if self._forbidden():
+                return None
             tok = (self.headers.get("Authorization") or "")[len("Bearer "):]
             uid = ACCESS.get(tok)
             if not uid:
@@ -542,6 +557,90 @@ try:
     check("a successful read that says off: off", srv.operator_signin_on() is False)
     code, msg, job = wipe()
     check("...and wiping works as before", code == 200 and job, (code, msg))
+    write_conf("1")
+
+    print("a 403 that ENDS the session signs the operator out (HARDWARE-TESTS Test 4, 7.2)")
+    # The API answers 403, not 401, when the token is still valid but the
+    # account behind it is not: password changed, disabled, deleted. The
+    # kiosk only acted on 401, so the operator stayed "signed in" while every
+    # upload failed with a bare HTTP 403.
+    write_conf("1")
+    srv.operator_signout()
+    signin("ann@example.test", PW_A)
+    settle()
+    with srv.QUEUE_LOCK:                             # start from an empty queue
+        srv._queue_write_unlocked([])
+    POSTS.clear()
+    LOGINS.clear()
+    FORBID["u-ann"] = "Your password was changed. Please sign in again."
+    code, msg, job = wipe()
+    check("password changed on the web: the wipe itself still starts (its token is valid)",
+          code == 200 and job, (code, msg))
+    finish(job)
+    check("...its upload is refused: nothing filed", POSTS == [], POSTS)
+    q = srv.queue_load()
+    check("...the record is kept, waiting to upload, still Ann's",
+          len(q) == 1 and (q[0].get(srv.OPERATOR_TAG) or {}).get("id") == "u-ann", q)
+    check("...and Ann is signed out", srv.operator_identity() is None, srv.OPERATOR)
+    boot = get("/api/bootstrap")[1]
+    check("...the sign-in panel gives the server's reason",
+          "password was changed" in boot["signin"].get("message", "").lower()
+          and not boot["signin"].get("signedIn"), boot["signin"])
+    check("...no fallback to the shared account", "station@example.test" not in LOGINS, LOGINS)
+    code, msg, job = wipe()
+    check("...the next wipe waits for a sign-in", code == 401 and job is None, (code, msg))
+    FORBID.clear()                                   # the new password's token is fine
+    signin("ann@example.test", PW_A)
+    settle()
+    check("signing in again uploads the held record, as Ann",
+          [u for u, _b in POSTS] == ["u-ann"] and srv.queue_load() == [], (POSTS, srv.queue_load()))
+
+    print("a disabled account is signed out by a lookup too, not only by an upload")
+    srv.operator_signout()
+    signin("bob@example.test", PW_B)
+    settle()
+    FORBID["u-bob"] = "This account has been disabled."
+    code, ans = get("/api/wipe/eligibility?assetId=asset-1")
+    check("the lookup answers 'unknown', not an error page", code == 200 and ans.get("known") is False,
+          (code, ans))
+    check("...and Bob is signed out", srv.operator_identity() is None, srv.OPERATOR)
+    boot = get("/api/bootstrap")[1]
+    check("...the panel says the account was disabled",
+          "disabled" in boot["signin"].get("message", "").lower(), boot["signin"])
+    FORBID.clear()
+
+    print("a 403 about the REQUEST is not a session end")
+    signin("ann@example.test", PW_A)
+    settle()
+    POSTS.clear()
+    FORBID["u-ann"] = "You don't have permission to do this."
+    code, msg, job = wipe()
+    finish(job)
+    check("no permission for one call: still signed in", (srv.operator_identity() or {}).get("id") == "u-ann",
+          srv.OPERATOR)
+    check("...the record is kept to retry", POSTS == [] and len(srv.queue_load()) == 1, srv.queue_load())
+    FORBID.clear()
+    srv.queue_flush()
+    check("...and goes once the server accepts it", [u for u, _b in POSTS] == ["u-ann"], POSTS)
+    srv.operator_signout()
+
+    print("flag off: a session-ending 403 drops the shared account's cached token")
+    write_conf("0")
+    srv.STATE["token"] = None
+    POSTS.clear()
+    LOGINS.clear()
+    srv.ensure_token()
+    FORBID["u-station"] = "Your password was changed. Please sign in again."
+    code, msg, job = wipe()
+    finish(job)
+    check("shared account refused: nothing filed, record queued",
+          POSTS == [] and len(srv.queue_load()) == 1, (POSTS, srv.queue_load()))
+    check("...the stale token is dropped", srv.STATE.get("token") is None, srv.STATE.get("token"))
+    FORBID.clear()
+    LOGINS.clear()
+    srv.queue_flush()
+    check("...the next send signs in again and files it",
+          LOGINS == ["station@example.test"] and [u for u, _b in POSTS] == ["u-station"], (LOGINS, POSTS))
     write_conf("1")
 
     print("the browser is not invited to keep or fill the password")

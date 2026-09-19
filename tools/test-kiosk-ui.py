@@ -273,6 +273,27 @@ const hidden = (id) => document.getElementById(id).classList.contains('hidden');
   run(`BOOT={device:{name:'x'},workflow:'amazon'}; auditGate()`);
   out.auditFlagOff = document.getElementById('aStart').disabled;
 
+  // "Already audited" banner: the machine's roll-up verdict (contract C4),
+  // or - from an older API - the newest record, labelled as a record.
+  out.pwRollup = run(`priorWipeBits({wipeVerdict:'failed',lastWipeStatus:'failed'})`);
+  out.pwIncomplete = run(`priorWipeBits({wipeVerdict:'incomplete'})`);
+  out.pwLegacy = run(`priorWipeBits({lastWipeStatus:'wiped',wipeSource:'last-record'})`);
+  out.pwNothing = run(`priorWipeBits({})`);
+  run(`BOOT={workflow:'goods_in',device:{name:'x'}};
+       jget=async()=>({found:true,tag:'ALS-9',auditCount:2,lastAuditAt:'2026-09-19T10:01:30Z',
+         lastWipeStatus:'failed',wipeVerdict:'failed',wipeSource:'rollup'});`);
+  await run(`checkPrior()`);
+  out.priorHtml = document.getElementById('aPrior').innerHTML;
+
+  // The Rescan button re-runs the capture (POST /api/rescan) and re-polls.
+  run(`RSC=[]; jpost=async(u,b)=>{RSC.push(u);return {ok:true,status:200,data:{started:true}};};
+       BOOTS=0; bootstrap=()=>{BOOTS++;};`);
+  timers.length = 0;
+  await run(`rescan()`);
+  flush();
+  out.rescanPosts = run(`RSC`);
+  out.rescanBoots = run(`BOOTS`);
+
   process.stdout.write(JSON.stringify(out));
 })().catch((e) => { process.stdout.write(JSON.stringify({ error: String(e && e.stack || e) })); });
 """
@@ -283,6 +304,22 @@ def main():
         html = fh.read()
     js = inline_script(html)
     check("index.html has an inline script", len(js) > 1000, len(js))
+
+    # The station's refusals tell the operator to "press Rescan" (no profile
+    # captured; a drive that was not in the capture). The page had no control
+    # of that name - only "Retry connection" inside the offline banner and a
+    # Save in the PIN-locked Settings - so the instruction led nowhere.
+    with open(os.path.join(HERE, "gui", "server.py"), encoding="utf-8") as fh:
+        server = fh.read()
+    told = re.findall(r"[Pp]ress Rescan|then Rescan", server)
+    btn = re.search(r'<button[^>]*onclick="rescan\(\)"[^>]*>\s*Rescan\s*</button>', html)
+    check("the station's messages name Rescan (the thing this checks exists)", len(told) >= 2, told)
+    check("the main screen has a button labelled exactly 'Rescan'", bool(btn), "")
+    check("...outside the offline banner and the Settings panel",
+          bool(btn) and html.rfind('id="errBanner"', 0, btn.start()) == -1
+          and html.rfind('id="ovSet"', 0, btn.start()) == -1, "")
+    check("...and it posts /api/rescan", re.search(
+        r"async function rescan\(\)\{[^}]*jpost\('/api/rescan'", js, re.S) is not None, "")
 
     node = shutil.which("node")
     if not node:
@@ -468,6 +505,20 @@ def main():
           o["auditOffWhenSignedOut"] is True and o["auditOnWhenSignedIn"] is False
           and o["auditFlagOff"] is False,
           (o["auditOffWhenSignedOut"], o["auditOnWhenSignedIn"], o["auditFlagOff"]))
+
+    check("Rescan: re-runs the capture on the station (POST /api/rescan)",
+          o["rescanPosts"] == ["/api/rescan"], o["rescanPosts"])
+    check("Rescan: the screen re-reads the state afterwards", o["rescanBoots"] >= 1, o["rescanBoots"])
+    check("prior banner: the roll-up verdict names the machine's state",
+          o["pwRollup"] == ["wipe: a drive FAILED its wipe"], o["pwRollup"])
+    check("prior banner: incomplete is said in words",
+          o["pwIncomplete"] == ["wipe: not every drive wiped yet"], o["pwIncomplete"])
+    check("prior banner: without C4 the newest row is labelled as a record, not the machine",
+          o["pwLegacy"] == ["last wipe record: wiped"], o["pwLegacy"])
+    check("prior banner: nothing known, nothing said", o["pwNothing"] == [], o["pwNothing"])
+    check("prior banner end to end: shows the failed roll-up, never 'wipe: wiped'",
+          "a drive FAILED its wipe" in o["priorHtml"] and "wipe: wiped" not in o["priorHtml"]
+          and "ALS-9" in o["priorHtml"], o["priorHtml"])
 
 
 main()

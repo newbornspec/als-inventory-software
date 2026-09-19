@@ -47,8 +47,20 @@ jobs:
           command -v gpg >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq gnupg; }
           gpg --version | head -1
 
+      # node: test-kiosk-ui.py syntax-checks the kiosk page's script and drives
+      # its wipe panel and sign-in controls under node. Without node it prints
+      # SKIP and passes, so on a runner image that stopped shipping node every
+      # kiosk-screen proof would silently stop running with the job still
+      # green. Installed explicitly, and ALS_REQUIRE_NODE=1 below turns a
+      # missing node into a FAIL rather than a skip.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
       - name: Run every tools/test-* script
         shell: bash
+        env:
+          ALS_REQUIRE_NODE: '1'
         run: |
           set -u
           shopt -s nullglob
@@ -141,6 +153,35 @@ jobs:
         # exactly what a rebuilt Railway DB, CI, or a new developer machine runs.
         working-directory: apps/api
         run: npm run migration:run
+
+      - name: Postgres-backed API specs
+        # The *.pg.spec.ts files are describe.skip unless ALS_PG_TEST_PORT is
+        # set, so the "API tests" step above never runs them - and they hold
+        # the proofs no in-memory test can give: two concurrent wipe ingests
+        # always settle as data_wipe_failed (the settle lock), the certificate
+        # ledger's trigger refuses UPDATE/DELETE, a re-download keeps its
+        # number, a one-byte change breaks the chain, the offline verify
+        # script, guessed ids 404. Without this step a regression in any of
+        # them merges with CI green.
+        #
+        # They run against the job's own Postgres service, in a DEDICATED
+        # database the helper creates and migrates itself
+        # (apps/api/src/database/pg-test-db-for-spec.ts: its name must end in
+        # "_test", default als_inventory_test), never the als_inventory
+        # database the steps around this one migrate and seed. The service's
+        # user is a superuser, so it may create that database. Host, user and
+        # password default to localhost / als_inventory / als_inventory_ci,
+        # which is this service; they are spelled out anyway so a change to
+        # the service block cannot silently point them somewhere else.
+        # The pattern must match: jest fails on "No tests found", so a rename
+        # of the spec files turns this step red instead of vacuously green.
+        working-directory: apps/api
+        env:
+          ALS_PG_TEST_PORT: '5432'
+          ALS_PG_TEST_HOST: localhost
+          ALS_PG_TEST_USER: als_inventory
+          ALS_PG_TEST_PASSWORD: als_inventory_ci
+        run: npx jest --ci 'pg\.spec\.ts$'
 
       - name: Seed
         working-directory: apps/api

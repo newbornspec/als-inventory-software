@@ -60,6 +60,7 @@ PowerShell (change `E:` if needed). It only reads files.
 $s = 'E:'
 $e = Get-Content "$s\hardware-audit.sh" -Raw
 $k = Get-Content "$s\gui\server.py" -Raw
+$g = Get-Content "$s\gui\index.html" -Raw
 "stick commit            : " + (Get-Content "$s\gui\.stick-version" -Raw).Trim()
 "read-back (test 1, 7)   : " + ($e -match 'verify_erased')
 "NVMe namespaces (9)     : " + ($k -match 'it is on the same NVMe drive')
@@ -67,6 +68,8 @@ $k = Get-Content "$s\gui\server.py" -Raw
 "limitations (test 10)   : " + ($e -match 'smart_counts')
 "operator sign-in (4)    : " + ($k -match 'AUDIT_OPERATOR_SIGNIN')
 "suspend guard (test 11) : " + ($e -match 'mem_sleep')
+"Rescan button (2D)      : " + ($g -match 'onclick="rescan\(\)"')
+"403 signs out (4, 7.2)  : " + ($k -match 'SESSION_ENDED_403')
 ```
 
 `False` means that change is not on the stick. Skip that test for now. (The
@@ -279,10 +282,12 @@ the upload has to happen on a later day to show which date it uses.
 the drive *was not in the hardware profile captured for this machine* and to
 press Rescan.
 
-Then rescan. **There is no Rescan button on the main screen of this kiosk
-version.** Open **Settings** (the gear), enter the admin PIN, change nothing,
-and press **Save**. That re-reads the hardware. (Restarting the machine with
-the drive in also works.) Now the same wipe is allowed.
+Then press **Rescan** (top right of the screen, next to the Settings gear)
+and wait until the hardware card is filled in again. That re-reads the
+hardware and the drive list. (On a stick older than this change there is no
+Rescan button: open **Settings**, enter the admin PIN, change nothing, press
+**Save**; or restart the machine with the drive in.) Now the same wipe is
+allowed.
 
 **Send back (all of 2):** the label photos; a photo of the screen after 2A
 showing both blocks and the summary; a screenshot of the asset page after 2A
@@ -403,7 +408,9 @@ a second person's login; a sacrificial drive; an Ethernet cable.
 
 ### Switch it on
 
-1. On Windows, open `E:\audit.conf` in Notepad. Add this line and save:
+1. On Windows, open `E:\audit.conf` in Notepad. Add this line (or, if an
+   `AUDIT_OPERATOR_SIGNIN="0"` line is already there, change its 0 to 1) and
+   save:
    ```
    AUDIT_OPERATOR_SIGNIN="1"
    ```
@@ -445,11 +452,18 @@ a second person's login; a sacrificial drive; an Ethernet cable.
 - Step 7.1: the wipe works and uploads with **no** sign-in prompt. The
   12-hour sign-in is renewed in the background while the station is online.
   That is correct, not a fault.
-- Step 7.2: the server now refuses your session. The wipe itself may still
-  run, but its upload is refused: the station signs you out and the sign-in
-  panel says your sign-in has expired. The record shows `waiting to upload`,
-  not an unclear error. Sign in again with the new password: it uploads, and
-  its certificate names you.
+- Step 7.2: the server now refuses your session (it answers "Your password
+  was changed", as HTTP 403). The wipe itself usually still runs: the
+  station only learns this when it next talks to the server. (If it already
+  learned it, from a lookup such as the batch check, the wipe is refused
+  with the sign-in prompt below instead. That is also a pass.) The upload
+  is refused, and
+  the station then signs you out: the sign-in panel opens with **The server
+  ended your session: Your password was changed. Please sign in again.** The
+  record shows `waiting to upload`, not an unclear error. Sign in again with
+  the new password: it uploads, and its certificate names you. (The same
+  happens, with "This account has been disabled", if an admin disables the
+  account while you are signed in.)
 
 **Send back:** photos of the sign-in screen, the step-1 refusal, the step-2
 error, and the header with your name; the certificate PDFs from steps 4 and 5;

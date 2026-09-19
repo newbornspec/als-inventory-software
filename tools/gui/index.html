@@ -245,6 +245,14 @@
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
           stroke-linecap="round"><path d="M12 7v5l3 2"/><circle cx="12" cy="12" r="9"/></svg>
         <span id="hQueueN"></span></span>
+      <!-- Rescan: reads this machine's hardware again (the profile every wipe
+           and audit is filed under, and the drive list) and reconnects. The
+           station's own messages say "press Rescan" - after a failed capture,
+           or for a drive plugged in after the capture - so the control has
+           exactly that name, on the main screen, with no PIN. -->
+      <button class="btn gho sm" id="hRescan"
+        title="Read this machine's hardware and drives again, and reconnect"
+        onclick="rescan()">Rescan</button>
       <button class="iconbtn" title="Settings" onclick="openSettings()">
         <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
           stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1A1.7 1.7 0 0 0 9 19.4a1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
@@ -513,8 +521,10 @@
          but do not fill a SAVED login into a new-password field - so a login
          the browser kept for the previous person at this bench is not typed
          in for the next one. Stopping the browser from SAVING the login at
-         all belongs in the kiosk browser profile (start-gui.sh:
-         signon.rememberSignons=false), not in this page. -->
+         all belongs in the kiosk browser profile, not in this page: the
+         user.js that als-autostart.sh (write_ff_prefs) and start-gui.sh
+         write sets signon.rememberSignons=false and turns autofill off, and
+         Chromium gets the same in its Preferences. -->
     <label class="fld"><span>Password</span>
       <input id="signPass" type="password" autocomplete="new-password"
         onkeydown="if(event.key==='Enter')doSignIn()" /></label>
@@ -924,6 +934,18 @@ function fillHardware(){
    serial, the same key the upload uses, so the warning matches what would
    actually happen. Silent when offline or when there is no serial. */
 let PRIOR=null;
+/* The machine's wipe state for the banner. wipeVerdict is the server's
+   per-drive roll-up (contract C4): the machine, every drive. Without it (an
+   API older than C4, or offline) only the newest record is known - one
+   drive's event, which said "wiped" for a laptop whose other drive had just
+   failed - so it is labelled as that, never as the machine's state. */
+function priorWipeBits(p){
+  const V={wiped:'every drive wiped',failed:'a drive FAILED its wipe',
+    incomplete:'not every drive wiped yet',none:'no wipe on record'};
+  if(p.wipeVerdict&&V[p.wipeVerdict])return['wipe: '+V[p.wipeVerdict]];
+  if(p.lastWipeStatus)return['last wipe record: '+esc(String(p.lastWipeStatus))];
+  return[];
+}
 async function checkPrior(){
   const el=$('aPrior'); if(!el)return;
   if(wf()!=='goods_in') return;
@@ -940,9 +962,9 @@ async function checkPrior(){
         year:'numeric',hour:'2-digit',minute:'2-digit'})
     : 'previously';
   const bits=[];
-  if(p.tag)bits.push('as '+p.tag);
+  if(p.tag)bits.push('as '+esc(p.tag));
   if(p.auditCount)bits.push(p.auditCount+(p.auditCount===1?' audit':' audits')+' on record');
-  if(p.lastWipeStatus)bits.push('wipe: '+p.lastWipeStatus);
+  bits.push(...priorWipeBits(p));
   const html='<span class="hd"></span><span><b>Already audited in this batch</b> — '+
     when+(bits.length?' · '+bits.join(' · '):'')+
     '. Running the audit again updates that record rather than creating a new one.</span>';
@@ -1613,6 +1635,11 @@ async function saveSettings(){
 }
 async function retry(){toast('Reconnecting…');try{await jpost('/api/rescan',{});}catch(e){}
   setTimeout(bootstrap,3500);}
+/* The header's Rescan button: the same /api/rescan (re-capture the profile,
+   re-read the drives, reconnect), said as what the operator asked for. */
+async function rescan(){toast('Rescanning — reading this machine\'s hardware again…');
+  try{await jpost('/api/rescan',{});}catch(e){}
+  setTimeout(bootstrap,1500);}
 
 /* ----------------------------------------------------------- power --- */
 function power(action){

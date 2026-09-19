@@ -52,12 +52,55 @@ SELF_DIR=$(cd "$(dirname "$0")" 2>/dev/null && pwd)
 # hardcoded archiso path. Falls back silently when the helper is absent.
 ALS_MEDIA=""
 [ -r "$SELF_DIR/find-media.sh" ] && { . "$SELF_DIR/find-media.sh"; ALS_MEDIA=$(als_find_media 2>/dev/null); }
+
+# audit.conf is READ as KEY="value" lines, never sourced as shell code.
+#
+# It used to be `. <(sed 's/\r$//' "$conf")` - the file ran as bash, as root
+# (the kiosk starts this engine with sudo for every capture and every wipe).
+# The kiosk's Settings screen writes the Wi-Fi name and password into that
+# file, and needs no PIN for Wi-Fi, so anyone at the screen could type
+# x"$(any command)" as the network name and have it run as root the next time
+# the engine started. Values are now taken literally, the way the kiosk's own
+# load_conf (gui/server.py) reads them, so both halves of the station agree on
+# what a line says:
+#   - blank lines and lines starting with # are skipped, as are lines that are
+#     not KEY=value (an `export KEY=...` line is ignored, as the kiosk does);
+#   - Windows CRLF endings and a leading UTF-8 BOM are dropped (audit.conf is
+#     usually edited in Notepad);
+#   - one leading and one trailing double quote are removed, exactly as the
+#     kiosk's regex does; a value written in a matching pair of SINGLE quotes
+#     loses those too, which is what sourcing did for such a line;
+#   - $, backticks and backslashes mean nothing: WIFI_PASSWORD="pa$$word" is
+#     now that password (sourcing turned $$ into a process id);
+#   - only the station's own settings are taken: AUDIT_*, WIFI_*,
+#     IMAGE_SERVER and TIME_SERVER. A PATH=, IFS= or LD_PRELOAD= line in the
+#     file sets nothing.
+# Returns 1 if the file cannot be read.
+als_read_conf() {
+  local line key val
+  [ -r "$1" ] || return 1
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line%$'\r'}"
+    line="${line#$'\xef\xbb\xbf'}"
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line%"${line##*[![:space:]]}"}"
+    case "$line" in ''|'#'*) continue ;; esac
+    [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*=[[:space:]]*(.*)$ ]] || continue
+    key="${BASH_REMATCH[1]}"; val="${BASH_REMATCH[2]}"
+    case "$key" in AUDIT_*|WIFI_*|IMAGE_SERVER|TIME_SERVER) ;; *) continue ;; esac
+    if [ "${#val}" -ge 2 ] && [ "${val:0:1}" = "'" ] && [ "${val: -1}" = "'" ]; then
+      val="${val:1:${#val}-2}"
+    else
+      val="${val#\"}"; val="${val%\"}"
+    fi
+    printf -v "$key" '%s' "$val"
+  done < "$1"
+  return 0
+}
+
 for conf in "$SELF_DIR/audit.conf" "${ALS_MEDIA:-/nonexistent}/audit.conf"             /cdrom/audit.conf /run/archiso/bootmnt/audit.conf ./audit.conf; do
   [ -f "$conf" ] || continue
-  # Strip any Windows CRLF endings before sourcing — audit.conf is usually edited
-  # on Windows, and a stray carriage return would otherwise end up inside the
-  # Wi-Fi password / URL and break the run.
-  . <(sed 's/\r$//' "$conf") && break
+  als_read_conf "$conf" && break
 done
 API="${AUDIT_URL:-$API_DEFAULT}"
 
