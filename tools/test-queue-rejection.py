@@ -73,6 +73,9 @@ class FakeApi(BaseHTTPRequestHandler):
         n = int(self.headers.get("Content-Length") or 0)
         raw = self.rfile.read(n) if n else b""
         if self.path == "/auth/login":
+            if API.get("login"):
+                code, body = API["login"]
+                return self._json(code, body)
             return self._json(200, {"accessToken": "tok-station", "user": {
                 "id": "u-station", "name": "Station", "role": "",
                 "permissions": ["perform_amazon_audit", "perform_goods_in_audit"]}})
@@ -286,6 +289,40 @@ try:
     q = srv.queue_load()
     check("the wipe record is kept, carrying the workflow it was made under",
           len(q) == 1 and q[0].get("auditKind") == "goods_in" and "lotId" not in q[0], q)
+
+    print("a failed STATION sign-in is not the server refusing the record")
+    # Flag off, authed_api signs the shared account in first, through the same
+    # api(). A 400 from /auth/login (a short AUDIT_PASSWORD fails LoginDto) or
+    # a 404 (AUDIT_URL points at the wrong path) is about the station, not the
+    # record: the record never reached /devices/hardware-audit. Reporting it
+    # as "not accepted by the server" blamed the record, and throttled its
+    # retry for 10 minutes after the password had been fixed.
+    for code, body in ((400, {"message": ["password must be longer than or equal to 8 characters"]}),
+                       (404, {"message": "Cannot POST /api/auth/login"})):
+        reset()
+        srv.STATE["token"] = None
+        API["answer"] = (201, {"assetId": "asset-1", "tag": "ALS-1"})
+        API["login"] = (code, body)
+        rec = dict(WIPE, notes="login %d" % code)
+        _o, queued, err = srv.upload_audit(rec)
+        check("login HTTP %d: the record never reached the API" % code, BODIES == [], BODIES)
+        check("login HTTP %d: queued, and NOT noted as a refusal of the record" % code,
+              queued and srv.rejection_of(rec) is None and srv.REJECTED == {},
+              (queued, srv.REJECTED))
+        check("login HTTP %d: the message is about the station's sign-in" % code,
+              "did not accept this record" not in err and "sign in" in err.lower(), err)
+        st = srv.queue_status()
+        check("login HTTP %d: status shows 1 waiting, 0 refused" % code,
+              st["waiting"] == 1 and st["waitingRejected"] == 0, st)
+        srv.queue_flush()
+        check("login HTTP %d: a flush does not note a refusal either" % code,
+              srv.REJECTED == {} and srv.queue_status()["waitingRejected"] == 0, srv.REJECTED)
+        # Fixed in Settings: the next flush sends it straight away - no
+        # throttle was set by a refusal that was never about the record.
+        API["login"] = None
+        srv.queue_flush()
+        check("login HTTP %d: once sign-in works the next flush sends it at once" % code,
+              len(BODIES) == 1 and srv.queue_load() == [], (len(BODIES), srv.queue_load()))
 
     print("the page shows it")
     with open(os.path.join(HERE, "gui", "index.html"), encoding="utf-8") as fh:

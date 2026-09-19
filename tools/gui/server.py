@@ -1220,6 +1220,12 @@ def server_reachable(timeout=15):
         pass
 
 
+class StationSignInFailed(RuntimeError):
+    """The SHARED station account could not sign in (the server answered
+    /auth/login with an HTTP error). Deliberately not an HTTPError: see
+    login()."""
+
+
 def login():
     """The SHARED station account (flag off only)."""
     if operator_signin_on():
@@ -1227,10 +1233,23 @@ def login():
         # even as a fallback for an expired operator session (plan step 27).
         raise SignInRequired(SIGNIN_NEEDED)
     conf = STATE["conf"]
-    out = api("/auth/login", "POST", {
-        "email": conf.get("AUDIT_EMAIL", ""),
-        "password": conf.get("AUDIT_PASSWORD", ""),
-    })
+    try:
+        out = api("/auth/login", "POST", {
+            "email": conf.get("AUDIT_EMAIL", ""),
+            "password": conf.get("AUDIT_PASSWORD", ""),
+        })
+    except urllib.error.HTTPError as exc:
+        # Not an HTTPError past this point: authed_api signs in through here
+        # before it POSTs a record, and server_rejection() reads any HTTPError
+        # as the server refusing THAT record. A 400 from LoginDto (a short
+        # AUDIT_PASSWORD, an AUDIT_EMAIL that is not an address) or a 404 (an
+        # AUDIT_URL with the wrong path) was reported on every queued wipe as
+        # "not accepted by the server", and held its retry for 10 minutes
+        # after the password was fixed - though the record was never sent.
+        raise StationSignInFailed(
+            "The station could not sign in to the server (HTTP %d)%s - check AUDIT_EMAIL / "
+            "AUDIT_PASSWORD and the server address in Settings."
+            % (exc.code, (": " + http_error_message(exc)) if http_error_message(exc) else ""))
     tok = (out or {}).get("accessToken")
     if not tok:
         raise RuntimeError("Sign-in failed — check AUDIT_EMAIL / AUDIT_PASSWORD.")
