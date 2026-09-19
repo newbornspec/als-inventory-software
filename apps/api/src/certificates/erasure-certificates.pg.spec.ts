@@ -16,6 +16,7 @@ import { Batch } from '../batches/batch.entity';
 import { Asset } from '../assets/asset.entity';
 import { AssetAudit, DataWipeStatus } from '../assets/asset-audit.entity';
 import { AssetHistory } from '../assets/asset-history.entity';
+import { AssetsService } from '../assets/assets.service';
 import { CertificatesService } from '../assets/certificates.service';
 import type { IngestAuditDto } from '../devices/dto/ingest-audit.dto';
 import { DevicesService } from '../devices/devices.service';
@@ -313,6 +314,77 @@ maybe('stored, signed erasure certificates (Postgres)', () => {
     const record = await certificates(ledger).signedRecord(assetId);
     expect(record.number).toBe(first.number);
     expect(record.id).toBe(first.id);
+  }, 60000);
+
+  // Review of step 29: a wipe recorded by hand in the web app makes the
+  // machine certifiable too, so it must be issued then - not on the first
+  // download, possibly months later, dated that day.
+  it('a manual WIPED audit issues the certificate when it is recorded', async () => {
+    const ledger = new CertificateLedger(ds, signer);
+    const { assetId } = await devices(ledger).ingest(
+      userId,
+      payload(`CERT-${Date.now()}-manual`),
+    );
+    expect(await certsOf(assetId)).toHaveLength(0);
+    const assets = new AssetsService(
+      ds.getRepository(Asset),
+      ds.getRepository(AssetHistory),
+      ds.getRepository(AssetAudit),
+      ds.getRepository(Batch),
+      { record: () => Promise.resolve() } as never,
+      {
+        getAuthz: () =>
+          Promise.resolve({
+            role: UserRole.ADMIN,
+            permissions: [],
+            disabled: false,
+          }),
+      } as never,
+      ledger,
+    );
+    await assets.createAudit(
+      assetId,
+      {
+        dataWipeStatus: DataWipeStatus.WIPED,
+        dataWipeMethod: 'Single-pass overwrite',
+      },
+      userId,
+    );
+    const certs = await certsOf(assetId);
+    expect(certs).toHaveLength(1);
+    expect(await ledger.verify(certs[0].id)).toEqual({ valid: true });
+
+    // A failure in the ledger never fails the audit being recorded.
+    const broken = {
+      enabled: true,
+      ensure: () => Promise.reject(new Error('ledger down')),
+    } as unknown as CertificateLedger;
+    const again = new AssetsService(
+      ds.getRepository(Asset),
+      ds.getRepository(AssetHistory),
+      ds.getRepository(AssetAudit),
+      ds.getRepository(Batch),
+      { record: () => Promise.resolve() } as never,
+      {
+        getAuthz: () =>
+          Promise.resolve({
+            role: UserRole.ADMIN,
+            permissions: [],
+            disabled: false,
+          }),
+      } as never,
+      broken,
+    );
+    await expect(
+      again.createAudit(
+        assetId,
+        {
+          dataWipeStatus: DataWipeStatus.WIPED,
+          dataWipeMethod: 'Single-pass overwrite',
+        },
+        userId,
+      ),
+    ).resolves.toBeDefined();
   }, 60000);
 
   it('a drive failure after issue: no new certificate, and the download is refused', async () => {

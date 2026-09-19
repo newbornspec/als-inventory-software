@@ -3,7 +3,9 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -23,6 +25,7 @@ import { CreateAssetAuditDto } from './dto/create-asset-audit.dto';
 import { sanitizeUser } from '../users/sanitize-user';
 import { screenSizeFor, standardiseRamGb } from '../common/spec-normalise';
 import { ActivityService } from '../activity/activity.service';
+import { CertificateLedger } from '../certificates/certificate-ledger';
 import {
   isScopedManager,
   managerBatchCondition,
@@ -96,7 +99,12 @@ export class AssetsService {
     @InjectRepository(Batch) private batches: Repository<Batch>,
     private activity: ActivityService,
     private permissions: PermissionsService,
+    // Signed certificates (plan step 29); inert without CERT_SIGNING_KEY.
+    // Optional so specs that build the service by hand need not supply it.
+    @Optional() private ledger?: CertificateLedger,
   ) {}
+
+  private readonly log = new Logger(AssetsService.name);
 
   // A scoped manager may only place/keep an asset in a lot they can access
   // (their own, or an unowned pool lot).
@@ -446,6 +454,25 @@ export class AssetsService {
       userId,
       dto.finalDisposition ? `Audit recorded — disposition: ${dto.finalDisposition}` : 'Audit recorded',
     );
+
+    // A wipe recorded by hand can make the machine certifiable just as a
+    // station wipe does, so with signing on its certificate is issued now -
+    // dated the day the wipe was recorded, drawn from the rows as they are
+    // now - not on the first download, which may be months later (review of
+    // plan step 29). ensure() is a no-op when the machine is not certifiable
+    // or already has a certificate for exactly these wipes. In the ledger's
+    // own transaction, after the audit is saved, and never fatal: the first
+    // download issues it if this fails. Same rule as
+    // DevicesService.issueCertificate on the station path.
+    if (dto.dataWipeStatus === DataWipeStatus.WIPED && this.ledger?.enabled) {
+      try {
+        await this.ledger.ensure(assetId);
+      } catch (e) {
+        this.log.error(
+          `could not issue the signed certificate for asset ${assetId} after a manual wipe record (the first download will): ${(e as Error).message}`,
+        );
+      }
+    }
 
     return audit;
   }
