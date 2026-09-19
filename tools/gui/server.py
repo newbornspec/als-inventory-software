@@ -965,6 +965,20 @@ def refresh(do_login=True):
             ]
         if do_login:
             wifi_msg = connect_network()
+            # The boot-time sync_clock runs BEFORE this - before the station
+            # has joined Wi-Fi, which it does itself just above - so on any
+            # bench whose network is not up in the first seconds it found no
+            # time source and CLOCK["network"] stayed False all session. Every
+            # wipe was then filed wipedAtClock "unsynced", correctly dated or
+            # not, until someone pressed the fix-clock button. Now that the
+            # network is up, try again. Only while unsynced: once set, it is
+            # not re-probed on every Rescan. Also before the login, since a
+            # wrong clock is exactly what breaks HTTPS.
+            if not CLOCK["network"]:
+                try:
+                    sync_clock()
+                except Exception:  # noqa: BLE001
+                    pass
             try:
                 ensure_token()
                 STATE["lots"] = api("/devices/lots", token=STATE["token"]) or []

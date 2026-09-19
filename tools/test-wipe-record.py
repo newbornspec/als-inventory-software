@@ -276,6 +276,50 @@ try:
     srv._sync_clock = real_inner
     srv.CLOCK["network"] = False
 
+    # The boot-time sync runs before the station has joined Wi-Fi (refresh's
+    # connect_network does that), so it finds no time source. Once the network
+    # is up the station must try again, or every wipe that session is filed
+    # "unsynced" even though the clock is right.
+    print("the clock is re-synced once the network is up")
+    LINK = {"up": False}
+    SYNCS = []
+
+    def fake_inner_sync():
+        SYNCS.append(LINK["up"])
+        return (True, "clock already correct", True) if LINK["up"] else \
+            (False, "no time source reachable", False)
+
+    saved = (srv._sync_clock, srv.capture, srv.connect_network, srv.ensure_token,
+             srv.api, srv.queue_count, srv.load_conf, dict(srv.STATE))
+    srv._sync_clock = fake_inner_sync
+    srv.capture = lambda: (json.loads(json.dumps(PROFILE)), "summary")
+    srv.connect_network = lambda: LINK.update(up=True) or "connected"
+    srv.ensure_token = lambda: "t"
+    srv.api = lambda *a, **k: []
+    srv.queue_count = lambda: 0
+    srv.load_conf = lambda: {}
+    try:
+        srv.sync_clock()                    # boot(): Wi-Fi not associated yet
+        check("boot sync before the network: unsynced", srv.CLOCK["network"] is False)
+        srv.refresh()                       # joins Wi-Fi, logs in
+        check("refresh after the network came up: clock re-synced", srv.CLOCK["network"] is True,
+              SYNCS)
+        check("refresh: no error", not srv.STATE.get("error"), srv.STATE.get("error"))
+        start(["/dev/sda"])
+        if JOBS:
+            JOBS[0]["on_done"]({"status": "wiped", "method": "m", "device": "/dev/sda"})
+        check("a wipe after that: wipedAtClock network",
+              UPLOADS and UPLOADS[-1].get("wipedAtClock") == "network", UPLOADS)
+        n = len(SYNCS)
+        srv.refresh()
+        check("already synced: a Rescan does not probe the clock again", len(SYNCS) == n, SYNCS)
+    finally:
+        (srv._sync_clock, srv.capture, srv.connect_network, srv.ensure_token,
+         srv.api, srv.queue_count, srv.load_conf, st) = saved
+        srv.STATE.clear()
+        srv.STATE.update(st)
+        srv.CLOCK["network"] = False
+
     print("a serial lsblk escapes is passed the way the engine reads it")
 
     # lsblk -P prints '$' as \x24 (and '"', '\', '`', control bytes likewise).
