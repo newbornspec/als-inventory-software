@@ -157,7 +157,10 @@ caught it. Note which drive did that; it is exactly what we want to know.
 2. Then wipe it again with **NIST 800-88 Clear · overwrite + verify**.
 
 **Pass, both runs:**
-- The details say the drive is still frozen and it will overwrite instead.
+- **Automatic run:** the details say the drive is still frozen and it will
+  overwrite instead.
+- **Overwrite run:** no firmware erase is tried, so there is no frozen line.
+  The log goes straight to `Overwriting (this is the slow path) …`.
 - Progress lines appear every few seconds, like `[00:00:05] shred: …`.
 - The result is `Wiped — Overwrite — shred 1 pass + zero (NIST Clear; flash:
   user-addressable blocks only) — verified (reads as zeros) — recorded`.
@@ -174,8 +177,10 @@ caught it. Note which drive did that; it is exactly what we want to know.
 2. Go back to the kiosk. Wipe the NVMe drive with **Automatic**.
 3. Afterwards put it back: `sudo mv "$P.off" "$P"` (or just restart).
 
-**Pass:** the same as 1B. It falls back to the overwrite, with progress
-lines, and the method has the flash note. No TRIM anywhere.
+**Pass:** no firmware erase is tried and there is no frozen line: without
+`nvme` the station goes straight to `Overwriting (this is the slow path) …`.
+Then the same as 1B: progress lines, the same `Wiped — Overwrite — …` result
+with the flash note, level `clear`, and no TRIM anywhere.
 
 **Send back (all of 1):** a photo of each finished drive block, a photo of
 the details log for 1A and 1B, the `hdparm` output for 1B, and the
@@ -303,8 +308,8 @@ packages), the Windows PC.
    python tools\boot\make-splash.py --theme-only
    .\tools\sync-usb.ps1 -Drive E -Apply
    ```
-2. Check `E:\boot\theme\als\` now holds `lock.png`, `entry.png` and
-   `bullet.png`. Without them the shutdown splash stays Ubuntu's.
+2. Check `E:\boot\theme\usr\share\plymouth\themes\als\` now holds
+   `lock.png`, `entry.png` and `bullet.png`. Without them the shutdown splash stays Ubuntu's.
 3. **Copy `E:\casper\minimal.standard.live.als.squashfs` to a folder on the
    PC.** It is your way back. The build overwrites it and keeps no copy.
 4. Check `E:\gui\kiosk.mode` says `on` and `E:\gui\autostart.mode` says
@@ -423,7 +428,11 @@ a second person's login; a sacrificial drive; an Ethernet cable.
    4. The second person signs in. Wait two minutes.
    5. The second person signs out. You sign in again.
 6. Restart the station.
-7. Optional: stay signed in for more than 12 hours, then try a wipe.
+7. Optional, session expiry:
+   1. Stay signed in for more than 12 hours, with the network up. Then wipe
+      a drive.
+   2. On the web app, change the password of the account you are signed in
+      with. Then, on the station, wipe another drive.
 
 **Pass:**
 - Steps 1 and 2: no wipe is possible.
@@ -433,8 +442,14 @@ a second person's login; a sacrificial drive; an Ethernet cable.
   uploaded. It stays `waiting to upload`. It uploads once **you** sign in
   again, and its certificate names you.
 - After step 6 nobody is signed in: the station asks again.
-- Step 7: the station asks you to sign in again. The wipe does not fail with
-  an unclear error.
+- Step 7.1: the wipe works and uploads with **no** sign-in prompt. The
+  12-hour sign-in is renewed in the background while the station is online.
+  That is correct, not a fault.
+- Step 7.2: the server now refuses your session. The wipe itself may still
+  run, but its upload is refused: the station signs you out and the sign-in
+  panel says your sign-in has expired. The record shows `waiting to upload`,
+  not an unclear error. Sign in again with the new password: it uploads, and
+  its certificate names you.
 
 **Send back:** photos of the sign-in screen, the step-1 refusal, the step-2
 error, and the header with your name; the certificate PDFs from steps 4 and 5;
@@ -461,10 +476,12 @@ and stock status only, no customer data.
    **Query**.
 2. Open the `.sql` file in Notepad. Copy all of it. Paste it into the query
    box. Run it.
-3. If the tab shows only one result (or only `ROLLBACK`), run the `SELECT`s
-   one at a time instead: copy each block from `SELECT` to its `;`, paste,
-   run. Leave out `BEGIN READ ONLY;` and `ROLLBACK;`. Each block is read-only
-   on its own.
+3. If the tab shows only one result (or only `ROLLBACK`), run the queries
+   one at a time instead: copy each block from its first line to its `;`,
+   paste, run. Most blocks start with `SELECT`. Block **(c)** starts with
+   `WITH latest AS (`: copy from that line, not from a `SELECT` inside or
+   below it, or it will not run. Leave out `BEGIN READ ONLY;` and
+   `ROLLBACK;`. Each block is read-only on its own.
 
 **Pass:** it runs with no error, and you get five results:
 - **Totals** — wiped rows, wiped assets, first and last wipe.
@@ -609,6 +626,13 @@ sudo nvme id-ctrl -H /dev/nvme0 | grep -i -A5 sanicap
 4. For the Windows drive: before wiping, check a Windows partition is mounted
    (the audit mounts it to read the registry):
    `lsblk -o NAME,SIZE,FSTYPE,MOUNTPOINTS`. Note if one is. Then wipe.
+5. **Force the other NVMe methods.** Automatic always tries the crypto
+   sanitize first, so on its own it never reaches the others. On an NVMe
+   drive whose `sanicap` shows **both** crypto erase and block erase, wipe it
+   once with **Automatic** (you should get `NVMe cryptographic erase
+   (sanitize)`), then again with **NIST 800-88 Purge · secure erase** (you
+   should get `NVMe block-erase sanitize`). The `nvme format` methods only
+   appear on the drive with no sanitize support.
 
 **Pass:**
 - Every drive whose own erase works gives `Wiped`, with **no overwrite** run.
@@ -623,8 +647,14 @@ sudo nvme id-ctrl -H /dev/nvme0 | grep -i -A5 sanicap
 - The Windows drive gives `Wiped`, not a failure caused by the mounted
   partition. If it fails, the reason is what we need.
 
+**Record the four NVMe methods.** Write down which of these you actually saw:
+crypto sanitize, block-erase sanitize, `format -s2`, `format -s1`. Any you did
+not see is **not yet proved** on real hardware. Say so in your report, so step
+33 is not marked done for it.
+
 **Send back:** per drive: the three `nvme` outputs (for NVMe), the method line,
-the read-back time, and a photo of the finished block.
+the read-back time, and a photo of the finished block. Plus the list of NVMe
+methods seen and not seen.
 
 ---
 
@@ -674,14 +704,29 @@ In a terminal:
 ### Check the marker is gone
 
 The hidden area comes back after a power-off. So, in a terminal, show it for
-this session only (no `p`) and read the marker spot:
+this session only (no `p`) and read the marker spot.
+
+The machine has restarted since you set `B`, and the terminal forgets
+everything on a restart. So the first line sets `B` again, from the number you
+wrote down. Do not skip it.
 
 ```sh
+B=<the number B you wrote down>
+[ -n "$B" ] || echo 'B is not set - STOP, set it first'
 sudo hdparm -N $B --yes-i-know-what-i-am-doing /dev/sdX
 echo 1 | sudo tee /sys/block/sdX/device/rescan
 lsblk -b -d -o NAME,SIZE /dev/sdX
 sudo dd if=/dev/sdX bs=512 skip=$((B-8)) count=8 2>/dev/null | head -c 60 | od -c | head -3
 ```
+
+**First check the read itself is real:**
+- `lsblk` must show a size of exactly `B` × 512. If it is smaller, the area is
+  still hidden and the read shows nothing about it.
+- The `od` output must have rows of characters after `0000000`. Only
+  `0000000` on its own means nothing was read. That is **not a pass**: set `B`
+  again and repeat.
+- The marker must have shown before the wipe (step 3 printed
+  `ALS-HPA-MARKER…`). If you did not see it then, this test proves nothing.
 
 **Pass:** one of these, and nothing else:
 - `Wiped`, the method mentions the hidden area being removed, and the marker
@@ -695,8 +740,13 @@ record shows the smaller size.
 BIOS, `AUDIT_WIPE_UNFREEZE="0"`. Expect `Failed` naming the hidden area, or
 `Wiped` at the full size. Never `Wiped` at the smaller size.
 
-**Clean up:** give the drive its full size back for good:
-`sudo hdparm -N p$B --yes-i-know-what-i-am-doing /dev/sdX`.
+**Clean up:** give the drive its full size back for good. Set `B` again first
+if the machine has restarted since:
+```sh
+B=<the number B you wrote down>
+[ -n "$B" ] || echo 'B is not set - STOP, set it first'
+sudo hdparm -N p$B --yes-i-know-what-i-am-doing /dev/sdX
+```
 
 **Send back:** the `hdparm -N` output before and after, the result line, the
 `od` output, and the certificate PDF.
@@ -723,48 +773,58 @@ with **two NVMe drives**. All sacrificial.
 
 This deletes everything on the drive. In a terminal:
 
+0. Find the drive first. Do not assume it is `nvme0`:
+   ```sh
+   sudo nvme list -v
+   ```
+   Match the serial number to the label on the sacrificial drive. The
+   controller on that line (`nvme0`, `nvme1`, …) is your **`nvmeN`**. In every
+   command below, type that name where it says `nvmeN`. If the machine has
+   another NVMe drive, triple-check. `delete-ns` wipes the whole drive it is
+   given, with no question asked. Check again after each restart, because the
+   numbers can change.
 1. Check it can hold two namespaces:
-   `sudo nvme id-ctrl /dev/nvme0 | grep -E '^(nn|oacs|tnvmcap|cntlid) '`.
+   `sudo nvme id-ctrl /dev/nvmeN | grep -E '^(nn|oacs|tnvmcap|cntlid) '`.
    `nn` must be 2 or more. If it is 1, this drive cannot do the test.
 2. Split it. `<half>` = `tnvmcap` ÷ 512 ÷ 2, rounded down (512 is the block
    size of `--flbas=0` on most drives). `<id>` = `cntlid`.
    ```sh
-   sudo nvme delete-ns /dev/nvme0 -n 0xffffffff
-   sudo nvme create-ns /dev/nvme0 --nsze=<half> --ncap=<half> --flbas=0
-   sudo nvme create-ns /dev/nvme0 --nsze=<half> --ncap=<half> --flbas=0
-   sudo nvme attach-ns /dev/nvme0 -n 1 -c <id>
-   sudo nvme attach-ns /dev/nvme0 -n 2 -c <id>
-   sudo nvme ns-rescan /dev/nvme0
+   sudo nvme delete-ns /dev/nvmeN -n 0xffffffff
+   sudo nvme create-ns /dev/nvmeN --nsze=<half> --ncap=<half> --flbas=0
+   sudo nvme create-ns /dev/nvmeN --nsze=<half> --ncap=<half> --flbas=0
+   sudo nvme attach-ns /dev/nvmeN -n 1 -c <id>
+   sudo nvme attach-ns /dev/nvmeN -n 2 -c <id>
+   sudo nvme ns-rescan /dev/nvmeN
    lsblk -d -o NAME,SIZE
    ```
-   You should now see `nvme0n1` and `nvme0n2`. If any command errors, stop
+   You should now see `nvmeNn1` and `nvmeNn2`. If any command errors, stop
    and send a photo.
 3. Put a marker on each:
    ```sh
-   yes ALS-NS1-MARKER | head -c 1048576 | sudo dd of=/dev/nvme0n1 bs=1M count=1 iflag=fullblock conv=fsync
-   yes ALS-NS2-MARKER | head -c 1048576 | sudo dd of=/dev/nvme0n2 bs=1M count=1 iflag=fullblock conv=fsync
+   yes ALS-NS1-MARKER | head -c 1048576 | sudo dd of=/dev/nvmeNn1 bs=1M count=1 iflag=fullblock conv=fsync
+   yes ALS-NS2-MARKER | head -c 1048576 | sudo dd of=/dev/nvmeNn2 bs=1M count=1 iflag=fullblock conv=fsync
    ```
 4. Restart, so the kiosk captures the drive as it is now. In **Wipe drive**
    each of the two should say `same NVMe drive as` the other.
-5. Tick **only `nvme0n1`**. Press **Wipe**. The confirm dialog must warn that
+5. Tick **only `nvmeNn1`**. Press **Wipe**. The confirm dialog must warn that
    the two are parts of ONE NVMe drive, that a sanitize erases ALL of them,
-   and that `nvme0n2` is NOT ticked and will not be recorded. Confirm. Let it
+   and that `nvmeNn2` is NOT ticked and will not be recorded. Confirm. Let it
    finish.
 6. Read both back:
    ```sh
-   sudo dd if=/dev/nvme0n1 bs=1M count=1 2>/dev/null | grep -c ALS-NS1-MARKER
-   sudo dd if=/dev/nvme0n2 bs=1M count=1 2>/dev/null | grep -c ALS-NS2-MARKER
+   sudo dd if=/dev/nvmeNn1 bs=1M count=1 2>/dev/null | grep -c ALS-NS1-MARKER
+   sudo dd if=/dev/nvmeNn2 bs=1M count=1 2>/dev/null | grep -c ALS-NS2-MARKER
    ```
    Each command prints how many marker lines it found. Before the wipe that
    is a large number; after an erase it is `0`.
-7. Put both markers back (step 3). Restart. Now tick **both** `nvme0n1` and
-   `nvme0n2`, **Wipe**, **Confirm**. One starts; the other's block says
-   `Waiting for nvme0n1 to finish - it is on the same NVMe drive`. Let both
+7. Put both markers back (step 3). Restart. Now tick **both** `nvmeNn1` and
+   `nvmeNn2`, **Wipe**, **Confirm**. One starts; the other's block says
+   `Waiting for nvmeNn1 to finish - it is on the same NVMe drive`. Let both
    finish, then read both back again (step 6).
 
 **Pass:**
 - Step 6: the n1 count is `0`. For n2, either its count is `0` too (the
-  drive's sanitize took the whole drive), **or** the n1 result names `nvme0n2`
+  drive's sanitize took the whole drive), **or** the n1 result names `nvmeNn2`
   as not erased. It is a fail if n1 says `Wiped`, the n2 marker is still there,
   and nothing on the screen or the record mentions n2.
 - Step 7: the two never run at the same time, each gets its own result, and
@@ -773,21 +833,30 @@ This deletes everything on the drive. In a terminal:
 ### 9B — a laptop with two NVMe drives
 
 1. `sudo nvme list -v`. Note which controller (`nvme0`, `nvme1`) owns which
-   drive, with serials.
+   drive, with serials. Then record the second drive's sanitize log **before**
+   any wipe, and photograph it:
+   ```sh
+   sudo nvme sanitize-log /dev/nvme1
+   ```
+   (Use the second drive's own controller name.) This log shows the **last**
+   sanitize the drive ever ran, even one from a previous owner. So it is only
+   useful compared with this photo.
 2. Put a marker on the **second** drive, as in 9A step 3 (use its own name,
    e.g. `/dev/nvme1n1`).
 3. Restart. Wipe **only the first** drive.
 4. Check the marker on the second drive is still there (the count is above
-   `0`), and that
-   `sudo nvme sanitize-log /dev/nvme1` shows no new sanitize.
+   `0`). Run `sudo nvme sanitize-log /dev/nvme1` again and compare it with
+   the step-1 photo: the status (`SSTAT`) and the sanitize counters must be
+   exactly the same.
 5. Then tick **both** drives and wipe them together.
 
-**Pass:** step 4 keeps the second drive's marker; in step 5 both finish as
+**Pass:** step 4 keeps the second drive's marker and its sanitize log is
+unchanged; in step 5 both finish as
 `Wiped`, each with its own record and serial.
 
-**Send back:** the `nvme list -v` and `id-ctrl` output, photos of the
-confirm-dialog warning and the `Waiting for …` block from 9A, the marker
-counts, and the certificate PDF.
+**Send back:** the `nvme list -v` and `id-ctrl` output, both `sanitize-log`
+photos from 9B, photos of the confirm-dialog warning and the `Waiting for …`
+block from 9A, the marker counts, and the certificate PDF.
 
 ---
 
