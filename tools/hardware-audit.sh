@@ -2263,6 +2263,555 @@ case "$RAM_MAX_RAW" in
   *GB) RAM_MAX=$(printf '%s' "$RAM_MAX_RAW" | grep -oE '[0-9]+');;
 esac
 
+# --- drive health (contract C5: a percentage from the drive's own data) ------
+# The owner asked for each drive's health as a PERCENTAGE with a status, next
+# to battery health, and for it NEVER to say "Unknown". Before this the profile
+# carried a text scrape of `smartctl -a` (no timeout, hours misread on drives
+# that print "16083h+45m+12.345s" as 345, no attribute 198, no NVMe spare,
+# critical warning or media errors), and the kiosk ran its OWN smartctl as the
+# desktop user - which the kernel refuses (opening an NVMe or ATA pass-through
+# needs root), so every drive on the station read "SMART not available".
+#
+# Now each drive is read ONCE, here, as root, during the capture:
+#   `smartctl -j -x` (JSON; -x adds Device Statistics and the self-test log),
+#   or `mmc extcsd read` for an eMMC, which has no SMART at all.
+# Every read has a time limit (ALS_SMART_TIMEOUT, 30 s): a sick drive can hang
+# a SMART read for minutes, and before this one such drive held the whole
+# capture until the kiosk gave up at 900 s. Drives are read one after another.
+#
+# The number comes from ONE documented formula (DRIVE-HEALTH-CONTRACT C5),
+# implemented once, in als_health_py below, and unit-tested against real
+# smartctl 7.4 JSON (tools/test-drive-health.py):
+#   life remaining (flash: the drive's own wear figure) - capped by an error
+#   score (reallocated / pending / uncorrectable sectors, media errors) and by
+#   the drive's own failure alarms (SMART FAILED, a failing attribute, an NVMe
+#   critical warning, a failed self-test, running hot).
+# Bands (the owner's): Good 90-100, Caution 50-89, Bad 0-49; the status is
+# only ever derived from the percentage.
+#
+# When a percentage cannot be measured the object says WHY and WHAT TO DO
+# ({"measured":false,"reason":...,"action":...}) - never a guessed number and
+# never "unknown". The old flat fields (smartStatus, healthPct, powerOnHours,
+# ...) are still written, from the same JSON, for readers that predate this.
+#
+# The helper is printed by a function (like als_verify_py) so the tests run
+# exactly this code. Keep every python line from starting with "}".
+als_health_py() {
+  cat <<'PYEOF'
+import json, os, re, sys
+
+TIMEOUT_RCS = (124, 137)
+
+# (reason, action) - the contract's table, word for word. Never "unknown".
+R_RAID = ("behind a RAID/Intel RST controller",
+          "set the storage mode to AHCI in the BIOS, then press Rescan")
+R_UNSUP = ("the drive does not report health data",
+           "none on this machine — test it on another machine or replace")
+R_OFF = ("SMART is switched off and would not turn on",
+         "enable SMART in the BIOS, then press Rescan")
+R_TIMEOUT = ("the drive did not answer the health request in 30 s",
+             "press Rescan; if it repeats, the drive may be failing")
+R_EMMC_TOOL = ("this build cannot read eMMC health", "update the stick")
+R_NO_SMARTCTL = ("this build cannot read drive health (smartctl is missing)",
+                 "update the stick")
+# Not in the contract's table, and still never "unknown": smartctl ran as root
+# and could not open the device (it vanished, or the controller refused it),
+# or it printed nothing usable at all.
+R_OPEN = ("the drive could not be opened for a health read",
+          "press Rescan; if it repeats, reseat the drive or test it on another machine")
+R_NO_ANSWER = ("the drive gave no readable health answer",
+               "press Rescan; if it repeats, the drive may be failing")
+
+# A logical volume of a hardware RAID card, or a disk smartctl can only reach
+# through one: smartctl says which -d option it would need.
+RAID_MSG = re.compile(r"megaraid|cciss|aacraid|areca|3ware|hpsa|sssraid|-d\s+[a-z]+,\s*N", re.I)
+RAID_PRODUCT = re.compile(r"PERC|MegaRAID|LOGICAL VOLUME|RAID", re.I)
+
+# SATA SSD life-remaining attributes: id AND name must both match (vendors
+# reuse ids for unrelated counters). The NORMALISED value is life remaining
+# (100 = new); the raw value is vendor-specific and is never used for this.
+LIFE_ATTRS = [(231, "ssd_life_left"), (233, "media_wearout_indicator"),
+              (177, "wear_leveling_count"), (202, "percent_lifetime_remain"),
+              (169, "remaining_lifetime_perc")]
+
+# Error attributes: the id, plus a name guard for the same reason.
+ERR_ATTRS = {5: r"realloc|retired", 197: r"pending", 198: r"uncorrect|offline",
+             187: r"uncorrect", 10: r"spin.?retry", 199: r"crc"}
+
+CW_BITS = [(0x01, "available spare below threshold"), (0x02, "temperature out of range"),
+           (0x04, "reliability degraded"), (0x08, "media is read-only"),
+           (0x10, "volatile memory backup failed"),
+           (0x20, "persistent memory region is read-only")]
+
+
+def out(s):
+    sys.stdout.buffer.write((s + "\n").encode("utf-8"))
+
+
+def plural(n, one, many=None):
+    return "%d %s" % (n, one if n == 1 else (many or one + "s"))
+
+
+def num(v):
+    if isinstance(v, bool) or v is None:
+        return None
+    if isinstance(v, int):
+        return v
+    if isinstance(v, float):
+        return int(v)
+    return None
+
+
+def raw_count(a):
+    """The count an attribute carries: the leading digits of raw.string
+    ("0", "8 (0 2)", "16083h+45m+12.345s" -> 16083), else raw.value."""
+    raw = a.get("raw") or {}
+    m = re.match(r"\s*(\d+)", str(raw.get("string") or ""))
+    if m:
+        return int(m.group(1))
+    return num(raw.get("value"))
+
+
+def band(p):
+    return "good" if p >= 90 else ("caution" if p >= 50 else "bad")
+
+
+def not_measured(r, source):
+    h = {"measured": False, "reason": r[0], "action": r[1]}
+    if source:
+        h["source"] = source
+    return h
+
+
+def label(h):
+    """The one-line summary the capture prints."""
+    if not h.get("measured"):
+        return "Not measurable — %s — %s" % (h["reason"], h["action"])
+    return "%d%% %s (%s)" % (h["percent"], h["status"].capitalize(), h["basis"])
+
+
+def emit(h, flat=None):
+    out("H " + json.dumps(h, ensure_ascii=True, separators=(",", ":")))
+    out("L " + label(h))
+    for k, v in (flat or []):
+        if v is None:
+            continue
+        out(("N %s %d" if isinstance(v, int) else "S %s %s") % (k, v))
+
+
+def finish(source, L, E, deductions, caps, notes, fields, tool, flat_extra):
+    """Apply the formula's last step and build the object."""
+    pct = min([L if L is not None else 100, E] + [c for c, _ in caps])
+    pct = int(round(max(0, min(100, pct))))
+    reasons = list(deductions) + [t for _, t in caps] + list(notes)
+    if L is not None:
+        basis = "life remaining %d%% reported by the drive" % L
+        lowered = (list(deductions) if E < L else []) + [t for c, t in caps if c < L]
+        if pct < L and lowered:
+            basis += "; reduced by " + ", ".join(lowered)
+    else:
+        parts = []
+        if source != "ata-hdd":
+            parts.append("no wear figure reported by the drive")
+        parts.append(", ".join(deductions) if deductions
+                     else "no reallocated, pending or uncorrectable sectors")
+        parts += [t for _, t in caps]
+        if fields.get("smartPassed") is True:
+            parts.append("SMART passed")
+        basis = "; ".join(parts)
+    h = {"measured": True, "percent": pct, "status": band(pct), "basis": basis,
+         "reasons": reasons, "source": source}
+    h.update(fields)
+    h["tool"] = tool
+    flat = [("smartStatus", {True: "PASSED", False: "FAILED"}.get(fields.get("smartPassed"))),
+            ("healthPct", pct)] + flat_extra
+    emit(h, flat)
+
+
+def smart(raw, rc, kind, tried):
+    if rc in TIMEOUT_RCS:
+        return emit(not_measured(R_TIMEOUT, kind))
+    try:
+        d = json.loads(raw) if raw.strip() else None
+    except ValueError:
+        d = None
+    if not isinstance(d, dict) or not d:
+        return emit(not_measured(R_NO_SMARTCTL if rc == 127 else R_NO_ANSWER, kind))
+    sc = d.get("smartctl") or {}
+    msgs = " ".join(str(m.get("string", "")) for m in (sc.get("messages") or [])
+                    if isinstance(m, dict))
+    es = num(sc.get("exit_status"))
+    es = rc if es is None else es
+    dev = d.get("device") or {}
+    proto = str(dev.get("protocol") or "")
+    product = " ".join(str(d.get(k) or "") for k in ("scsi_vendor", "scsi_product", "model_name"))
+    if RAID_MSG.search(msgs) or str(dev.get("type") or "").startswith(("megaraid", "cciss")) \
+            or (proto == "SCSI" and RAID_PRODUCT.search(product)):
+        return emit(not_measured(R_RAID, kind))
+    nv = d.get("nvme_smart_health_information_log")
+    nv = nv if isinstance(nv, dict) else None
+    table = [a for a in ((d.get("ata_smart_attributes") or {}).get("table") or [])
+             if isinstance(a, dict)]
+    status = d.get("smart_status") if isinstance(d.get("smart_status"), dict) else {}
+    has_data = bool(nv or table or "passed" in status)
+    # exit_status bit 0: smartctl could not even tell what the device is
+    # ("Unable to detect device type"); bit 1: the open failed. Either way
+    # the drive was never asked, so it is not "does not report health data".
+    if es & 3 and not has_data:
+        return emit(not_measured(R_OPEN, kind))
+    sup = d.get("smart_support") or {}
+    if sup.get("available") is False:
+        return emit(not_measured(R_UNSUP, kind))
+    if sup.get("enabled") is False and not has_data:
+        if not tried:
+            return out("ENABLE")
+        return emit(not_measured(R_OFF, kind))
+    if not has_data:
+        return emit(not_measured(R_UNSUP, kind))
+
+    if nv is not None or proto == "NVMe":
+        source = "nvme"
+    else:
+        rr = d.get("rotation_rate")
+        if isinstance(rr, int) and not isinstance(rr, bool):
+            source = "ata-hdd" if rr > 0 else "ata-ssd"
+        else:
+            source = kind if kind in ("ata-hdd", "ata-ssd") else "ata-ssd"
+    ver = sc.get("version") or []
+    tool = "smartctl %s" % ".".join(str(x) for x in ver[:2]) if ver else "smartctl"
+
+    passed = status.get("passed")
+    passed = passed if isinstance(passed, bool) else None
+    temp = num((d.get("temperature") or {}).get("current"))
+    poh = num((d.get("power_on_time") or {}).get("hours"))
+    pcy = num(d.get("power_cycle_count"))
+
+    L = None
+    deductions, caps, notes = [], [], []
+    E = 100
+    fields = {"smartPassed": passed, "temperatureC": None, "powerOnHours": None,
+              "powerCycles": None, "lifeUsedPct": None, "availableSparePct": None,
+              "reallocatedSectors": None, "pendingSectors": None,
+              "uncorrectableSectors": None, "mediaErrors": None,
+              "criticalWarning": None, "selfTest": "none"}
+
+    if source == "nvme":
+        nv = nv or {}
+        used = num(nv.get("percentage_used"))
+        spare = num(nv.get("available_spare"))
+        thr = num(nv.get("available_spare_threshold"))
+        media = num(nv.get("media_errors"))
+        cw = num(nv.get("critical_warning"))
+        temp = temp if temp is not None else num(nv.get("temperature"))
+        poh = poh if poh is not None else num(nv.get("power_on_hours"))
+        pcy = pcy if pcy is not None else num(nv.get("power_cycles"))
+        cands = []
+        if used is not None:
+            cands.append(100 - used)
+        if spare is not None:
+            cands.append(spare)
+        if cands:
+            L = max(0, min(100, min(cands)))
+            if spare is not None and spare < 100 and spare <= min(cands):
+                notes.append("spare blocks at %d%%%s" % (
+                    spare, " (the drive's own threshold is %d%%)" % thr if thr is not None else ""))
+        if media:
+            E -= min(50, 10 * media)
+            deductions.append(plural(media, "media error"))
+        if cw:
+            bits = [t for b, t in CW_BITS if cw & b] or ["code %d" % cw]
+            caps.append((25, "NVMe critical warning: " + ", ".join(bits)))
+        # smartctl marks an NVMe FAILED whenever critical_warning is set; that
+        # is the same alarm as the cap just above, not a second one.
+        if passed is False and not cw:
+            caps.append((20, "the drive's own SMART self-check FAILED"))
+        limit = num((d.get("temperature") or {}).get("op_limit_max")) or 70
+        fields.update(lifeUsedPct=used, availableSparePct=spare, mediaErrors=media,
+                      criticalWarning=cw)
+        st = selftest_nvme(d)
+    else:
+        attrs = {}
+        for a in table:
+            i = num(a.get("id"))
+            if i is not None and i not in attrs:
+                attrs[i] = a
+        def err(i):
+            a = attrs.get(i)
+            if a and re.search(ERR_ATTRS[i], str(a.get("name") or ""), re.I):
+                return raw_count(a)
+            return None
+        realloc, pending, off_unc, rep_unc = err(5), err(197), err(198), err(187)
+        spin, crc = err(10), err(199)
+        unc = None if off_unc is None and rep_unc is None else (off_unc or 0) + (rep_unc or 0)
+        if realloc:
+            E -= min(40, 2 * realloc)
+            deductions.append(plural(realloc, "reallocated sector"))
+        if pending:
+            E -= min(40, 10 * pending)
+            deductions.append(plural(pending, "pending sector"))
+        if unc:
+            E -= min(50, 10 * unc)
+            deductions.append(plural(unc, "uncorrectable sector"))
+        if spin:
+            E -= 10
+            deductions.append("spin retries recorded (%d)" % spin)
+        if crc:
+            notes.append("%s — a cable or connector fault, not counted against the drive"
+                         % plural(crc, "cable/connection (CRC) error"))
+        if passed is False:
+            caps.append((20, "the drive's own SMART self-check FAILED"))
+        for a in table:
+            wf = str(a.get("when_failed") or "")
+            name = str(a.get("name") or "attribute %s" % a.get("id"))
+            if wf == "now":
+                caps.append((20, "%s is below the drive's failure threshold now" % name))
+            elif wf == "past":
+                caps.append((49, "%s fell below the drive's failure threshold in the past" % name))
+        used = None
+        if source == "ata-ssd":
+            for pg in ((d.get("ata_device_statistics") or {}).get("pages") or []):
+                for row in (pg.get("table") or []) if isinstance(pg, dict) else []:
+                    if not isinstance(row, dict):
+                        continue
+                    if str(row.get("name") or "").lower() != "percentage used endurance indicator":
+                        continue
+                    if (row.get("flags") or {}).get("valid") is False:
+                        continue
+                    v = num(row.get("value"))
+                    if v is not None and used is None:
+                        used = v
+            if used is not None:
+                L = max(0, min(100, 100 - used))
+            else:
+                for i, nm in LIFE_ATTRS:
+                    a = attrs.get(i)
+                    if a and str(a.get("name") or "").lower() == nm and num(a.get("value")) is not None:
+                        L = max(0, min(100, num(a.get("value"))))
+                        used = 100 - L
+                        break
+        fields.update(lifeUsedPct=used, reallocatedSectors=realloc, pendingSectors=pending,
+                      uncorrectableSectors=unc)
+        limit = 55 if source == "ata-hdd" else 70
+        st = selftest_ata(d)
+    fields.update(temperatureC=temp, powerOnHours=poh, powerCycles=pcy, selfTest=st[0])
+    if st[0] == "failed":
+        caps.append((25, "the last self-test failed%s" % st[1]))
+    if temp is not None and temp >= limit:
+        caps.append((89, "running hot: %d °C (the drive's limit is %d °C)" % (temp, limit)))
+
+    flat = [("powerOnHours", poh), ("powerCycles", pcy),
+            ("reallocatedSectors", fields["reallocatedSectors"]),
+            ("pendingSectors", fields["pendingSectors"]),
+            ("ssdLifeUsedPct", fields["lifeUsedPct"] if source != "ata-hdd" else None),
+            ("temperatureC", temp)]
+    finish(source, L, E, deductions, caps, notes, fields, tool, flat)
+
+
+def selftest_ata(d):
+    log = d.get("ata_smart_self_test_log") or {}
+    for key in ("extended", "standard"):
+        for row in ((log.get(key) or {}).get("table") or []):
+            if not isinstance(row, dict):
+                continue
+            s = row.get("status") or {}
+            text = str(s.get("string") or "")
+            if re.search(r"abort|interrupt|progress", text, re.I):
+                continue
+            if s.get("passed") is True:
+                return ("passed", "")
+            if s.get("passed") is False:
+                t = str((row.get("type") or {}).get("string") or "").strip()
+                at = num(row.get("lifetime_hours"))
+                return ("failed", " (%s%s)" % (t or "self-test", ", at %d h" % at if at is not None else ""))
+    return ("none", "")
+
+
+def selftest_nvme(d):
+    log = d.get("nvme_self_test_log") or {}
+    for row in (log.get("table") or []):
+        if not isinstance(row, dict):
+            continue
+        v = num((row.get("self_test_result") or {}).get("value"))
+        if v == 0:
+            return ("passed", "")
+        if v in (5, 6, 7):
+            t = str((row.get("self_test_code") or {}).get("string") or "").strip()
+            at = num(row.get("power_on_hours"))
+            return ("failed", " (%s%s)" % (t or "self-test", ", at %d h" % at if at is not None else ""))
+    return ("none", "")
+
+
+def emmc(raw, rc):
+    if rc in TIMEOUT_RCS:
+        return emit(not_measured(R_TIMEOUT, "emmc"))
+    if rc == 127:
+        return emit(not_measured(R_EMMC_TOOL, "emmc"))
+    def field(key):
+        m = re.search(r"\[EXT_CSD_%s\]:\s*0x([0-9a-fA-F]+)" % key, raw)
+        return int(m.group(1), 16) if m else None
+    a, b, eol = field("DEVICE_LIFE_TIME_EST_TYP_A"), field("DEVICE_LIFE_TIME_EST_TYP_B"), field("PRE_EOL_INFO")
+    est = [x for x in (a, b) if x]      # 0x00 = "not defined" by the drive
+    if rc != 0 or not est:
+        return emit(not_measured(R_UNSUP, "emmc"))
+    worst = max(est)
+    L = max(0, min(100, 100 - 10 * worst))
+    caps = []
+    if eol == 2:
+        caps.append((89, "the drive reports its reserve blocks are running low (pre-EOL warning)"))
+    elif eol == 3:
+        caps.append((25, "the drive reports its reserve blocks are nearly used up (pre-EOL urgent)"))
+    used = min(100, 10 * worst)
+    fields = {"smartPassed": None, "temperatureC": None, "powerOnHours": None,
+              "powerCycles": None, "lifeUsedPct": used, "availableSparePct": None,
+              "reallocatedSectors": None, "pendingSectors": None,
+              "uncorrectableSectors": None, "mediaErrors": None,
+              "criticalWarning": None, "selfTest": "none"}
+    finish("emmc", L, 100, [], caps, [], fields, "mmc-utils", [("ssdLifeUsedPct", used)])
+
+
+def hidden(root):
+    """Drives the storage controller hides from Linux, so there is no disk to
+    read at all: an Intel RST 'RAID On' controller that remaps NVMe drives
+    (the kernel counts them in the ahci device's remapped_nvme), or a RAID
+    class controller (PCI class 0x0104, which is also how Intel VMD shows)
+    with no disk underneath it. One entry per controller; [] when none."""
+    base = os.path.join(root, "sys", "bus", "pci", "devices")
+    found = []
+    try:
+        names = sorted(os.listdir(base))
+    except OSError:
+        names = []
+    disk = re.compile(r"^(sd[a-z]+|nvme\d+n\d+|mmcblk\d+|vd[a-z]+|hd[a-z]+)$")
+    for n in names:
+        p = os.path.join(base, n)
+        def rd(f):
+            try:
+                with open(os.path.join(p, f)) as fh:
+                    return fh.read().strip()
+            except OSError:
+                return ""
+        remap = rd("remapped_nvme")
+        if remap.isdigit() and int(remap) > 0:
+            found.append({"controller": n, "count": int(remap),
+                          "health": not_measured(R_RAID, "nvme")})
+            continue
+        if not rd("class").lower().startswith("0x0104"):
+            continue
+        has = False
+        top = p.rstrip(os.sep).count(os.sep)
+        for dp, dns, _fs in os.walk(p):
+            if dp.count(os.sep) - top >= 12:
+                dns[:] = []
+            if any(disk.match(x) for x in dns) or os.path.basename(dp) == "block" and dns:
+                has = True
+                break
+        if not has:
+            found.append({"controller": n, "count": 1, "health": not_measured(R_RAID, None)})
+    out(json.dumps(found, ensure_ascii=True, separators=(",", ":")))
+
+
+def main():
+    mode = sys.argv[1] if len(sys.argv) > 1 else ""
+    if mode == "hidden":
+        return hidden(sys.argv[2] if len(sys.argv) > 2 else "")
+    raw = sys.stdin.buffer.read().decode("utf-8", "replace")
+    rc = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2].lstrip("-").isdigit() else 0
+    if mode == "smart":
+        kind = sys.argv[3] if len(sys.argv) > 3 else ""
+        tried = len(sys.argv) > 4 and sys.argv[4] == "1"
+        return smart(raw, rc, kind, tried)
+    if mode == "emmc":
+        return emmc(raw, rc)
+    sys.exit(2)
+
+
+main()
+PYEOF
+}
+
+# Run a command with the health-read time limit (when `timeout` exists).
+als_health_to() {
+  if command -v timeout >/dev/null 2>&1; then timeout "${ALS_SMART_TIMEOUT:-30}" "$@"; else "$@"; fi
+}
+
+# The drive kind the contract names, from lsblk's NAME and ROTA. Used for a
+# drive whose own data could not be read (the object still says what it is).
+als_health_kind() {
+  case "$1" in
+    nvme*) echo nvme ;;
+    mmcblk*) echo emmc ;;
+    *) [ "$2" = "1" ] && echo ata-hdd || echo ata-ssd ;;
+  esac
+}
+
+# Read ONE drive's health. $1 = kernel name (nvme0n1, sda, mmcblk0), $2 = kind.
+# Sets DH_JSON (the contract C5 object), DH_LINE (the summary text) and DH_OUT
+# (the helper's full output; its "S"/"N" lines are the old flat fields).
+# Never fails the capture, never takes longer than two time limits (a read, and
+# a second read only after switching SMART on for a drive that had it off).
+als_drive_health() {
+  local name="$1" kind="$2" py raw rc dev l
+  DH_JSON=""; DH_LINE=""; DH_OUT=""
+  py=$(command -v python3 2>/dev/null)
+  if [ -z "$py" ]; then
+    # No python3, no formula: say so, never a guess.
+    DH_JSON="{\"measured\":false,\"reason\":\"this build cannot compute drive health\",\"action\":\"update the stick\",\"source\":\"$kind\"}"
+    DH_LINE="Not measurable — this build cannot compute drive health — update the stick"
+    return 0
+  fi
+  case "$name" in
+    mmcblk*)
+      # boot0/boot1/rpmb are views of the same chip: ask the chip itself.
+      dev="/dev/$(printf '%s' "$name" | sed -E 's/(boot[0-9]+|rpmb)$//')"
+      if command -v mmc >/dev/null 2>&1; then
+        raw=$(als_health_to mmc extcsd read "$dev" 2>&1); rc=$?
+      else
+        raw=""; rc=127
+      fi
+      DH_OUT=$(printf '%s' "$raw" | "$py" -c "$(als_health_py)" emmc "$rc" 2>/dev/null)
+      ;;
+    *)
+      if command -v smartctl >/dev/null 2>&1; then
+        raw=$(als_health_to smartctl -j -x "/dev/$name" 2>/dev/null); rc=$?
+        DH_OUT=$(printf '%s' "$raw" | "$py" -c "$(als_health_py)" smart "$rc" "$kind" 0 2>/dev/null)
+        if [ "$DH_OUT" = "ENABLE" ]; then
+          # SMART supported but switched off: switch it on once and read again.
+          als_health_to smartctl -s on "/dev/$name" >/dev/null 2>&1
+          raw=$(als_health_to smartctl -j -x "/dev/$name" 2>/dev/null); rc=$?
+          DH_OUT=$(printf '%s' "$raw" | "$py" -c "$(als_health_py)" smart "$rc" "$kind" 1 2>/dev/null)
+        fi
+      else
+        DH_OUT=$(printf '' | "$py" -c "$(als_health_py)" smart 127 "$kind" 0 2>/dev/null)
+      fi
+      ;;
+  esac
+  while IFS= read -r l; do
+    case "$l" in
+      "H "*) DH_JSON="${l#H }" ;;
+      "L "*) DH_LINE="${l#L }" ;;
+    esac
+  done <<< "$DH_OUT"
+  if [ -z "$DH_JSON" ]; then
+    # The helper itself failed on this drive's answer. Still not a guess.
+    DH_JSON="{\"measured\":false,\"reason\":\"the health calculation failed on this drive's answer\",\"action\":\"press Rescan; if it repeats, update the stick\",\"source\":\"$kind\"}"
+    DH_LINE="Not measurable — the health calculation failed on this drive's answer — press Rescan; if it repeats, update the stick"
+    DH_OUT=""
+  fi
+  return 0
+}
+
+# Add the helper's old flat fields (S key text / N key number) to the object
+# being built (o_begin..o_end of one storage entry).
+als_health_flat() {
+  local tag key val
+  while IFS=' ' read -r tag key val; do
+    case "$tag" in
+      S) o_s "$key" "$val" ;;
+      N) o_n "$key" "$val" ;;
+    esac
+  done <<< "$1"
+}
+
 # --- storage (INTERNAL fixed drives only; ignore all external/removable media) ---
 # Pull KEY="value" from an lsblk -P line WITHOUT eval. eval would define shell
 # vars literally named MODEL/SERIAL and clobber the machine's identity read above
@@ -2292,39 +2841,42 @@ while IFS= read -r line; do
     [ "$D_ROTA" = "1" ] && DTYPE="HDD" || DTYPE="SSD"
     case "$D_TRAN" in sata|ata) IFACE_D="SATA";; *) IFACE_D="$D_TRAN";; esac
   fi
-  # SMART health report — overall status plus the attributes that matter for
-  # grading (drive age + failure indicators). Best-effort parse of smartctl -a,
-  # which covers both ATA and NVMe layouts.
-  SMART=""; SM_POH=""; SM_PCY=""; SM_REALLOC=""; SM_PENDING=""; SM_USED=""; SM_HEALTH=""
-  if command -v smartctl >/dev/null 2>&1; then
-    SM=$(smartctl -a "/dev/$D_NAME" 2>/dev/null)
-    SMART=$(printf '%s\n' "$SM" | sed -n 's/.*self-assessment test result:[[:space:]]*//p; s/.*SMART Health Status:[[:space:]]*//p' | head -n1 | tr -d ' ')
-    SM_POH=$(printf '%s\n' "$SM" | grep -iE 'Power.?[- ]?On.?[- ]?Hours' | grep -oE '[0-9][0-9,]*' | tail -n1 | tr -d ',')
-    SM_PCY=$(printf '%s\n' "$SM" | grep -iE 'Power.?[- ]?Cycle' | grep -oE '[0-9][0-9,]*' | tail -n1 | tr -d ',')
-    SM_REALLOC=$(printf '%s\n' "$SM" | grep -iE 'Reallocated_Sector' | grep -oE '[0-9]+' | tail -n1)
-    SM_PENDING=$(printf '%s\n' "$SM" | grep -iE 'Current_Pending_Sector' | grep -oE '[0-9]+' | tail -n1)
-    SM_USED=$(printf '%s\n' "$SM" | grep -iE 'Percentage Used' | grep -oE '[0-9]+' | head -n1)
-    # Health % = life remaining. NVMe reports "Percentage Used" (health = 100-used);
-    # ATA SSDs expose a normalised wear/life attribute (VALUE column, 100 = new).
-    if [ -n "$SM_USED" ]; then
-      SM_HEALTH=$(( 100 - SM_USED ))
-    else
-      hv=$(printf '%s\n' "$SM" | grep -iE 'Media_Wearout_Indicator|SSD_Life_Left|Wear_Leveling_Count|Remaining_Lifetime_Perc' | head -n1 | awk '{print $4}' | grep -oE '^[0-9]+')
-      [ -n "$hv" ] && SM_HEALTH=$(( 10#$hv ))
-    fi
-  fi
-  # Show the first drive's health in the on-screen summary so it's easy to confirm.
-  [ -z "$SMART_SUMMARY" ] && SMART_SUMMARY="${SMART:-n/a}${SM_HEALTH:+  ${SM_HEALTH}% health}${SM_POH:+  ${SM_POH}h}${SM_REALLOC:+  realloc ${SM_REALLOC}}"
+  # Drive health (contract C5): one timed smartctl JSON read (or mmc-utils for
+  # an eMMC), as root, turned into a percentage by als_health_py. The old flat
+  # fields come from the same read - there is no second scrape of the drive.
+  als_drive_health "$D_NAME" "$(als_health_kind "$D_NAME" "$D_ROTA")"
+  # One line per drive in the on-screen summary, e.g.
+  #   nvme0n1: 94% Good (life remaining 94% reported by the drive)
+  SMART_SUMMARY="$SMART_SUMMARY$D_NAME: $DH_LINE
+"
   o_begin
   o_s model "$D_MODEL"; o_s capacity "$CAP"; o_s type "$DTYPE"
-  o_s interface "$IFACE_D"; o_s smartStatus "$SMART"; o_s serialNumber "$D_SERIAL"
-  o_n healthPct "$SM_HEALTH"; o_n powerOnHours "$SM_POH"; o_n powerCycles "$SM_PCY"
-  o_n reallocatedSectors "$SM_REALLOC"; o_n pendingSectors "$SM_PENDING"; o_n ssdLifeUsedPct "$SM_USED"
+  o_s interface "$IFACE_D"; o_s serialNumber "$D_SERIAL"
+  # The kernel name, so the kiosk can find a drive that reports no serial.
+  o_s device "$D_NAME"
+  als_health_flat "$DH_OUT"
+  o_raw health "$DH_JSON"
   STOR_ELEMS="$STOR_ELEMS,$(o_end)"
 done <<STOREOF
 $(lsblk -bdP -o NAME,TYPE,TRAN,RM,SIZE,MODEL,SERIAL,ROTA 2>/dev/null)
 STOREOF
 STORAGE="[${STOR_ELEMS#,}]"
+
+# Drives the storage controller hides from Linux (Intel RST "RAID On" with
+# remapped NVMe, a RAID-class controller with no disk under it). They have no
+# lsblk entry, so no storage[] entry and no health to read - and they are
+# deliberately NOT added to storage[]: every storage[] entry is a drive the
+# API expects a wipe record for, and one that can never be wiped here would
+# hold its machine's certificate forever. They go in hiddenStorage instead,
+# each with the contract's not-measurable reason and the fix (switch the BIOS
+# to AHCI, then Rescan - after which they are ordinary drives).
+HIDDEN_STORAGE="[]"
+if command -v python3 >/dev/null 2>&1; then
+  HIDDEN_STORAGE=$(python3 -c "$(als_health_py)" hidden "${ALS_SYS_ROOT:-}" 2>/dev/null)
+  case "$HIDDEN_STORAGE" in "["*"]") ;; *) HIDDEN_STORAGE="[]" ;; esac
+fi
+[ "$HIDDEN_STORAGE" != "[]" ] && SMART_SUMMARY="${SMART_SUMMARY}hidden drive: Not measurable — behind a RAID/Intel RST controller — set the storage mode to AHCI in the BIOS, then press Rescan
+"
 
 # --- graphics ---
 GFX_ELEMS=""
@@ -2566,6 +3118,7 @@ p_obj system "$SYSTEM"
 p_obj cpu "$CPU"
 p_obj memory "$MEMORY"
 p_obj storage "$STORAGE"
+p_obj hiddenStorage "$HIDDEN_STORAGE"
 p_obj graphics "$GRAPHICS"
 p_obj display "$DISPLAY_OBJ"
 p_obj battery "$BATTERY"
@@ -2588,7 +3141,14 @@ if [ -n "$RAM_DETECTED" ] && [ "$RAM_DETECTED" != "$RAM_GB" ]; then
 fi
 [ -n "$DISP_SIZE" ] && printf "  %-14s %s\n" "Screen"   "$DISP_SIZE${DISP_RES:+  ·  $DISP_RES}"
 printf "  %-14s %s\n" "Storage"  "$(printf '%s' "$STORAGE" | grep -oE '"capacity":"[^"]*"' | sed 's/.*://; s/"//g' | paste -sd', ' -)"
-printf "  %-14s %s\n" "Drive health" "${SMART_SUMMARY:-n/a}"
+# One line per drive: "Drive health   nvme0n1: 94% Good (basis)".
+if [ -n "$SMART_SUMMARY" ]; then
+  while IFS= read -r l; do
+    [ -n "$l" ] && printf "  %-14s %s\n" "Drive health" "$l"
+  done <<< "$SMART_SUMMARY"
+else
+  printf "  %-14s %s\n" "Drive health" "no internal drive found"
+fi
 printf "  %-14s %s\n" "Battery"  "${BAT_HEALTH:-n/a}"
 printf "  %-14s %s\n" "TPM/Boot" "${TPM_VER:-none} / ${BOOT_MODE} ${SECURE_BOOT:+(SecureBoot $SECURE_BOOT)}"
 echo
