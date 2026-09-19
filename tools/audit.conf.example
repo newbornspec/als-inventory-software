@@ -28,26 +28,16 @@ AUDIT_URL="https://als-inventory-software-production.up.railway.app"
 AUDIT_EMAIL="station@your-domain"
 AUDIT_PASSWORD=""
 
-# --- operator sign-in (owner decision D27; OFF until tested on the station) --
-# "0" (default, or the line missing): today's behaviour. The operator types
-#     their name on the kiosk screen; wipes are filed with the station account
-#     above, and the certificate prints that name as "Operator (self-declared)"
-#     next to the filing account.
-# "1": each operator signs in on the kiosk screen with their OWN ALS Inventory
-#     login (the same email and password as the web app). The sign-in is kept
-#     in the station's memory only - it is never written to this file or the
-#     stick, and a reboot signs everyone out. With it on:
-#       * a wipe cannot be started until someone is signed in, and
-#       * signing in needs the network, so a station with no connection cannot
-#         start a wipe at all.
-#     A record queued while the network dropped is tagged with the operator
-#     who made it and is only sent once that same person is signed in again -
-#     never under someone else's sign-in.
-#     Records are then filed under the signed-in person, so the certificate
-#     names a real account holder instead of the shared station account.
-# Leave AUDIT_EMAIL / AUDIT_PASSWORD above in place until sign-in has been
-# tested on the station; a kiosk from before this setting ignores the line.
-AUDIT_OPERATOR_SIGNIN="0"
+# --- operator (who did the wipe) -----------------------------------------------
+# The operator types their name on the kiosk screen. Wipes are filed with the
+# station account above, and the certificate prints that name as
+# "Operator (self-declared)" next to the filing account.
+#
+# Planned, NOT YET IMPLEMENTED: operators signing in on the kiosk with their
+# own ALS Inventory login (owner decision D27, to be switched by an
+# AUDIT_OPERATOR_SIGNIN setting). No kiosk reads that setting yet - adding it
+# to audit.conf has NO effect: wipes do not wait for a sign-in and are still
+# filed under the station account. It will be documented here when it ships.
 
 # --- admin PIN ----------------------------------------------------------------
 # Guards the kiosk's Settings screen. WITHOUT one, the server address, image

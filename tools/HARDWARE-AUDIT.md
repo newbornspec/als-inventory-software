@@ -170,13 +170,15 @@ files; leaving it is harmless.
      the drive you picked** (`/dev` names are handed out at boot and can move
      to a different disk).
    - A drive that reports **no serial at all** is allowed (owner decision D18):
-     it is wiped and recorded with its identity as unknown, and the
-     certificate says the serial was not reported by the drive.
+     it is wiped and its record carries no drive serial (identity unknown).
+     The certificate does **not** yet say so: today it prints only the
+     machine's own serial and the method, with no line per drive. A
+     per-drive certificate is planned (owner decisions D18/D23).
 4. **Read the result** for each drive. There are exactly three:
 
    | Result | What it means | What is recorded |
    |---|---|---|
-   | **Wiped** | The erase ran and the drive passed its check afterwards. | A wipe record for **that drive** (serial, model, method, start and finish time, tool version). Makes the erasure certificate available. |
+   | **Wiped** | The erase ran and the drive read back as zeros afterwards — **or** it was a firmware erase the drive reported as done, which is accepted without that check ("controller-confirmed", see *The check afterwards* below). | A wipe record for **that drive** (serial, model, method, start and finish time, tool version). Makes the certificate for the **whole machine** available — see *Wipe EVERY internal drive* below. |
    | **Failed** | The erase was attempted but did not complete or did not pass its check (a drive that stalls, errors, or does not read back clean; a job that dies without a result counts as failed). Treat the drive as **still holding data**, possibly partly erased. | A **failed** record for that drive, so the asset shows the failure. Wipe it again before it can be resold. |
    | **Refused** | **Nothing was written to the drive.** It was the wrong drive (serial mismatch), a USB / removable / boot disk, or not a real disk. | **Nothing.** A refusal is not filed, because the drive was never touched. |
 
@@ -184,6 +186,16 @@ files; leaving it is harmless.
    and uploaded automatically later, with the time the wipe actually happened.
    Each finished wipe is also marked on the stick straight away, so restarting
    the kiosk cannot lose a record.
+
+**Wipe EVERY internal drive of the machine before relying on its
+certificate.** Today the certificate is for the whole device and is issued as
+soon as **one** drive is recorded as wiped. A drive that was never wiped has no
+record at all, so nothing blocks the certificate: pick only the NVMe of a
+laptop that also has a SATA disk, and the kiosk says "Erasure certificate now
+available" while the SATA disk still holds the customer's data. Check the drive
+list against the captured profile and wipe each one. (A per-machine roll-up
+that withholds the certificate until every drive of the machine is wiped is
+planned, owner decision D23; it is not on the station yet.)
 
 **Certificates.** A drive recorded as wiped makes the certificate available —
 unless the same asset also has a **failed** wipe record that is newer than the
@@ -220,11 +232,27 @@ machines never resume, so it stays off (owner decision D42). NVMe has no frozen
 state.
 
 **The check afterwards.** Every wipe ends with a read-back of the drive (start,
-middle and end). A drive that should read as zeros and does not is overwritten
-in full and checked again; if it still fails, the result is **Failed**. Today a
-firmware crypto erase that does not read back as zeros is accepted as
-"controller-confirmed" (a crypto erase leaves unreadable ciphertext, not zeros),
-and the method on the record says so; a stricter read-back is planned.
+middle and end), and what happens when it does not read as zeros depends on how
+the drive was erased:
+
+- **Overwrite** (`overwrite` / `zero`, or any drive whose firmware erase was
+  unavailable): the drive is overwritten in full once more and read back again;
+  if it still does not read as zeros, the result is **Failed**.
+- **Any firmware erase** — NVMe crypto erase, NVMe secure erase
+  (`nvme format -s1`), NVMe block-erase sanitize, ATA secure erase, enhanced or
+  not: **today the result is Wiped anyway.** The erase is accepted on the
+  drive's word, labelled **"controller-confirmed"** in the recorded method, and
+  **no overwrite is run**. That is right for a genuine crypto erase (it leaves
+  unreadable ciphertext, not zeros), but the same label is given to a plain
+  secure erase or block erase whose firmware reported success and left the data
+  where it was. **Treat a method ending "— controller-confirmed" as the drive's
+  own claim, not as a checked result**; "— verified (reads as zeros)" is the
+  checked one. If a controller-confirmed result is not good enough for a
+  machine, wipe that drive again with `overwrite`.
+
+A stricter read-back after firmware erases is planned (plan step 31, owner
+decision D31: a read-back that cannot confirm the erase will be recorded as
+**Failed**). Until it ships, the above is what the station does.
 
 > ⚠️ This permanently destroys data. Check the drive's **size and model** (and
 > its serial, on a kiosk version that shows it) against the drive you mean
@@ -266,7 +294,14 @@ at every boot, so they do **not** need a rebuild — a sync is enough for those.
      without the speed-up. Fix the cause and build again. If it says the
      **Mozilla key did not match**, do not work around it (see
      `UBUNTU-STICK.md`).
-   - Any `die` / error stops the build **before** the stick is touched.
+   - An error **before** the step `Copying onto the stick` stops the build
+     with the stick untouched.
+   - `copy failed` is the exception: it comes **during** that copy, which
+     overwrites the layer on the stick in place. The layer on the stick is
+     then **damaged** and the stick is still armed, so the next boot from it
+     would fail. Do not boot the stick again until you have put back the copy
+     from step 2 from Windows (see *Going back*). The usual cause is the stick
+     running out of space: the new layer is larger than the old one.
 4. **Check and reboot:**
    ```sh
    sudo bash /cdrom/make-als-layer.sh status
