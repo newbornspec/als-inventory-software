@@ -22,6 +22,12 @@
 
 API_DEFAULT="https://als-inventory-software-production.up.railway.app"
 
+# The version of THIS TOOL, stamped on every wipe result so a certificate can
+# name the software that did the erasure. Bump it when the wipe behaviour
+# changes. NOT to be confused with VERSION further down, which is the AUDITED
+# machine's DMI system-version (e.g. "ThinkPad T440").
+ALS_TOOL_VERSION="2026.09.19"
+
 # --- privilege warning -------------------------------------------------------
 # SystemRescue boots you in as root, so this never came up. The Ubuntu stick
 # does not, and almost every lock check reads something only root can read:
@@ -60,7 +66,13 @@ echo "  ALS Inventory — Hardware Audit"
 echo "=================================================="
 
 # --- JSON helpers (no jq dependency) ---
-esc() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr -d '\r\n\t'; }
+# esc() drops EVERY control character (0x00-0x1F and DEL), not just CR/LF/TAB.
+# JSON forbids raw control characters inside a string, and DMI, SMART and lsblk
+# strings come from firmware: one stray byte (an ESC in a vendor string, a 0x01
+# pad in a serial) made the whole profile or WIPE_RESULT unparseable, so the
+# machine or the wipe had no record at all. Must stay a one-liner: the lock
+# check tests extract this exact line.
+esc() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr -d '\000-\037\177'; }
 jstr() { printf '%s' "$1" | grep -o "\"$2\":\"[^\"]*\"" | head -n1 | sed 's/.*":"//; s/"$//'; }
 jraw() { printf '%s' "$1" | grep -o "\"$2\":[^,}]*" | head -n1 | sed 's/.*://; s/[[:space:]]//g'; }
 
@@ -70,6 +82,13 @@ OB=""
 o_begin() { OB=""; }
 o_s() { [ -n "$2" ] || return 0; OB="$OB,\"$1\":\"$(esc "$2")\""; }
 o_n() { [ -n "$2" ] || return 0; case "$2" in ''|*[!0-9]*) return 0;; esac; OB="$OB,\"$1\":$2"; }
+# o_s0 = string field that is kept even when empty (a field a reader relies on
+# always being there, e.g. WIPE_RESULT's "reason"). o_raw = an already-built
+# JSON value (true/false, or a nested object made with o_begin..o_end first and
+# saved to a variable - o_* share one buffer, so build the inner object BEFORE
+# o_begin of the outer one).
+o_s0() { OB="$OB,\"$1\":\"$(esc "$2")\""; }
+o_raw() { [ -n "$2" ] || return 0; OB="$OB,\"$1\":$2"; }
 o_end() { printf '{%s}' "${OB#,}"; }
 
 # Reachability, with enough patience for a cold boot.
@@ -412,12 +431,12 @@ ensure_tools() {
   return 0
 }
 
-# --- OPTIONAL, DESTRUCTIVE: securely erase the machine's INTERNAL drives ---
-# Runs ONLY when AUDIT_WIPE=1 in audit.conf, AND the operator types WIPE to
-# confirm. Every command targets ONE specific device (nvme / hdparm / shred) — none can touch another drive — and USB/removable disks are excluded,
-# so the boot stick is never at risk. Sets WIPE_STATUS + WIPE_METHOD for the
-# upload so the wipe lands on the audit record and the erasure certificate.
-WIPE_STATUS=""; WIPE_METHOD=""
+# --- DESTRUCTIVE: the erase helpers behind gui_wipe_one ---------------------
+# Every command below targets ONE specific device (nvme / hdparm / shred) - none
+# can touch another drive. The only caller is gui_wipe_one (the kiosk's
+# per-drive wipe, `--wipe-drive`), which refuses USB, removable, boot and
+# pseudo devices before any of these run. The text-mode wipe that used to call
+# them too was retired - see wipe_internal_drives.
 
 # Verification pass: sampled read-back confirming the device now reads as zeros
 # at the start, middle and near the end. Returns 0 (verified) or 1 (not clean).
@@ -484,20 +503,122 @@ ata_secure_erase() {
   return 1
 }
 
+# Read the NVMe Sanitize Status log page (log 81h) as NUMBERS.
+#
+# This used to grep `nvme sanitize-log -H` for the English words "completed
+# successfully". That log page describes the LAST sanitize the controller ran,
+# not the one just issued - so a success left over from an earlier sanitize
+# (a previous run, the refurbisher before us, or a block erase when we asked for
+# crypto) matched the words and was taken as this erase finishing. The words are
+# also nvme-cli's wording, which changes between versions.
+#
+# So read the raw page (-b) and decode the fields the spec defines, little-endian:
+#   bytes 0-1   SPROG   progress, 65535 = complete
+#   bytes 2-3   SSTAT   bits 2:0 = status (0 never, 1 done, 2 running, 3 FAILED,
+#                       4 done with no-deallocate)
+#   bytes 4-7   SCDW10  the Sanitize command's CDW10; bits 2:0 = the action run
+#   bytes 8-19  estimated seconds for overwrite / block erase / crypto erase
+#               (0 or 0xFFFFFFFF = no estimate)
+# Sets SAN_SPROG SAN_SSTAT SAN_ACT SAN_EST_OW SAN_EST_BE SAN_EST_CE.
+# Returns 1 if the page could not be read (fewer than 8 bytes came back).
+nvme_sanitize_log() {
+  local b
+  SAN_SPROG=""; SAN_SSTAT=""; SAN_ACT=""; SAN_EST_OW=""; SAN_EST_BE=""; SAN_EST_CE=""
+  b=$(nvme sanitize-log "$1" -b 2>/dev/null | od -An -tu1 -v -N20 2>/dev/null)
+  # shellcheck disable=SC2086
+  set -- $b
+  [ "$#" -ge 8 ] || return 1
+  SAN_SPROG=$(( $1 + $2 * 256 ))
+  SAN_SSTAT=$(( $3 + $4 * 256 ))
+  SAN_ACT=$(( $5 & 7 ))
+  if [ "$#" -ge 20 ]; then
+    SAN_EST_OW=$(( ${9} + ${10} * 256 + ${11} * 65536 + ${12} * 16777216 ))
+    SAN_EST_BE=$(( ${13} + ${14} * 256 + ${15} * 65536 + ${16} * 16777216 ))
+    SAN_EST_CE=$(( ${17} + ${18} * 256 + ${19} * 65536 + ${20} * 16777216 ))
+  fi
+  return 0
+}
+
+# How long to wait for a sanitize, in seconds, from the drive's own estimate.
+# $1 = estimated seconds (may be empty, 0 or 4294967295 = no estimate).
+# Twice the estimate plus a minute, never under 5 minutes (a crypto erase that
+# estimates 2 s should not be failed by a slow first log read), capped at 6 h.
+# With no estimate, the 20 minutes this always waited.
+nvme_sanitize_limit() {
+  local est="${1:-}"
+  case "$est" in ''|*[!0-9]*|0|4294967295) echo 1200; return 0 ;; esac
+  est=$(( est * 2 + 60 ))
+  [ "$est" -lt 300 ] && est=300
+  [ "$est" -gt 21600 ] && est=21600
+  echo "$est"
+}
+
 # Run an NVMe SANITIZE (action 4 = crypto erase, 2 = block erase) on the
 # controller and wait for it to finish. Sanitize is asynchronous, so poll the
-# sanitize-log until it reports completion. Returns 0 on success.
+# sanitize log. Success ONLY when all three hold at once: the status is
+# "completed" (1 or 4), progress is 65535, and the action the log records is
+# the action issued here. Anything else is still running, stale, or failed.
+# Returns 0 on success.
+#
+# The log only describes the LAST sanitize, with no timestamp. A drive that was
+# crypto-sanitized before (by a refurbisher, or an earlier run) already shows
+# "done, 65535, action 4" before we issue anything - and a controller that
+# updates the page a moment after accepting the command, or accepts it without
+# starting a new operation, would let that old entry pass as this erase. So the
+# log is read BEFORE the command. If that snapshot already looks like the
+# success we are waiting for (or cannot be read at all), a completed entry is
+# accepted only after this run has SEEN the new operation: status 2 (in
+# progress) or progress below 65535. If that never shows within a short grace,
+# the result is indistinguishable from the old one and is not accepted - the
+# caller then falls back to the next method, which is honest; a false "wiped"
+# is not.
 nvme_sanitize() {
-  local ctrl="$1" act="$2" i log
+  local ctrl="$1" act="$2" limit=1200 waited=0 st est need_fresh=0 grace=60
+  if nvme_sanitize_log "$ctrl"; then
+    st=$(( SAN_SSTAT & 7 ))
+    case "$st" in
+      1|4) [ "$SAN_SPROG" = "65535" ] && [ "$SAN_ACT" = "$act" ] && need_fresh=1 ;;
+    esac
+  else
+    need_fresh=1
+  fi
   nvme sanitize "$ctrl" -a "$act" >/dev/null 2>&1 || return 1
   echo "    sanitize started — waiting for completion …"
-  for i in $(seq 1 240); do
-    log=$(nvme sanitize-log "$ctrl" -H 2>/dev/null)
-    printf '%s\n' "$log" | grep -qi 'completed successfully' && return 0
-    printf '%s\n' "$log" | grep -qi 'sanitize.*fail' && return 1
+  while :; do
+    if nvme_sanitize_log "$ctrl"; then
+      case "$act" in 4) est="$SAN_EST_CE" ;; 2) est="$SAN_EST_BE" ;; 3) est="$SAN_EST_OW" ;; *) est="" ;; esac
+      limit=$(nvme_sanitize_limit "$est")
+      st=$(( SAN_SSTAT & 7 ))
+      # The new operation, seen: running, or progress not yet complete.
+      if [ "$st" = 2 ] || { [ -n "$SAN_SPROG" ] && [ "$SAN_SPROG" != "65535" ]; }; then
+        need_fresh=0
+      fi
+      case "$st" in
+        1|4)
+          if [ "$SAN_SPROG" = "65535" ] && [ "$SAN_ACT" = "$act" ]; then
+            [ "$need_fresh" = 0 ] && return 0
+            # Identical to what the log said before we issued the command.
+            if [ "$waited" -ge "$grace" ]; then
+              echo "    sanitize log still shows only the earlier completed action $act — this run's erase was never seen; not accepted"
+              return 1
+            fi
+          fi
+          # A completed entry for a DIFFERENT action (or not at 100%) is the
+          # previous sanitize, not this one. Keep waiting; the deadline decides.
+          ;;
+        3)
+          echo "    sanitize reported FAILED (status $SAN_SSTAT, action $SAN_ACT)"
+          return 1
+          ;;
+      esac
+    fi
+    if [ "$waited" -ge "$limit" ]; then
+      echo "    sanitize did not report completion of action $act within ${limit}s"
+      return 1
+    fi
     sleep 5
+    waited=$(( waited + 5 ))
   done
-  return 1
 }
 
 # Firmware crypto / secure erase for ONE drive per AUDIT_WIPE_METHOD
@@ -545,108 +666,45 @@ clear_label() {
   if [ "${1:-}" = "1" ]; then echo "NIST Clear"; else echo "NIST Clear; flash: user-addressable blocks only"; fi
 }
 
+# The text-mode wipe is RETIRED (owner decision D9, 19 Sep 2026; reversible).
+#
+# This used to be a second, complete copy of the wipe ladder: it listed every
+# internal drive, erased them one after another, and then merged all of them
+# into ONE status and ONE method string for the upload. So a machine with a
+# wiped NVMe and a failed SATA disk filed a single record, and every later fix
+# to the ladder (TRIM, the verify read, the drive's own identity) had to be made
+# twice - and was not always. The kiosk's gui_wipe_one does the same job one
+# drive at a time, with one result per drive.
+#
+# It stays as a stub so an old audit.conf with AUDIT_WIPE=1 is told plainly
+# what happened instead of being silently ignored. It wipes NOTHING and sets
+# nothing that the upload would file as a wipe.
 wipe_internal_drives() {
   [ "${AUDIT_WIPE:-0}" = "1" ] || return 0
-
-  local disks=() line n t tr rm
-  while IFS= read -r line; do
-    [ -z "$line" ] && continue
-    n=$(pval "$line" NAME); t=$(pval "$line" TYPE); tr=$(pval "$line" TRAN); rm=$(pval "$line" RM)
-    [ "$t" = "disk" ] || continue
-    [ "$tr" = "usb" ] && continue
-    [ "$rm" = "1" ] && continue
-    [ "$(cat "/sys/block/$n/removable" 2>/dev/null)" = "1" ] && continue
-    disks+=("$n")
-  done <<WIPEEOF
-$(lsblk -dP -o NAME,TYPE,TRAN,RM 2>/dev/null)
-WIPEEOF
-
-  [ "${#disks[@]}" -eq 0 ] && { echo "Data wipe: no internal drive found — skipped."; return 0; }
-
   echo
-  echo "=====================  DATA WIPE  ====================="
-  echo "This will PERMANENTLY erase the internal drive(s) below."
-  local d
-  for d in "${disks[@]}"; do
-    printf "   /dev/%-9s %8s  %s\n" "$d" \
-      "$(lsblk -dno SIZE "/dev/$d" 2>/dev/null)" "$(lsblk -dno MODEL "/dev/$d" 2>/dev/null)"
-  done
-  echo "(The USB you booted from is NOT listed and will not be touched.)"
-  local ans
-  read -rp "Type WIPE to erase, or press Enter to skip: " ans
-  [ "$ans" = "WIPE" ] || { echo "Data wipe skipped."; return 0; }
-
-  local all_ok=1 methods="" dev rota m verified
-  for d in "${disks[@]}"; do
-    dev="/dev/$d"; m=""; verified=0
-    rota=$(cat "/sys/block/$d/queue/rotational" 2>/dev/null)
-    echo "Erasing $dev …"
-
-    # 1) Firmware crypto/secure erase where the drive supports it (NIST Purge).
-    local fw=0
-    if firmware_erase "$dev" "$d"; then m="$M"; fw=1; fi
-    # 2) NOT TRIM. blkdiscard used to sit here and be recorded as the wipe.
-    #    TRIM is a hint to the controller, not an erase: it may defer the work
-    #    or never do it, and the data stays in NAND until garbage collection.
-    #    A TRIMmed drive then reads back zeros BY DESIGN (DRAT/RZAT), so
-    #    verify_zero passed it and the certificate said "unrecoverable" about
-    #    data that could still be there. Neither NIST 800-88 nor IEEE 2883
-    #    counts discard as a sanitisation. See gui_wipe_one for the same fix.
-    # 3) Overwrite fallback (NIST Clear). Streams progress — a full pass on a
-    #    spinning disk takes hours and must not look like a hang.
-    if [ -z "$m" ]; then
-      echo "  overwriting (this can take hours on a large disk) …"
-      if run_overwrite "$dev"; then
-        m="Overwrite — shred 1 pass + zero ($(clear_label "$rota"))"
-      else
-        echo "  overwrite failed: ${OVR_ERR:-unknown error}"
-      fi
-    fi
-
-    # Verification — overwrite must read back as zeros; a firmware crypto erase
-    # leaves undecryptable ciphertext (not zeros), so it's controller-confirmed.
-    if [ -n "$m" ]; then
-      echo "  verifying …"
-      if verify_zero "$dev"; then
-        verified=1; m="$m — verified (reads as zeros)"
-      elif [ "$fw" = "1" ]; then
-        verified=1; m="$m — controller-confirmed"
-      else
-        echo "  verify failed — falling back to a full overwrite pass …"
-        if run_overwrite "$dev" && verify_zero "$dev"; then
-          m="Overwrite — shred 1 pass + zero ($(clear_label "$rota")) — verified (reads as zeros)"; verified=1
-        fi
-      fi
-    fi
-
-    if [ -n "$m" ] && [ "$verified" = "1" ]; then
-      echo "  ✓ $m"
-      methods="${methods:+$methods; }$m"
-    else
-      echo "  ✗ FAILED on $dev${m:+ ($m)}"
-      all_ok=0
-    fi
-  done
-
-  WIPE_METHOD=$(printf '%s' "$methods" | tr ';' '\n' | sed 's/^ *//' | grep -v '^$' | sort -u | paste -sd'; ' -)
-  if [ $all_ok -eq 1 ]; then
-    WIPE_STATUS="wiped"; echo "Data wipe complete."
-  else
-    WIPE_STATUS="failed"; echo "Data wipe had failures — recording as FAILED."
-  fi
-  echo "======================================================"
+  echo "Data wipe: NOT run here. AUDIT_WIPE=1 is set in audit.conf, but wiping"
+  echo "is now done from the kiosk screen, one drive at a time, so each drive"
+  echo "gets its own record. Nothing has been erased by this run."
+  echo
+  return 0
 }
 
 # ---- GUI single-drive wipe entrypoint --------------------------------------
-# Called as:  hardware-audit.sh --wipe-drive /dev/sdX [auto|crypto|secure|overwrite]
-# Wipes ONE explicitly named internal drive, reusing the same tested erase
-# helpers as the batch flow (firmware_erase / shred + verify_zero).
-# Emits human-readable progress on stdout and a final machine-readable line:
-#   WIPE_RESULT {"status":"wiped|failed","method":"…","device":"/dev/sdX"}
-# Refuses removable devices, USB-attached devices, and the disk the system
-# booted from - three separate checks, so the boot drive is never selected even
-# when it is a fixed-reporting SSD. (This comment used to claim USB was refused
-# when only the removable flag was checked.)
+# Called as:
+#   hardware-audit.sh --wipe-drive /dev/sdX [auto|crypto|secure|overwrite|zero] [expected-serial]
+# Wipes ONE explicitly named internal drive with the erase helpers above
+# (firmware_erase / shred + verify_zero). This is the only wipe path.
+# Emits human-readable progress on stdout and EXACTLY ONE final line on every
+# exit path (see wipe_result and contract C1):
+#   WIPE_RESULT {"status":"wiped|failed|refused","device":"/dev/sdX","method":"…",
+#                "reason":"…","toolVersion":…,"startedAt":…,"finishedAt":…,
+#                "drive":{"serialNumber":…},"methodRequested":…}
+# "refused" means NOTHING was written: not a block device, removable, USB, the
+# boot disk, a pseudo-device, or not the drive the operator picked (serial
+# mismatch). Removable, USB and boot disk are three separate checks, so the
+# boot drive is never selected even when it is a fixed-reporting SSD. (This
+# comment used to claim USB was refused when only the removable flag was
+# checked.)
 # --- overwrite with LIVE progress and a captured reason on failure -----------
 # A 250GB spinning disk takes hours to overwrite. Running shred silently made the
 # GUI look frozen for that whole time, and discarding its output threw away the
@@ -736,29 +794,141 @@ als_boot_disk() {
   return 1
 }
 
+# --- the drive's OWN identity, read from the drive -----------------------------
+#
+# A wipe record used to say which DEVICE PATH was wiped (/dev/sda) and nothing
+# about the drive itself. Device names are handed out at boot in probe order;
+# they are not an identity. A certificate - and the per-drive records built on
+# it - have to name the drive by what it reports: its serial, model and size.
+#
+# Defined HERE, above the --wipe-drive dispatch, on purpose. The profile code's
+# pval() does the same parsing but is defined after the dispatch has already
+# exited, so gui_wipe_one cannot see it.
+#
+# Pull KEY="value" out of one lsblk -P line, without eval, trimmed, with
+# lsblk's escapes normalised by als_lsblk_unescape. The profile's storage loop
+# uses THIS helper for SERIAL and MODEL too, so the serial the kiosk sends back
+# as the expected serial (storage[].serialNumber) is byte-for-byte the text
+# DRV_SERIAL holds here. When the two were normalised differently (the profile
+# kept lsblk's raw "\x24", this side decoded it to "$"), a drive whose serial
+# held any escaped byte was refused as "identity mismatch" on every attempt.
+als_lsblk_val() {
+  local v
+  v=$(printf ' %s' "$1" | grep -oE " $2=\"[^\"]*\"" | head -n1 | sed -e "s/^ $2=\"//" -e 's/"$//')
+  als_lsblk_unescape "$v" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
+}
+# lsblk -P writes a quote, backslash, $, backtick and any byte it cannot print
+# in the current locale as \xNN (a backslash itself is \x5c), so the only
+# backslashes in a value are those escapes. Turn them back into text ONLY where
+# that is safe:
+#   \x20-\x7e  printable ASCII: decoded (\x24 -> $, \x22 -> ", \x5c -> \)
+#   \x00-\x1f, \x7f  control bytes: dropped (JSON cannot carry them raw)
+#   \x80-\xff  kept as the literal four characters \xNN
+# The last rule is the one that matters. This used to decode everything with
+# printf %b, so a stray 0xFF pad byte in a firmware model string came back as
+# a raw 0xFF - not UTF-8, so the WIPE_RESULT line was not valid text and the
+# kiosk (which reads the engine as strict UTF-8) died decoding it: an erased
+# drive with no record. Leaving high bytes as escape text keeps every line
+# pure ASCII for what lsblk escaped. A real accented character lsblk printed
+# unescaped (a UTF-8 locale) passes through as it was.
+als_lsblk_unescape() {
+  local s="$1" out="" h c
+  while :; do
+    case "$s" in *'\x'*) ;; *) break ;; esac
+    out="$out${s%%\\x*}"
+    s="${s#*\\x}"
+    h="${s:0:2}"
+    case "$h" in
+      [0-9a-fA-F][0-9a-fA-F])
+        if [ $((16#$h)) -ge 32 ] && [ $((16#$h)) -le 126 ]; then
+          printf -v c '%b' "\\x$h"
+          out="$out$c"; s="${s:2}"; continue
+        elif [ $((16#$h)) -lt 32 ] || [ $((16#$h)) -eq 127 ]; then
+          s="${s:2}"; continue
+        fi
+        ;;
+    esac
+    out="$out\\x"
+  done
+  printf '%s' "$out$s"
+}
+# Sets DRV_SERIAL DRV_MODEL DRV_SIZE DRV_TRAN DRV_ROTA DRV_WWN for device $1.
+# Any of them may be empty: some drives report no serial (owner decision D18:
+# allowed, recorded as unknown), and USB bridges often hide it.
+als_drive_identity() {
+  local line
+  DRV_SERIAL=""; DRV_MODEL=""; DRV_SIZE=""; DRV_TRAN=""; DRV_ROTA=""; DRV_WWN=""
+  line=$(lsblk -dbnP -o SERIAL,MODEL,SIZE,TRAN,ROTA,WWN "$1" 2>/dev/null | head -n1)
+  [ -n "$line" ] || return 1
+  DRV_SERIAL=$(als_lsblk_val "$line" SERIAL)
+  DRV_MODEL=$(als_lsblk_val "$line" MODEL)
+  DRV_SIZE=$(als_lsblk_val "$line" SIZE)
+  DRV_TRAN=$(als_lsblk_val "$line" TRAN)
+  DRV_ROTA=$(als_lsblk_val "$line" ROTA)
+  DRV_WWN=$(als_lsblk_val "$line" WWN)
+  return 0
+}
+
+# UTC, ISO-8601, second precision: 2026-09-19T10:01:07Z
+als_utc_now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+
+# Print THE result line of a gui_wipe_one run. $1 status, $2 method, $3 reason.
+# Reads WR_DEV / WR_WANT / WR_STARTED (set at the top of gui_wipe_one) and the
+# DRV_* identity. Built with the o_* helpers, never by hand: a model name or a
+# shred error with a quote in it used to be able to break the line, and the
+# kiosk then had no result at all for a drive it had just wiped.
+# Fields that were not read are left out rather than sent empty.
+wipe_result() {
+  local drv
+  o_begin
+  o_s serialNumber "$DRV_SERIAL"
+  o_s model "$DRV_MODEL"
+  o_n sizeBytes "$DRV_SIZE"
+  o_s transport "$DRV_TRAN"
+  case "$DRV_ROTA" in 1) o_raw rotational true ;; 0) o_raw rotational false ;; esac
+  o_s wwn "$DRV_WWN"
+  drv=$(o_end)
+  o_begin
+  o_s0 status "$1"
+  o_s0 device "$WR_DEV"
+  o_s0 method "$2"
+  o_s0 reason "$3"
+  o_s toolVersion "$ALS_TOOL_VERSION"
+  o_s startedAt "$WR_STARTED"
+  o_s finishedAt "$(als_utc_now)"
+  [ "$drv" = "{}" ] || o_raw drive "$drv"
+  o_s methodRequested "$WR_WANT"
+  echo "WIPE_RESULT $(o_end)"
+}
+
 gui_wipe_one() {
-  local dev="$1" want="${2:-auto}" d rota m verified fw
+  local dev="$1" want="${2:-auto}" expect="${3:-}" d rota m verified fw
+  WR_DEV="$dev"; WR_WANT="$want"; WR_STARTED=$(als_utc_now)
+  DRV_SERIAL=""; DRV_MODEL=""; DRV_SIZE=""; DRV_TRAN=""; DRV_ROTA=""; DRV_WWN=""
   if [ -z "$dev" ] || [ ! -b "$dev" ]; then
-    echo "WIPE_RESULT {\"status\":\"failed\",\"method\":\"no such device\",\"device\":\"$dev\"}"
+    echo "Refusing: ${dev:-(no device given)} is not a block device."
+    wipe_result refused "no such device" "${dev:-(no device given)} is not a block device"
     return 1
   fi
   d="${dev#/dev/}"
+  # Read the identity FIRST, so even a refusal says which drive it refused.
+  als_drive_identity "$dev"
   if [ "$(cat "/sys/block/$d/removable" 2>/dev/null)" = "1" ]; then
     echo "Refusing: $dev is removable — the boot media is never wiped."
-    echo "WIPE_RESULT {\"status\":\"failed\",\"method\":\"removable device refused\",\"device\":\"$dev\"}"
+    wipe_result refused "removable device refused" "$dev is removable"
     return 1
   fi
   if als_disk_is_usb "$d"; then
     echo "Refusing: $dev is attached over USB - external drives, including the one"
     echo "this station booted from, are never wiped here."
-    echo "WIPE_RESULT {\"status\":\"failed\",\"method\":\"usb device refused\",\"device\":\"$dev\"}"
+    wipe_result refused "usb device refused" "$dev is attached over USB"
     return 1
   fi
   local boot
   boot=$(als_boot_disk)
   if [ -n "$boot" ] && [ "$d" = "$boot" ]; then
     echo "Refusing: $dev is the disk this system is running from."
-    echo "WIPE_RESULT {\"status\":\"failed\",\"method\":\"boot disk refused\",\"device\":\"$dev\"}"
+    wipe_result refused "boot disk refused" "$dev is the disk this system is running from"
     return 1
   fi
   # Pseudo-devices are not real disks: /dev/loop* is the boot media's own
@@ -766,10 +936,30 @@ gui_wipe_one() {
   case "$d" in
     loop*|ram*|zram*|sr*|fd*|dm-*)
       echo "Refusing: $dev is not a real disk (it is a $d pseudo-device)."
-      echo "WIPE_RESULT {\"status\":\"failed\",\"method\":\"none\",\"device\":\"$dev\",\"reason\":\"$dev is not a physical disk\"}"
+      wipe_result refused "none" "$dev is not a physical disk"
       return 1
       ;;
   esac
+  # Is this still the drive the operator chose? The kiosk passes the serial it
+  # showed on screen. Device names are assigned at boot in probe order, so a
+  # drive pulled or re-seated between the scan and the wipe - or a second disk
+  # that came up first this time - can put a DIFFERENT drive behind the same
+  # /dev name. Checked before anything is written; an empty expected serial
+  # (an older kiosk, or a drive that reports none) means no check.
+  # The kiosk sends the profile's storage[].serialNumber, which is normalised by
+  # the same als_lsblk_val as DRV_SERIAL, so an exact match is the normal case.
+  # A profile captured by an older engine kept lsblk's raw escape text (e.g.
+  # "S3Z\x241234" for S3Z$1234); normalising the expected serial the same way
+  # accepts that too. Either form names only the drive lsblk just described, so
+  # this cannot match a different drive.
+  expect=$(printf '%s' "$expect" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+  if [ -n "$expect" ] && [ "$expect" != "$DRV_SERIAL" ] \
+     && [ "$(als_lsblk_unescape "$expect" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')" != "$DRV_SERIAL" ]; then
+    echo "Refusing: $dev reports serial '${DRV_SERIAL:-none}', not the '$expect' that was selected."
+    echo "Nothing has been written. Rescan the drives and choose again."
+    wipe_result refused "identity mismatch refused" "drive serial '${DRV_SERIAL:-none}' does not match the selected drive '$expect'"
+    return 1
+  fi
   export AUDIT_WIPE_METHOD="$want"
   rota=$(cat "/sys/block/$d/queue/rotational" 2>/dev/null)
   m=""; verified=0; fw=0
@@ -834,18 +1024,18 @@ gui_wipe_one() {
 
   if [ -n "$m" ] && [ "$verified" = "1" ]; then
     echo "✓ $m"
-    echo "WIPE_RESULT {\"status\":\"wiped\",\"method\":\"$(esc "$m")\",\"device\":\"$dev\",\"reason\":\"\"}"
+    wipe_result wiped "$m" ""
     return 0
   fi
   [ -n "$reason" ] || reason="no erase method succeeded on this drive"
   echo "✗ FAILED on $dev — $reason"
-  echo "WIPE_RESULT {\"status\":\"failed\",\"method\":\"$(esc "${m:-none}")\",\"device\":\"$dev\",\"reason\":\"$(esc "$reason")\"}"
+  wipe_result failed "${m:-none}" "$reason"
   return 1
 }
 
 # GUI entrypoints run before the interactive audit flow and exit on their own.
 if [ "${1:-}" = "--wipe-drive" ]; then
-  gui_wipe_one "$2" "$3"
+  gui_wipe_one "${2:-}" "${3:-}" "${4:-}"
   exit $?
 fi
 
@@ -999,8 +1189,12 @@ STOR_ELEMS=""; SMART_SUMMARY=""
 while IFS= read -r line; do
   [ -z "$line" ] && continue
   D_NAME=$(pval "$line" NAME); D_TYPE=$(pval "$line" TYPE); D_TRAN=$(pval "$line" TRAN)
-  D_RM=$(pval "$line" RM); D_SIZE=$(pval "$line" SIZE); D_MODEL=$(pval "$line" MODEL)
-  D_SERIAL=$(pval "$line" SERIAL); D_ROTA=$(pval "$line" ROTA)
+  # SERIAL and MODEL go through als_lsblk_val (defined above the --wipe-drive
+  # dispatch), the SAME normaliser the wipe uses for the drive's own identity:
+  # the kiosk sends this serialNumber back as the expected serial, and the two
+  # must be byte-for-byte equal or the right drive is refused as a mismatch.
+  D_RM=$(pval "$line" RM); D_SIZE=$(pval "$line" SIZE); D_MODEL=$(als_lsblk_val "$line" MODEL)
+  D_SERIAL=$(als_lsblk_val "$line" SERIAL); D_ROTA=$(pval "$line" ROTA)
   [ "$D_TYPE" = "disk" ] || continue
   # Exclude USB sticks, external HDD/SSD, SD cards and the live boot medium.
   [ "$D_TRAN" = "usb" ] && continue
@@ -1396,7 +1590,9 @@ fi
 read -rp "Start audit into ${CHOSEN_NUM}${CHOSEN_SUB_NUM:+ / $CHOSEN_SUB_NUM}? [Y/n] " GO
 case "${GO:-Y}" in [nN]*) echo "Cancelled."; exit 0 ;; esac
 
-# Destructive data wipe (only if AUDIT_WIPE=1 and the operator confirms).
+# Retired: with AUDIT_WIPE=1 this only says that wiping is done at the kiosk.
+# The body below therefore never carries dataWipeStatus - this flow files an
+# audit, never a wipe record.
 wipe_internal_drives
 
 BODY="{\"lotId\":\"$CHOSEN_ID\""
@@ -1407,7 +1603,6 @@ BODY="{\"lotId\":\"$CHOSEN_ID\""
 # AUDIT_OPERATOR (optional, set in audit.conf) names the human at the bench.
 BODY="$BODY,\"auditKind\":\"goods_in\""
 [ -n "${AUDIT_OPERATOR:-}" ] && BODY="$BODY,\"operatorName\":\"$(esc "$AUDIT_OPERATOR")\""
-[ -n "$WIPE_STATUS" ] && BODY="$BODY,\"dataWipeStatus\":\"$WIPE_STATUS\",\"dataWipeMethod\":\"$(esc "$WIPE_METHOD")\""
 # biosLocked is the API's existing single boolean. Derived from the same rows
 # the report prints, so the flag can never disagree with the detail above it.
 [ -n "${BIOS_LOCKED:-}" ] && BODY="$BODY,\"biosLocked\":$BIOS_LOCKED"
@@ -1420,18 +1615,6 @@ if [ -n "$(jstr "$RESP" assetId)" ]; then
   VERB=$([ "$(jraw "$RESP" created)" = "true" ] && echo "added to" || echo "re-audited in")
   echo
   echo "✓ $(jstr "$RESP" name) ($(jstr "$RESP" tag)) $VERB $(jstr "$RESP" lot)."
-  if [ -n "$WIPE_STATUS" ]; then
-    echo
-    echo "  ═══════════════  DATA WIPE  ═══════════════"
-    echo "   Result       : $WIPE_STATUS"
-    echo "   Method        : $WIPE_METHOD"
-    case "$WIPE_METHOD" in
-      *verified*)  echo "   Verification : PASSED";;
-      *confirmed*) echo "   Verification : controller-confirmed";;
-      *)           echo "   Verification : —";;
-    esac
-    echo "  ═══════════════════════════════════════════"
-  fi
   RESULT=0
 else
   echo
