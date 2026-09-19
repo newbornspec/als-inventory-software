@@ -3,6 +3,8 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { AssetAudit } from '../assets/asset-audit.entity';
 import { isScopedManager, type RequestUser } from '../common/ownership';
+import { rollupWipe, type RollupRow } from '../devices/wipe-rollup';
+import type { WipedDrive } from '../devices/wipe-detail';
 
 // The cross-asset audit feed behind the Audit workspace. asset_audits is one
 // row per audit EVENT, and the field tools deliberately file several events
@@ -68,6 +70,12 @@ export interface DayEventRow {
   screen_size?: string | null;
   screen_resolution?: string | null;
   battery_health?: string | null;
+  // Which drive a wipe row was about, when (station clock), and who recorded
+  // it - what the per-drive verdict below needs. Optional for the same reason.
+  wiped_drive_serial?: string | null;
+  wiped_drive?: WipedDrive | null;
+  wipe_source?: string | null;
+  wiped_at?: string | null;
 }
 
 // The device's components for the day, merged like every other field here:
@@ -160,7 +168,23 @@ export function hasComponents(profile: unknown): boolean {
 // honesty depends on.
 export function groupDayEvents(rows: DayEventRow[]): AuditDayDevice[] {
   const byAsset = new Map<string, AuditDayDevice>();
+  const wipesByAsset = new Map<string, RollupRow[]>();
   for (const r of rows) {
+    if (r.data_wipe_status === 'wiped' || r.data_wipe_status === 'failed') {
+      const list = wipesByAsset.get(r.asset_id) ?? [];
+      list.push({
+        id: r.id,
+        dataWipeStatus: r.data_wipe_status,
+        dataWipeMethod: r.data_wipe_method,
+        wipedAt: r.wiped_at ?? null,
+        createdAt: r.created_at,
+        wipedDriveSerial: r.wiped_drive_serial ?? null,
+        wipedDrive: r.wiped_drive ?? null,
+        wipeSource: r.wipe_source ?? null,
+        hardwareProfile: r.hardware_profile,
+      });
+      wipesByAsset.set(r.asset_id, list);
+    }
     let d = byAsset.get(r.asset_id);
     if (!d) {
       d = {
@@ -235,6 +259,22 @@ export function groupDayEvents(rows: DayEventRow[]): AuditDayDevice[] {
   // Devices newest-activity-first; each device's events newest-first for
   // display (they arrived oldest-first so the merge above reads forward).
   const devices = [...byAsset.values()];
+  // Wipe status is the one field "last non-null wins" gets wrong (plan step
+  // 23): the kiosk files one row PER DRIVE, so drive A failing at 10:00 and
+  // drive B wiping at 10:01 read as "wiped" for the machine. The day's wipe
+  // rows go through the same per-drive, worst-first verdict the certificate
+  // and the asset status use (devices/wipe-rollup.ts), so the workspace can
+  // never show a machine as wiped that the certificate refuses. It judges the
+  // day's rows only - this is a day view - and legacy rows with no drive
+  // identity keep the interim 24-hour rule inside rollupWipe.
+  for (const d of devices) {
+    const wipes = wipesByAsset.get(d.assetId);
+    if (!wipes?.length) continue;
+    const verdict = rollupWipe(wipes).verdict;
+    if (verdict === 'wiped') d.dataWipeStatus = 'wiped';
+    else if (verdict === 'failed' || verdict === 'incomplete')
+      d.dataWipeStatus = 'failed';
+  }
   for (const d of devices) d.events.reverse();
   devices.sort((a, b) => (a.lastAt < b.lastAt ? 1 : -1));
   return devices;
@@ -301,6 +341,8 @@ export class AuditsService {
               aa."hardware_profile", aa."manufacturer", aa."model", aa."cpu",
               aa."ram_gb", aa."storage_capacity", aa."screen_size",
               aa."screen_resolution", aa."battery_health",
+              aa."wiped_drive_serial", aa."wiped_drive", aa."wipe_source",
+              aa."wiped_at",
               a."name" AS asset_name, a."tag" AS asset_tag, a."unit_id",
               a."serial_number", a."device_type",
               u."name" AS auditor_name

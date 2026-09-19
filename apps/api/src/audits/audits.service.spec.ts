@@ -154,6 +154,70 @@ describe('groupDayEvents', () => {
     expect(devices.find((d) => d.assetId === 'a1')!.events).toHaveLength(3);
   });
 
+  it('one drive failing makes the machine failed for the day, whichever drive finished last (plan step 23)', () => {
+    const drive = (serial: string) => ({
+      serialNumber: serial,
+      model: 'SSD',
+      devicePath: '/dev/' + serial,
+    });
+    for (const order of [
+      ['fail', 'wipe'],
+      ['wipe', 'fail'],
+    ]) {
+      const rows = order.map((o, i) =>
+        row({
+          id: 'e' + i,
+          created_at: `2026-08-22T09:0${i}:00Z`,
+          data_wipe_status: o === 'fail' ? 'failed' : 'wiped',
+          data_wipe_method:
+            o === 'fail'
+              ? 'none'
+              : 'NVMe crypto erase — verified (reads as random)',
+          wiped_drive_serial: o === 'fail' ? 'DRV-A' : 'DRV-B',
+          wiped_drive: drive(o === 'fail' ? 'DRV-A' : 'DRV-B'),
+          wipe_source: 'station',
+        }),
+      );
+      expect(groupDayEvents(rows)[0].dataWipeStatus).toBe('failed');
+    }
+  });
+
+  it('a failed drive re-wiped the same day reads wiped', () => {
+    const a = { serialNumber: 'DRV-A', model: 'SSD', devicePath: '/dev/sda' };
+    const d = groupDayEvents([
+      row({
+        id: 'e1',
+        created_at: '2026-08-22T09:00:00Z',
+        data_wipe_status: 'failed',
+        wiped_drive_serial: 'DRV-A',
+        wiped_drive: a,
+        wipe_source: 'station',
+      }),
+      row({
+        id: 'e2',
+        created_at: '2026-08-22T09:30:00Z',
+        data_wipe_status: 'wiped',
+        data_wipe_method: 'Overwrite — single zero pass (NIST Clear)',
+        wiped_drive_serial: 'DRV-A',
+        wiped_drive: a,
+        wipe_source: 'station',
+      }),
+    ])[0];
+    expect(d.dataWipeStatus).toBe('wiped');
+  });
+
+  it('a single legacy wipe row (no drive identity) reads as before', () => {
+    const d = groupDayEvents([
+      row({
+        id: 'e1',
+        created_at: '2026-08-22T09:00:00Z',
+        data_wipe_status: 'wiped',
+        data_wipe_method: 'NIST 800-88 Purge',
+      }),
+    ])[0];
+    expect(d.dataWipeStatus).toBe('wiped');
+  });
+
   it("orders devices by latest activity and each device's events newest-first", () => {
     const devices = groupDayEvents([
       row({ id: 'e1', asset_id: 'a1', created_at: '2026-08-22T09:00:00Z' }),
