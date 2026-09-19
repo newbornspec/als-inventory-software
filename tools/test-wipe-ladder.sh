@@ -166,6 +166,42 @@ grep -q 'm="Block discard' "$SRC" && bad "TRIM is never a recorded method" "stil
 unl=$(grep -n 'm="Overwrite' "$SRC" | grep -v 'clear_label')
 [ -z "$unl" ] && ok "every overwrite result is labelled by medium" || bad "every overwrite result is labelled by medium" "$unl"
 
+echo "D9: the text-mode wipe is retired - AUDIT_WIPE=1 wipes nothing and files no wipe"
+# Runs the REAL text-mode tail of the script: from the wipe_internal_drives call
+# to the upload and the final exit. Sign-in, lot choice and the profile are
+# replaced by fixed values; http_post only records the body it was handed. The
+# operator "types WIPE" on stdin, so the old code would have gone ahead.
+# lsblk here reports one internal SATA disk, so a real wipe WOULD have a target;
+# the erase helpers are logging stubs and the disk tools are tripwires.
+TAIL=$(sed -n '/^wipe_internal_drives$/,$p' "$SRC")
+case "$TAIL" in *'exit "$RESULT"'*) ;; *) echo "could not find the text-mode tail - refusing to run"; exit 1 ;; esac
+WID="$(extract "$SRC" wipe_internal_drives)
+$(grep '^jstr()\|^jraw()\|^pval()' "$SRC")"
+BODYF="$T/body.json"
+: > "$LOG"; : > "$BODYF"
+TXT=$(printf 'WIPE\n\n\n' | env -i PATH="$TRIP:$SAFE" LOG="$LOG" BODYF="$BODYF" AUDIT_WIPE=1 "$BASH" -c "$FUNCS
+$WID
+$STUBS
+lsblk() { case \"\$*\" in *-dP*) echo 'NAME=\"sdz\" TYPE=\"disk\" TRAN=\"sata\" RM=\"0\"' ;; esac; return 0; }
+http_post() { printf '%s' \"\$2\" > \"\$BODYF\"; echo '{\"assetId\":\"a1\",\"name\":\"X\",\"tag\":\"T\",\"lot\":\"L\",\"created\":true}'; }
+API=http://test.invalid; TOKEN=t; CHOSEN_ID=lot1; CHOSEN_SUB_ID=; PROFILE='{}'
+$TAIL" 2>&1)
+CALLS=$(command cat "$LOG")
+[ -z "$CALLS" ] && ok "text mode, AUDIT_WIPE=1: no erase helper or disk tool was called" \
+  || bad "text mode, AUDIT_WIPE=1: no erase helper or disk tool was called" "$(printf '%s' "$CALLS" | head -n3 | tr '\n' ' ')"
+BODY=$(command cat "$BODYF")
+case "$BODY" in
+  '{"lotId":"lot1"'*) ok "text mode: the audit itself was still uploaded" ;;
+  *) bad "text mode: the audit itself was still uploaded" "body: $BODY / out: $(printf '%s' "$TXT" | tail -n3 | tr '\n' ' ')" ;;
+esac
+case "$BODY" in
+  *dataWipe*) bad "text mode: the upload carries no dataWipeStatus/Method" "$BODY" ;;
+  *) ok "text mode: the upload carries no dataWipeStatus/Method" ;;
+esac
+case "$TXT" in *"done from the kiosk screen"*) ok "text mode: the operator is told to wipe from the kiosk" ;; *) bad "text mode: the operator is told to wipe from the kiosk" "$TXT" ;; esac
+body=$(extract "$SRC" wipe_internal_drives)
+case "$body" in *firmware_erase*|*run_overwrite*|*verify_zero*|*shred*|*nvme*|*hdparm*) bad "text mode: the duplicated ladder is gone, not left dead" "$body" ;; *) ok "text mode: the duplicated ladder is gone, not left dead" ;; esac
+
 echo
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

@@ -412,12 +412,12 @@ ensure_tools() {
   return 0
 }
 
-# --- OPTIONAL, DESTRUCTIVE: securely erase the machine's INTERNAL drives ---
-# Runs ONLY when AUDIT_WIPE=1 in audit.conf, AND the operator types WIPE to
-# confirm. Every command targets ONE specific device (nvme / hdparm / shred) — none can touch another drive — and USB/removable disks are excluded,
-# so the boot stick is never at risk. Sets WIPE_STATUS + WIPE_METHOD for the
-# upload so the wipe lands on the audit record and the erasure certificate.
-WIPE_STATUS=""; WIPE_METHOD=""
+# --- DESTRUCTIVE: the erase helpers behind gui_wipe_one ---------------------
+# Every command below targets ONE specific device (nvme / hdparm / shred) - none
+# can touch another drive. The only caller is gui_wipe_one (the kiosk's
+# per-drive wipe, `--wipe-drive`), which refuses USB, removable, boot and
+# pseudo devices before any of these run. The text-mode wipe that used to call
+# them too was retired - see wipe_internal_drives.
 
 # Verification pass: sampled read-back confirming the device now reads as zeros
 # at the start, middle and near the end. Returns 0 (verified) or 1 (not clean).
@@ -545,102 +545,33 @@ clear_label() {
   if [ "${1:-}" = "1" ]; then echo "NIST Clear"; else echo "NIST Clear; flash: user-addressable blocks only"; fi
 }
 
+# The text-mode wipe is RETIRED (owner decision D9, 19 Sep 2026; reversible).
+#
+# This used to be a second, complete copy of the wipe ladder: it listed every
+# internal drive, erased them one after another, and then merged all of them
+# into ONE status and ONE method string for the upload. So a machine with a
+# wiped NVMe and a failed SATA disk filed a single record, and every later fix
+# to the ladder (TRIM, the verify read, the drive's own identity) had to be made
+# twice - and was not always. The kiosk's gui_wipe_one does the same job one
+# drive at a time, with one result per drive.
+#
+# It stays as a stub so an old audit.conf with AUDIT_WIPE=1 is told plainly
+# what happened instead of being silently ignored. It wipes NOTHING and sets
+# nothing that the upload would file as a wipe.
 wipe_internal_drives() {
   [ "${AUDIT_WIPE:-0}" = "1" ] || return 0
-
-  local disks=() line n t tr rm
-  while IFS= read -r line; do
-    [ -z "$line" ] && continue
-    n=$(pval "$line" NAME); t=$(pval "$line" TYPE); tr=$(pval "$line" TRAN); rm=$(pval "$line" RM)
-    [ "$t" = "disk" ] || continue
-    [ "$tr" = "usb" ] && continue
-    [ "$rm" = "1" ] && continue
-    [ "$(cat "/sys/block/$n/removable" 2>/dev/null)" = "1" ] && continue
-    disks+=("$n")
-  done <<WIPEEOF
-$(lsblk -dP -o NAME,TYPE,TRAN,RM 2>/dev/null)
-WIPEEOF
-
-  [ "${#disks[@]}" -eq 0 ] && { echo "Data wipe: no internal drive found — skipped."; return 0; }
-
   echo
-  echo "=====================  DATA WIPE  ====================="
-  echo "This will PERMANENTLY erase the internal drive(s) below."
-  local d
-  for d in "${disks[@]}"; do
-    printf "   /dev/%-9s %8s  %s\n" "$d" \
-      "$(lsblk -dno SIZE "/dev/$d" 2>/dev/null)" "$(lsblk -dno MODEL "/dev/$d" 2>/dev/null)"
-  done
-  echo "(The USB you booted from is NOT listed and will not be touched.)"
-  local ans
-  read -rp "Type WIPE to erase, or press Enter to skip: " ans
-  [ "$ans" = "WIPE" ] || { echo "Data wipe skipped."; return 0; }
-
-  local all_ok=1 methods="" dev rota m verified
-  for d in "${disks[@]}"; do
-    dev="/dev/$d"; m=""; verified=0
-    rota=$(cat "/sys/block/$d/queue/rotational" 2>/dev/null)
-    echo "Erasing $dev …"
-
-    # 1) Firmware crypto/secure erase where the drive supports it (NIST Purge).
-    local fw=0
-    if firmware_erase "$dev" "$d"; then m="$M"; fw=1; fi
-    # 2) NOT TRIM. blkdiscard used to sit here and be recorded as the wipe.
-    #    TRIM is a hint to the controller, not an erase: it may defer the work
-    #    or never do it, and the data stays in NAND until garbage collection.
-    #    A TRIMmed drive then reads back zeros BY DESIGN (DRAT/RZAT), so
-    #    verify_zero passed it and the certificate said "unrecoverable" about
-    #    data that could still be there. Neither NIST 800-88 nor IEEE 2883
-    #    counts discard as a sanitisation. See gui_wipe_one for the same fix.
-    # 3) Overwrite fallback (NIST Clear). Streams progress — a full pass on a
-    #    spinning disk takes hours and must not look like a hang.
-    if [ -z "$m" ]; then
-      echo "  overwriting (this can take hours on a large disk) …"
-      if run_overwrite "$dev"; then
-        m="Overwrite — shred 1 pass + zero ($(clear_label "$rota"))"
-      else
-        echo "  overwrite failed: ${OVR_ERR:-unknown error}"
-      fi
-    fi
-
-    # Verification — overwrite must read back as zeros; a firmware crypto erase
-    # leaves undecryptable ciphertext (not zeros), so it's controller-confirmed.
-    if [ -n "$m" ]; then
-      echo "  verifying …"
-      if verify_zero "$dev"; then
-        verified=1; m="$m — verified (reads as zeros)"
-      elif [ "$fw" = "1" ]; then
-        verified=1; m="$m — controller-confirmed"
-      else
-        echo "  verify failed — falling back to a full overwrite pass …"
-        if run_overwrite "$dev" && verify_zero "$dev"; then
-          m="Overwrite — shred 1 pass + zero ($(clear_label "$rota")) — verified (reads as zeros)"; verified=1
-        fi
-      fi
-    fi
-
-    if [ -n "$m" ] && [ "$verified" = "1" ]; then
-      echo "  ✓ $m"
-      methods="${methods:+$methods; }$m"
-    else
-      echo "  ✗ FAILED on $dev${m:+ ($m)}"
-      all_ok=0
-    fi
-  done
-
-  WIPE_METHOD=$(printf '%s' "$methods" | tr ';' '\n' | sed 's/^ *//' | grep -v '^$' | sort -u | paste -sd'; ' -)
-  if [ $all_ok -eq 1 ]; then
-    WIPE_STATUS="wiped"; echo "Data wipe complete."
-  else
-    WIPE_STATUS="failed"; echo "Data wipe had failures — recording as FAILED."
-  fi
-  echo "======================================================"
+  echo "Data wipe: NOT run here. AUDIT_WIPE=1 is set in audit.conf, but wiping"
+  echo "is now done from the kiosk screen, one drive at a time, so each drive"
+  echo "gets its own record. Nothing has been erased by this run."
+  echo
+  return 0
 }
 
 # ---- GUI single-drive wipe entrypoint --------------------------------------
 # Called as:  hardware-audit.sh --wipe-drive /dev/sdX [auto|crypto|secure|overwrite]
-# Wipes ONE explicitly named internal drive, reusing the same tested erase
-# helpers as the batch flow (firmware_erase / shred + verify_zero).
+# Wipes ONE explicitly named internal drive with the erase helpers above
+# (firmware_erase / shred + verify_zero). This is the only wipe path.
 # Emits human-readable progress on stdout and a final machine-readable line:
 #   WIPE_RESULT {"status":"wiped|failed","method":"…","device":"/dev/sdX"}
 # Refuses removable devices, USB-attached devices, and the disk the system
@@ -1396,7 +1327,9 @@ fi
 read -rp "Start audit into ${CHOSEN_NUM}${CHOSEN_SUB_NUM:+ / $CHOSEN_SUB_NUM}? [Y/n] " GO
 case "${GO:-Y}" in [nN]*) echo "Cancelled."; exit 0 ;; esac
 
-# Destructive data wipe (only if AUDIT_WIPE=1 and the operator confirms).
+# Retired: with AUDIT_WIPE=1 this only says that wiping is done at the kiosk.
+# The body below therefore never carries dataWipeStatus - this flow files an
+# audit, never a wipe record.
 wipe_internal_drives
 
 BODY="{\"lotId\":\"$CHOSEN_ID\""
@@ -1407,7 +1340,6 @@ BODY="{\"lotId\":\"$CHOSEN_ID\""
 # AUDIT_OPERATOR (optional, set in audit.conf) names the human at the bench.
 BODY="$BODY,\"auditKind\":\"goods_in\""
 [ -n "${AUDIT_OPERATOR:-}" ] && BODY="$BODY,\"operatorName\":\"$(esc "$AUDIT_OPERATOR")\""
-[ -n "$WIPE_STATUS" ] && BODY="$BODY,\"dataWipeStatus\":\"$WIPE_STATUS\",\"dataWipeMethod\":\"$(esc "$WIPE_METHOD")\""
 # biosLocked is the API's existing single boolean. Derived from the same rows
 # the report prints, so the flag can never disagree with the detail above it.
 [ -n "${BIOS_LOCKED:-}" ] && BODY="$BODY,\"biosLocked\":$BIOS_LOCKED"
@@ -1420,18 +1352,6 @@ if [ -n "$(jstr "$RESP" assetId)" ]; then
   VERB=$([ "$(jraw "$RESP" created)" = "true" ] && echo "added to" || echo "re-audited in")
   echo
   echo "✓ $(jstr "$RESP" name) ($(jstr "$RESP" tag)) $VERB $(jstr "$RESP" lot)."
-  if [ -n "$WIPE_STATUS" ]; then
-    echo
-    echo "  ═══════════════  DATA WIPE  ═══════════════"
-    echo "   Result       : $WIPE_STATUS"
-    echo "   Method        : $WIPE_METHOD"
-    case "$WIPE_METHOD" in
-      *verified*)  echo "   Verification : PASSED";;
-      *confirmed*) echo "   Verification : controller-confirmed";;
-      *)           echo "   Verification : —";;
-    esac
-    echo "  ═══════════════════════════════════════════"
-  fi
   RESULT=0
 else
   echo
