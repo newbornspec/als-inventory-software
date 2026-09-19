@@ -430,13 +430,12 @@ try:
     class _R:
         stdout = LSBLK
 
-    real_run, real_smart = srv.subprocess.run, srv.smart_health
+    real_run = srv.subprocess.run
     srv.subprocess.run = lambda *a, **k: _R()
-    srv.smart_health = lambda *a, **k: None
     try:
         listed = REAL_LIST_DRIVES(force=True)
     finally:
-        srv.subprocess.run, srv.smart_health = real_run, real_smart
+        srv.subprocess.run = real_run
     check("list_drives: serial decoded", listed and listed[0].get("serial") == "ABC$123", listed)
 
     # The profile holds the RAW lsblk value (the engine's pval does not decode).

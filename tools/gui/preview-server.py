@@ -66,12 +66,27 @@ DRIVES = [
     {"device": "/dev/nvme0n1", "name": "nvme0n1", "size": "512 GB", "bytes": 512110190592,
      "rotational": False, "model": "Samsung SSD 980 PRO", "serial": "S5GXNX0T812345",
      "transport": "nvme", "method": "NVMe firmware erase (crypto/secure)",
-     "health": {"status": "good", "reasons": [], "hours": 1234, "tempC": 38}},
+     # Health as server.py's with_health() hands it over (contract C5).
+     "health": {"measured": True, "percent": 94, "status": "good",
+                "basis": "life remaining 94% reported by the drive", "reasons": [],
+                "source": "nvme", "smartPassed": True, "temperatureC": 38,
+                "powerOnHours": 1234, "lifeUsedPct": 6, "selfTest": "none",
+                "tool": "smartctl 7.4"},
+     "healthView": {"cls": "ok", "title": "94% · Good",
+                    "detail": "life remaining 94% reported by the drive · 38 °C · 1,234 h"
+                              " · life used 6%"}},
     {"device": "/dev/sda", "name": "sda", "size": "500 GB", "bytes": 500107862016,
      "rotational": True, "model": "WDC WD5000LPLX", "serial": "",
      "transport": "sata", "method": "ATA secure erase / overwrite (HDD)",
-     "health": {"status": "caution", "reasons": ["3 reallocated sectors"], "hours": 20111,
-                "tempC": 41}},
+     "health": {"measured": True, "percent": 74, "status": "caution",
+                "basis": "3 reallocated sectors, 2 uncorrectable sectors; SMART passed",
+                "reasons": ["3 reallocated sectors", "2 uncorrectable sectors"],
+                "source": "ata-hdd", "smartPassed": True, "temperatureC": 41,
+                "powerOnHours": 20111, "reallocatedSectors": 3, "pendingSectors": 0,
+                "uncorrectableSectors": 2, "selfTest": "passed", "tool": "smartctl 7.4"},
+     "healthView": {"cls": "warn", "title": "74% · Caution",
+                    "detail": "3 reallocated sectors, 2 uncorrectable sectors; SMART passed"
+                              " · 41 °C · 20,111 h"}},
 ]
 for _d in DRIVES:
     _d["controller"] = "nvme0" if _d["device"].startswith("/dev/nvme") else None
@@ -91,7 +106,13 @@ def bootstrap():
                    "hw": {"processor": "Intel Core i5-8350U", "memory": "16 GB",
                           "storage": "512 GB NVMe + 500 GB HDD", "display": "14in 1920x1080",
                           "network": "Intel Wi-Fi", "batteryLine": "82% health",
-                          "tpm": "2.0"}},
+                          "tpm": "2.0"},
+                   # server.py's drive_health_lines(): one row per drive (contract C5).
+                   "driveHealth": [dict(d["healthView"],
+                                        drive="%s %s (%s)" % (d["size"],
+                                                              "NVMe" if d["controller"] else "HDD",
+                                                              d["name"]))
+                                   for d in DRIVES]},
         "lots": [{"id": "lot-1", "batchNumber": "B-0042", "actualUnitCount": 12,
                   "expectedUnitCount": 20, "createdAt": "2026-09-01T09:00:00Z",
                   "createdByName": "Preview"}],

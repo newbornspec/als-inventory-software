@@ -20,6 +20,7 @@ really erases a drive, and that a machine with two drives gets a true record.
 | 9 | NVMe namespaces and two-NVMe laptops | half a day | 37 |
 | 10 | Limitations on the record (frozen drive, bad sectors) | half a day | 40 |
 | 11 | Optional: suspend to unfreeze | half a day | 42 |
+| 12 | Drive health as a percentage | 30 min | C5 |
 
 > ⚠️ **Every wipe in this file destroys data.** Use **sacrificial drives
 > only**. Before you confirm a wipe, check the model **and** serial on the
@@ -70,6 +71,7 @@ $g = Get-Content "$s\gui\index.html" -Raw
 "suspend guard (test 11) : " + ($e -match 'mem_sleep')
 "Rescan button (2D)      : " + ($g -match 'onclick="rescan\(\)"')
 "403 signs out (4, 7.2)  : " + ($k -match 'SESSION_ENDED_403')
+"drive health (test 12)  : " + ($e -match 'als_health_py')
 ```
 
 `False` means that change is not on the stick. Skip that test for now. (The
@@ -979,3 +981,60 @@ wiped.
   It goes on the list of machines where this must stay off.
 
 **Send back:** photos of both runs' details, and whether the machine resumed.
+
+---
+
+## Test 12 — Drive health as a percentage (contract C5)
+
+**What it proves:** each drive shows a health **percentage** and a status
+(Good 90-100, Caution 50-89, Bad 0-49) worked out from the drive's own SMART
+data, in the hardware panel and on the wipe screen - and never "Unknown".
+Nothing is wiped in this test.
+
+**Needs:** `drive health (test 12)` = True. For an eMMC laptop, a layer
+rebuilt after this change (it adds `mmc-utils`); without it an eMMC says
+"this build cannot read eMMC health - update the stick", which is correct.
+
+**Equipment:** any laptop with an NVMe or SATA SSD; if you have them, a hard
+disk with known bad sectors, and a machine set to "RAID On" in the BIOS.
+
+### Steps
+
+1. Boot the laptop from the stick and let the capture finish.
+2. Press **Display all system hardware information**. Next to **Battery**
+   there is a **Drive health** row with one line per drive, each naming the
+   drive it is about, for example `512GB NVMe (nvme0n1) 94% · Good`, with the
+   reason underneath
+   (`life remaining 94% reported by the drive · 36 °C · 5,678 h · life used 6%`).
+3. Open the **Wipe** panel. The drive's badge / banner shows the **same**
+   percentage and status as step 2 (it is the same reading).
+4. Open a terminal (see "Opening a terminal on the station") and run
+   `sudo smartctl -x /dev/nvme0n1` (or `/dev/sda`). Check the numbers the
+   line was worked out from: `Percentage Used` / `Available Spare` (NVMe), or
+   the wear attribute and attributes 5 / 197 / 198 (SATA).
+5. If you have the RAID machine: capture it. The Drive health row says
+   `Not measurable — behind a RAID/Intel RST controller` and
+   `set the storage mode to AHCI in the BIOS, then press Rescan`. Do that and
+   Rescan: the drive now shows a percentage. On a machine whose spare SATA
+   controller is left in RAID mode with nothing plugged into it, the row
+   reads `Storage controller in RAID mode` with the same advice - it does not
+   claim a drive that is not there.
+6. If you have a SAS disk in a caddy or a server pull-out: it has no SMART
+   attribute table, and its percentage comes from its grown defect list and
+   uncorrected error counts. Check them with
+   `sudo smartctl -x /dev/sdX | grep -i "defect\|uncorrected"`.
+
+**Pass:**
+- Every drive shows a percentage and a status, or `Not measurable — <reason>`
+  with what to do. Nowhere says "Unknown" or "SMART not available".
+- The wipe list's badge and the panel row use exactly the same words for the
+  same drive.
+- A drive that had SMART switched off and was switched on by the station says
+  so in its reason line.
+- NVMe: the percentage is `100 - Percentage Used` (or the Available Spare if
+  that is lower), unless the reason line names a fault that lowered it.
+- The capture's text summary (Show details) has a `Drive health` line per drive.
+- Step 3 matches step 2.
+
+**Send back:** a photo of the Drive health row, the output of step 4, and the
+make and model of any machine that shows `Not measurable`.

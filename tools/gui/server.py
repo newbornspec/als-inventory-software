@@ -1907,14 +1907,11 @@ def refresh(do_login=True):
             STATE["profile"], STATE["summary"] = None, ""
             raise
         STATE["profile"], STATE["summary"] = prof, summ
-        # Attach SMART health to the profile so it is stored on the asset record
-        # (profile is kept verbatim as JSONB, so this needs no API change).
-        if isinstance(STATE["profile"], dict):
-            STATE["profile"]["driveHealth"] = [
-                {"device": d["device"], "model": d.get("model"), "size": d.get("size"),
-                 "health": d.get("health")}
-                for d in list_drives()
-            ]
+        # Drive health is in the profile already: the engine reads it as root
+        # into storage[].health (contract C5). This used to graft a second copy
+        # on here, profile["driveHealth"], from the kiosk's own smartctl probe -
+        # which ran as the desktop user, was refused by the kernel, and so
+        # uploaded null or "unknown" for every drive on every record.
         if do_login:
             wifi_msg = connect_network()
             # The boot-time sync_clock runs BEFORE this - before the station
@@ -2002,14 +1999,6 @@ def ident():
     cores = joins(["%sC" % c["cores"] if c.get("cores") else "",
                    "%sT" % c["threads"] if c.get("threads") else ""], "/")
 
-    # Worst drive health across the internal disks, shown on the Storage line.
-    rank = {"failing": 3, "caution": 2, "healthy": 1}
-    worst = ""
-    for d in list_drives():
-        s = ((d.get("health") or {}).get("status") or "")
-        if rank.get(s, 0) > rank.get(worst, 0):
-            worst = s
-    health_note = (" · Health: %s" % worst.capitalize()) if worst else ""
     return {
         "name": " ".join(x for x in [i.get("manufacturer"), i.get("model")] if x) or "Unknown device",
         "deviceType": i.get("deviceType", ""),
@@ -2019,13 +2008,17 @@ def ident():
         "storage": ", ".join(" ".join(x for x in [d.get("capacity"), d.get("type")] if x) for d in st),
         "drives": st,
         "battery": bat.get("health", ""),
+        # One Drive health line per internal drive for the hardware panel,
+        # next to Battery (contract C5 wording, built by health_view), plus
+        # any drive the storage controller hides from Linux.
+        "driveHealth": drive_health_lines(p),
         # --- lines for the hardware panel -------------------------------------
         "hw": {
             "processor": joins([c.get("model"), cores, c.get("maxClock")]),
             "memory": joins([("%s GB" % mm["totalGb"]) if mm.get("totalGb") else "",
                              mm.get("type"), mm.get("speed")]),
-            "storage": (joins([joins([d.get("capacity"), d.get("type")], " ")
-                               for d in st], ", ") or "") + health_note,
+            "storage": joins([joins([d.get("capacity"), d.get("type")], " ")
+                              for d in st], ", "),
             "display": joins([dsp.get("size"), dsp.get("resolution")]),
             "optical": "Present" if has_optical() else "Not present",
             "network": joins([nic(net.get("wifi")), nic(net.get("bluetooth")),
@@ -2128,14 +2121,15 @@ def nvme_controller(name):
 
 def list_drives(force=False):
     """Internal (non-removable, non-USB) whole disks that can be wiped/imaged,
-    each with a friendly auto-selected method label for display.
+    each with a friendly auto-selected method label for display, and the
+    drive's health as the capture read it (with_health).
 
     Cached briefly: the UI polls bootstrap every 1.5s while hardware is being
     detected, and this is called more than once per request — without the cache
-    that is several lsblk/smartctl spawns a second on slow hardware."""
+    that is several lsblk spawns a second on slow hardware."""
     now = time.time()
     if not force and DRIVES_CACHE["data"] and now - DRIVES_CACHE["ts"] < 5:
-        return DRIVES_CACHE["data"]
+        return with_health(DRIVES_CACHE["data"])
     drives = []
     try:
         # -b gives SIZE in bytes, so the UI can estimate how long a wipe takes.
@@ -2196,7 +2190,6 @@ def list_drives(force=False):
             "serial": drive_serial(lsblk_field(line, "SERIAL")),
             "transport": tran,
             "method": method,
-            "health": smart_health("/dev/" + name),
             # The NVMe controller (or subsystem) this namespace sits on; None
             # for SATA/SAS disks. See nvme_controller.
             "controller": nvme_controller(name),
@@ -2211,7 +2204,7 @@ def list_drives(force=False):
         d["namespaces"] = [x["device"] for x in drives
                            if ctrl and x.get("controller") == ctrl]
     DRIVES_CACHE["ts"], DRIVES_CACHE["data"] = now, drives
-    return drives
+    return with_health(drives)
 
 
 def human_size(n):
@@ -2224,103 +2217,133 @@ def human_size(n):
     return "%d GB" % round(n / 1_000_000_000.0)
 
 
-SMART_CACHE = {}     # device -> (timestamp, health dict)
-SMART_PENDING = set()  # devices being probed right now, so we probe each once
+# ------------------------------------------------------------ drive health ----
+# Contract C5. The engine reads every drive's health ONCE, as root, during the
+# capture, and stores it at profile.storage[i].health. The kiosk only DISPLAYS
+# that object - it no longer runs smartctl itself.
+#
+# Why: the kiosk's own probe (smart_health, removed) ran smartctl as the
+# desktop user. The kernel refuses that user an NVMe admin command or an ATA
+# pass-through, smartctl still printed a well-formed JSON body saying "open
+# failed", and the probe read that as "no SMART": every drive on the station
+# showed "SMART not available for this drive" - the drive was blamed for the
+# probe's missing privilege. The capture already had the answer, as root.
+#
+# The wording is here, in ONE place, and the page only shows what it is given:
+#   measured      "94% · Good", then the basis and the key numbers
+#   not measured  "Not measurable — <reason>", then what to do
+#   no health     "Not scanned yet — press Rescan" (before a capture, a drive
+#                 plugged in after it, or a profile from an older engine)
+# Never "Unknown": the owner's rule is that the screen says why and what to do.
+HEALTH_CLS = {"good": "ok", "caution": "warn", "bad": "bad"}
+NOT_SCANNED = "Not scanned yet — press Rescan"
 
 
-def _smart_unknown():
-    """Probed, but SMART is unavailable/unreadable. Distinct from None (= probe
-    still running): the UI shows "Checking..." for None, and if a no-SMART drive
-    were cached as None it would say "Checking..." forever."""
-    return {"status": "unknown", "reasons": [], "hours": None, "tempC": None,
-            "reallocated": None, "pending": None, "mediaErrors": None,
-            "percentUsed": None}
-
-
-def smart_health(dev, block=False):
-    """SMART summary for one drive, so a failing disk is flagged BEFORE an
-    operator commits to a multi-hour wipe. Handles both ATA and NVMe via
-    `smartctl -j`.
-
-    NON-BLOCKING by default: smartctl can take many seconds per disk, and this
-    is reached from /api/bootstrap, which the UI polls while the page is
-    loading. Blocking here would leave the operator staring at an empty screen,
-    so an unprobed drive returns None and is probed on a background thread; the
-    next poll picks up the answer."""
-    hit = SMART_CACHE.get(dev)
-    if hit and time.time() - hit[0] < 300:
-        return hit[1]
-    if not block:
-        if dev not in SMART_PENDING:
-            SMART_PENDING.add(dev)
-            threading.Thread(target=lambda: smart_health(dev, block=True),
-                             daemon=True).start()
+def valid_health(h):
+    """A contract C5 object this page can show, or None. A measured object
+    must carry an integer percent and the status its band gives - the status is
+    never trusted on its own - and a not-measured one must say why."""
+    if not isinstance(h, dict):
         return None
-    if not shutil.which("smartctl"):
-        health = _smart_unknown()
-        SMART_CACHE[dev] = (time.time(), health)
-        SMART_PENDING.discard(dev)
-        return health
-    try:
-        out = subprocess.run(["smartctl", "-j", "-H", "-A", dev],
-                             capture_output=True, text=True, timeout=12).stdout
-        d = json.loads(out)
-    except Exception:  # noqa: BLE001
-        # Cache the failure too: every terminal state must resolve the probe.
-        health = _smart_unknown()
-        SMART_CACHE[dev] = (time.time(), health)
-        SMART_PENDING.discard(dev)
-        return health
-    if not isinstance(d, dict) or not d:
-        health = _smart_unknown()
-        SMART_CACHE[dev] = (time.time(), health)
-        SMART_PENDING.discard(dev)
-        return health
+    if h.get("measured") is True:
+        p = h.get("percent")
+        if isinstance(p, bool) or not isinstance(p, int) or not 0 <= p <= 100:
+            return None
+        return h if h.get("status") == health_band(p) else None
+    if h.get("measured") is False and isinstance(h.get("reason"), str) and h["reason"].strip():
+        return h
+    return None
 
-    passed = (d.get("smart_status") or {}).get("passed")
-    hours = (d.get("power_on_time") or {}).get("hours")
-    temp = (d.get("temperature") or {}).get("current")
-    reallocated = pending = media_err = pct_used = None
 
-    nv = d.get("nvme_smart_health_information_log") or {}
-    if nv:
-        pct_used = nv.get("percentage_used")
-        media_err = nv.get("media_errors")
-        hours = hours or nv.get("power_on_hours")
-    for a in ((d.get("ata_smart_attributes") or {}).get("table") or []):
-        raw = (a.get("raw") or {}).get("value")
-        if a.get("id") == 5:
-            reallocated = raw
-        elif a.get("id") == 197:
-            pending = raw
+def health_band(p):
+    """The owner's bands: Good 90-100, Caution 50-89, Bad 0-49."""
+    return "good" if p >= 90 else ("caution" if p >= 50 else "bad")
 
-    reasons = []
-    if passed is False:
-        reasons.append("SMART self-assessment FAILED")
-    if reallocated:
-        reasons.append("%s reallocated sector%s" % (reallocated, "" if reallocated == 1 else "s"))
-    if pending:
-        reasons.append("%s pending sector%s" % (pending, "" if pending == 1 else "s"))
-    if media_err:
-        reasons.append("%s media error%s" % (media_err, "" if media_err == 1 else "s"))
-    if isinstance(pct_used, int) and pct_used >= 90:
-        reasons.append("%d%% of rated write life used" % pct_used)
 
-    if passed is False:
-        status = "failing"
-    elif reasons:
-        status = "caution"
-    elif passed is True:
-        status = "healthy"
-    else:
-        status = "unknown"
+def health_view(h):
+    """{cls, title, detail} for one drive's health object (or None)."""
+    h = valid_health(h)
+    if h is None:
+        return {"cls": "na", "title": NOT_SCANNED, "detail": ""}
+    if h["measured"] is False:
+        return {"cls": "na", "title": "Not measurable — %s" % h["reason"].strip(),
+                "detail": str(h.get("action") or "").strip()}
+    facts = []
+    if isinstance(h.get("temperatureC"), int) and not isinstance(h.get("temperatureC"), bool):
+        facts.append("%d °C" % h["temperatureC"])
+    if isinstance(h.get("powerOnHours"), int) and not isinstance(h.get("powerOnHours"), bool):
+        facts.append("{:,} h".format(h["powerOnHours"]))
+    if isinstance(h.get("lifeUsedPct"), int) and not isinstance(h.get("lifeUsedPct"), bool):
+        facts.append("life used %d%%" % h["lifeUsedPct"])
+    detail = " · ".join([x for x in [str(h.get("basis") or "").strip()] if x] + facts)
+    return {"cls": HEALTH_CLS[h["status"]],
+            "title": "%d%% · %s" % (h["percent"], h["status"].capitalize()),
+            "detail": detail}
 
-    health = {"status": status, "reasons": reasons, "hours": hours,
-              "tempC": temp, "reallocated": reallocated, "pending": pending,
-              "mediaErrors": media_err, "percentUsed": pct_used}
-    SMART_CACHE[dev] = (time.time(), health)
-    SMART_PENDING.discard(dev)
-    return health
+
+def profile_health(name, serial):
+    """The captured health object for the drive the kiosk lists as `name`
+    (nvme0n1) with `serial`, or None. Matched by serial first - both sides
+    through drive_serial, the same normaliser the wipe identity check uses -
+    then, for a drive that reports no serial, by the kernel name the engine
+    records beside it (storage[].device)."""
+    st = (STATE.get("profile") or {}).get("storage") or []
+    st = [d for d in st if isinstance(d, dict)]
+    serial = drive_serial(serial)
+    if serial:
+        hits = [d for d in st if drive_serial(d.get("serialNumber")) == serial]
+        # Two drives that report the same serial: only the name can tell them
+        # apart, and a guess between them would show one drive's health on
+        # the other.
+        if len(hits) == 1:
+            return hits[0].get("health")
+        hits = [d for d in hits if d.get("device") == name]
+        return hits[0].get("health") if len(hits) == 1 else None
+    hits = [d for d in st if d.get("device") == name and not drive_serial(d.get("serialNumber"))]
+    return hits[0].get("health") if len(hits) == 1 else None
+
+
+def with_health(drives):
+    """list_drives' entries, each with the captured health (contract object,
+    or None) and the words to show for it. Copies: the cached list is left as
+    lsblk gave it, so a capture that finishes shows up at the next poll."""
+    out = []
+    for d in drives:
+        h = valid_health(profile_health(d.get("name"), d.get("serial")))
+        out.append(dict(d, health=h, healthView=health_view(h)))
+    return out
+
+
+def drive_health_lines(p):
+    """The hardware panel's Drive health rows: one per profile storage[] entry,
+    then one per controller that hides drives (hiddenStorage)."""
+    lines = []
+    for d in (p.get("storage") or []):
+        if not isinstance(d, dict):
+            continue
+        # Capacity and type alone are not an identity: a desktop with two
+        # 500 GB HDDs gave two identical rows with opposite verdicts, and
+        # nothing to say which disk to pull. The kernel name is what the wipe
+        # panel shows too, so the two surfaces name the same drive the same way.
+        name = " ".join(str(x) for x in [d.get("capacity"), d.get("type")] if x)
+        dev = str(d.get("device") or "").strip()
+        if name and dev:
+            name = "%s (%s)" % (name, dev)
+        lines.append(dict(health_view(d.get("health")), drive=name or dev or "Drive"))
+    for x in (p.get("hiddenStorage") or []):
+        if not isinstance(x, dict):
+            continue
+        # A count only exists when the kernel vouched for one (Intel RST says
+        # how many NVMe drives it remapped). A RAID-mode controller with
+        # nothing visible under it may be hiding disks or may simply be empty,
+        # so that row says what is known - the controller's mode - rather than
+        # sending the operator into the BIOS for a drive that may not exist.
+        n = x.get("count")
+        n = n if isinstance(n, int) and not isinstance(n, bool) and n > 0 else None
+        lines.append(dict(health_view(x.get("health")),
+                          drive="%d drive%s hidden by the storage controller" % (n, "" if n == 1 else "s")
+                          if n else "Storage controller in RAID mode"))
+    return lines
 
 
 OPTICAL_CACHE = []   # single-item cache; hardware cannot change mid-session
@@ -4268,7 +4291,6 @@ class Handler(BaseHTTPRequestHandler):
 
         if u.path == "/api/rescan":
             DRIVES_CACHE["ts"] = 0.0        # a rescan must re-read the hardware
-            SMART_CACHE.clear()
             del OPTICAL_CACHE[:]
             threading.Thread(target=refresh, daemon=True).start()
             return self._send(200, {"started": True})

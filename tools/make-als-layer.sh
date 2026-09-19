@@ -194,7 +194,14 @@ PARENT="minimal.standard.live.squashfs"
 # The separate Clonezilla USB used to CAPTURE images does not help: when a
 # customer machine is being restored it is booted from THIS stick, and only
 # one stick boots at a time.
-PACKAGES="${ALS_PACKAGES:-nvme-cli smartmontools partclone pigz libhivex-bin tpm2-tools clonezilla}"
+# mmc-utils is here for drive health (contract C5): an eMMC has no SMART, and
+# its only wear figures (EXT_CSD life-time estimates A/B and PRE_EOL_INFO) are
+# read with `mmc extcsd read`. Without it an eMMC laptop's drive health says
+# "this build cannot read eMMC health - update the stick". It is a NEW file in
+# the layer, not an upgrade: mmc-utils is in none of the 1821 packages of the
+# Ubuntu 24.04.2 desktop casper filesystem.manifest (checked 2026-09-19), and
+# it depends on nothing but libc.
+PACKAGES="${ALS_PACKAGES:-nvme-cli smartmontools mmc-utils partclone pigz libhivex-bin tpm2-tools clonezilla}"
 
 say()  { printf '%s\n' "$*"; }
 die()  { printf '\n  !!  %s\n\n' "$*" >&2; exit 1; }

@@ -382,12 +382,53 @@ are **never overwritten** by an audit.
 | Manufacturer, family, model, device type, serial, **Dell express code**, BIOS UUID | Cosmetic grade (A/B/C/D/scrap) |
 | BIOS version/date, UEFI/Legacy, Secure Boot, TPM | Functional tests (keyboard, ports, webcam, Wi-Fi…) |
 | CPU model/cores/threads/clock, RAM size/type/speed/slots | Data-wipe status + method only for a wipe done **outside** the station (kiosk wipes are recorded automatically), disposition |
-| Per-drive model/capacity/type/interface/serial + **SMART health** (status, power-on hours, reallocated/pending sectors, SSD life used) | Grade, cost, location, notes, resale value |
+| Per-drive model/capacity/type/interface/serial + **drive health** (`storage[].health`: a percentage 0-100 with status Good 90-100 / Caution 50-89 / Bad 0-49, the basis and reasons, temperature, power-on hours, life used, bad sectors / media errors, last self-test - or, when it cannot be measured, the reason and what to do; see "Drive health" below) | Grade, cost, location, notes, resale value |
 | Graphics, battery (design/full/cycle/health), network + MAC | |
 
 Some fields depend on the machine and boot: **OS/build** (usually none — units are
 wiped), **BitLocker / BIOS-password state**, and **display EDID** may come back blank.
 That's expected — the profile simply omits what it can't read.
+
+### Drive health
+
+Each internal drive's health is read once during the capture, as root, with
+`smartctl -j -x` (30 s limit per drive), or `mmc extcsd read` for an eMMC.
+The percentage is the drive's own data put through one formula
+(DRIVE-HEALTH-CONTRACT C5, `als_health_py` in `hardware-audit.sh`):
+
+1. **Life remaining** (SSD/NVMe/eMMC only): NVMe `100 - percentage_used`,
+   or the available spare if lower; SATA SSD the Device Statistics
+   "Percentage Used Endurance Indicator", else the normalised value of
+   attribute 231/233/177/202/169 (id and name must both match); eMMC
+   `100 - 10 x` the worse life-time estimate. Hard drives have no wear figure.
+2. **Error score**, from 100: 2 per reallocated sector (max 40), 10 per
+   pending sector (max 40), 10 per uncorrectable sector/error (198 + 187,
+   max 50), 10 per NVMe media error (max 50), 10 for any spin retry. CRC
+   errors are a cable fault and are only noted. A SAS/SCSI disk has no
+   attribute table: its grown defect list counts as reallocated sectors and
+   its error counter log's uncorrected read/write errors as uncorrectable.
+3. **Caps**: SMART FAILED or an attribute failing now 20; an attribute that
+   failed in the past 49; NVMe critical warning 25; last self-test failed 25;
+   eMMC pre-EOL urgent 25 / warning 89; running hot (NVMe limit, else HDD
+   55 °C, SSD 70 °C) 89.
+4. **Percent** = the lowest of the three; the status comes only from the
+   percent (Good 90-100, Caution 50-89, Bad 0-49).
+
+A drive that supports SMART but has it switched off is switched on once
+(`smartctl -s on`) and read again. That is the only write a capture makes and
+it stays on afterwards, so the health record says it happened, in the reasons
+and in the basis.
+
+The basis only ever names counters the drive actually reported: a drive that
+reports no wear figure, no error counter and no alarm of its own is recorded
+as not measurable, never as a confident 100%.
+
+When a percentage cannot be measured the record says why and what to do
+(behind a RAID/Intel RST controller → set AHCI in the BIOS and Rescan; the
+drive reports no health data; SMART switched off; the read timed out; this
+build cannot read it → update the stick). It never says "Unknown". Drives the
+controller hides from Linux entirely are listed in `hiddenStorage`, not in
+`storage[]`, so they cannot hold a machine's wipe certificate open.
 
 ### Check a machine without uploading
 
