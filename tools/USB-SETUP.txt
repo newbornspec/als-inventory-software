@@ -55,10 +55,17 @@ the ones that matter:
    AUDIT_EMAIL="station@YOUR_DOMAIN"
    AUDIT_PASSWORD="FROM_YOUR_PASSWORD_MANAGER"
 
-   # Operators type their name on the kiosk; wipes are filed with the
-   # station account above. (Sign-in with each operator's own login is
-   # planned, D27, but NOT implemented yet - no AUDIT_OPERATOR_SIGNIN
-   # setting has any effect on the current kiosk.)
+   # Who did the wipe. Default (setting absent or "0"): operators type
+   # their name on the kiosk and wipes are filed with the station
+   # account above; the certificate prints the name as self-declared.
+   # AUDIT_OPERATOR_SIGNIN="1": nobody can wipe, audit or restore until
+   # someone signs in ON THE SCREEN with their own ALS login. Signing in
+   # needs the network (there is no offline sign-in). Each record is
+   # filed under that person's own account; a record made offline waits
+   # on the stick and is sent only when THAT person signs in again. The
+   # station account is then never used. Leave it off until you have run
+   # HARDWARE-TESTS.md Test 4 on the station.
+   AUDIT_OPERATOR_SIGNIN="0"
 
    # Admin PIN for the kiosk's Settings screen. WITHOUT one, the server
    # address, image server and wipe method cannot be changed from the
@@ -113,7 +120,8 @@ switch to turn on in audit.conf any more.
 
 1. Let the kiosk read the machine first. It will not start a wipe
    without this machine's captured hardware profile (or while it is
-   still reading). If it says so, press Rescan and wait.
+   still reading). If it says so, press Rescan (top right of the
+   screen) and wait.
 2. Pick the drive(s) and the method, check the drive's size and model
    (and serial, where the screen shows it), and confirm. Several
    drives can be picked at once, but each is its own job with its own
@@ -127,21 +135,27 @@ switch to turn on in audit.conf any more.
      - the engine re-reads the drive's own serial and refuses if it is
        not the drive you picked;
      - a drive that reports NO serial is allowed; its record carries
-       no drive serial (identity unknown). The certificate does NOT
-       say so yet - today it has no line per drive (planned, D18/D23).
+       no drive serial (identity unknown), and the certificate lists
+       it as "serial not reported by the drive".
+     - SATA drives are checked for hidden areas (HPA / DCO) first. An
+       HPA is removed until the next power cycle; if it cannot be, or a
+       DCO is present, the drive FAILS (the station never runs
+       --dco-restore). If it cannot be checked at all (RAID / RST
+       controllers) the wipe goes ahead with that noted on the record.
 4. Each drive ends with ONE of three results:
 
-   WIPED    the erase ran and the drive read back as zeros - OR it
-            was a firmware erase the drive reported as done, accepted
-            WITHOUT that check ("controller-confirmed", see WIPE
-            METHODS at the bottom). A wipe record is filed for that
-            drive (serial, model, method, start/finish time, tool
-            version). The erasure certificate for the WHOLE machine
-            becomes available - see "WIPE EVERY INTERNAL DRIVE" below.
-   FAILED   the erase was attempted but did not complete or did not
-            pass its check (includes a job that died with no result).
-            A FAILED record is filed. Treat the drive as still holding
-            data and wipe it again before it can be resold.
+   WIPED    the erase ran AND the drive was read back afterwards with
+            none of its old data recognisable (see WIPE METHODS at the
+            bottom). There is no result for "the drive said it worked".
+            A wipe record is filed for that drive (serial, model, method
+            asked for and achieved, level Purge/Clear, read-back
+            verdict, limitations, start/finish time, tool version).
+   FAILED   the erase did not complete, OR the read-back found old
+            data, OR the read-back could not be done at all (an erase
+            nobody could check is never recorded as wiped). Also a job
+            that died with no result. A FAILED record is filed, with
+            the reason. Treat the drive as still holding data and wipe
+            it again before it can be resold.
    REFUSED  NOTHING was written to the drive (wrong drive, USB,
             removable, boot disk, not a real disk). NOTHING is
             recorded either.
@@ -149,19 +163,22 @@ switch to turn on in audit.conf any more.
    No network? The wipe still completes; the record is kept on the
    stick and uploads by itself later, with the real wipe time.
 
-WIPE EVERY INTERNAL DRIVE of the machine before relying on its
-certificate. Today the certificate covers the whole device and is
-issued as soon as ONE drive is recorded as wiped. A drive that was
-never wiped has NO record, so nothing blocks the certificate: wipe
-only the NVMe of a laptop that also has a SATA disk and the kiosk says
-"Erasure certificate now available" while the SATA disk still holds
-the customer's data. Check the drive list against the capture and
-wipe each one. (A roll-up that waits for every drive is planned, D23;
-it is not on the station yet.)
+WIPE EVERY INTERNAL DRIVE of the machine. The certificate covers the
+whole machine and the server works it out PER DRIVE: it is issued only
+when every internal drive in the wipe-time hardware profile has a WIPED
+record (a drive's latest record counts, so a failed drive wiped again
+is fine). While any drive is failed or has no wipe, the asset shows
+"data wipe failed", there is no certificate, and the kiosk's summary
+names the drive holding it up. One certificate lists every drive with
+its own serial, method and result.
 
-Certificate: no certificate is issued while the same machine also has
-a FAILED wipe record that is newer than its WIPED record, or less than
-24 hours older than it (one of its drives may still hold data).
+Older records (from a stick before per-drive records) are still
+certified, labelled "Drive not individually recorded (record predates
+per-drive tracking)" and dated "Date recorded". For a machine with only
+such records the old rule still applies: no certificate while a FAILED
+wipe record is newer than its WIPED record, or less than 24 hours older
+than it. An old certificate downloaded again keeps its number but has
+the new wording - expected.
 
 Test on a sacrificial drive first after any change to the stick.
 
@@ -264,35 +281,52 @@ To go back, any one of:
   WIPE METHODS (AUDIT_WIPE_METHOD = what the kiosk pre-selects)
 ---------------------------------------------------------------------
    crypto    = cryptographic erase - destroys the drive's encryption
-               key (NVMe / self-encrypting drives). NIST 800-88 "Purge".
-   secure    = firmware secure / block erase. NIST "Purge".
+               key (NVMe sanitize crypto erase or format -s2; enhanced
+               ATA secure erase on SATA). NIST 800-88 "Purge".
+   secure    = firmware erase (NVMe block-erase sanitize or format -s1;
+               ATA secure erase on SATA).
    auto      = crypto -> secure -> overwrite (best the drive supports).
    overwrite = random pass + zero pass, read back. NIST "Clear".
    zero      = single zero pass, read back. NIST "Clear", half the time.
+
+NVMe: the SANITIZE is tried first (crypto erase, then block erase);
+"nvme format" only last, and only when it covers the whole drive. A
+sanitize erases EVERY namespace of the drive, ticked or not (the
+confirm dialog says so when a drive has more than one).
+
+Level on the record: PURGE for an NVMe sanitize/format or an ENHANCED
+ATA erase; CLEAR for an overwrite or a normal ATA erase. On flash an
+overwrite reaches only the blocks the system can address, and a drive
+with reallocated/pending sectors gets a limitation naming the counts -
+both are printed on the record. If a stronger method was asked for
+and not used, the record says what was asked for, what was done, and
+why (e.g. the drive is frozen by the BIOS).
 
 A frozen SATA drive (the BIOS usually freezes them) cannot take a
 firmware erase and is overwritten instead. There is no TRIM step - TRIM
 is not an erase.
 
-Every wipe ends with a read-back check. What happens when the drive
-does not read back as zeros depends on how it was erased:
-   OVERWRITE (overwrite / zero, or no firmware erase available):
-      overwritten in full once more and read back again; if it still
-      does not read as zeros, the result is FAILED.
-   ANY FIRMWARE ERASE (NVMe crypto, NVMe format -s1 secure erase,
-   NVMe block-erase sanitize, ATA secure erase enhanced or not):
-      TODAY THE RESULT IS STILL WIPED. It is taken on the drive's word,
-      the method ends "- controller-confirmed", and NO overwrite runs.
-      Right for a real crypto erase (ciphertext, not zeros) - but a
-      plain secure erase whose firmware said "done" and changed nothing
-      gets the same label. Treat "controller-confirmed" as the drive's
-      claim, not a checked result ("verified (reads as zeros)" is the
-      checked one); wipe again with overwrite if that is not enough.
-A stricter read-back is planned (plan step 31 / owner decision D31: an
-erase the read-back cannot confirm will be FAILED). The exact method
-is recorded on the device's audit and its data-erasure certificate.
+Every wipe ends with a READ-BACK of the drive: first and last MiB,
+eight windows across it, and every place a partition started before
+the erase. The verdict is one of three:
+   CLEAN       nothing of the old data. After an overwrite only zeros
+               count. After a firmware erase: zeros, all 0xFF, a short
+               repeated fill, or random-looking data (what a crypto
+               erase leaves). The method ends "- verified (reads as
+               ...)".  -> WIPED
+   FOUND       a boot sector, partition table, or NTFS / BitLocker /
+               FAT / LUKS / ext signature is still there (or, after an
+               overwrite, anything but zeros). After a firmware erase
+               the drive said "done" and did not erase: the station
+               falls back to a full overwrite and reads THAT back.
+               After an overwrite: FAILED.
+   UNVERIFIED  the drive could not be read back (read error, drive
+               gone, no python3). -> FAILED, with the reason.
+The exact method is recorded on the device's audit and its
+data-erasure certificate.
 
 Check a drive's firmware-erase support (read-only, erases nothing):
    nvme id-ctrl /dev/nvme0 -H | grep -i crypto
    nvme id-ctrl /dev/nvme0 -H | grep -i sanitize
+   nvme list-ns /dev/nvme0 --all        (how many namespaces)
 =====================================================================

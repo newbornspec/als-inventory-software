@@ -29,15 +29,23 @@ AUDIT_EMAIL="station@your-domain"
 AUDIT_PASSWORD=""
 
 # --- operator (who did the wipe) -----------------------------------------------
-# The operator types their name on the kiosk screen. Wipes are filed with the
-# station account above, and the certificate prints that name as
-# "Operator (self-declared)" next to the filing account.
-#
-# Planned, NOT YET IMPLEMENTED: operators signing in on the kiosk with their
-# own ALS Inventory login (owner decision D27, to be switched by an
-# AUDIT_OPERATOR_SIGNIN setting). No kiosk reads that setting yet - adding it
-# to audit.conf has NO effect: wipes do not wait for a sign-in and are still
-# filed under the station account. It will be documented here when it ships.
+# AUDIT_OPERATOR_SIGNIN (owner decision D27, reversible; default OFF):
+#   "0" or absent - the operator types their name on the kiosk screen. Wipes
+#                   are filed with the station account above, and the
+#                   certificate prints that name as "Operator (self-declared)"
+#                   next to the filing account.
+#   "1"           - nobody can wipe, audit or restore until a person signs in
+#                   ON THE SCREEN with their own ALS Inventory login (email and
+#                   password, checked by the server; the password is never
+#                   stored). Signing in needs the network: there is no offline
+#                   sign-in, so with the network down nothing can start until
+#                   it is back. Every record is filed under that person's own
+#                   account and names them. A record made offline waits on the
+#                   stick and is sent only when THAT person signs in again -
+#                   never under someone else. The station account above is not
+#                   used at all while this is on.
+# Turn it on only after running HARDWARE-TESTS.md Test 4 on the station.
+AUDIT_OPERATOR_SIGNIN="0"
 
 # --- admin PIN ----------------------------------------------------------------
 # Guards the kiosk's Settings screen. WITHOUT one, the server address, image

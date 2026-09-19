@@ -408,7 +408,9 @@ a second person's login; a sacrificial drive; an Ethernet cable.
 
 ### Switch it on
 
-1. On Windows, open `E:\audit.conf` in Notepad. Add this line and save:
+1. On Windows, open `E:\audit.conf` in Notepad. Add this line (or, if an
+   `AUDIT_OPERATOR_SIGNIN="0"` line is already there, change its 0 to 1) and
+   save:
    ```
    AUDIT_OPERATOR_SIGNIN="1"
    ```

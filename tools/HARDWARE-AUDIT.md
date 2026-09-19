@@ -158,7 +158,7 @@ files; leaving it is harmless.
    captured this machine's hardware profile (and not while a capture is still
    running). Without it there is nothing to file the wipe under, and an erase
    with no record is worse than no erase. If the screen says so, press
-   **Rescan** and wait.
+   **Rescan** (top right of the screen) and wait.
 2. **Pick the drive(s) and the method**, then confirm. The confirm dialog names
    the drives and the batch the records will go to. Several drives of one
    machine can be picked at once; each still runs as **its own job, with its
@@ -175,15 +175,25 @@ files; leaving it is harmless.
      to a different disk).
    - A drive that reports **no serial at all** is allowed (owner decision D18):
      it is wiped and its record carries no drive serial (identity unknown).
-     The certificate does **not** yet say so: today it prints only the
-     machine's own serial and the method, with no line per drive. A
-     per-drive certificate is planned (owner decisions D18/D23).
-4. **Read the result** for each drive. There are exactly three:
+     The certificate lists that drive as *serial not reported by the drive*.
+4. **Hidden areas (SATA drives).** Before anything is written, the engine asks
+   the drive whether part of it is hidden from the system (an HPA or DCO,
+   `hdparm -N` / `--dco-identify`). A wipe would not reach hidden sectors, so
+   (owner decision D34):
+   - **HPA** only: removed **temporarily** (until the next power cycle) and
+     checked; if it cannot be removed, or comes back during the wipe, the
+     result is **Failed**. A drive that only offers a permanent change
+     (ACCESSIBLE MAX ADDRESS) is not changed and fails.
+   - **DCO**: **Failed**, naming it. The station never runs `--dco-restore`.
+   - **Could not be checked** (common behind RAID / RST controllers): the
+     wipe goes ahead, and the record carries that as a limitation.
+   NVMe and eMMC have no HPA / DCO.
+5. **Read the result** for each drive. There are exactly three:
 
    | Result | What it means | What is recorded |
    |---|---|---|
-   | **Wiped** | The erase ran and the drive read back as zeros afterwards — **or** it was a firmware erase the drive reported as done, which is accepted without that check ("controller-confirmed", see *The check afterwards* below). | A wipe record for **that drive** (serial, model, method, start and finish time, tool version). Makes the certificate for the **whole machine** available — see *Wipe EVERY internal drive* below. |
-   | **Failed** | The erase was attempted but did not complete or did not pass its check (a drive that stalls, errors, or does not read back clean; a job that dies without a result counts as failed). Treat the drive as **still holding data**, possibly partly erased. | A **failed** record for that drive, so the asset shows the failure. Wipe it again before it can be resold. |
+   | **Wiped** | The erase ran **and the drive was read back afterwards with none of its old data recognisable** (see *The check afterwards* below). There is no result for "the drive said it worked". | A wipe record for **that drive**: serial, model, method asked for and achieved, sanitisation level (Purge / Clear), the read-back verdict, hidden areas, limitations, start and finish time, tool version. |
+   | **Failed** | The erase did not complete, **or the read-back found old data, or the read-back could not be done** (owner decision D31: an erase nobody could check is not recorded as wiped). Also a job that dies without a result, and a hidden area that could not be dealt with. Treat the drive as **still holding data**, possibly partly erased. | A **failed** record for that drive, with the reason. Wipe it again before it can be resold. |
    | **Refused** | **Nothing was written to the drive.** It was the wrong drive (serial mismatch), a USB / removable / boot disk, or not a real disk. | **Nothing.** A refusal is not filed, because the drive was never touched. |
 
    With no network the wipe still completes: the record is saved on the stick
@@ -191,24 +201,25 @@ files; leaving it is harmless.
    Each finished wipe is also marked on the stick straight away, so restarting
    the kiosk cannot lose a record.
 
-**Wipe EVERY internal drive of the machine before relying on its
-certificate.** Today the certificate is for the whole device and is issued as
-soon as **one** drive is recorded as wiped. A drive that was never wiped has no
-record at all, so nothing blocks the certificate: pick only the NVMe of a
-laptop that also has a SATA disk, and the kiosk says "Erasure certificate now
-available" while the SATA disk still holds the customer's data. Check the drive
-list against the captured profile and wipe each one. (A per-machine roll-up
-that withholds the certificate until every drive of the machine is wiped is
-planned, owner decision D23; it is not on the station yet.)
+**Wipe EVERY internal drive of the machine.** The certificate is for the whole
+machine, and the server now works it out **per drive** (owner decision D23): it
+is issued only when every internal drive listed in the wipe-time hardware
+profile has a **wiped** record, and each drive's latest record counts (a
+drive that failed and was then wiped again is wiped). While any drive is
+failed, or has no wipe on record, the asset shows **data wipe failed** and no
+certificate is issued; the kiosk's run summary says which drive is holding it
+up. One certificate lists every drive with its own
+serial, method and result.
 
-**Certificates.** A drive recorded as wiped makes the certificate available —
-unless the same asset also has a **failed** wipe record that is newer than the
-wiped one, or less than 24 hours older than it. Then no certificate is issued,
-because one of the machine's drives may still hold data (owner decision D11, an
-interim guard until the certificate lists every drive of the machine). The
-accepted cost: a drive that failed and was re-wiped successfully within the same
-day stays without a certificate until it is wiped once more, more than 24 hours
-after the failure.
+**Certificates for older records.** Records from a stick that predates
+per-drive records carry no drive identity. They are still certified (owner
+decision D20), labelled *Drive not individually recorded (record predates
+per-drive tracking)* and dated *Date recorded*. For a machine that has only
+such records, the old interim guard still decides (owner decision D11): no
+certificate while a **failed** wipe record is newer than the wiped one, or
+less than 24 hours older than it. A certificate that was downloaded before
+this release keeps its number when downloaded again, but its wording is the
+new one (per-drive sections, the labels above) - expected, not an error.
 
 ### Methods
 
@@ -217,17 +228,38 @@ The method the kiosk pre-selects comes from `AUDIT_WIPE_METHOD` in `audit.conf`
 operator can pick another for each wipe.
 
 - `auto` (default) — the drive's own **cryptographic erase** if it supports one,
-  else its firmware **secure erase**, else an overwrite.
-- `crypto` — cryptographic erase (self-encrypting drives / NVMe), else overwrite.
-- `secure` — firmware secure erase (ATA `hdparm` / NVMe), else overwrite.
+  else its firmware **secure / block erase**, else an overwrite.
+- `crypto` — cryptographic erase (NVMe sanitize crypto erase, or
+  `nvme format -s2`; on SATA the enhanced ATA secure erase), else overwrite.
+- `secure` — firmware erase (ATA secure erase; NVMe block-erase sanitize or
+  `nvme format -s1`), else overwrite.
 - `overwrite` — one random pass and one zero pass (`shred`), read back.
 - `zero` — a single zero pass, read back (NIST "Clear", half the time).
 
-Firmware secure / crypto erase is NIST 800-88 **"Purge"** (it also reaches spare
-and reallocated areas); an overwrite is **"Clear"**, and on flash it reaches only
-the blocks the operating system can address — the recorded method says so. There
-is **no TRIM step**: TRIM is a hint to the drive, not an erase, and a TRIMmed SSD
-reads back as zeros whether or not its data is gone.
+**NVMe order.** The engine finds the drive's controller from the kernel (it
+never guesses it from the device name) and tries the **sanitize** first:
+crypto erase, then block erase, as far as the drive says it supports them.
+`nvme format` comes last, and only when it is known to cover the whole drive
+(one namespace, or the drive says a format erases all of them). A sanitize
+erases **every namespace** of the drive, ticked or not (owner decision D36);
+the confirm dialog says so when a drive has more than one.
+
+**Levels.** Every record says the level it reached (NIST SP 800-88):
+
+- **Purge** — an NVMe sanitize or format, or an **enhanced** ATA secure erase,
+  read back clean.
+- **Clear** — an overwrite read back as zeros, or a **normal** (non-enhanced)
+  ATA secure erase read back clean. On flash an overwrite reaches only the
+  blocks the operating system can address; the record says so. A drive that
+  reports reallocated or pending sectors (SMART 5 / 197) gets a limitation
+  naming the counts, because a retired sector cannot be reached by an
+  overwrite or a normal ATA erase (owner decision D38).
+
+There is **no TRIM step**: TRIM is a hint to the drive, not an erase, and a
+TRIMmed SSD reads back as zeros whether or not its data is gone. When a
+stronger method was asked for but not used, the record says what was asked
+for, what was achieved, and why (for example *the drive's security is frozen
+by the BIOS*).
 
 **Frozen SATA drives:** the BIOS usually marks SATA drives security-frozen at
 boot, which blocks ATA secure erase, so such a drive is overwritten instead.
@@ -235,28 +267,32 @@ boot, which blocks ATA secure erase, so such a drive is overwritten instead.
 machines never resume, so it stays off (owner decision D42). NVMe has no frozen
 state.
 
-**The check afterwards.** Every wipe ends with a read-back of the drive (start,
-middle and end), and what happens when it does not read as zeros depends on how
-the drive was erased:
+**The check afterwards.** Every wipe ends with a read-back of the drive: the
+first and last MiB, eight windows spread across the drive, and every place a
+partition started **before** the erase (the partition table is recorded first,
+because afterwards it may be gone while the volumes it pointed at are not). The
+drive is read directly, not from the system's cache. The verdict is one of
+three, recorded as `clean`, `found` or `unverified`:
 
-- **Overwrite** (`overwrite` / `zero`, or any drive whose firmware erase was
-  unavailable): the drive is overwritten in full once more and read back again;
-  if it still does not read as zeros, the result is **Failed**.
-- **Any firmware erase** — NVMe crypto erase, NVMe secure erase
-  (`nvme format -s1`), NVMe block-erase sanitize, ATA secure erase, enhanced or
-  not: **today the result is Wiped anyway.** The erase is accepted on the
-  drive's word, labelled **"controller-confirmed"** in the recorded method, and
-  **no overwrite is run**. That is right for a genuine crypto erase (it leaves
-  unreadable ciphertext, not zeros), but the same label is given to a plain
-  secure erase or block erase whose firmware reported success and left the data
-  where it was. **Treat a method ending "— controller-confirmed" as the drive's
-  own claim, not as a checked result**; "— verified (reads as zeros)" is the
-  checked one. If a controller-confirmed result is not good enough for a
-  machine, wipe that drive again with `overwrite`.
+- **Old data found** — a boot sector, a partition table (`EFI PART`), or an
+  NTFS, BitLocker, FAT, LUKS or ext signature, anywhere it looked; or, after
+  an overwrite, anything that is not zeros. After a **firmware** erase the
+  drive said "done" and did not erase: the engine says so and falls back to a
+  full **overwrite**, which is then read back in turn. After an overwrite the
+  result is **Failed**.
+- **Clean** — nothing of the old data. After an **overwrite** only zeros
+  count as clean. After a **firmware** erase what a genuine erase leaves is
+  accepted: zeros, all `0xFF`, a short repeated vendor fill, or random-looking
+  data (the ciphertext a cryptographic erase leaves). The method on the record
+  ends *— verified (reads as zeros / 0xFF / random / ...)*.
+- **Could not verify** — a read that failed or came back short, the drive
+  gone, no `python3`: the result is **Failed**, with the reason (owner
+  decision D31). An erase that nobody could check is never recorded as wiped.
 
-A stricter read-back after firmware erases is planned (plan step 31, owner
-decision D31: a read-back that cannot confirm the erase will be recorded as
-**Failed**). Until it ships, the above is what the station does.
+What the check cannot see: data that is already random-looking (compressed or
+encrypted files) sitting between the windows looks the same as the ciphertext
+of a crypto erase. The signature checks at every former partition start are
+what catch a drive that lied.
 
 > ⚠️ This permanently destroys data. Check the drive's **size and model** (and
 > its serial, on a kiosk version that shows it) against the drive you mean

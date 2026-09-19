@@ -60,6 +60,39 @@ for label, var, pattern in lines:
         continue
     check("%s: '%s' is in %s" % (label, pattern, path), found)
 
+# The owner docs described behaviour the merged code no longer has: a
+# firmware erase accepted on the drive's word ("controller-confirmed", gone
+# since plan step 31), and operator sign-in as "not implemented" while the
+# kiosk reads AUDIT_OPERATOR_SIGNIN (step 27). Each track merged its own copy
+# of the docs, so these sentences survived. None of them may come back.
+RETIRED = [
+    (r"controller-confirmed", "a firmware erase accepted without a read-back"),
+    (r"TODAY THE RESULT IS STILL WIPED|today the result is Wiped anyway",
+     "firmware erases recorded as wiped unchecked"),
+    (r"NOT YET IMPLEMENTED|NOT implemented yet|No kiosk reads that setting",
+     "operator sign-in described as not implemented"),
+    (r"no Rescan button on the main screen", "the missing Rescan button"),
+    (r"does not\s+yet say so|does NOT\s+say so yet", "no per-drive certificate lines"),
+    (r"it is not on the station yet", "the per-drive roll-up described as planned"),
+]
+docs = ["HARDWARE-AUDIT.md", "USB-SETUP.txt", "HARDWARE-TESTS.md", "audit.conf.example",
+        os.path.join("gui", "README-KIOSK.md")]
+for rel in docs:
+    path = os.path.join(HERE, rel)
+    if not os.path.exists(path):
+        continue
+    with open(path, encoding="utf-8") as fh:
+        text = fh.read()
+    for pattern, what in RETIRED:
+        if rel == "HARDWARE-TESTS.md" and pattern == "controller-confirmed":
+            continue            # there it is the FAIL marker the owner looks for
+        hit = re.search(pattern, text)
+        check("%s does not describe %s" % (rel, what), hit is None,
+              hit and text[max(0, hit.start() - 60):hit.end() + 60])
+with open(os.path.join(HERE, "hardware-audit.sh"), encoding="utf-8") as fh:
+    check("the engine has no controller-confirmed branch (step 31)",
+          "controller-confirmed" not in fh.read())
+
 print("")
 print("%d passed, %d failed" % (PASS[0], len(FAIL)))
 sys.exit(1 if FAIL else 0)
