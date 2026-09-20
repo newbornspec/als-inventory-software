@@ -195,8 +195,39 @@
   /* ...................................................................... */
 
   /* HWTEST:KEYBOARD:CSS:START */
-  /* The keyboard test's styles (a later phase) - the on-screen layout it
-     lights up as keys arrive needs most of them. */
+  /* The keyboard test draws an on-screen layout and lights each key as the
+     technician releases it, on the very machine they are typing on. Two things
+     carry the result in WORDS, never colour alone (the app's WCAG baseline):
+     the "Keys detected: N / M" counter and the plain-English list of keys not
+     yet seen. A lit key is a green fill AND a corner tick, for the same reason.
+     The board scrolls sideways rather than reflowing into nonsense on a narrow
+     panel - a keyboard whose rows have wrapped is no longer one the eye can
+     check against the real thing. */
+  .kbd-panel{display:flex;flex-direction:column;gap:11px}
+  .kbd-top{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center}
+  .kbd-count{font-size:13.5px;font-weight:700;color:var(--ink)}
+  .kbd-lay{display:flex;gap:6px;align-items:center;margin-left:auto}
+  .kbd-lay .lbl{font-size:12px;color:var(--mut)}
+  .kbd-board{overflow-x:auto;padding:7px;border:1px solid var(--line);border-radius:10px;
+             background:#fbfcfe}
+  .kbd-board.kbd-live{border-color:var(--blue);box-shadow:0 0 0 2px var(--blsoft)}
+  .kbd-sec{display:flex;flex-direction:column;gap:5px;min-width:max-content}
+  .kbd-sec+.kbd-sec{margin-top:7px;padding-top:7px;border-top:1px dashed var(--line)}
+  .kbd-row{display:flex;gap:4px}
+  .kbd-key{flex:0 0 auto;width:34px;height:34px;position:relative;display:flex;
+           align-items:center;justify-content:center;padding:0 3px;font-size:11px;line-height:1.05;
+           text-align:center;border:1px solid var(--line);border-radius:6px;background:#fff;
+           color:var(--ink);white-space:nowrap;overflow:hidden;user-select:none}
+  /* Seen: a green fill AND a corner tick, so the state never rides on colour. */
+  .kbd-key.kbd-seen{background:#f0fdf4;border-color:#86efac;color:#15803d;font-weight:600}
+  .kbd-key.kbd-seen::after{content:"\2713";position:absolute;top:1px;right:2px;font-size:8px;
+                           color:#15803d;font-weight:700}
+  .kbd-missing{font-size:12.5px;color:var(--mut);overflow-wrap:anywhere;margin:0}
+  .kbd-missing b{color:var(--ink)}
+  .kbd-notes{width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid var(--line);
+             border-radius:8px;font:inherit;font-size:13.5px;color:var(--ink);background:#fff}
+  .kbd-notes:disabled{background:#f8fafc;color:var(--mut2)}
+  .kbd-verdicts{display:flex;flex-wrap:wrap;gap:8px}
   /* HWTEST:KEYBOARD:CSS:END */
 
   /* ...................................................................... */
@@ -548,9 +579,15 @@
               <button class="btn gho sm" id="hwtRun_keyboard" onclick="runHwTest('keyboard')">Test</button>
             </div>
             <div class="hwtw" id="hwtWhy_keyboard"></div>
-            <div class="hwtd" id="hwtDetail_keyboard"><!-- the keyboard test's own
-              controls go here (a later phase): an on-screen layout that lights
-              up as keys arrive. A key the browser never sees is REPORTED, not
+            <div class="hwtd" id="hwtDetail_keyboard"><!-- the keyboard test's runner
+              (HWTEST:KEYBOARD:JS) builds its controls in here when Test is
+              pressed: an on-screen ISO-105/ANSI-104 layout that lights each key
+              as it is released, a "Keys detected: N / M" counter, the list of
+              keys not seen yet, and Good / Some keys don't work / Faulty. While it
+              is capturing keys, the verdict buttons are held off and its key
+              handler swallows every release, so pressing the very keys under test
+              can never trigger a verdict; the technician clicks Stop capturing
+              with the mouse first. A key the browser never sees is REPORTED, not
               failed - the technician decides. --></div>
           </div>
           <!-- HWTEST:KEYBOARD:END -->
@@ -2446,15 +2483,341 @@ function ovGo(){const c=ovCb;if(c)c();}
 /* -------------------------------------------------------------------- */
 
 /* HWTEST:KEYBOARD:JS:START */
-/* The keyboard test (a later phase). Register it with:
-       HWT_RUNNERS.keyboard = async function(){ ... };
-   Contract C6 for this one: show the layout, light each key as its keydown
-   arrives, and record detectedKeys / expectedKeys / missingKeys and which
-   layout was shown. A key the browser cannot see is REPORTED, never
-   auto-failed (owner's §3) - the technician's answer is authoritative, and
-   `confirmedBy` says when a human overrode the detection. This is also the
-   only place in the page that may take a global key handler, and it must
-   give it up again when the test ends: the rest of the kiosk has none. */
+/* The keyboard test. An on-screen layout is drawn and each key lights up as it
+   is released (keyup), matched by event.code so it does not matter what character
+   the key produces on this machine's layout. The browser may only claim which
+   keys it saw (owner's §17); the technician confirms the rest, because keys the
+   browser is never told about - many Fn combinations, some media and OEM keys -
+   are perfectly real. So a key the page has not seen is REPORTED, never
+   auto-failed (owner's §3): missingKeys is a list to check by hand, and only the
+   technician's click sets Pass, Attention or Fail.
+
+   Keyup, not keydown, on purpose. The kiosk forbids a global keydown handler (the
+   shell's rule, and tools/test-hwtest.py enforces it); keyup on the document is
+   the same door the screen test uses for its Escape, and it is all this test
+   needs - a key is "seen" once it has gone down and come back up. Watching the
+   document rather than one element means it does not matter where focus is when
+   the technician works across the whole keyboard, Tab and arrows included.
+
+   The trap this test has to avoid is its own making: the technician is pressing
+   EVERY key, so if a keypress could trigger a verdict - a P/F shortcut, or Space
+   landing on a focused verdict button - the machine would file an answer the
+   moment they tested that key. While it is capturing, therefore, the verdict
+   buttons are disabled AND guarded in code, and the key handler calls
+   preventDefault so a release cannot activate anything or scroll the page. The
+   verdicts arm only after the technician clicks Stop capturing with the mouse.
+
+   This is the ONE place in the kiosk that takes a document-level key handler
+   (the rest has none), and it gives it back the instant the test ends - on Stop,
+   on a verdict, and at the start of every run - so nothing is left listening. */
+
+/* Every key: c=event.code (what we match), l=the cap shown, w=width in key units,
+   ml=the plain-English name used in the "not seen" list, which disambiguates the
+   pairs (two Shifts, two Ctrls) and the numpad from the number row. */
+function kbdKey(c,l,w,ml){ return {c:c,l:l,w:w||1,ml:ml||l}; }
+/* Build one layout as sections (main block, navigation cluster, numpad) so the
+   board reads like a real keyboard, and flatten a lookup of every key in it.
+   iso true is ISO-105 (the UK/EU laptop default, with the extra key by the left
+   Shift and the tall Enter's hash key on the home row); false is ANSI-104. */
+function kbdBuildLayout(iso){
+  const fn=[[
+    kbdKey('Escape','Esc',1.3),
+    kbdKey('F1','F1'),kbdKey('F2','F2'),kbdKey('F3','F3'),kbdKey('F4','F4'),
+    kbdKey('F5','F5'),kbdKey('F6','F6'),kbdKey('F7','F7'),kbdKey('F8','F8'),
+    kbdKey('F9','F9'),kbdKey('F10','F10'),kbdKey('F11','F11'),kbdKey('F12','F12'),
+    kbdKey('PrintScreen','PrtSc'),kbdKey('ScrollLock','ScrLk'),kbdKey('Pause','Pause')
+  ]];
+  const num=[[
+    kbdKey('Backquote','`'),kbdKey('Digit1','1'),kbdKey('Digit2','2'),kbdKey('Digit3','3'),
+    kbdKey('Digit4','4'),kbdKey('Digit5','5'),kbdKey('Digit6','6'),kbdKey('Digit7','7'),
+    kbdKey('Digit8','8'),kbdKey('Digit9','9'),kbdKey('Digit0','0'),
+    kbdKey('Minus','-'),kbdKey('Equal','='),kbdKey('Backspace','Backspace',2)
+  ]];
+  let tab,caps,shift;
+  if(iso){
+    tab=[kbdKey('Tab','Tab',1.5),kbdKey('KeyQ','Q'),kbdKey('KeyW','W'),kbdKey('KeyE','E'),
+      kbdKey('KeyR','R'),kbdKey('KeyT','T'),kbdKey('KeyY','Y'),kbdKey('KeyU','U'),
+      kbdKey('KeyI','I'),kbdKey('KeyO','O'),kbdKey('KeyP','P'),
+      kbdKey('BracketLeft','['),kbdKey('BracketRight',']')];
+    caps=[kbdKey('CapsLock','Caps',1.75),kbdKey('KeyA','A'),kbdKey('KeyS','S'),kbdKey('KeyD','D'),
+      kbdKey('KeyF','F'),kbdKey('KeyG','G'),kbdKey('KeyH','H'),kbdKey('KeyJ','J'),
+      kbdKey('KeyK','K'),kbdKey('KeyL','L'),kbdKey('Semicolon',';'),kbdKey('Quote',"'"),
+      kbdKey('Backslash','#',1,'# / ~ key (ISO)'),kbdKey('Enter','Enter',1.5)];
+    shift=[kbdKey('ShiftLeft','Shift',1.25,'Left Shift'),
+      kbdKey('IntlBackslash','\\ |',1,'ISO extra key (\\ | or < >)'),
+      kbdKey('KeyZ','Z'),kbdKey('KeyX','X'),kbdKey('KeyC','C'),kbdKey('KeyV','V'),
+      kbdKey('KeyB','B'),kbdKey('KeyN','N'),kbdKey('KeyM','M'),
+      kbdKey('Comma',','),kbdKey('Period','.'),kbdKey('Slash','/'),
+      kbdKey('ShiftRight','Shift',2.75,'Right Shift')];
+  }else{
+    tab=[kbdKey('Tab','Tab',1.5),kbdKey('KeyQ','Q'),kbdKey('KeyW','W'),kbdKey('KeyE','E'),
+      kbdKey('KeyR','R'),kbdKey('KeyT','T'),kbdKey('KeyY','Y'),kbdKey('KeyU','U'),
+      kbdKey('KeyI','I'),kbdKey('KeyO','O'),kbdKey('KeyP','P'),
+      kbdKey('BracketLeft','['),kbdKey('BracketRight',']'),kbdKey('Backslash','\\',1.5)];
+    caps=[kbdKey('CapsLock','Caps',1.75),kbdKey('KeyA','A'),kbdKey('KeyS','S'),kbdKey('KeyD','D'),
+      kbdKey('KeyF','F'),kbdKey('KeyG','G'),kbdKey('KeyH','H'),kbdKey('KeyJ','J'),
+      kbdKey('KeyK','K'),kbdKey('KeyL','L'),kbdKey('Semicolon',';'),kbdKey('Quote',"'"),
+      kbdKey('Enter','Enter',2.25)];
+    shift=[kbdKey('ShiftLeft','Shift',2.25,'Left Shift'),
+      kbdKey('KeyZ','Z'),kbdKey('KeyX','X'),kbdKey('KeyC','C'),kbdKey('KeyV','V'),
+      kbdKey('KeyB','B'),kbdKey('KeyN','N'),kbdKey('KeyM','M'),
+      kbdKey('Comma',','),kbdKey('Period','.'),kbdKey('Slash','/'),
+      kbdKey('ShiftRight','Shift',2.75,'Right Shift')];
+  }
+  const bottom=[kbdKey('ControlLeft','Ctrl',1.25,'Left Ctrl'),kbdKey('MetaLeft','Win',1.25,'Left Win'),
+    kbdKey('AltLeft','Alt',1.25,'Left Alt'),kbdKey('Space','Space',6.25),
+    kbdKey('AltRight','Alt Gr',1.25,'Right Alt (Alt Gr)'),kbdKey('MetaRight','Win',1.25,'Right Win'),
+    kbdKey('ContextMenu','Menu',1.25),kbdKey('ControlRight','Ctrl',1.25,'Right Ctrl')];
+  const nav=[
+    [kbdKey('Insert','Ins'),kbdKey('Home','Home'),kbdKey('PageUp','PgUp')],
+    [kbdKey('Delete','Del'),kbdKey('End','End'),kbdKey('PageDown','PgDn')],
+    [kbdKey('ArrowUp','Up')],
+    [kbdKey('ArrowLeft','Left'),kbdKey('ArrowDown','Down'),kbdKey('ArrowRight','Right')]
+  ];
+  const numpad=[
+    [kbdKey('NumLock','NumLk'),kbdKey('NumpadDivide','/',1,'Numpad /'),
+      kbdKey('NumpadMultiply','*',1,'Numpad *'),kbdKey('NumpadSubtract','-',1,'Numpad -')],
+    [kbdKey('Numpad7','7',1,'Numpad 7'),kbdKey('Numpad8','8',1,'Numpad 8'),
+      kbdKey('Numpad9','9',1,'Numpad 9'),kbdKey('NumpadAdd','+',1,'Numpad +')],
+    [kbdKey('Numpad4','4',1,'Numpad 4'),kbdKey('Numpad5','5',1,'Numpad 5'),
+      kbdKey('Numpad6','6',1,'Numpad 6')],
+    [kbdKey('Numpad1','1',1,'Numpad 1'),kbdKey('Numpad2','2',1,'Numpad 2'),
+      kbdKey('Numpad3','3',1,'Numpad 3'),kbdKey('NumpadEnter','Enter',1,'Numpad Enter')],
+    [kbdKey('Numpad0','0',2,'Numpad 0'),kbdKey('NumpadDecimal','.',1,'Numpad .')]
+  ];
+  const sections=[[fn[0],num[0],tab,caps,shift,bottom],nav,numpad];
+  const keys=[];
+  for(const sec of sections) for(const row of sec) for(const k of row) keys.push(k);
+  return {sections:sections,keys:keys};
+}
+
+/* One namespaced object, so the region adds no other top-level global (the shell
+   owns those). It holds both layouts, the set of codes seen so far, whether it is
+   capturing, the two document handlers, and the runner's resolve. */
+const KBD={
+  layouts:{'iso-105':kbdBuildLayout(true),'ansi-104':kbdBuildLayout(false)},
+  layout:'iso-105',
+  seen:null,        // a Set of every event.code seen this run
+  keyEls:{},        // code -> the on-screen key element, for lighting it up
+  capturing:false,  // true while the document key handlers are attached
+  resolve:null,     // resolves the runner's promise once one result is recorded
+
+  keys:function(){ return KBD.layouts[KBD.layout].keys; },
+
+  // detected / expected / the not-seen list, computed from the codes seen and
+  // the layout on screen - never read out of the DOM, so it cannot go stale.
+  compute:function(){
+    const keys=KBD.keys(); let det=0; const missing=[];
+    for(const k of keys){
+      if(KBD.seen&&KBD.seen.has(k.c)) det++; else missing.push(k.ml||k.l);
+    }
+    return {det:det,exp:keys.length,missing:missing};
+  },
+
+  // Draw the current layout. Rebuilt from scratch (so a layout switch is clean),
+  // re-applying the seen state to whichever keys the new layout has. Widths are
+  // set so a wide key exactly replaces the n unit keys and their gaps beneath it,
+  // which keeps the rows aligned like a real board.
+  buildBoard:function(){
+    const host=$('kbdBoard'); if(!host)return;
+    host.innerHTML=''; KBD.keyEls={};
+    const secs=KBD.layouts[KBD.layout].sections;
+    for(const sec of secs){
+      const s=document.createElement('div'); s.className='kbd-sec';
+      for(const row of sec){
+        const r=document.createElement('div'); r.className='kbd-row';
+        for(const k of row){
+          const b=document.createElement('div');
+          b.className='kbd-key';
+          b.style.width=Math.round(k.w*34+(k.w-1)*4)+'px';
+          b.textContent=k.l;
+          b.setAttribute('data-code',k.c);
+          if(KBD.seen&&KBD.seen.has(k.c)) b.classList.add('kbd-seen');
+          r.appendChild(b); KBD.keyEls[k.c]=b;
+        }
+        s.appendChild(r);
+      }
+      host.appendChild(s);
+    }
+    host.classList.toggle('kbd-live',KBD.capturing);
+  },
+
+  // The counter and the not-seen list, the two signals that do not rely on
+  // colour. The list is capped so it does not become a wall on the first key,
+  // but the stored missingKeys is always the full list (see extra()).
+  updateStatus:function(){
+    const c=KBD.compute();
+    const cnt=$('kbdCount'); if(cnt) cnt.textContent='Keys detected: '+c.det+' / '+c.exp;
+    const box=$('kbdMissing'); if(!box)return;
+    if(!c.missing.length){
+      box.innerHTML='<b>Every key on this layout has been seen.</b> Confirm the keyboard and record your verdict.';
+    }else{
+      const cap=30,shown=c.missing.slice(0,cap);
+      box.innerHTML='<b>Not seen yet ('+c.missing.length+'):</b> '+esc(shown.join(', '))+
+        (c.missing.length>cap?' …and '+(c.missing.length-cap)+' more':'')+
+        '. A key the browser cannot see is not a broken key — check it by hand and decide.';
+    }
+  },
+
+  // Switch layout mid-run: the codes already seen are kept, the count and the
+  // not-seen list are recomputed against the new layout, and the toggle shows
+  // which one is current in TEXT (a tick), not by colour alone.
+  setLayout:function(name){
+    if(name!=='iso-105'&&name!=='ansi-104')return;
+    KBD.layout=name;
+    const iso=$('kbdIso'),ansi=$('kbdAnsi');
+    if(iso){ iso.textContent=name==='iso-105'?'ISO (105) ✓':'ISO (105)';
+      iso.setAttribute('aria-pressed',name==='iso-105'?'true':'false');
+      iso.classList.toggle('gho',name!=='iso-105'); }
+    if(ansi){ ansi.textContent=name==='ansi-104'?'ANSI (104) ✓':'ANSI (104)';
+      ansi.setAttribute('aria-pressed',name==='ansi-104'?'true':'false');
+      ansi.classList.toggle('gho',name!=='ansi-104'); }
+    KBD.buildBoard(); KBD.updateStatus();
+  },
+
+  // The one document handler, a stable reference on KBD so removeEventListener
+  // can take it off again. On keyup it marks the key seen and lights it, and
+  // preventDefaults so a release cannot activate a focused control (Space fires a
+  // button on keyup) or scroll the page - so pressing the keys under test can do
+  // nothing but light them up.
+  onKeyUp:function(e){
+    if(!KBD.capturing)return;
+    if(e&&e.preventDefault)e.preventDefault();
+    const code=e&&e.code; if(!code)return;
+    if(KBD.seen)KBD.seen.add(code);
+    const el=KBD.keyEls[code];
+    if(el&&el.classList) el.classList.add('kbd-seen');
+    KBD.updateStatus();
+  },
+
+  // Enable/disable the verdicts and notes and set the wording, from KBD.capturing
+  // alone so it is always in step. The verdicts are disabled while capturing;
+  // the layout toggles are not, because switching layout mid-capture is safe.
+  syncControls:function(){
+    const cap=KBD.capturing;
+    ['kbdPass','kbdAttn','kbdFail','kbdNotes'].forEach(function(id){
+      const el=$(id); if(el) el.disabled=cap;
+    });
+    const t=$('kbdToggle'); if(t) t.textContent=cap?'Stop capturing keys':'Capture more keys';
+    const instr=$('kbdInstr'); if(instr) instr.textContent=cap
+      ? 'Capturing: press every key on this machine’s keyboard — each one lights up here. Keys the browser cannot see are listed below, not failed. Click “Stop capturing keys” with the mouse when you are done.'
+      : 'Capture stopped. Check the keys not seen yet, add a note if needed, then record your verdict — or click “Capture more keys” to test more.';
+    const board=$('kbdBoard'); if(board) board.classList.toggle('kbd-live',cap);
+  },
+
+  startCapture:function(){
+    if(KBD.capturing)return;
+    KBD.capturing=true;
+    document.addEventListener('keyup',KBD.onKeyUp,true);
+    KBD.syncControls();
+    const b=$('kbdBoard'); if(b&&b.focus){ try{ b.focus(); }catch(e){} }
+  },
+  // Always safe to call: removing a handler that is not attached is a no-op, so
+  // this both stops a live capture and clears anything a previous run left.
+  stopCapture:function(){
+    try{ document.removeEventListener('keyup',KBD.onKeyUp,true); }catch(e){}
+    KBD.capturing=false;
+    KBD.syncControls();
+  },
+
+  notesText:function(){ const el=$('kbdNotes'); return el?String(el.value||'').slice(0,300):''; },
+  // The fields every keyboard result carries (contract C6). missingKeys is the
+  // FULL not-seen list (the on-screen one is capped for tidiness). confirmedBy is
+  // always 'technician' because a human's click is the only thing that records.
+  extra:function(){
+    const c=KBD.compute();
+    return {detectedKeys:c.det,expectedKeys:c.exp,missingKeys:c.missing.slice(),
+      layout:KBD.layout,confirmedBy:'technician',notes:KBD.notesText()};
+  },
+
+  // Finish: give the key handler back, record exactly one result, then blank the
+  // panel so it takes no more answers, then resolve. extra() is read BEFORE the
+  // blank, because the notes live in the panel being cleared.
+  finish:function(record){
+    KBD.stopCapture();
+    const r=KBD.resolve; KBD.resolve=null;
+    record();
+    const d=$('hwtDetail_keyboard'); if(d) d.innerHTML='';
+    KBD.keyEls={};
+    if(r) r();
+  },
+  // The three verdicts, each guarded so it cannot fire while capturing even if a
+  // press somehow reached it - the disabled attribute is the affordance, this is
+  // the lock. A could-not-run (an unseen key) is NEVER here; only a person's
+  // click sets a state, and unseen keys ride along as missingKeys to check.
+  pass:function(){ if(KBD.capturing)return;
+    KBD.finish(function(){ hwPass('keyboard',KBD.extra()); }); },
+  attention:function(){ if(KBD.capturing)return;
+    const c=KBD.compute();
+    const reason='the technician reported some keys do not work'+
+      (c.missing.length?' — '+c.missing.length+' key'+(c.missing.length===1?'':'s')+
+        ' were not seen by the browser and need checking by hand':'');
+    KBD.finish(function(){ hwAttention('keyboard',reason,
+      'Check the keys listed above by hand before the machine leaves the bench.',KBD.extra()); }); },
+  fail:function(){ if(KBD.capturing)return;
+    KBD.finish(function(){ hwFail('keyboard','the technician found the keyboard does not work',KBD.extra()); }); }
+};
+
+/* Build the panel, wire it, then wait for the technician. Capture starts at once
+   so keys can be pressed straight away - and because it starts, the verdicts are
+   held off until Stop capturing, which is exactly the guard the owner asks for. */
+HWT_RUNNERS.keyboard=async function(){
+  KBD.stopCapture();          // drop any handler a previous run might have left
+  KBD.layout='iso-105';
+  KBD.seen=new Set();
+  KBD.keyEls={};
+  KBD.resolve=null;
+  const d=$('hwtDetail_keyboard');
+  return new Promise(function(res){
+    KBD.resolve=res;
+    if(!d){
+      // No panel to build into is the station being unable to run the test.
+      hwCannotRun('keyboard','the station could not build the keyboard test panel',
+        'Reload the page and run the keyboard test again.');
+      KBD.resolve=null; res(); return;
+    }
+    try{
+      d.innerHTML=
+        '<div class="kbd-panel">'+
+          '<p class="hwtw" id="kbdInstr" style="margin:0"></p>'+
+          '<div class="kbd-top">'+
+            '<span class="kbd-count" id="kbdCount">Keys detected: 0 / 0</span>'+
+            '<button class="btn gho sm" type="button" id="kbdToggle">Stop capturing keys</button>'+
+            '<span class="kbd-lay">'+
+              '<span class="lbl">Layout</span>'+
+              '<button class="btn gho sm" type="button" id="kbdIso" aria-pressed="true">ISO (105)</button>'+
+              '<button class="btn gho sm" type="button" id="kbdAnsi" aria-pressed="false">ANSI (104)</button>'+
+            '</span>'+
+          '</div>'+
+          '<div class="kbd-board" id="kbdBoard" tabindex="-1"></div>'+
+          '<p class="kbd-missing" id="kbdMissing"></p>'+
+          '<input class="kbd-notes" type="text" id="kbdNotes" maxlength="300" '+
+            'placeholder="Notes (which keys, what was wrong)">'+
+          '<div class="kbd-verdicts">'+
+            '<button class="btn sm" type="button" id="kbdPass">Keyboard is good</button>'+
+            '<button class="btn gho sm" type="button" id="kbdAttn">Some keys don’t work</button>'+
+            '<button class="btn dan sm" type="button" id="kbdFail">Keyboard is faulty</button>'+
+          '</div>'+
+        '</div>';
+      $('kbdIso').addEventListener('click',function(){ KBD.setLayout('iso-105'); });
+      $('kbdAnsi').addEventListener('click',function(){ KBD.setLayout('ansi-104'); });
+      $('kbdToggle').addEventListener('click',function(){ if(KBD.capturing) KBD.stopCapture(); else KBD.startCapture(); });
+      $('kbdPass').addEventListener('click',function(){ KBD.pass(); });
+      $('kbdAttn').addEventListener('click',function(){ KBD.attention(); });
+      $('kbdFail').addEventListener('click',function(){ KBD.fail(); });
+      KBD.setLayout('iso-105');   // draws the board and marks ISO the current one
+      KBD.startCapture();         // arm capture; the verdicts stay off until Stop
+    }catch(e){
+      // Anything going wrong building the panel is the station being unable to
+      // run the test - ATTENTION with a reason and an action, never FAILED.
+      KBD.finish(function(){
+        hwCannotRun('keyboard',
+          'the station could not build the keyboard test panel ('+((e&&e.message)||e||'no detail')+')',
+          'Run the keyboard test again; if it keeps happening, tell a supervisor.');
+      });
+    }
+  });
+};
 /* HWTEST:KEYBOARD:JS:END */
 
 /* -------------------------------------------------------------------- */
