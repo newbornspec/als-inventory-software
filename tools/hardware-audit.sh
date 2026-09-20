@@ -3057,6 +3057,29 @@ als_gpu_vram() {
   return 1
 }
 
+# Integrated or dedicated — and only where the machine itself says which.
+# $1 is the normalised vendor, $2 the PCI slot as lspci prints it ("00:02.0").
+#
+# A vendor name on its own does NOT answer this. Intel's on-die graphics have
+# always enumerated on the CPU's own root complex at 00:02.x, but an Arc A-series
+# board is a card in a PCIe slot with its own VRAM, enumerating as a "VGA
+# compatible controller" like any other — so calling every Intel display device
+# integrated wrote "Shared with system memory" onto a card carrying 8 or 16 GB of
+# its own. That is a specification the buyer pays for, asserted from nothing we
+# read. Off the root complex Intel gets the same treatment as AMD: no type, and
+# therefore no memory claim either.
+als_gpu_type() {
+  case "$1" in
+    NVIDIA) printf 'Dedicated' ;;
+    Intel)
+      case "$2" in
+        00:02.*|*:00:02.*) printf 'Integrated' ;;
+      esac ;;
+    # AMD and anything else: deliberately unanswered, see below.
+  esac
+  return 0
+}
+
 GFX_ELEMS=""
 while IFS= read -r l; do
   [ -z "$l" ] && continue
@@ -3064,10 +3087,10 @@ while IFS= read -r l; do
   slot=$(printf '%s' "$l" | awk '{print $1}')
   vend=$(printf '%s' "$l" | awk -F'"' '{print $4}')
   dev=$(printf '%s' "$l" | awk -F'"' '{print $6}')
-  case "$vend" in *Intel*) vend="Intel"; gtype="Integrated";;
-    *NVIDIA*) vend="NVIDIA"; gtype="Dedicated";;
-    *Advanced\ Micro*|*AMD*|*ATI*) vend="AMD"; gtype="";;
-    *) gtype="";; esac
+  case "$vend" in *Intel*) vend="Intel";;
+    *NVIDIA*) vend="NVIDIA";;
+    *Advanced\ Micro*|*AMD*|*ATI*) vend="AMD";; esac
+  gtype=$(als_gpu_type "$vend" "$slot")
   # Video memory, and only where it can be said honestly:
   #   Integrated — there IS no dedicated memory, the GPU carves it out of system
   #     RAM, so the sentence is the true answer and no number would be.
@@ -3075,8 +3098,9 @@ while IFS= read -r l; do
   #   Untyped    — left empty on purpose. AMD ships both APUs and discrete cards
   #     under the same vendor string, and amdgpu publishes mem_info_vram_total
   #     for an APU too (the UMA carve-out), so a figure taken here could not be
-  #     told apart from real dedicated memory. Better an empty row than one that
-  #     reads as a spec the buyer is paying for.
+  #     told apart from real dedicated memory. An Intel card away from the root
+  #     complex is the same ambiguity and gets the same answer. Better an empty
+  #     row than one that reads as a spec the buyer is paying for.
   vram=""
   case "$gtype" in
     Integrated) vram="Shared with system memory" ;;
@@ -3390,11 +3414,13 @@ als_os_volumes() {
 # What the disks say, in one word, from the lines above on stdin. Pure text in,
 # one token out, so every branch can be driven by a test without a disk:
 #   NONE          internal disks were seen and carry nothing that can hold an OS
+#   ENCRYPTED     a BitLocker volume is there, so nothing on it can be read
 #   LINUX <mnt>   a Linux root is already mounted, so it is free to read
+#   NTFS          a Windows filesystem is there and we did not manage to open it
 #   OTHER         a non-Windows system is there and we did not read it
 #   (nothing)     there was no internal disk to look at, so there is no answer
 als_os_disk_verdict() {
-  local line fs mp rm tran type disks=0 other=0 linux_mp=""
+  local line fs mp rm tran type disks=0 other=0 ntfs=0 enc=0 linux_mp=""
   while IFS= read -r line; do
     [ -n "$line" ] || continue
     rm=$(pval "$line" RM); tran=$(pval "$line" TRAN)
@@ -3410,19 +3436,42 @@ als_os_disk_verdict() {
         # operating system would be the worst answer this block could give.
         if [ -n "$mp" ] && [ "$mp" != "/" ] && [ -z "$linux_mp" ]; then linux_mp="$mp"; fi
         ;;
-      # A filesystem that can hold a system, or hides whether it does. Note
-      # ntfs: we only reach this function when no READABLE Windows was found, so
-      # an NTFS volume here is a data disk or one we could not open — either way
-      # "no operating system installed" would be a lie.
-      ntfs|ntfs3|apfs|hfsplus|zfs_member|LVM2_member|crypto_LUKS)
+      # BitLocker, named by libblkid itself — so this is a value we READ, not an
+      # inference. It is called out separately because it is the one filesystem
+      # that must never reach "nothing installed": all of the customer's data is
+      # sitting there, it simply cannot be opened without the recovery key. A
+      # BitLocker machine laid out ESP + MSR + C: has no NTFS on it anywhere,
+      # so without this case it scored nothing at all and was reported blank.
+      *BitLocker*|*bitlocker*)
+        enc=1 ;;
+      # NTFS is Windows' OWN filesystem, and we only reach this function when no
+      # READABLE Windows was found. So this volume is either a data disk or a
+      # Windows we failed to open — and the second of those is a capture failure
+      # the operator can fix, which is why it is kept apart from the rest.
+      ntfs|ntfs3)
+        ntfs=1 ;;
+      # A filesystem that can hold a system, or hides whether it does. Either
+      # way "no operating system installed" would be a lie.
+      apfs|hfsplus|zfs_member|LVM2_member|crypto_LUKS)
         other=1 ;;
     esac
   done
+  # Encrypted outranks everything else: a volume nobody can read is the fact
+  # that decides what happens to the machine, and it must not be pushed aside by
+  # a second system that merely happened to be easier to look at.
+  [ "$enc" = "1" ] && { printf 'ENCRYPTED'; return 0; }
   [ -n "$linux_mp" ] && { printf 'LINUX %s' "$linux_mp"; return 0; }
+  [ "$ntfs" = "1" ] && { printf 'NTFS'; return 0; }
   [ "$other" = "1" ] && { printf 'OTHER'; return 0; }
   [ "$disks" -gt 0 ] && { printf 'NONE'; return 0; }
   return 0
 }
+
+# One sentence, one place. The encrypted answer is reached two ways — the lock
+# checks noticing it while they look for a volume to mount, and the disk scan
+# below seeing the filesystem itself — and the operator must read the same
+# words whichever way we got there.
+OS_ENCRYPTED_MSG="Windows present but encrypted (BitLocker) — cannot be read without the recovery key"
 
 # No readable Windows: say what IS on the disks, and nothing more than that.
 als_os_without_windows() {
@@ -3432,6 +3481,16 @@ als_os_without_windows() {
     NONE)
       OS_NAME="No operating system installed"
       return 0 ;;
+    ENCRYPTED)
+      OS_NAME="$OS_ENCRYPTED_MSG"
+      return 0 ;;
+    NTFS)
+      # Not "no Windows here". Windows' own filesystem is on the disk and the
+      # station could not open it — which is what an image with no ntfs-3g, or a
+      # volume left dirty by fast startup or hibernation, looks like from here.
+      # Both are fixable at the bench, so say which two things to check.
+      OS_NAME="A Windows (NTFS) volume is present but could not be opened to read it — check that ntfs-3g is on the stick and that Windows was shut down rather than hibernated, then re-run the audit"
+      return 0 ;;
     LINUX\ *)
       mp=${verdict#LINUX }
       # PRETTY_NAME is the distribution's own one-line description.
@@ -3440,8 +3499,9 @@ als_os_without_windows() {
       if [ -n "$pretty" ]; then OS_NAME="$pretty"; return 0; fi
       ;;
   esac
-  # A non-Windows volume we did not open, or no disk to look at. Both are "we
-  # did not find Windows", and neither is "there is nothing installed".
+  # A non-Windows volume we did not open, a Linux root with no os-release, or no
+  # disk to look at. All three are "we did not find Windows", and none of them
+  # is "there is nothing installed".
   OS_NAME="No Windows installation found"
 }
 
@@ -3477,7 +3537,7 @@ als_read_installed_os() {
 
   if ! lock_locate_hives; then
     if [ -n "$WIN_ENCRYPTED" ]; then
-      OS_NAME="Windows present but encrypted (BitLocker) — cannot be read without the recovery key"
+      OS_NAME="$OS_ENCRYPTED_MSG"
       return 0
     fi
     als_os_without_windows

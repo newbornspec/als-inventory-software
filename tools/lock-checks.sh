@@ -114,8 +114,16 @@ lock_mount_windows() {
     return 0
   fi
 
+  # BitLocker volumes belong in this list as much as NTFS ones do. libblkid on
+  # a modern util-linux — which this stick ships — types an encrypted volume as
+  # "BitLocker", NOT as "ntfs", so an ntfs-only filter walked straight past the
+  # one disk we most need to notice: lock_is_bitlocker below was never called on
+  # it, WIN_ENCRYPTED stayed empty, and every caller then reported "no Windows
+  # here" about a machine whose Windows is sitting there intact and merely
+  # unreadable. Nothing is mounted for such a device — the loop records it and
+  # moves on — so widening the filter only ever ADDS the encrypted answer.
   local dev
-  for dev in $(lsblk -pnro NAME,FSTYPE 2>/dev/null | awk '$2=="ntfs"||$2=="ntfs3"{print $1}'); do
+  for dev in $(lsblk -pnro NAME,FSTYPE 2>/dev/null | awk '$2=="ntfs"||$2=="ntfs3"||$2~/[Bb]it[Ll]ocker/{print $1}'); do
     # Encrypted: skip it and remember why, so the caller can say so instead of
     # reporting a clean registry it never actually read.
     if lock_is_bitlocker "$dev"; then WIN_ENCRYPTED=1; continue; fi

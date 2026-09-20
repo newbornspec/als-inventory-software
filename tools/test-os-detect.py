@@ -339,15 +339,22 @@ r = record(run_case(NO_WINDOWS + WIPED))
 check("a wiped machine says so in as many words",
       r["os"] == "No operating system installed", r)
 
-# An NTFS volume we could not open is NOT an empty machine.
+# An NTFS volume we could not open is NOT an empty machine, and it is not a
+# machine without Windows either: NTFS is Windows' own filesystem, and the usual
+# reason we cannot open it is a missing ntfs-3g or a volume left dirty by fast
+# startup - both of which the operator can fix at the bench.
 DATA_NTFS = r'''
 als_os_volumes() { printf '%s\n' \
   'NAME="/dev/sda" TYPE="disk" FSTYPE="" MOUNTPOINT="" RM="0" TRAN="sata"' \
   'NAME="/dev/sda2" TYPE="part" FSTYPE="ntfs" MOUNTPOINT="" RM="0" TRAN="sata"'; }
 '''
 r = record(run_case(NO_WINDOWS + DATA_NTFS))
-check("an unopened NTFS volume is 'no Windows found', never 'no OS installed'",
-      r["os"] == "No Windows installation found", r)
+check("an unopened NTFS volume is never 'no OS installed'",
+      "No operating system" not in r["os"], r)
+check("an unopened NTFS volume says the volume could not be OPENED",
+      r["os"].startswith("A Windows (NTFS) volume is present but could not be opened"), r)
+check("an unopened NTFS volume tells the operator what to check",
+      "ntfs-3g" in r["os"] and "hibernated" in r["os"], r)
 
 # No internal disk to look at at all: we have not earned any claim.
 r = record(run_case(NO_WINDOWS + "als_os_volumes() { :; }"))
@@ -398,10 +405,70 @@ check("a Linux root with no os-release is not given an invented name",
 
 print("4. BitLocker, missing tools, missing privilege")
 
-r = record(run_case('lock_locate_hives() { WIN_ENCRYPTED=1; return 1; }'))
+OS_ENCRYPTED = ("Windows present but encrypted (BitLocker) — "
+                "cannot be read without the recovery key")
+
+# BitLocker driven through the REAL mount path rather than a stub of it. The
+# earlier version of this case set WIN_ENCRYPTED by hand, which proved the
+# sentence was worded right and nothing else - and the machinery underneath it
+# could not set that variable at all: libblkid on a modern util-linux types an
+# encrypted volume "BitLocker", not "ntfs", so an ntfs-only device filter walked
+# past the whole disk. These stubs are what such a machine really looks like:
+# an ESP, the Microsoft reserved partition with no filesystem, and C: encrypted,
+# with no WinRE partition to fall back on.
+#
+# The mount stub is the safety assertion. An encrypted volume must be recorded
+# and skipped BEFORE anything is mounted, so this file must never be created.
+ENC_BIN = os.path.join(TMP, "bin-bitlocker")
+os.makedirs(ENC_BIN)
+MOUNT_MARK = os.path.join(TMP, "mount-was-called")
+w(os.path.join(ENC_BIN, "lsblk"), """#!/bin/sh
+for a in "$@"; do
+  case "$a" in
+    # "-no MOUNTPOINT,FSTYPE": nothing belonging to the machine is mounted.
+    *MOUNTPOINT*) exit 0 ;;
+  esac
+done
+printf '%s\\n' '/dev/sda1 vfat' '/dev/sda2 ' '/dev/sda3 BitLocker'
+""", executable=True)
+w(os.path.join(ENC_BIN, "blkid"), """#!/bin/sh
+dev=""
+for a in "$@"; do case "$a" in /dev/*) dev="$a" ;; esac; done
+case "$dev" in
+  /dev/sda3) echo BitLocker ;;
+  *) exit 2 ;;
+esac
+""", executable=True)
+w(os.path.join(ENC_BIN, "mount"), """#!/bin/sh
+: > "$ALS_MOUNT_MARK"
+exit 1
+""", executable=True)
+
+BITLOCKER = ('export ALS_MOUNT_MARK="%s"\nPATH="$(cd "%s" && pwd):$PATH"'
+             % (MOUNT_MARK.replace("\\", "/"), ENC_BIN.replace("\\", "/")))
+r = record(run_case(BITLOCKER))
 check("BitLocker: says Windows is there and why it cannot be read",
-      r["os"] == ("Windows present but encrypted (BitLocker) — "
-                  "cannot be read without the recovery key"), r)
+      r["os"] == OS_ENCRYPTED, r)
+check("BitLocker: the encrypted disk is never reported as a wiped machine",
+      "No operating system" not in r["os"] and "No Windows" not in r["os"], r)
+check("BitLocker: nothing was mounted to find that out",
+      not os.path.exists(MOUNT_MARK), MOUNT_MARK)
+
+# And the same machine when the mount side did not catch it - an image with no
+# blkid, say. The disk scan sees the encrypted filesystem itself. Before this
+# case existed the layout below scored nothing at all and the machine was
+# published as "No operating system installed": an assertion that a disk full of
+# the customer's data had been erased.
+ENC_DISKS = r'''
+als_os_volumes() { printf '%s\n' \
+  'NAME="/dev/sda" TYPE="disk" FSTYPE="" MOUNTPOINT="" RM="0" TRAN="sata"' \
+  'NAME="/dev/sda1" TYPE="part" FSTYPE="vfat" MOUNTPOINT="" RM="0" TRAN="sata"' \
+  'NAME="/dev/sda2" TYPE="part" FSTYPE="" MOUNTPOINT="" RM="0" TRAN="sata"' \
+  'NAME="/dev/sda3" TYPE="part" FSTYPE="BitLocker" MOUNTPOINT="" RM="0" TRAN="sata"'; }
+'''
+r = record(run_case(NO_WINDOWS + ENC_DISKS))
+check("an encrypted volume in the disk scan is never a wiped machine",
+      r["os"] == OS_ENCRYPTED, r)
 
 NO_HIVEX = ('lock_has() { case "$1" in hivexget) return 1 ;; '
             '*) command -v "$1" >/dev/null 2>&1 ;; esac; }\n' + HIVES_FOUND)
@@ -661,6 +728,40 @@ check("touch: an empty input list gives no answer at all", out == "", out)
 out, _ = awk_out(TOUCH_AWK, (KBD + SCREEN).rstrip("\n"))
 check("touch: the last device is still examined without a trailing blank line",
       out == "yes", out)
+
+# The GPU classification, which decides whether the memory row gets a sentence
+# or nothing. A vendor name alone cannot answer it: Intel's on-die graphics sit
+# on the CPU root complex at 00:02.x, but an Arc board is a card in a slot with
+# its own VRAM, and classifying it integrated published "Shared with system
+# memory" as the specification of a 16 GB card.
+m = re.search(r"^als_gpu_type\(\) \{.*?^\}", engine_src, re.S | re.M)
+check("the GPU classifier can be sliced out of the engine", bool(m))
+GPU_TYPE = m.group(0) if m else ""
+
+
+def gpu_type(vendor, slot):
+    script = w(os.path.join(TMP, "gpu.sh"),
+               GPU_TYPE + '\nals_gpu_type "%s" "%s"\n' % (vendor, slot))
+    r = subprocess.run([BASH, script], capture_output=True, timeout=60,
+                       encoding="utf-8", errors="replace")
+    return r.stdout.strip()
+
+
+check("an Intel GPU on the CPU root complex is integrated",
+      gpu_type("Intel", "00:02.0") == "Integrated", gpu_type("Intel", "00:02.0"))
+check("an Intel GPU in a PCIe slot is NOT called integrated on the vendor name",
+      gpu_type("Intel", "03:00.0") == "", gpu_type("Intel", "03:00.0"))
+check("a domain-qualified root-complex slot is still read as integrated",
+      gpu_type("Intel", "0000:00:02.0") == "Integrated",
+      gpu_type("Intel", "0000:00:02.0"))
+check("NVIDIA is still dedicated", gpu_type("NVIDIA", "01:00.0") == "Dedicated",
+      gpu_type("NVIDIA", "01:00.0"))
+check("AMD is still left unanswered, APU and card being indistinguishable here",
+      gpu_type("AMD", "05:00.0") == "", gpu_type("AMD", "05:00.0"))
+check("an unrecognised vendor is left unanswered", gpu_type("Matrox", "01:00.0") == "",
+      gpu_type("Matrox", "01:00.0"))
+check("the shared-memory sentence is reached through the classifier, not the vendor",
+      'gtype=$(als_gpu_type "$vend" "$slot")' in engine_src)
 
 shutil.rmtree(TMP, ignore_errors=True)
 

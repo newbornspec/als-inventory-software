@@ -150,7 +150,13 @@ export function specRows(p: HardwareProfileLike | null | undefined): SpecRow[] {
       mfgArch: c.manufacturer || DASH,
       params:
         text([
-          text([c.model, c.baseClock]),
+          // The model name usually carries the rated clock already ("Intel(R)
+          // Core(TM) i3-8145U CPU @ 2.10GHz"), and the station scrapes
+          // cpu.baseClock out of that very string — so printing both gave
+          // "...@ 2.10GHz 2.10 GHz" in a cell whose whole job is a clean
+          // one-line spec. Append it only when the model states no frequency of
+          // its own, which is most AMD parts and Intel's hybrid chips.
+          text([c.model, !/@\s*[\d.]+\s*GHz/i.test(c.model ?? '') && c.baseClock]),
           paren([
             c.maxClock && `${c.maxClock} boost`,
             c.cores != null && `${c.cores}c${c.threads != null ? `/${c.threads}t` : ''}`,
