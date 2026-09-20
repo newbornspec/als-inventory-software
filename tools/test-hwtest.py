@@ -2,20 +2,20 @@
 # -*- coding: utf-8 -*-
 """The hardware functional test (contract C6), station side, end to end.
 
-Five components - speaker, keyboard, camera, screen, trackpad - tested in the
-kiosk on the machine being audited, confirmed by a technician, and carried on
-that machine's audit record as profile.hardwareTest (inside the hardware
-profile: no migration, no new column).
+Seven components - speaker, keyboard, camera, screen, trackpad, microphone and
+USB ports - tested in the kiosk on the machine being audited, confirmed by a
+technician, and carried on that machine's audit record as profile.hardwareTest
+(inside the hardware profile: no migration, no new column).
 
-This proves the FOUNDATION: the five tests themselves are written in their own
+This proves the FOUNDATION: the seven tests themselves are written in their own
 regions, and this is the shell they drop into.
 
 1. THE STATE MACHINE. The overall verdict is DERIVED by the contract's
    worst-wins rule, in server.py's hwtest_overall() and in the page's
    hwOverall() - two sides, one rule, so both are driven with EVERY combination
-   of the five states across the five tests and must agree with each other and
+   of the five states across the seven tests and must agree with each other and
    with the contract. The rules asserted by name: a run that is not finished
-   never reports a verdict (only "2 / 5 completed"), every test PASSED is the
+   never reports a verdict (only "2 / 7 completed"), every test PASSED is the
    only way to reach PASSED, any FAILED beats any ATTENTION, and a trackpad
    recorded as a benign N/A (a desktop with none) does not worsen the overall.
 2. THE RULE THAT KEEPS IT HONEST. A test the station could not RUN is
@@ -30,8 +30,8 @@ regions, and this is the shell they drop into.
    state, a test still running, a non-pass with no reason, and anything too
    big to carry on a record.
 4. THE SHELL ON SCREEN. Under node, with a small stand-in for the DOM (the
-   way tools/test-drive-health.py drives index.html): five "Not tested" rows
-   with their own detail areas, the count, the verdict only once all five are
+   way tools/test-drive-health.py drives index.html): seven "Not tested" rows
+   with their own detail areas, the count, the verdict only once all seven are
    in, words as well as colour, never "Unknown", and a result that could not
    be saved says so instead of looking saved.
 5. THE ENDPOINTS. The REAL Handler on a real port: save, read back, the
@@ -133,7 +133,7 @@ check("server.py's hwtest_overall matches the contract in every combination",
 
 partial = [(c, g) for c, g in zip(COMBOS, PY)
            if g["completed"] < g["total"] and g["status"] in DONE]
-check("a part-finished run NEVER reports a verdict - only 'N / 5 completed'",
+check("a part-finished run NEVER reports a verdict - only 'N / 7 completed'",
       not partial, partial[:4])
 wrong_pass = [(c, g) for c, g in zip(COMBOS, PY)
               if g["status"] == "PASSED" and list(c) != ["PASSED"] * len(TESTS)]
@@ -152,14 +152,15 @@ check("the derivation is one function, not a status the sender can set",
       srv.hwtest_overall(dict(combo_object(("PASSED",) * len(TESTS)), status="FAILED"))["status"]
       == "PASSED")
 # The benign N/A the trackpad brings: a desktop with no trackpad records it as
-# PASSED (with notApplicable), so four real passes plus that N/A is a full 5 / 5
+# PASSED (with notApplicable), so six real passes plus that N/A is a full 7 / 7
 # PASSED and NEVER "Needs attention" - the derivation only ever looks at status.
 na_overall = srv.hwtest_overall({
     "speaker": {"status": "PASSED"}, "keyboard": {"status": "PASSED"},
     "camera": {"status": "PASSED"}, "screen": {"status": "PASSED"},
+    "microphone": {"status": "PASSED"}, "usb": {"status": "PASSED"},
     "trackpad": {"status": "PASSED", "notApplicable": True}})
-check("a machine with a benign N/A trackpad and four passes reads 5 / 5 — Passed",
-      na_overall == {"status": "PASSED", "completed": 5, "total": 5}, na_overall)
+check("a machine with a benign N/A trackpad and six passes reads 7 / 7 — Passed",
+      na_overall == {"status": "PASSED", "completed": 7, "total": 7}, na_overall)
 
 # ---------------------------------------------- 2 + 3. what may be stored --
 print("2. a test the station could not RUN is ATTENTION with a reason, never FAILED")
@@ -268,7 +269,7 @@ for name in TESTS:
         spans.append((HTML.find(start), HTML.find(end) + len(end), "%s %s" % (name, start)))
 spans.sort()
 overlap = [(a, b) for a, b in zip(spans, spans[1:]) if a[1] >= b[0]]
-check("the twelve regions never overlap", not overlap, overlap)
+check("the %d regions never overlap (three per test)" % (3 * len(TESTS)), not overlap, overlap)
 check("every test row has its own status, reason and detail area",
       all(('id="hwtStat_%s"' % n) in HTML and ('id="hwtWhy_%s"' % n) in HTML
           and ('id="hwtDetail_%s"' % n) in HTML for n in TESTS))
@@ -396,8 +397,8 @@ await run(`runHwTest('keyboard')`);
 out.threw = run(`HWTEST.speaker`);
 out.silent = run(`HWTEST.keyboard`);
 
-// A technician's answers: pass, needs-attention, fail. With five tests, four
-// answers still leave the run unfinished (4 / 5) - the trackpad's benign N/A
+// A technician's answers: pass, needs-attention, fail. With seven tests, six
+// answers still leave the run unfinished (6 / 7) - the trackpad's benign N/A
 // completes it, and must not turn the verdict amber.
 reset();
 run(`hwPass('speaker',{left:'PASSED',right:'PASSED',mixer:'unmuted Master and Speaker, set to 80%'});
@@ -407,26 +408,30 @@ run(`hwAttention('screen','1 bright pixel reported by the technician',null,{dead
 out.three = el('hwtSummary').innerHTML;
 run(`hwPass('camera',{device:'Integrated Camera'});`);
 out.four = el('hwtSummary').innerHTML;
+run(`hwPass('microphone',{device:'Internal Microphone',confirmedBy:'technician'});
+     hwPass('usb',{portsSeen:3,devices:[],confirmedBy:'technician'});`);
+out.six = el('hwtSummary').innerHTML;
 run(`hwPass('trackpad',{notApplicable:true,confirmedBy:'technician'});`);
-out.fiveAttention = { html: el('hwtSummary').innerHTML, cls: el('hwtSummary').className };
+out.allAttention = { html: el('hwtSummary').innerHTML, cls: el('hwtSummary').className };
 // The trackpad row, when it is a benign N/A, is neutral N/A in words - never a
 // green "Passed" - even though it is stored as PASSED for the count.
 out.naRow = run(`document.getElementById('hwtStat_trackpad').textContent+'|'+
   document.getElementById('hwtStat_trackpad').className`);
 out.naWhy = run(`document.getElementById('hwtWhy_trackpad').textContent`);
 run(`hwFail('camera','the technician found the picture is black');`);
-out.fiveFailed = { html: el('hwtSummary').innerHTML, cls: el('hwtSummary').className };
+out.allFailed = { html: el('hwtSummary').innerHTML, cls: el('hwtSummary').className };
 
-// Four real passes plus the benign N/A: a full 5 / 5 that reads Passed, green,
+// Six real passes plus the benign N/A: a full 7 / 7 that reads Passed, green,
 // NOT amber - the N/A satisfies the count without dragging the verdict down.
 reset();
 run(`hwPass('speaker',{});hwPass('keyboard',{});hwPass('camera',{});hwPass('screen',{});
+     hwPass('microphone',{});hwPass('usb',{});
      hwPass('trackpad',{notApplicable:true,confirmedBy:'technician'});`);
 out.naOverall = { html: el('hwtSummary').innerHTML, cls: el('hwtSummary').className };
 
 reset();
 run(`for(const k of HWT_KEYS) hwPass(k,{});`);
-out.fivePassed = { html: el('hwtSummary').innerHTML, cls: el('hwtSummary').className };
+out.allPassed = { html: el('hwtSummary').innerHTML, cls: el('hwtSummary').className };
 out.passedRows = run(`HWT_KEYS.map(k=>document.getElementById('hwtStat_'+k).textContent+'|'+
   document.getElementById('hwtStat_'+k).className)`);
 
@@ -505,7 +510,7 @@ out.swapped = { summary: el('hwtSummary').innerHTML,
   shown: !el('hwtSaveMsg').classList.contains('hidden') };
 
 // The station SERVICE restarted: the same machine, but its copy is gone - the
-// test is in its memory only. The card must not keep claiming 5 / 5.
+// test is in its memory only. The card must not keep claiming 7 / 7.
 await allPass();
 run(`adoptHwTest(null,'HOST1',false)`);
 out.restarted = { summary: el('hwtSummary').innerHTML, msg: el('hwtSaveMsg').textContent };
@@ -556,7 +561,7 @@ process.stdout.write(JSON.stringify(out));
     with open(harness, "w", encoding="utf-8") as fh:
         fh.write("(async () => {\n" + body +
                  "\n})().catch(e => { console.error(e); process.exit(3); });\n")
-    stored = {"status": "ATTENTION", "completed": 5, "total": 5, "technician": "Ann Operator",
+    stored = {"status": "ATTENTION", "completed": 7, "total": 7, "technician": "Ann Operator",
               "testedAt": "2026-09-20T12:00:00Z", "clockWasNetwork": True,
               "speaker": {"status": "ATTENTION",
                           "reason": "the station could not unmute this machine",
@@ -567,6 +572,12 @@ process.stdout.write(JSON.stringify(out));
               "screen": {"status": "PASSED", "reason": None, "action": None, "notes": ""},
               "trackpad": {"status": "PASSED", "moved": True, "leftClick": True, "rightClick": True,
                            "confirmedBy": "technician", "reason": None, "action": None, "notes": ""},
+              "microphone": {"status": "PASSED", "device": "Internal Microphone",
+                             "confirmedBy": "technician", "reason": None, "action": None, "notes": ""},
+              "usb": {"status": "PASSED", "portsSeen": 3,
+                      "devices": [{"port": "1-3", "name": "SanDisk Ultra",
+                                   "speed": "USB 3.0 (5000 Mbps)"}],
+                      "confirmedBy": "technician", "reason": None, "action": None, "notes": ""},
               "history": []}
     inp = os.path.join(TMP, "in.json")
     with open(inp, "w", encoding="utf-8") as fh:
@@ -580,7 +591,7 @@ process.stdout.write(JSON.stringify(out));
     check("the page's script runs at all", bool(o), r.stderr.decode("utf-8", "replace")[-800:])
 
     # The page returns the same three fields plus what only a screen needs
-    # (the "N / 5 completed" line, and an empty verdict while the run is not
+    # (the "N / 7 completed" line, and an empty verdict while the run is not
     # finished); the rule itself is those three.
     JS_OVERALL = [{k: v for k, v in x.items() if k in ("status", "completed", "total")}
                   for x in (o.get("overall") or [])]
@@ -589,12 +600,12 @@ process.stdout.write(JSON.stringify(out));
           JS_OVERALL and not disagree, disagree[:4])
 
     rows = o.get("rows") or []
-    check("the shell shows five tests, each 'Not tested' in words and in colour",
-          len(rows) == 5 and all(x["badge"] == "Not tested" and "na" in x["cls"] for x in rows), rows)
+    check("the shell shows seven tests, each 'Not tested' in words and in colour",
+          len(rows) == 7 and all(x["badge"] == "Not tested" and "na" in x["cls"] for x in rows), rows)
     check("each row says what the test will do before it is run",
           all(x["why"].startswith("Not run yet.") for x in rows), rows)
-    check("before anything is tested the summary is '0 / 5 completed' with NO verdict",
-          "0 / 5 completed" in o.get("emptySummary", "")
+    check("before anything is tested the summary is '0 / 7 completed' with NO verdict",
+          "0 / 7 completed" in o.get("emptySummary", "")
           and not any(w in o.get("emptySummary", "") for w in ("Passed", "Failed", "Needs attention"))
           and "na" in o.get("emptyCls", ""), (o.get("emptySummary"), o.get("emptyCls")))
 
@@ -613,17 +624,19 @@ process.stdout.write(JSON.stringify(out));
           (o.get("silent") or {}).get("status") == "ATTENTION"
           and "without recording a result" in ((o.get("silent") or {}).get("reason") or ""), o.get("silent"))
 
-    check("two tests done: '2 / 5 completed' and still no verdict",
-          "2 / 5 completed" in (o.get("partial") or {}).get("html", "")
+    check("two tests done: '2 / 7 completed' and still no verdict",
+          "2 / 7 completed" in (o.get("partial") or {}).get("html", "")
           and "Passed" not in (o.get("partial") or {}).get("html", "")
           and "na" in (o.get("partial") or {}).get("cls", ""), o.get("partial"))
-    check("three done is still no verdict", "3 / 5 completed" in o.get("three", "")
+    check("three done is still no verdict", "3 / 7 completed" in o.get("three", "")
           and "Needs attention" not in o.get("three", ""), o.get("three"))
-    check("four done is STILL no verdict - five tests, one to go", "4 / 5 completed" in o.get("four", "")
+    check("four done is still no verdict", "4 / 7 completed" in o.get("four", "")
           and not any(w in o.get("four", "") for w in ("Passed", "Failed", "Needs attention")), o.get("four"))
-    check("the benign N/A completes the run without amber: '5 / 5 — Needs attention' from the screen alone",
-          "5 / 5 completed — Needs attention" in (o.get("fiveAttention") or {}).get("html", "")
-          and "warn" in (o.get("fiveAttention") or {}).get("cls", ""), o.get("fiveAttention"))
+    check("six done is STILL no verdict - seven tests, one to go", "6 / 7 completed" in o.get("six", "")
+          and not any(w in o.get("six", "") for w in ("Passed", "Failed", "Needs attention")), o.get("six"))
+    check("the benign N/A completes the run without amber: '7 / 7 — Needs attention' from the screen alone",
+          "7 / 7 completed — Needs attention" in (o.get("allAttention") or {}).get("html", "")
+          and "warn" in (o.get("allAttention") or {}).get("cls", ""), o.get("allAttention"))
     nar = o.get("naRow") or ""
     check("a benign N/A trackpad row is neutral N/A in words, never a green 'Passed'",
           nar.startswith("N/A|") and "na" in nar and "ok" not in nar and "Passed" not in nar, nar)
@@ -631,15 +644,15 @@ process.stdout.write(JSON.stringify(out));
           "no trackpad fitted" in (o.get("naWhy") or "") and "Unknown" not in (o.get("naWhy") or ""),
           o.get("naWhy"))
     check("one FAILED wins, in words and red",
-          "5 / 5 completed — Failed" in (o.get("fiveFailed") or {}).get("html", "")
-          and "bad" in (o.get("fiveFailed") or {}).get("cls", ""), o.get("fiveFailed"))
-    check("four real passes plus a benign N/A trackpad reads '5 / 5 — Passed', green not amber",
-          "5 / 5 completed — Passed" in (o.get("naOverall") or {}).get("html", "")
+          "7 / 7 completed — Failed" in (o.get("allFailed") or {}).get("html", "")
+          and "bad" in (o.get("allFailed") or {}).get("cls", ""), o.get("allFailed"))
+    check("six real passes plus a benign N/A trackpad reads '7 / 7 — Passed', green not amber",
+          "7 / 7 completed — Passed" in (o.get("naOverall") or {}).get("html", "")
           and "ok" in (o.get("naOverall") or {}).get("cls", "")
           and "Needs attention" not in (o.get("naOverall") or {}).get("html", ""), o.get("naOverall"))
-    check("five passes: 'Passed', in words and green",
-          "5 / 5 completed — Passed" in (o.get("fivePassed") or {}).get("html", "")
-          and "ok" in (o.get("fivePassed") or {}).get("cls", ""), o.get("fivePassed"))
+    check("seven passes: 'Passed', in words and green",
+          "7 / 7 completed — Passed" in (o.get("allPassed") or {}).get("html", "")
+          and "ok" in (o.get("allPassed") or {}).get("cls", ""), o.get("allPassed"))
     check("the rows say Passed in words too", o.get("passedRows")
           and all(x.startswith("Passed|hwtb ok") for x in o["passedRows"]), o.get("passedRows"))
     # "20 Sep 2026" or "20 Sept 2026" - the month's short name is the
@@ -649,14 +662,14 @@ process.stdout.write(JSON.stringify(out));
           and re.search(r"20 Sept? 2026", (o.get("adopted") or {}).get("summary", "")),
           o.get("adopted"))
 
-    check("Run all tests runs all five, in order", o.get("order") == TESTS, o.get("order"))
-    check("each one is saved as it finishes", o.get("saves") == 5, o.get("saves"))
+    check("Run all tests runs all seven, in order", o.get("order") == TESTS, o.get("order"))
+    check("each one is saved as it finishes", o.get("saves") == len(TESTS), o.get("saves"))
     # One test per save: the station treats everything it is sent as a NEW
-    # result, so re-sending the three that have not changed would file three
+    # result, so re-sending the six that have not changed would file six
     # retests that never happened, every time.
     check("a save names only the test that has just run, and sets no verdict of its own",
           isinstance(o.get("lastSaveBody"), dict)
-          and list(o["lastSaveBody"].keys()) == ["trackpad"], o.get("lastSaveBody"))
+          and list(o["lastSaveBody"].keys()) == [TESTS[-1]], o.get("lastSaveBody"))
     check("every save names exactly one test", o.get("saveKeys") == [[k] for k in TESTS],
           o.get("saveKeys"))
     check("the controls come back when the run ends", o.get("buttonsBack") is True)
@@ -673,7 +686,7 @@ process.stdout.write(JSON.stringify(out));
           ao.get("shown") is True and "NOT saved" in ao.get("msg", "")
           and "speaker" in ao.get("msg", "") and "camera" not in ao.get("msg", ""), ao)
     check("...and the count says two tests are done, not one",
-          "2 / 5 completed" in ao.get("summary", ""), ao.get("summary"))
+          "2 / 7 completed" in ao.get("summary", ""), ao.get("summary"))
 
     jr = o.get("justRecorded") or {}
     check("a result just recorded is protected from the station's copy without "
@@ -688,22 +701,22 @@ process.stdout.write(JSON.stringify(out));
     check("and the controls come back when that single test ends",
           lk.get("startsAfter") == 1 and lk.get("buttonsBack") is True, lk)
 
-    check("five passes, saved, belong to the machine the station names",
-          "5 / 5 completed — Passed" in (o.get("beforeSwap") or {}).get("summary", "")
+    check("seven passes, saved, belong to the machine the station names",
+          "7 / 7 completed — Passed" in (o.get("beforeSwap") or {}).get("summary", "")
           and (o.get("beforeSwap") or {}).get("machine") == "HOST1", o.get("beforeSwap"))
     sw = o.get("swapped") or {}
     check("a Rescan onto a DIFFERENT machine clears the card instead of keeping the verdict",
-          "0 / 5 completed" in sw.get("summary", "") and "Passed" not in sw.get("summary", "")
+          "0 / 7 completed" in sw.get("summary", "") and "Passed" not in sw.get("summary", "")
           and sw.get("speaker") == "Not tested", sw)
     check("...and says why, rather than the rows just changing under the technician",
           sw.get("shown") is True and "machine on the bench changed" in sw.get("msg", ""), sw)
     rs = o.get("restarted") or {}
     check("the station losing its copy (a service restart) clears the card too",
-          "0 / 5 completed" in rs.get("summary", "") and "Passed" not in rs.get("summary", ""), rs)
+          "0 / 7 completed" in rs.get("summary", "") and "Passed" not in rs.get("summary", ""), rs)
     check("...and says the station no longer holds it, so it is not on the record",
           "no longer holds" in rs.get("msg", "") and "again" in rs.get("msg", ""), rs)
     check("an answer already in flight when a save landed is dropped, not painted back",
-          "5 / 5 completed — Passed" in (o.get("stalePoll") or ""), o.get("stalePoll"))
+          "7 / 7 completed — Passed" in (o.get("stalePoll") or ""), o.get("stalePoll"))
     uk = o.get("unsavedKept") or {}
     check("a result the station refused survives an adopt - it has none to hand back",
           uk.get("screen") == "Passed" and "NOT saved" in uk.get("msg", ""), uk)
@@ -721,7 +734,7 @@ process.stdout.write(JSON.stringify(out));
     check("a reloaded screen shows what the station already holds",
           ad.get("speaker") == "Needs attention"
           and "could not unmute" in ad.get("why", "")
-          and "5 / 5 completed — Needs attention" in ad.get("summary", ""), ad)
+          and "7 / 7 completed — Needs attention" in ad.get("summary", ""), ad)
     check("but the station's older copy is never painted over a result just recorded here",
           o.get("notClobbered") == "PASSED", o.get("notClobbered"))
     check("nothing on the card ever says 'Unknown'",
@@ -777,7 +790,7 @@ try:
         "mixer": "unmuted Master and Speaker, set to 80%",
         "sink": "Built-in Audio Analogue Stereo"}})
     saved = (ans or {}).get("hardwareTest") or {}
-    check("one test saved: the other four are 'not tested', and there is NO verdict",
+    check("one test saved: the other six are 'not tested', and there is NO verdict",
           code == 200 and saved.get("completed") == 1 and saved.get("status") == "IN_PROGRESS"
           and saved["camera"]["status"] == "NOT_TESTED", (code, saved))
     check("the station stamps who tested it - the Operator named in the header",
@@ -802,7 +815,7 @@ try:
           saved2["speaker"]["status"] == "FAILED" and len(saved2["history"]) == 1
           and saved2["history"][0]["test"] == "speaker"
           and saved2["history"][0]["status"] == "PASSED", saved2.get("history"))
-    check("one test failed, four not tested: still no overall verdict",
+    check("one test failed, six not tested: still no overall verdict",
           saved2["status"] == "IN_PROGRESS" and saved2["completed"] == 1, saved2["status"])
 
     code, ans = call("POST", "/api/hwtest", {"keyboard": {"status": "PASSED"}})

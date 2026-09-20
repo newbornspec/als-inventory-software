@@ -22,13 +22,20 @@ const pass = { status: 'PASSED' };
 // does not re-derive a verdict.
 const ALL_PASS = {
   status: 'PASSED',
-  completed: 5,
-  total: 5,
+  completed: 7,
+  total: 7,
   speaker: { status: 'PASSED', left: 'PASSED', right: 'PASSED' },
   keyboard: { status: 'PASSED', deviceType: 'Laptop – Standard' },
   camera: { status: 'PASSED', device: 'HD Webcam' },
   screen: { status: 'PASSED', deadPixels: 0 },
   trackpad: { status: 'PASSED', moved: true, leftClick: true, rightClick: true, scrolled: true },
+  microphone: { status: 'PASSED', device: 'Internal Microphone', confirmedBy: 'technician' },
+  usb: {
+    status: 'PASSED',
+    portsSeen: 3,
+    devices: [{ port: '1-3', name: 'SanDisk Ultra', speed: 'USB 3.0 (5000 Mbps)' }],
+    confirmedBy: 'technician',
+  },
 };
 
 const ONE_FAILED = {
@@ -38,7 +45,7 @@ const ONE_FAILED = {
 };
 
 // Two faulty components: named in reading order (Speaker, Keyboard, Camera,
-// Screen, Trackpad), so keyboard before screen.
+// Screen, Trackpad, Microphone, USB ports), so keyboard before screen.
 const TWO_FAILED = {
   ...ALL_PASS,
   status: 'FAILED',
@@ -61,19 +68,21 @@ const FAILED_BEATS_ATTENTION = {
   camera: { status: 'ATTENTION', device: 'HD Webcam' },
 };
 
-// Not finished: no verdict, only how many of five are done.
+// Not finished: no verdict, only how many of seven are done.
 const PARTIAL = {
   status: 'IN_PROGRESS',
   completed: 3,
-  total: 5,
+  total: 7,
   speaker: pass,
   keyboard: pass,
   camera: pass,
   screen: { status: 'NOT_TESTED' },
   trackpad: { status: 'NOT_TESTED' },
+  microphone: { status: 'NOT_TESTED' },
+  usb: { status: 'NOT_TESTED' },
 };
 
-// The same, but the station omitted the counts: derive 3 of 5 from the finished
+// The same, but the station omitted the counts: derive 3 of 7 from the finished
 // components rather than inventing a verdict.
 const PARTIAL_NO_COUNTS = {
   status: 'IN_PROGRESS',
@@ -82,23 +91,53 @@ const PARTIAL_NO_COUNTS = {
   camera: pass,
   screen: { status: 'NOT_TESTED' },
   trackpad: { status: 'IN_PROGRESS' },
+  microphone: { status: 'NOT_TESTED' },
+  usb: { status: 'NOT_TESTED' },
+};
+
+// The two newest tests, each the only thing wrong with the machine. A USB port
+// the technician found dead is a FAILED like any other; the cell names it by the
+// same label the card uses.
+const MIC_ATTENTION = {
+  ...ALL_PASS,
+  status: 'ATTENTION',
+  microphone: {
+    status: 'ATTENTION',
+    device: 'Internal Microphone',
+    reason: 'the microphone permission was refused, so nothing could be listened to',
+    action: 'Grant microphone access for this page, then test again.',
+  },
+};
+
+const USB_FAILED = {
+  ...ALL_PASS,
+  status: 'FAILED',
+  usb: {
+    status: 'FAILED',
+    portsSeen: 2,
+    devices: [{ port: '1-3', name: 'SanDisk Ultra', speed: 'USB 3.0 (5000 Mbps)' }],
+    reason: 'the technician reported: the front-left port did nothing',
+    confirmedBy: 'technician',
+  },
 };
 
 // A desktop: the trackpad is benign N/A (stored PASSED with notApplicable), the
 // other four pass. It must read "Passed" and must NOT name the trackpad.
 const DESKTOP_NA = {
   status: 'PASSED',
-  completed: 5,
-  total: 5,
+  completed: 7,
+  total: 7,
   speaker: { status: 'PASSED', left: 'PASSED', right: 'PASSED' },
   keyboard: { status: 'PASSED', deviceType: 'Desktop – Full' },
   camera: { status: 'PASSED', device: 'Logitech C920' },
   screen: { status: 'PASSED', deadPixels: 0 },
   trackpad: { status: 'PASSED', notApplicable: true },
+  microphone: { status: 'PASSED', device: 'Logitech C920 Microphone' },
+  usb: { status: 'PASSED', portsSeen: 4, devices: [] },
 };
 
 describe.each(COPIES)('hardware test one-cell summary (%s copy)', (_name, m) => {
-  it('all five components passed: "Passed"', () => {
+  it('all seven components passed: "Passed"', () => {
     expect(m.hardwareTestSummary(ALL_PASS)).toBe('Passed');
   });
 
@@ -118,10 +157,18 @@ describe.each(COPIES)('hardware test one-cell summary (%s copy)', (_name, m) => 
     expect(m.hardwareTestSummary(FAILED_BEATS_ATTENTION)).toBe('Failed: keyboard');
   });
 
-  it('an unfinished run has no verdict, only "N of 5 tested"', () => {
-    expect(m.hardwareTestSummary(PARTIAL)).toBe('3 of 5 tested');
+  it('a microphone that could not be tested: "Needs attention:" names it', () => {
+    expect(m.hardwareTestSummary(MIC_ATTENTION)).toBe('Needs attention: microphone');
+  });
+
+  it('a dead USB port: "Failed:" names it, by the label the card uses', () => {
+    expect(m.hardwareTestSummary(USB_FAILED)).toBe('Failed: usb ports');
+  });
+
+  it('an unfinished run has no verdict, only "N of 7 tested"', () => {
+    expect(m.hardwareTestSummary(PARTIAL)).toBe('3 of 7 tested');
     // Even when the station omitted the counts, count the finished components.
-    expect(m.hardwareTestSummary(PARTIAL_NO_COUNTS)).toBe('3 of 5 tested');
+    expect(m.hardwareTestSummary(PARTIAL_NO_COUNTS)).toBe('3 of 7 tested');
   });
 
   it('a benign N/A trackpad does not count as attention and is never named', () => {
@@ -141,6 +188,8 @@ describe.each(COPIES)('hardware test one-cell summary (%s copy)', (_name, m) => 
       TWO_FAILED,
       ONE_ATTENTION,
       FAILED_BEATS_ATTENTION,
+      MIC_ATTENTION,
+      USB_FAILED,
       PARTIAL,
       PARTIAL_NO_COUNTS,
       DESKTOP_NA,

@@ -157,7 +157,7 @@
   #ovMsg{white-space:pre-line}
 
   /* --------------------------------------------- hardware test (C6) ---
-     One card, four tests. Every state is said in WORDS as well as colour
+     One card, seven tests. Every state is said in WORDS as well as colour
      (the app's WCAG baseline), so a technician on a washed-out second-hand
      screen reads the same verdict as one on a good panel. */
   /* A rule between the tests, not above the first one: the tests are the only
@@ -183,8 +183,8 @@
   .hwtd:not(:empty){margin-top:10px}
   #hwtSummary{margin:0}
 
-  /* Each test's own CSS lives in its own region below, so four tests can be
-     written in four worktrees and merged without touching each other. Nothing
+  /* Each test's own CSS lives in its own region below, so the tests can be
+     written in separate worktrees and merged without touching each other. Nothing
      shared goes inside a region, and no region styles anything outside its
      own .hwt block. */
 
@@ -360,6 +360,62 @@
            border-radius:8px;font:inherit;font-size:13.5px;color:var(--ink);background:#fff}
   .tp-verdicts{display:flex;flex-wrap:wrap;gap:8px}
   /* HWTEST:TRACKPAD:CSS:END */
+
+  /* ...................................................................... */
+
+  /* HWTEST:MICROPHONE:CSS:START */
+  /* The microphone test. The browser can prove an audio track opened and that
+     something is arriving on it (owner's §17); whether the machine actually
+     HEARS the room is the technician's call, so the level is shown live and they
+     speak into it. The meter carries its state in WORDS (mic-word: "picking up
+     sound" / "silent") beside the bar, because a bar is motion and colour - on a
+     washed-out second-hand panel, or for anyone who cannot see the difference,
+     the words are the signal and the bar only reinforces them. The loudest level
+     so far is kept on screen too, so a short word into the mic still leaves
+     evidence after the bar has fallen back. */
+  .mic-panel{display:flex;flex-direction:column;gap:10px}
+  .mic-name{margin:0;font-size:13px;color:var(--mut)}
+  .mic-name b{color:var(--ink)}
+  /* The bar's track. A fixed height so the panel does not jump as the level
+     moves, and a border so an empty (silent) meter still reads as a meter. */
+  .mic-meter{position:relative;height:18px;border:1px solid var(--line);border-radius:99px;
+             background:#f1f5f9;overflow:hidden}
+  .mic-fill{position:absolute;left:0;top:0;bottom:0;width:0;background:var(--blue);
+            border-radius:99px;transition:width .08s linear}
+  .mic-word{font-size:13.5px;font-weight:700;color:var(--ink)}
+  .mic-peak{font-size:12.5px;color:var(--mut)}
+  .mic-note{width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid var(--line);
+            border-radius:8px;font:inherit;font-size:13.5px;color:var(--ink);background:#fff}
+  .mic-verdicts{display:flex;flex-wrap:wrap;gap:8px}
+  /* HWTEST:MICROPHONE:CSS:END */
+
+  /* ...................................................................... */
+
+  /* HWTEST:USB:CSS:START */
+  /* The USB ports test. The list is the whole test: one line per port that
+     answered while the test was open, each naming the bus path the kernel
+     reported and the device that appeared there. It is deliberately plain text
+     with a monospaced path - a port path is not a socket, and dressing it up as
+     a diagram of the machine's back panel would claim exactly what the station
+     cannot know. The running count sits above it in words, and the ports that
+     were ALREADY connected when the test started are listed separately, greyed,
+     so nothing already plugged in can be mistaken for a port the technician
+     just proved. */
+  .usb-panel{display:flex;flex-direction:column;gap:10px}
+  .usb-count{font-size:14px;font-weight:700;color:var(--ink)}
+  .usb-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+  .usb-list li{display:flex;flex-wrap:wrap;gap:4px 10px;align-items:baseline;
+               border:1px solid var(--line);border-radius:8px;padding:7px 10px;background:#fbfcfe;
+               font-size:13px;color:var(--ink)}
+  .usb-port{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px;
+            font-weight:700;color:var(--blue)}
+  .usb-meta{font-size:12.5px;color:var(--mut)}
+  .usb-none{margin:0;font-size:13px;color:var(--mut)}
+  .usb-known{margin:0;font-size:12.5px;color:var(--mut2);overflow-wrap:anywhere}
+  .usb-note{width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid var(--line);
+            border-radius:8px;font:inherit;font-size:13.5px;color:var(--ink);background:#fff}
+  .usb-verdicts{display:flex;flex-wrap:wrap;gap:8px}
+  /* HWTEST:USB:CSS:END */
 
   /* alerts */
   .alert{border:1px solid #fecaca;background:#fef2f2;border-radius:12px;padding:14px 16px;
@@ -636,13 +692,13 @@
                a wipe is filed. Start audit sits above this card, so testing
                after filing is the natural order and used to lose the result
                silently - hwtSaveMsg says so when it happens. -->
-          <div class="hwtw" style="margin:0 0 4px">Four checks on this machine, run here and
+          <div class="hwtw" style="margin:0 0 4px">Seven checks on this machine, run here and
             confirmed by you. Each result is kept on this station and goes onto the machine’s
             audit record when the audit is filed — so press Start audit after testing, not
             before.</div>
 
           <!-- Each test owns everything between its two markers and nothing
-               else in this file, so the five can be written separately and
+               else in this file, so the seven can be written separately and
                merged without touching each other. Whatever fills a region
                must keep the three ids the shared code writes into -
                hwtStat_<test>, hwtWhy_<test> and hwtRun_<test> - and put its
@@ -755,8 +811,53 @@
           </div>
           <!-- HWTEST:TRACKPAD:END -->
 
+          <!-- HWTEST:MICROPHONE:START -->
+          <div class="hwt" id="hwt_microphone">
+            <div class="hwtr">
+              <span class="hwtn">Microphone</span>
+              <span class="hwtb na" id="hwtStat_microphone">Not tested</span>
+              <button class="btn gho sm" id="hwtRun_microphone" onclick="runHwTest('microphone')">Test</button>
+            </div>
+            <div class="hwtw" id="hwtWhy_microphone"></div>
+            <div class="hwtd" id="hwtDetail_microphone"><!-- the microphone test's runner
+              (HWTEST:MICROPHONE:JS) builds its controls in here when Test is
+              pressed: it opens the microphone, names the device, and shows what
+              it is picking up as a live level — in WORDS ("picking up sound" /
+              "silent") as well as a bar, so the meter never rides on movement
+              alone. The technician speaks, watches it move, and answers
+              Microphone works / Microphone has an issue. Every track is stopped
+              and the AudioContext closed on the way out, so the microphone is
+              never left live. No microphone fitted, or a refused permission, is
+              the station being unable to run the test - recorded as
+              needs-attention with what to do, never as a broken microphone. --></div>
+          </div>
+          <!-- HWTEST:MICROPHONE:END -->
+
+          <!-- HWTEST:USB:START -->
+          <div class="hwt" id="hwt_usb">
+            <div class="hwtr">
+              <span class="hwtn">USB ports</span>
+              <span class="hwtb na" id="hwtStat_usb">Not tested</span>
+              <button class="btn gho sm" id="hwtRun_usb" onclick="runHwTest('usb')">Test</button>
+            </div>
+            <div class="hwtw" id="hwtWhy_usb"></div>
+            <div class="hwtd" id="hwtDetail_usb"><!-- the USB ports test's runner
+              (HWTEST:USB:JS) builds its controls in here when Test is pressed.
+              A browser cannot see USB ports at all, so the station reads the
+              kernel's own list (GET /api/hwtest/usb) and the page polls it while
+              the test is open, counting each NEW port that responds as the
+              technician moves a stick from socket to socket. Whatever was
+              already plugged in when the test started is listed and NOT counted,
+              and neither is the port the station booted from. Linux reports bus
+              paths, not sockets, so nothing here says WHICH socket answered -
+              the technician keeps track of any that do nothing. Seeing no new
+              device is never a failure; only the technician's answer records
+              one. --></div>
+          </div>
+          <!-- HWTEST:USB:END -->
+
           <p class="sublbl" style="margin:16px 0 7px">Test results</p>
-          <!-- "N / 5 completed", and the overall verdict ONLY once all five
+          <!-- "N / 7 completed", and the overall verdict ONLY once all seven
                are finished (hwOverall). A half-done run never reads as a pass. -->
           <div class="health na" id="hwtSummary"><span class="hd"></span><span></span></div>
           <!-- Said out loud when a result is on screen but not on the record:
@@ -1460,12 +1561,12 @@ function fillHardware(){
 }
 
 /* ----------------------------------------------- hardware test (C6) ---
-   A technician-confirmed functional test of five components, run here on the
+   A technician-confirmed functional test of seven components, run here on the
    machine being audited and saved onto its audit record as
    profile.hardwareTest (no migration - it rides inside the hardware profile).
 
    This is the SHELL: the state machine, the rendering, the summary and the
-   save. The five tests themselves live in their own regions at the bottom of
+   save. The seven tests themselves live in their own regions at the bottom of
    this script, one each, and register a runner in HWT_RUNNERS. Nothing in a
    test's region may touch anything here.
 
@@ -1473,13 +1574,15 @@ function fillHardware(){
    actually observed. It heard nothing, saw nothing and felt no keys - the
    technician did. So a PASS is a person's answer, and a test the station
    could not RUN is never a failure (hwCannotRun). */
-/* Trackpad is appended LAST rather than grouped with the keyboard: the four
+/* Every new test is APPENDED rather than grouped with the one it resembles -
+   the microphone beside the camera, the USB ports beside the speaker. The ones
    before it are done and confirmed on real hardware, so leaving their order and
-   their regions untouched is the lowest-risk way to add a fifth. server.py's
-   HWTEST_TESTS lists the same five in the same order (Run all runs them in this
+   their regions untouched is the lowest-risk way to add another. server.py's
+   HWTEST_TESTS lists the same seven in the same order (Run all runs them in this
    order), so the two must be changed together. */
-const HWT_KEYS=['speaker','keyboard','camera','screen','trackpad'];
-const HWT_NAMES={speaker:'Speaker',keyboard:'Keyboard',camera:'Camera',screen:'Screen',trackpad:'Trackpad'};
+const HWT_KEYS=['speaker','keyboard','camera','screen','trackpad','microphone','usb'];
+const HWT_NAMES={speaker:'Speaker',keyboard:'Keyboard',camera:'Camera',screen:'Screen',
+  trackpad:'Trackpad',microphone:'Microphone',usb:'USB ports'};
 /* What each test does, shown until it has been run - so a row that says
    "Not tested" still tells the technician what pressing Test will do. */
 const HWT_ABOUT={
@@ -1487,7 +1590,9 @@ const HWT_ABOUT={
   keyboard:'Not run yet. Press every key; the keys this page can see light up, and you confirm the rest.',
   camera:'Not run yet. The camera is opened and shown live; you confirm the picture is right.',
   screen:'Not run yet. The screen is filled with each colour in turn; you look for dead pixels, leakage and discolouration.',
-  trackpad:'Not run yet. Move a finger on the trackpad and click left and right; the station lights what it sees, and you confirm it is the trackpad.'};
+  trackpad:'Not run yet. Move a finger on the trackpad and click left and right; the station lights what it sees, and you confirm it is the trackpad.',
+  microphone:'Not run yet. The microphone is opened and the sound it picks up is shown as a live level; you speak, watch it move, and confirm it hears you.',
+  usb:'Not run yet. Plug a stick into each USB port in turn; the station counts each port that responds, and you confirm whether they all work.'};
 /* The five states, each with the words shown on screen and the colour beside
    them. Words AND colour, always, and never a non-answer (owner's §8): a
    status this page cannot name reads as Not tested, which is true. */
@@ -1538,13 +1643,13 @@ function hwStatus(k){const s=hwResult(k).status;return HWT_LOOK[s]?s:'NOT_TESTED
        else all PASSED -> PASSED
 
    and the part that keeps it honest: a run that is not finished reports NO
-   verdict at all, only "2 / 5 completed". Every test PASSED is the only way to
+   verdict at all, only "2 / 7 completed". Every test PASSED is the only way to
    reach PASSED, so a half-done test can never read as a pass. A machine with no
    trackpad is not half-done: that benign N/A is stored as PASSED (below), so it
    satisfies the count without dragging the verdict down.
 
    server.py has the same rule in hwtest_overall(), because the record is
-   derived there too. tools/test-hwtest.py drives both sides with all 625
+   derived there too. tools/test-hwtest.py drives both sides with all 78125
    combinations and fails if they ever disagree - change them together. */
 function hwOverall(t){
   t=t||{};
@@ -1758,7 +1863,7 @@ async function runHwTest(k){
   }finally{ HWT_RUNNING=false; renderHwTest(); }
 }
 
-/* Run all five, in order, one at a time. Each one saves as it finishes, so a
+/* Run all seven, in order, one at a time. Each one saves as it finishes, so a
    machine switched off half way through keeps what was already done. The lock
    is runHwTest's - this only refuses to START a run while one is going, so the
    two entry points cannot disagree about what "a test is running" means. */
@@ -1772,7 +1877,7 @@ async function runAllHwTests(){
    answer replaces what is on screen, so the two can never drift apart.
 
    One test at a time on purpose: the station treats every result it is sent
-   as a NEW one, so re-sending the three that have not changed would push each
+   as a NEW one, so re-sending the six that have not changed would push each
    of them into the history again and re-date them - a retest that never
    happened, on every save. */
 async function hwSave(k){
@@ -2608,8 +2713,9 @@ function ovGo(){const c=ovCb;if(c)c();}
 /* ==================================================================== *
  *  The four hardware tests. One region each, filled by one change at a *
  *  time, kept at the end of the script and apart from each other so    *
- *  that four of them can be written in four worktrees and merged       *
- *  without ever meeting. A region may add its own code and register    *
+ *  that several of them can be written in separate worktrees and       *
+ *  merged without ever meeting. A region may add its own code and      *
+ *  register                                                            *
  *  its runner; it may not change anything above this line.             *
  *                                                                      *
  *  A runner is an async function that records its outcome through      *
@@ -4070,6 +4176,595 @@ HWT_RUNNERS.trackpad = async function(){
   });
 };
 /* HWTEST:TRACKPAD:JS:END */
+
+/* -------------------------------------------------------------------- */
+/*                                                                      */
+/* -------------------------------------------------------------------- */
+
+/* HWTEST:MICROPHONE:JS:START */
+/* The microphone test, the camera test's twin. The page is a secure context
+   (127.0.0.1) so getUserMedia is allowed, and als-autostart.sh pre-grants the
+   microphone for this origin beside the camera, because the permission
+   doorhanger is unreachable in a --kiosk window with no URL bar.
+
+   What the browser may claim (owner's §17) is narrow: that an audio track opened
+   and that a signal is arriving on it. Whether the machine really HEARS the room
+   - the right microphone, no crackle, not muffled under a palm rest - is the
+   technician's call. So the station opens the microphone, shows what it is
+   picking up as a live level, and asks.
+
+   The level is said in WORDS as well as drawn as a bar. A bar is motion and
+   colour; the words are what a technician on a washed-out second-hand panel
+   actually reads, and what anyone who cannot tell the fill from the track reads
+   too. The loudest level so far is kept in words as well, so one word spoken
+   into the mic still leaves evidence after the bar has dropped back.
+
+   The rule the whole module hangs on holds here: a refused permission and no
+   microphone fitted are could-not-run (ATTENTION with a reason and an action),
+   NEVER a failure - in fact every way the station can fail to open or measure
+   the microphone lands there. Only the technician's "not working" records FAILED.
+
+   And the microphone must never be left live: every track is stopped and the
+   AudioContext closed on the way out - the pass, the fail, an error, a timeout
+   and the page being torn down alike - which is why the whole flow sits in a
+   try/finally with a pagehide guard doing the same. Everything the region keeps
+   lives on one namespaced object so it adds no other top-level global (the shell
+   owns those). */
+const MIC = {
+  stream: null,      // the live MediaStream while the meter is up
+  ac: null,          // the AudioContext, closed on the way out
+  src: null,         // the MediaStreamSource feeding the analyser
+  analyser: null,
+  buf: null,         // the sample buffer the analyser fills
+  timer: null,       // the meter's interval; cleared on every way out
+  peak: 0,           // the loudest level seen during this run
+  settled: false,    // a result has been recorded; ignore a second click
+  resolve: null,
+  onHide: null
+};
+
+// How loud counts as what. Plain sentences, because these ARE the meter as far
+// as the technician is concerned - the bar only reinforces them. The last entry
+// catches everything, so there is always a word and never a non-answer.
+MIC.LEVELS = [
+  {at: 0.15,  word: 'Picking up sound — loud and clear'},
+  {at: 0.05,  word: 'Picking up sound'},
+  {at: 0.015, word: 'Picking up a little sound'},
+  {at: 0,     word: 'Silent — nothing is reaching the microphone'}
+];
+// The level at which we are willing to say the station heard something at all.
+MIC.HEARD = 0.015;
+
+MIC.words = function(level){
+  for(var i = 0; i < MIC.LEVELS.length; i++) if(level >= MIC.LEVELS[i].at) return MIC.LEVELS[i].word;
+  return MIC.LEVELS[MIC.LEVELS.length - 1].word;
+};
+
+// Stop every track, so the microphone goes off and its indicator with it. Safe
+// to call twice and on a null or odd stream: this must never throw on the way
+// out, so every step is guarded.
+MIC.stop = function(s){
+  s = s || MIC.stream;
+  if(s && s.getTracks){
+    try{ s.getTracks().forEach(function(t){ try{ t.stop(); }catch(e){} }); }catch(e){}
+  }
+  if(s === MIC.stream) MIC.stream = null;
+};
+
+// Close the AudioContext so nothing is left holding the machine's audio device.
+MIC.closeCtx = function(){
+  try{ if(MIC.src && MIC.src.disconnect) MIC.src.disconnect(); }catch(e){}
+  try{ if(MIC.analyser && MIC.analyser.disconnect) MIC.analyser.disconnect(); }catch(e){}
+  var ac = MIC.ac;
+  MIC.ac = null; MIC.src = null; MIC.analyser = null; MIC.buf = null;
+  try{ if(ac && ac.close) ac.close(); }catch(e){}
+};
+
+MIC.stopMeter = function(){
+  try{ if(MIC.timer){ clearInterval(MIC.timer); } }catch(e){}
+  MIC.timer = null;
+};
+
+// The one way out: the timer, the tracks and the context, in that order. Every
+// exit from this region goes through it, including the pagehide guard.
+MIC.release = function(s){
+  MIC.stopMeter();
+  MIC.stop(s);
+  MIC.closeCtx();
+};
+
+MIC.reset = function(){
+  MIC.release();
+  MIC.peak = 0; MIC.settled = false; MIC.resolve = null;
+};
+
+// The device's own name if the open track carries one (Firefox fills the label
+// once the microphone is permitted and open), else a plain phrase. Never blank
+// and never the word this module is forbidden to print, so `device` always reads
+// as something on the report.
+MIC.deviceName = function(s){
+  try{
+    var t = s && s.getAudioTracks && s.getAudioTracks()[0];
+    var l = (t && t.label != null) ? String(t.label).trim() : '';
+    if(l) return l;
+  }catch(e){}
+  return 'the machine’s microphone';
+};
+
+MIC.audioApi = function(){
+  return typeof (window.AudioContext || window.webkitAudioContext) === 'function';
+};
+
+// getUserMedia that can never hang the page (house rule), exactly as the camera
+// test does it: if it has neither resolved nor rejected in time we give up, so
+// the technician is not stranded on "Testing…". The usual cause is the
+// permission prompt waiting off-screen because the pre-grant pref is missing. A
+// stream that lands AFTER we gave up is stopped at once, so a late grant can
+// never leave the microphone live.
+MIC.acquire = function(ms){
+  return new Promise(function(resolve, reject){
+    var done = false;
+    var md = (typeof navigator !== 'undefined') && navigator.mediaDevices;
+    if(!md || !md.getUserMedia){ reject({name:'AlsNoApi'}); return; }
+    var timer = setTimeout(function(){ if(done) return; done = true; reject({name:'AlsTimeout'}); }, ms);
+    var p;
+    try{ p = md.getUserMedia({audio:true}); }
+    catch(e){ done = true; clearTimeout(timer); reject(e); return; }
+    p.then(function(s){
+      if(done){ MIC.stop(s); return; }   // arrived after we gave up: release it now
+      done = true; clearTimeout(timer); resolve(s);
+    }, function(e){
+      if(done) return; done = true; clearTimeout(timer); reject(e);
+    });
+  });
+};
+
+// Turn a getUserMedia failure into a could-not-run the operator can act on.
+// EVERY failure to OPEN the microphone comes through here, so none of them can
+// be recorded as a broken microphone - the station being unable to run the test
+// is not evidence about the hardware.
+MIC.cannotRunFor = function(err){
+  var name = (err && err.name) || '';
+  if(name === 'NotAllowedError' || name === 'SecurityError' || name === 'PermissionDeniedError')
+    return {reason: 'the microphone permission was refused, so nothing could be listened to',
+      action: 'Grant microphone access for this page, or update the stick so it is pre-granted (permissions.default.microphone), then test again.'};
+  if(name === 'NotFoundError' || name === 'DevicesNotFoundError' || name === 'OverconstrainedError')
+    return {reason: 'no microphone is fitted to this machine',
+      action: 'None if this model has no microphone; otherwise check it is enabled in the BIOS, then test again.'};
+  if(name === 'NotReadableError' || name === 'TrackStartError' || name === 'AbortError')
+    return {reason: 'a microphone is fitted but the station could not open it - it may be in use, or switched off by a hardware mute',
+      action: 'Close anything else using the microphone, check for a mute key or switch, then test again.'};
+  if(name === 'AlsNoApi')
+    return {reason: 'this browser build cannot open the microphone (the media API is missing)',
+      action: 'Update the stick (sync-usb.ps1), boot this machine again, then test again.'};
+  if(name === 'AlsTimeout')
+    return {reason: 'the microphone did not open in time - the permission prompt may be waiting off-screen',
+      action: 'Update the stick so the microphone is pre-granted (permissions.default.microphone), then test again.'};
+  return {reason: 'the station could not open the microphone (' + (name || (err && err.message) || 'no detail') + ')',
+    action: 'Test the microphone again; if it keeps happening, test it by hand and tell a supervisor.'};
+};
+
+// Wire the open stream to an analyser. Deliberately NOT connected to the
+// destination: routing the microphone back out to the speakers would howl on a
+// laptop, and the test is about what comes IN. false means the station could not
+// measure - a could-not-run, never a fault.
+MIC.listen = function(s){
+  try{
+    var Ctx = window.AudioContext || window.webkitAudioContext;
+    if(!Ctx) return false;
+    MIC.ac = new Ctx();
+    // A context can start suspended until a user gesture; pressing Test was one.
+    if(MIC.ac.state === 'suspended' && MIC.ac.resume){ try{ MIC.ac.resume(); }catch(e){} }
+    MIC.src = MIC.ac.createMediaStreamSource(s);
+    MIC.analyser = MIC.ac.createAnalyser();
+    MIC.analyser.fftSize = 1024;
+    MIC.src.connect(MIC.analyser);
+    MIC.buf = new Uint8Array(MIC.analyser.fftSize);
+    return true;
+  }catch(e){ return false; }
+};
+
+// How loud it is right now, 0..1, as the average swing away from silence. Any
+// failure reads as 0 rather than throwing inside the meter's timer.
+MIC.read = function(){
+  var a = MIC.analyser, buf = MIC.buf;
+  if(!a || !buf || !a.getByteTimeDomainData) return 0;
+  try{ a.getByteTimeDomainData(buf); }catch(e){ return 0; }
+  var sum = 0;
+  for(var i = 0; i < buf.length; i++){ var v = (buf[i] - 128) / 128; sum += v * v; }
+  return Math.sqrt(sum / buf.length);
+};
+
+MIC.paint = function(){
+  var level = MIC.read();
+  if(level > MIC.peak) MIC.peak = level;
+  // x400 so ordinary speech fills a useful part of the bar rather than a sliver;
+  // the bar is an indication, the words are the reading.
+  var pct = Math.max(0, Math.min(100, Math.round(level * 400)));
+  var f = $('micFill'); if(f) f.style.width = pct + '%';
+  var w = $('micWord'); if(w) w.textContent = MIC.words(level);
+  var p = $('micPeak');
+  if(p) p.textContent = (MIC.peak >= MIC.HEARD)
+    ? 'Sound has reached the microphone during this test.'
+    : 'No sound has reached the microphone yet — say something.';
+};
+
+MIC.startMeter = function(){
+  MIC.stopMeter();               // never stack two meters
+  MIC.paint();
+  MIC.timer = setInterval(MIC.paint, 100);
+};
+
+MIC.notesText = function(){ var el = $('micNote'); return el ? String(el.value || '').slice(0,300) : ''; };
+
+// The fields every microphone result carries (contract C6 shape): which device
+// was listened to, that a human confirmed it, and any note.
+MIC.fields = function(dev){
+  return {device: dev || 'the machine’s microphone', confirmedBy: 'technician', notes: MIC.notesText()};
+};
+
+/* Open the microphone, meter it, wait for the technician, record exactly one
+   result. The try/finally is the whole safety story: whatever happens - a pass,
+   a fail, a getUserMedia rejection, a timeout, a thrown error while building the
+   panel - the finally clears the timer, stops every track and closes the
+   context, so the microphone is never left live and the panel takes no more
+   answers. A pagehide guard runs the same release for the one path the finally
+   cannot cover: the page being torn down while the technician is still
+   deciding. */
+HWT_RUNNERS.microphone = async function(){
+  MIC.reset();           // release anything a previous run might have left open
+  var stream = null, dev = 'the machine’s microphone';
+  var d = $('hwtDetail_microphone');
+  var onHide = function(){ MIC.release(stream); };
+  MIC.onHide = onHide;
+  try{ window.addEventListener('pagehide', onHide); window.addEventListener('beforeunload', onHide); }catch(e){}
+  try{
+    if(!d){
+      hwCannotRun('microphone', 'the station could not build the microphone test panel',
+        'Reload the page and run the microphone test again.', MIC.fields(dev));
+      return;
+    }
+    // No Web Audio means no level can be measured. The station cannot run the
+    // test, so ATTENTION with what to do - not a verdict on the microphone.
+    if(!MIC.audioApi()){
+      hwCannotRun('microphone',
+        'this browser build cannot measure the sound level (the Web Audio API is missing)',
+        'Update the stick (sync-usb.ps1), boot this machine again, then test again.',
+        MIC.fields(dev));
+      return;
+    }
+    // Open the microphone. Any failure to open is a could-not-run, never a fail.
+    try{ stream = await MIC.acquire(15000); }
+    catch(err){
+      var c = MIC.cannotRunFor(err);
+      hwCannotRun('microphone', c.reason, c.action, MIC.fields(dev));
+      return;
+    }
+    MIC.stream = stream;
+    dev = MIC.deviceName(stream);
+    d.innerHTML =
+      '<div class="mic-panel">' +
+        '<p class="hwtw" id="micInstr" style="margin:0">Say something towards this machine — count ' +
+          'to three. The level below moves with what the microphone is picking up, and says in words ' +
+          'what it is hearing. A meter that never leaves silent while you speak is a microphone that ' +
+          'is not working.</p>' +
+        '<p class="mic-name" id="micName"></p>' +
+        '<div class="mic-meter" id="micMeter"><span class="mic-fill" id="micFill"></span></div>' +
+        '<div class="mic-word" id="micWord">Silent — nothing is reaching the microphone</div>' +
+        '<div class="mic-peak" id="micPeak">No sound has reached the microphone yet — say something.</div>' +
+        '<input class="mic-note" type="text" id="micNote" maxlength="300" ' +
+          'placeholder="Notes (what is wrong with the sound, if anything)">' +
+        '<div class="mic-verdicts">' +
+          '<button class="btn sm" type="button" id="micPass">Microphone works</button>' +
+          '<button class="btn dan sm" type="button" id="micFail">Microphone has an issue</button>' +
+        '</div>' +
+      '</div>';
+    var nameEl = $('micName');
+    if(nameEl) nameEl.innerHTML = 'Listening to <b>' + esc(dev) + '</b>.';
+    // Measuring is a second thing that can fail after the microphone opened, and
+    // it is could-not-run too.
+    if(!MIC.listen(stream)){
+      hwCannotRun('microphone',
+        'the microphone opened but the station could not measure what it is picking up',
+        'Run the microphone test again; if it keeps happening, test it by hand and tell a supervisor.',
+        MIC.fields(dev));
+      return;
+    }
+    MIC.startMeter();
+    // The technician's answer is the ONLY thing that records a pass or a fail.
+    // `settled` guards a double click on a kiosk touchscreen.
+    await new Promise(function(res){
+      MIC.resolve = res;
+      var wire = function(id, fn){ var el = $(id); if(el) el.addEventListener('click', fn); };
+      wire('micPass', function(){
+        if(MIC.settled) return; MIC.settled = true;
+        hwPass('microphone', MIC.fields(dev)); res();
+      });
+      wire('micFail', function(){
+        if(MIC.settled) return; MIC.settled = true;
+        var note = MIC.notesText();
+        hwFail('microphone', note ? ('the technician reported: ' + note)
+          : 'the technician found the microphone does not work', MIC.fields(dev));
+        res();
+      });
+    });
+  }catch(e){
+    // The microphone opened but something else threw: the station being unable
+    // to run the test, not a verdict on the hardware. Only record it if nothing
+    // else already did.
+    if(hwStatus('microphone') === 'IN_PROGRESS')
+      hwCannotRun('microphone',
+        'the station opened the microphone but could not run the test (' + ((e && e.message) || e || 'no detail') + ')',
+        'Test the microphone again; if it keeps happening, test it by hand and tell a supervisor.',
+        MIC.fields(dev));
+  }finally{
+    MIC.release(stream);
+    try{ window.removeEventListener('pagehide', onHide); window.removeEventListener('beforeunload', onHide); }catch(e){}
+    MIC.onHide = null; MIC.resolve = null;
+    if(d) d.innerHTML = '';
+  }
+};
+/* HWTEST:MICROPHONE:JS:END */
+
+/* -------------------------------------------------------------------- */
+/*                                                                      */
+/* -------------------------------------------------------------------- */
+
+/* HWTEST:USB:JS:START */
+/* The USB ports test. This one is backend-driven, because a browser CANNOT see
+   USB ports at all: WebUSB only ever shows a device the user has explicitly
+   permitted, and nothing about sockets. The station can - the kernel lists every
+   connected device under /sys/bus/usb/devices - so this page polls
+   GET /api/hwtest/usb while the test is open and counts each NEW port path that
+   answers as the technician moves a stick from socket to socket.
+
+   Three honesty rules, and they are the whole design:
+
+   1. Linux reports bus/port PATHS ("1-3"), never a physical label like "the
+      left-hand USB-A port". Nothing here maps one to the other, so the page
+      never claims WHICH socket responded - it says so out loud and asks the
+      technician to keep track of any that do nothing.
+   2. Whatever was ALREADY connected when the test started is listed and NOT
+      counted - an internal webcam, a bluetooth radio, a plugged-in mouse. So is
+      the port the station booted from, which server.py leaves out because the
+      station is running from that stick and it was never plugged in as part of
+      the test. Counting either would flatter every machine.
+   3. Seeing no new device is NOT a failure. The technician may simply not have
+      plugged anything in. Nothing here ever records a verdict on its own; only
+      the technician's answer does, and a station that could not read USB at all
+      is could-not-run (ATTENTION with a reason), never FAILED.
+
+   The poll is an interval, added when the panel opens and cleared on the
+   verdict, on an error and on the page being torn down - a timer left running
+   would keep hitting the station after the panel has gone. Everything the region
+   keeps lives on one namespaced object so it adds no other top-level global. */
+const USB = {
+  POLL_MS: 1500,
+  timer: null,
+  resolve: null,
+  onHide: null,
+  settled: false,
+  baseline: null,    // ports already connected when the test started; null = not looked yet
+  known: [],         // the devices in that baseline, listed but never counted
+  seen: {},          // port -> the device that appeared there during the test
+  order: [],         // those ports, in the order they responded
+  bootNote: '',      // what the station said about its own boot port
+  lastError: ''      // a poll that did not answer, said out loud rather than hidden
+};
+
+USB.text = function(v){ return (v == null) ? '' : String(v).trim().slice(0,200); };
+USB.notesText = function(){ var el = $('usbNote'); return el ? String(el.value || '').slice(0,300) : ''; };
+
+USB.reset = function(){
+  USB.stopPoll();
+  USB.baseline = null; USB.known = []; USB.seen = {}; USB.order = [];
+  USB.bootNote = ''; USB.lastError = ''; USB.settled = false; USB.resolve = null;
+};
+
+USB.stopPoll = function(){
+  try{ if(USB.timer){ clearInterval(USB.timer); } }catch(e){}
+  USB.timer = null;
+};
+
+// Everything the test scoped comes off here: the poll timer and the page-hide
+// guard, and the panel is blanked so it takes no more input. Idempotent.
+USB.teardown = function(){
+  USB.stopPoll();
+  try{ window.removeEventListener('pagehide', USB.onHide); window.removeEventListener('beforeunload', USB.onHide); }catch(e){}
+  var d = $('hwtDetail_usb'); if(d) d.innerHTML = '';
+};
+
+// One read of the station's view of the bus. Never throws: a service that does
+// not answer is a poll we say something about, not a crash in the panel.
+USB.ask = async function(){
+  try{ return await jget('/api/hwtest/usb'); }
+  catch(e){ return {ok:false, reason:'the station service did not answer when asked about the USB ports'}; }
+};
+
+// Turn a station answer that is not ok into a could-not-run the operator can
+// act on. The station's own words are preferred; the fallbacks cover a refusal
+// that carries only a message (the Host/Origin guard) or nothing at all.
+USB.cannotRunFor = function(a){
+  a = a || {};
+  return {reason: USB.text(a.reason) || USB.text(a.message) ||
+            'the station could not read this machine’s USB ports',
+    action: USB.text(a.action) ||
+            'Check the ports by hand — plug a stick into each one — and tell a supervisor that the station could not read them.'};
+};
+
+// A device the station reported, kept to the fields the record needs.
+USB.tidy = function(d){
+  d = d || {};
+  return {port: USB.text(d.port), name: USB.text(d.name), speed: USB.text(d.speed), hub: !!d.hub};
+};
+
+// What the station said about the port it booted from. Said ONCE on screen,
+// because a count that silently leaves a port out is a count nobody can check.
+USB.bootWords = function(a){
+  if(a && a.bootPortKnown)
+    return 'The stick this station booted from sits in one of this machine’s ports; that one port is left out of the count.';
+  return 'The station could not work out which port it booted from, so the boot stick may be one of the ports below — leave that one out yourself.';
+};
+
+// The first answer sets the baseline: everything on the bus before the test
+// started is listed and never counted.
+USB.absorb = function(a){
+  var list = (a && a.devices && a.devices.length) ? a.devices.map(USB.tidy) : [];
+  if(USB.baseline === null){
+    USB.baseline = {};
+    USB.known = list;
+    list.forEach(function(d){ if(d.port) USB.baseline[d.port] = true; });
+    USB.bootNote = USB.bootWords(a);
+    return;
+  }
+  list.forEach(function(d){
+    if(!d.port || USB.baseline[d.port] || USB.seen[d.port]) return;
+    USB.seen[d.port] = d;
+    USB.order.push(d.port);
+  });
+};
+
+// One line per port that responded. The port path is shown as the path it is -
+// never dressed up as a socket - with whatever the device called itself and the
+// speed it negotiated beside it.
+USB.lineFor = function(port){
+  var d = USB.seen[port] || {};
+  var bits = [];
+  if(d.name) bits.push(esc(d.name));
+  if(d.hub) bits.push('a hub');
+  bits.push(d.speed ? esc(d.speed) : 'speed not reported');
+  return '<li><span class="usb-port">' + esc(port) + '</span><span class="usb-meta">' +
+    bits.join(' · ') + '</span></li>';
+};
+
+USB.paint = function(){
+  var n = USB.order.length;
+  var c = $('usbCount');
+  if(c) c.textContent = 'Ports that responded: ' + n;
+  var list = $('usbList');
+  if(list) list.innerHTML = USB.order.map(USB.lineFor).join('');
+  var none = $('usbNone');
+  if(none){
+    none.textContent = n ? '' : 'Nothing new has responded yet. That is not a fault on its own — ' +
+      'no port is counted until something is plugged into it.';
+    none.classList.toggle('hidden', !!n);
+  }
+  var known = $('usbKnown');
+  if(known){
+    var was = USB.known.map(function(d){ return d.port + (d.name ? ' (' + d.name + ')' : ''); });
+    known.textContent = (was.length
+      ? 'Already connected when the test started, so not counted: ' + was.join(', ') + '. '
+      : 'Nothing was plugged into this machine when the test started. ') + USB.bootNote +
+      (USB.lastError ? ' ' + USB.lastError : '');
+  }
+};
+
+USB.poll = async function(){
+  if(USB.settled) return;
+  var a = await USB.ask();
+  if(USB.settled) return;             // the technician answered while we were asking
+  if(!a || a.ok !== true){
+    var c = USB.cannotRunFor(a);
+    USB.lastError = 'The station could not read the ports just now — ' + c.reason + '. It keeps trying.';
+    USB.paint();
+    return;
+  }
+  USB.lastError = '';
+  USB.absorb(a);
+  USB.paint();
+};
+
+// The fields every USB result carries (contract C6 shape): how many ports
+// responded, which devices appeared where, that a human confirmed it, and any
+// note. Capped, because this travels inside every record the station files.
+USB.fields = function(){
+  return {portsSeen: USB.order.length,
+    devices: USB.order.slice(0,20).map(function(p){
+      var d = USB.seen[p] || {};
+      return {port: p, name: d.name || '', speed: d.speed || ''};
+    }),
+    confirmedBy: 'technician', notes: USB.notesText()};
+};
+
+// Record exactly one verdict, tear the timer down, and let runHwTest finish.
+// The technician's click is the ONLY thing that records - the count is evidence,
+// not a verdict, and a count of zero is never a failure.
+USB.record = function(kind){
+  if(USB.settled) return; USB.settled = true;
+  var f = USB.fields();
+  if(kind === 'issue'){
+    var note = USB.notesText();
+    hwFail('usb', note ? ('the technician reported: ' + note)
+      : 'the technician found a USB port on this machine does not work', f);
+  }else{
+    hwPass('usb', f);
+  }
+  USB.teardown();
+  if(USB.resolve){ var r = USB.resolve; USB.resolve = null; r(); }
+};
+
+HWT_RUNNERS.usb = async function(){
+  USB.reset();
+  var d = $('hwtDetail_usb');
+  USB.onHide = function(){ USB.stopPoll(); };
+  try{ window.addEventListener('pagehide', USB.onHide); window.addEventListener('beforeunload', USB.onHide); }catch(e){}
+  try{
+    if(!d){
+      hwCannotRun('usb', 'the station could not build the USB ports test panel',
+        'Reload the page and run the USB ports test again.',
+        {portsSeen: 0, devices: [], confirmedBy: 'technician', notes: ''});
+      return;
+    }
+    // Ask once before building anything: a station that cannot read USB at all
+    // is could-not-run, and an empty panel with a dead counter would be worse
+    // than saying so.
+    var first = await USB.ask();
+    if(!first || first.ok !== true){
+      var c = USB.cannotRunFor(first);
+      hwCannotRun('usb', c.reason, c.action,
+        {portsSeen: 0, devices: [], confirmedBy: 'technician', notes: ''});
+      return;
+    }
+    d.innerHTML =
+      '<div class="usb-panel">' +
+        '<p class="hwtw" id="usbInstr" style="margin:0">Plug a stick into each port in turn — each ' +
+          'port that responds is counted. The station cannot tell which physical socket is which, so ' +
+          'keep track of any that do nothing.</p>' +
+        '<div class="usb-count" id="usbCount">Ports that responded: 0</div>' +
+        '<ul class="usb-list" id="usbList"></ul>' +
+        '<p class="usb-none" id="usbNone"></p>' +
+        '<p class="usb-known" id="usbKnown"></p>' +
+        '<input class="usb-note" type="text" id="usbNote" maxlength="300" ' +
+          'placeholder="Notes (which port did nothing, if any)">' +
+        '<div class="usb-verdicts">' +
+          '<button class="btn sm" type="button" id="usbPass">All ports work</button>' +
+          '<button class="btn dan sm" type="button" id="usbFail">A port is not working</button>' +
+        '</div>' +
+      '</div>';
+    USB.absorb(first);
+    USB.paint();
+    USB.timer = setInterval(function(){ USB.poll(); }, USB.POLL_MS);
+    await new Promise(function(res){
+      USB.resolve = res;
+      var wire = function(id, fn){ var el = $(id); if(el) el.addEventListener('click', fn); };
+      wire('usbPass', function(){ USB.record('pass'); });
+      wire('usbFail', function(){ USB.record('issue'); });
+    });
+  }catch(e){
+    // Anything going wrong building or running the panel is the station being
+    // unable to run the test - ATTENTION with a reason and an action, never
+    // FAILED. Only record it if nothing else already did.
+    if(hwStatus('usb') === 'IN_PROGRESS')
+      hwCannotRun('usb',
+        'the station could not run the USB ports test (' + ((e && e.message) || e || 'no detail') + ')',
+        'Run the USB ports test again; if it keeps happening, check the ports by hand and tell a supervisor.',
+        {portsSeen: 0, devices: [], confirmedBy: 'technician', notes: ''});
+  }finally{
+    USB.teardown();
+    USB.onHide = null; USB.resolve = null;
+  }
+};
+/* HWTEST:USB:JS:END */
 
 bootstrap();
 pollNet();

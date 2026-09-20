@@ -1787,9 +1787,9 @@ def operator_gate():
 
 
 # --------------------------------------------------- hardware test (C6) ----
-# A technician-confirmed functional test of five components - speaker,
-# keyboard, camera, screen, trackpad - run in the kiosk on the machine being
-# audited and carried on that machine's audit record.
+# A technician-confirmed functional test of seven components - speaker,
+# keyboard, camera, screen, trackpad, microphone, USB ports - run in the kiosk
+# on the machine being audited and carried on that machine's audit record.
 #
 # It rides INSIDE the captured hardware profile, as profile.hardwareTest:
 # hardware_profile is a JSONB column the API's ValidationPipe does not walk
@@ -1798,11 +1798,15 @@ def operator_gate():
 # profile wholesale - see hwtest_carry_forward, which is the whole reason that
 # second copy exists.
 #
-# Trackpad is LAST, matching index.html's HWT_KEYS order (Run all runs the tests
-# in this order). Every save and the overall verdict key off this tuple - the
-# /api/hwtest handler ignores any component not named here - so a test is not
-# fully wired in until it is registered on BOTH sides. Change them together.
-HWTEST_TESTS = ("speaker", "keyboard", "camera", "screen", "trackpad")
+# The order matches index.html's HWT_KEYS exactly (Run all runs the tests in
+# this order). New tests are APPENDED rather than slotted in beside the ones
+# they resemble: the five before them are finished and confirmed on real
+# hardware, so leaving their order alone is the cheapest way to add more.
+# Every save and the overall verdict key off this tuple - the /api/hwtest
+# handler ignores any component not named here - so a test is not fully wired
+# in until it is registered on BOTH sides. Change them together.
+HWTEST_TESTS = ("speaker", "keyboard", "camera", "screen", "trackpad",
+                "microphone", "usb")
 HWTEST_STATES = ("NOT_TESTED", "IN_PROGRESS", "PASSED", "ATTENTION", "FAILED")
 # The three that mean a test has finished. IN_PROGRESS is a screen state and is
 # never stored: hwtest_component refuses it.
@@ -1828,7 +1832,7 @@ def hwtest_overall(test):
         else all PASSED -> PASSED
 
     and the part that keeps it honest: a run that is not finished reports NO
-    verdict at all, only "2 / 5 completed" (status IN_PROGRESS, which is not a
+    verdict at all, only "2 / 7 completed" (status IN_PROGRESS, which is not a
     verdict). Every test PASSED is the only way to reach PASSED, so a half-done
     test can never read as a pass. A machine with no trackpad is not half-done:
     that benign N/A is stored as PASSED (notApplicable), so it satisfies the
@@ -2350,6 +2354,179 @@ def audio_prep():
                       "(a laptop can boot with sound sent to an HDMI screen that is not there)",
             "action": "Check the machine has a built-in speaker, unmute it by hand from the desktop, "
                       "then test again."}
+
+
+# ------------------------------------------ USB ports test: read the bus ----
+# The USB ports test's station duty (contract C6). A browser CANNOT see USB
+# ports: WebUSB only ever shows a device the user has explicitly permitted, and
+# nothing at all about sockets. The station can, because the kernel publishes
+# every connected device under /sys/bus/usb/devices.
+#
+# So the technician plugs a stick into each socket in turn and this endpoint
+# reports what the kernel sees; the page counts each NEW port path that
+# responds. Read-only: nothing here writes to sysfs and nothing touches the
+# devices themselves.
+#
+# Parsed straight out of sysfs rather than shelling out to lsusb, for the same
+# reason everything else here is stdlib: usbutils is not guaranteed to be on the
+# image, and adding it would mean a layer rebuild instead of a stick sync.
+#
+# What it may NOT claim: Linux names a bus/port PATH ("1-3"), never a physical
+# label like "the left-hand socket". Nothing here maps one to the other, and
+# nothing on screen pretends to - the technician keeps track of which socket did
+# nothing. And the port the boot stick is in is left out, because the station is
+# running FROM it: it is always present, was never plugged in as part of the
+# test, and counting it would inflate every machine's total by one.
+USB_SYSFS = "/sys/bus/usb/devices"
+# A DEVICE's directory is "<bus>-<port>[.<port>...]" (1-3, 1-4.2). A root hub is
+# "usb1" and an interface is "1-3:1.0"; neither is a socket a technician can
+# plug into, so both are skipped by this pattern alone.
+USB_PORT_RE = re.compile(r"^\d+-\d+(?:\.\d+)*$")
+# The page polls this every couple of seconds while the test is open, so the
+# read has to be short and must never hang: a budget across the whole scan, not
+# per file, because an unresponsive device makes EVERY read slow.
+USB_READ_BUDGET = 3.0
+USB_MAX_DEVICES = 40        # far more than any bench machine has; a stop, not a limit
+
+
+def _usb_read(path, limit=160):
+    """One sysfs attribute as text, or "" when it cannot be read. Never raises:
+    a device that unplugs mid-scan makes its files vanish under us, and that is
+    normal here, not an error."""
+    try:
+        with open(path, "r", errors="replace") as fh:
+            return fh.read(limit).strip()
+    except (OSError, ValueError):
+        return ""
+
+
+def _usb_speed_words(raw):
+    """The negotiated link speed in words, or "" when the kernel did not report
+    one. "" and not the word this module is forbidden to print - the page says
+    "speed not reported" for it."""
+    try:
+        mbps = float(raw)
+    except (TypeError, ValueError):
+        return ""
+    if mbps >= 10000:
+        return "USB 3.1 or faster (%g Mbps)" % mbps
+    if mbps >= 5000:
+        return "USB 3.0 (%g Mbps)" % mbps
+    if mbps >= 480:
+        return "USB 2.0 (%g Mbps)" % mbps
+    return "USB 1.x (%g Mbps)" % mbps
+
+
+def usb_boot_device():
+    """The block device this station booted from (e.g. /dev/sdb1), or "".
+
+    The live medium's mount point first (the same list write_boot_file uses),
+    then whatever audit.conf is sitting on - which is the stick on every real
+    boot and a checkout on a development machine, where it resolves to no USB
+    port at all and nothing is excluded."""
+    for mp in BOOT_MEDIA_MOUNTS:
+        dev = mount_device(mp)
+        if dev:
+            return dev
+    if CONF_PATH:
+        return mount_device(mount_point(CONF_PATH)) or ""
+    return ""
+
+
+def usb_boot_port(sysfs=None):
+    """The port path the boot medium is plugged into ("1-2"), or "".
+
+    Walks the device's own sysfs path: /sys/class/block/sdb1 resolves through
+    the USB tree, so the LAST port-path component in it is the port that device
+    itself occupies (a stick behind a hub reads as the hub port it is in,
+    e.g. 1-2.3). "" whenever the station booted from something that is not USB -
+    an internal disk, a checkout on a desk - and then nothing is excluded and
+    the page says so rather than quietly dropping a port."""
+    dev = usb_boot_device()
+    if not dev:
+        return ""
+    name = os.path.basename(dev)
+    node = ""
+    for candidate in (name, name.rstrip("0123456789")):
+        if not candidate:
+            continue
+        try:
+            path = os.path.realpath("/sys/class/block/%s" % candidate)
+        except OSError:
+            continue
+        if os.path.exists(path):
+            node = path
+            break
+    if not node:
+        return ""
+    port = ""
+    for part in node.split("/"):
+        if USB_PORT_RE.match(part):
+            port = part           # the deepest one: the device's own port
+    return port
+
+
+def usb_ports(root=None, budget=USB_READ_BUDGET):
+    """Everything currently on this machine's USB bus, for the ports test:
+
+        {"ok": True, "devices": [{"port": "1-3", "name": "SanDisk Ultra",
+                                  "speed": "USB 3.0 (5000 Mbps)", "hub": False}],
+         "bootPortKnown": True, "bootPortExcluded": True}
+        {"ok": False, "reason": "<plain English>", "action": "<what to do>"}
+
+    ok:False is a could-not-run, and the page records ATTENTION with the reason
+    and the action - never a failure. A machine whose USB the station cannot
+    read is not a machine with broken sockets, and seeing NO device is not a
+    fault either: the technician may simply not have plugged anything in yet."""
+    root = USB_SYSFS if root is None else root
+    deadline = time.monotonic() + budget
+    if not os.path.isdir(root):
+        return {"ok": False,
+                "reason": "this station cannot read the machine's USB ports "
+                          "(the kernel's list of USB devices is not there)",
+                "action": "Check the ports by hand - plug a stick into each one - and tell a "
+                          "supervisor that the station could not read them."}
+    try:
+        names = sorted(os.listdir(root))
+    except OSError as exc:
+        return {"ok": False,
+                "reason": "the station could not read the machine's USB ports (%s)"
+                          % (getattr(exc, "strerror", None) or exc),
+                "action": "Run the USB test again; if it keeps happening, check the ports by "
+                          "hand and tell a supervisor."}
+    boot_port = usb_boot_port()
+    devices, excluded = [], False
+    for name in names:
+        if time.monotonic() > deadline:
+            return {"ok": False,
+                    "reason": "the station ran out of time reading the machine's USB ports "
+                              "(a device on the bus is not answering)",
+                    "action": "Unplug anything that is not part of the test, then run the USB "
+                              "test again."}
+        if not USB_PORT_RE.match(name):
+            continue              # a root hub or an interface, not a socket
+        if boot_port and name == boot_port:
+            excluded = True       # the stick this station is running from
+            continue
+        path = os.path.join(root, name)
+        label = " ".join(x for x in (_usb_read(os.path.join(path, "manufacturer")),
+                                     _usb_read(os.path.join(path, "product"))) if x)
+        devices.append({"port": name,
+                        "name": label[:120],
+                        "speed": _usb_speed_words(_usb_read(os.path.join(path, "speed"))),
+                        # 09 is the USB hub class. Worth saying on screen: a hub
+                        # occupies a socket without being something plugged in
+                        # to test it.
+                        "hub": _usb_read(os.path.join(path, "bDeviceClass")) == "09"})
+        if len(devices) >= USB_MAX_DEVICES:
+            break
+    return {"ok": True, "devices": devices,
+            # Whether the station could work out which port it booted from at
+            # all. False is not a failure - it means the page must say the boot
+            # stick's port may be among those listed, instead of pretending it
+            # was left out.
+            "bootPortKnown": bool(boot_port),
+            "bootPortExcluded": excluded}
 
 
 # --------------------------------------------------------------- capture ----
@@ -4858,6 +5035,19 @@ class Handler(BaseHTTPRequestHandler):
                                     "hwtestNeedsFiling": hwtest_needs_filing(),
                                     "technician": hwtest_technician(),
                                     "tests": list(HWTEST_TESTS)})
+
+        if u.path == "/api/hwtest/usb":
+            # The USB ports test's station duty (contract C6): a browser cannot
+            # see USB ports, so the page polls this while the test is open and
+            # counts each new port path that answers. A GET because it only
+            # READS sysfs - nothing is written and no device is touched.
+            # request_problem() at the top of do_GET already applies the same
+            # Host/Origin guard every other route has, so no page but this
+            # station's own can ask what is plugged into the machine. usb_ports()
+            # is stdlib-only and works to a time budget, so it always answers
+            # and can never hang the page; ok:False makes the runner record
+            # could-not-run, never a fault.
+            return self._send(200, usb_ports())
 
         if u.path == "/api/toolcheck":
             return self._send(200, tool_check())

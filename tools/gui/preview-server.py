@@ -156,7 +156,10 @@ def bootstrap():
 # preview never runs a test, but the shell's states, counts and verdict are
 # the same code on screen.
 HWTEST = {"test": None}
-HWTEST_TESTS = ("speaker", "keyboard", "camera", "screen")
+# The same seven server.py names, in the same order, so the preview's counts
+# ("3 / 7 completed") match what a technician sees on a real station.
+HWTEST_TESTS = ("speaker", "keyboard", "camera", "screen", "trackpad",
+                "microphone", "usb")
 HWTEST_DONE = ("PASSED", "ATTENTION", "FAILED")
 
 
@@ -320,6 +323,17 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, {"hardwareTest": HWTEST["test"],
                                     "technician": STATE["operator"],
                                     "tests": list(HWTEST_TESTS)})
+        if u.path == "/api/hwtest/usb":
+            # Shaped like server.py's usb_ports(): one device already on the bus
+            # so the USB panel is clickable in the preview. The preview reads no
+            # real sysfs - the point here is to see the shell's wording and
+            # states, not to test a machine's sockets.
+            return self._send(200, {"ok": True, "bootPortKnown": True,
+                                    "bootPortExcluded": True,
+                                    "devices": [{"port": "1-1",
+                                                 "name": "Integrated Camera (preview)",
+                                                 "speed": "USB 2.0 (480 Mbps)",
+                                                 "hub": False}]})
         return self._send(404, {"message": "not in the preview"})
 
     def do_POST(self):  # noqa: N802

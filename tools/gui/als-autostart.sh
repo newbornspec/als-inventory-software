@@ -307,6 +307,13 @@ user_pref("dom.push.connection.enabled", false);
 // belt-and-braces: if the pref is ever missing the camera runner still degrades to
 // needs-attention with what to do, and never reports a false "camera not working".
 user_pref("permissions.default.camera", 1);
+// And the microphone, for the Hardware Test's microphone check, for exactly the
+// same reason: the level meter needs a live audio track, and the doorhanger that
+// would grant it is unreachable in a --kiosk window. Same values as above
+// (1 = ALLOW), same single origin, and the same belt-and-braces - without this
+// pref the microphone runner degrades to needs-attention with what to do, and
+// never reports a false "microphone not working".
+user_pref("permissions.default.microphone", 1);
 PREFS
 }
 

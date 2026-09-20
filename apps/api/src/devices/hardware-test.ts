@@ -12,7 +12,7 @@
 //
 // Rules this file enforces (owner's request, 2026-09-20):
 //   - The overall verdict is READ from the stored status, never invented. An
-//     unfinished run has no verdict, only "3 of 5 tested".
+//     unfinished run has no verdict, only "3 of 7 tested".
 //   - "Unknown" is never a word we print. A test with nothing to say degrades to
 //     a neutral, plain line.
 //   - Colour is never the only signal: every status is carried as words too, so
@@ -21,7 +21,8 @@
 export type HwTestTone = 'good' | 'warn' | 'bad' | 'neutral';
 
 export interface HardwareTestRow {
-  // "Speaker" | "Keyboard" | "Camera" | "Screen" | "Trackpad"
+  // "Speaker" | "Keyboard" | "Camera" | "Screen" | "Trackpad" | "Microphone" |
+  // "USB ports"
   component: string;
   // "Passed" | "Needs attention" | "Failed" | "N/A" | "Testing" | "Not tested"
   statusLabel: string;
@@ -35,7 +36,7 @@ export interface HardwareTestView {
   // false for a device with no hardware test on record — the card renders nothing.
   present: boolean;
   // "Passed" (good) / "Needs attention" (warn) / "Failed" (bad), or, for a run
-  // that is not finished, "3 of 5 tested" (neutral — no verdict).
+  // that is not finished, "3 of 7 tested" (neutral — no verdict).
   overall: { label: string; tone: HwTestTone };
   // "Tested by <technician> · 20 Sep 2026" (· clock not network-synced), or ''.
   meta: string;
@@ -46,8 +47,17 @@ export interface HardwareTestView {
   earlierCount: number;
 }
 
-// The five components, in the order a reader expects them.
-const COMPONENTS = ['speaker', 'keyboard', 'camera', 'screen', 'trackpad'] as const;
+// The seven components, in the order a reader expects them — the same order the
+// station runs and stores them in (server.py's HWTEST_TESTS).
+const COMPONENTS = [
+  'speaker',
+  'keyboard',
+  'camera',
+  'screen',
+  'trackpad',
+  'microphone',
+  'usb',
+] as const;
 type Component = (typeof COMPONENTS)[number];
 
 const COMPONENT_LABEL: Record<Component, string> = {
@@ -56,6 +66,8 @@ const COMPONENT_LABEL: Record<Component, string> = {
   camera: 'Camera',
   screen: 'Screen',
   trackpad: 'Trackpad',
+  microphone: 'Microphone',
+  usb: 'USB ports',
 };
 
 // A status that counts as a finished test (the station's HWTEST_DONE set).
@@ -127,16 +139,26 @@ function speakerSummary(part: Obj): string {
   return '';
 }
 
-// The device name the camera reported, tidied for reading: drop the truncated
-// trailing vendor half-word after a colon ("...: Integrate") and turn the
-// underscores into spaces. "Integrated_Webcam_HD: Integrate" -> "Integrated
-// Webcam HD". Nothing usable -> "the camera", so the row still reads as a
-// sentence.
-function cameraSummary(part: Obj): string {
+// The device name the camera or the microphone reported, tidied for reading:
+// drop the truncated trailing vendor half-word after a colon ("...: Integrate")
+// and turn the underscores into spaces. "Integrated_Webcam_HD: Integrate" ->
+// "Integrated Webcam HD". Nothing usable -> the plain fallback, so the row still
+// reads as a sentence.
+function deviceSummary(part: Obj, fallback: string): string {
   const raw = words(part.device);
-  if (!raw) return 'the camera';
+  if (!raw) return fallback;
   const tidy = raw.split(':')[0].replace(/_+/g, ' ').replace(/\s+/g, ' ').trim();
-  return tidy || 'the camera';
+  return tidy || fallback;
+}
+
+// The USB ports test counts PORTS, not devices: "3 ports responded". The bus
+// paths and device names the station collected stay out of the summary on
+// purpose — a bus path is not a socket, and printing one here would invite a
+// reader to believe the station knows which socket it was.
+function usbSummary(part: Obj): string {
+  const ports = num(part.portsSeen);
+  if (ports === null) return '';
+  return `${ports} port${ports === 1 ? '' : 's'} responded`;
 }
 
 function screenSummary(part: Obj): string {
@@ -173,11 +195,18 @@ function coreSummary(name: Component, part: Obj): string {
     case 'keyboard':
       return words(part.deviceType) ?? '';
     case 'camera':
-      return cameraSummary(part);
+      return deviceSummary(part, 'the camera');
     case 'screen':
       return screenSummary(part);
     case 'trackpad':
       return trackpadSummary(part);
+    // The microphone reads like the camera: the device it listened to is the
+    // useful line, and the live level it showed was a thing on screen, never a
+    // measurement worth quoting.
+    case 'microphone':
+      return deviceSummary(part, 'the microphone');
+    case 'usb':
+      return usbSummary(part);
   }
 }
 
@@ -287,7 +316,7 @@ export function hardwareTestView(hwtest: unknown): HardwareTestView {
 
 // One report cell for a whole machine's hardware test, the same wording idea as
 // the card: "Passed" / "Needs attention: screen" / "Failed: keyboard" /
-// "3 of 5 tested". '' when there is no test on record, like a blank battery
+// "3 of 7 tested". '' when there is no test on record, like a blank battery
 // cell. (Exported ready for the batch and pallet reports; not yet wired in — see
 // the note in the task.)
 export function hardwareTestSummary(hwtest: unknown): string {
@@ -303,6 +332,6 @@ export function hardwareTestSummary(hwtest: unknown): string {
     const named = v.rows.filter((r) => r.tone === 'warn').map((r) => r.component.toLowerCase());
     return named.length ? `Needs attention: ${named.join(', ')}` : 'Needs attention';
   }
-  // Neutral: an unfinished run carries its own "3 of 5 tested" phrasing.
+  // Neutral: an unfinished run carries its own "3 of 7 tested" phrasing.
   return label;
 }
