@@ -352,6 +352,14 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, {"operator": STATE["operator"]})
         if u.path == "/api/hwtest":
             return self._send(200, {"ok": True, "hardwareTest": hwtest_save(body)})
+        if u.path == "/api/hwtest/audio-prep":
+            # Shaped like server.py's audio_prep(): a plausible mixer/sink so the
+            # speaker panel is clickable in the preview. The preview never runs a
+            # real mixer, so it always reports success - the point here is to see
+            # the shell's states and wording, not to test the hardware.
+            return self._send(200, {"ok": True,
+                                    "mixer": "unmuted Master and Speaker, set to 80% (preview)",
+                                    "sink": "Built-in Audio Analogue Stereo (preview)"})
         return self._send(200, {"ok": True, "message": "preview: nothing done"})
 
 

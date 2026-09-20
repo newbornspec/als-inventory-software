@@ -189,7 +189,30 @@
      own .hwt block. */
 
   /* HWTEST:SPEAKER:CSS:START */
-  /* The speaker test's styles (a later phase). */
+  /* The speaker test plays a tone down one channel at a time so the technician
+     can stand at each physical speaker and say what they hear. The station
+     unmutes and sets the volume FIRST (a second-hand laptop often boots muted
+     or routed to an HDMI screen that is not there), and that step is shown in
+     words - spk-step - so an operator who hears nothing knows the mixer was
+     already dealt with and the speaker itself is what is at fault. Every
+     verdict is carried by a WORD beside the side it belongs to (spk-pick), not
+     by colour alone, for the app's WCAG baseline; the ring on the chosen button
+     is a second signal on top of that, never the only one. */
+  .spk-panel{display:flex;flex-direction:column;gap:11px}
+  .spk-step{margin:0;font-size:12.5px;color:var(--mut);overflow-wrap:anywhere}
+  .spk-step b{color:var(--ink)}
+  .spk-ch{border:1px solid var(--line);border-radius:10px;padding:11px 12px;
+          display:flex;flex-direction:column;gap:9px;background:#fbfcfe}
+  .spk-ch-head{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center}
+  .spk-ch-name{font-size:14px;font-weight:700;color:var(--ink);min-width:96px}
+  .spk-pick{font-size:12.5px;color:var(--mut);margin-left:auto}
+  .spk-pick b{color:var(--ink)}
+  .spk-verdicts{display:flex;flex-wrap:wrap;gap:8px}
+  /* The chosen verdict gets a ring AND its word in spk-pick, so which one is
+     selected never rides on colour. */
+  .spk-verdicts .spk-sel{outline:2px solid var(--blue);box-shadow:0 0 0 3px var(--blsoft)}
+  .spk-notes{width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid var(--line);
+             border-radius:8px;font:inherit;font-size:13.5px;color:var(--ink);background:#fff}
   /* HWTEST:SPEAKER:CSS:END */
 
   /* ...................................................................... */
@@ -576,10 +599,15 @@
               <button class="btn gho sm" id="hwtRun_speaker" onclick="runHwTest('speaker')">Test</button>
             </div>
             <div class="hwtw" id="hwtWhy_speaker"></div>
-            <div class="hwtd" id="hwtDetail_speaker"><!-- the speaker test's own
-              controls go here (a later phase): the station unmutes this machine
-              and sets a known volume first, plays a tone left then right, and
-              the technician says which speakers they heard. --></div>
+            <div class="hwtd" id="hwtDetail_speaker"><!-- the speaker test's runner
+              (HWTEST:SPEAKER:JS) builds its controls in here when Test is
+              pressed: it first asks the station to unmute this machine and set a
+              known volume (POST /api/hwtest/audio-prep), then plays a tone down
+              the left channel and the right in turn, and the technician marks
+              each side Working / Quiet or distorted / Not working. A station
+              that could not unmute is recorded as needs-attention with what to
+              do, never as dead speakers - only the technician's "not working"
+              records a fault. --></div>
           </div>
           <!-- HWTEST:SPEAKER:END -->
 
@@ -2483,15 +2511,308 @@ function ovGo(){const c=ovCb;if(c)c();}
  * ==================================================================== */
 
 /* HWTEST:SPEAKER:JS:START */
-/* The speaker test (a later phase). Register it with:
-       HWT_RUNNERS.speaker = async function(){ ... };
-   Contract C6 for this one: the station unmutes the machine and sets a known
-   volume BEFORE the tone - a second-hand laptop often boots muted or routed
-   to HDMI, and without that step a technician hears nothing and records
-   working speakers as dead - then records what it did in `mixer` and where
-   the tone went in `sink`, and asks about left and right separately. wpctl,
-   amixer and pw-cli are already on the station. A station that could not
-   unmute is hwCannotRun, never a failure. */
+/* The speaker test. Two things happen in order, and the order is the whole
+   point (owner's §14.1): FIRST the station unmutes this machine and sets a
+   known volume - a POST to /api/hwtest/audio-prep, which runs wpctl or amixer
+   as the desktop user - because a second-hand laptop very often boots muted, at
+   zero, or routed to an HDMI screen that is not there, and then a technician
+   hears nothing and records working speakers as dead. THEN a tone is played
+   down one channel at a time (Web Audio, a StereoPannerNode hard left or hard
+   right, with a channel-merger fallback for an older build), and the technician
+   says, per side, whether it works, is quiet or distorted, or does not work.
+
+   The rule the module hangs on holds here too: if the station could not unmute,
+   that is could-not-run (ATTENTION with a reason and an action), NEVER a
+   failure - a machine with no working mixer is not a machine with dead
+   speakers. Only the technician's own "not working" records a FAILED. Both
+   sides working is the only PASS; any not-working is the technician's Fail;
+   quiet-or-distorted is ATTENTION.
+
+   Everything the region keeps lives on one namespaced object so it adds no
+   other top-level global (the shell owns those), and the tone is stopped and
+   the AudioContext closed on every way out - a recorded result, a build error,
+   a timeout, and the page being torn down mid-decision (a pagehide guard) - so
+   a tone is never left droning after the panel has gone. */
+const SPK = {
+  ac: null,          // the AudioContext, opened lazily and closed on the way out
+  osc: null,         // the oscillator while a tone is sounding
+  toneTimer: null,   // stops the tone after a short burst, so it never drones on
+  resolve: null,     // resolves the runner's promise once one result is recorded
+  settled: false,    // a result has been recorded; ignore a second Save
+  left: '', right: '',   // the technician's per-side verdict: PASSED / ATTENTION / FAILED
+  mixer: '', sink: ''    // what the station did, and where the tone was sent
+};
+
+// The word shown for each verdict, so the choice is always carried in plain
+// English and never by a colour alone.
+SPK.WORDS = {PASSED: 'Working', ATTENTION: 'Quiet or distorted', FAILED: 'Not working'};
+// The three verdict buttons per side, by id, so selecting one can un-select its
+// siblings without a querySelector (the shell keeps ids stable).
+SPK.btnIds = {
+  left:  {PASSED: 'spkLeftPass',  ATTENTION: 'spkLeftAttn',  FAILED: 'spkLeftFail'},
+  right: {PASSED: 'spkRightPass', ATTENTION: 'spkRightAttn', FAILED: 'spkRightFail'}
+};
+
+SPK.reset = function(){
+  SPK.stopTone();
+  SPK.closeCtx();
+  SPK.resolve = null; SPK.settled = false;
+  SPK.left = ''; SPK.right = ''; SPK.mixer = ''; SPK.sink = '';
+};
+
+// A trimmed string or '' - never blank-as-undefined and never the word this
+// module is forbidden to print, so mixer/sink always read cleanly on the report.
+SPK.text = function(v){ return (v == null) ? '' : String(v).trim().slice(0,200); };
+
+// Whether this build has the Web Audio API at all. Without it no tone can be
+// emitted, which is the station being unable to run the test, not a fault.
+SPK.audioApi = function(){
+  return typeof (window.AudioContext || window.webkitAudioContext) === 'function';
+};
+
+// Play a short test tone down ONE channel only, so the technician can tell the
+// two speakers apart. StereoPannerNode hard to one side is the clean way; an
+// older Web Audio build without it gets a two-channel merger fed on one input,
+// which is silent on the other side just the same. Returns true if a tone
+// started - but a false is not a fault: the technician's ear is the test.
+SPK.playTone = function(channel){
+  try{
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if(!Ctx) return false;
+    if(!SPK.ac) SPK.ac = new Ctx();
+    // A context can start suspended until a user gesture; the Play click is one.
+    if(SPK.ac.state === 'suspended' && SPK.ac.resume) { try{ SPK.ac.resume(); }catch(e){} }
+    SPK.stopTone();                       // never stack two tones
+    const osc = SPK.ac.createOscillator();
+    osc.type = 'sine'; osc.frequency.value = 440;
+    const gain = SPK.ac.createGain(); gain.gain.value = 0.12;   // gentle, not a shriek
+    osc.connect(gain);
+    if(SPK.ac.createStereoPanner){
+      const pan = SPK.ac.createStereoPanner();
+      pan.pan.value = (channel === 'left') ? -1 : 1;
+      gain.connect(pan); pan.connect(SPK.ac.destination);
+    }else if(SPK.ac.createChannelMerger){
+      const merger = SPK.ac.createChannelMerger(2);
+      gain.connect(merger, 0, (channel === 'left') ? 0 : 1);
+      merger.connect(SPK.ac.destination);
+    }else{
+      gain.connect(SPK.ac.destination);   // last resort: both sides (still a tone)
+    }
+    osc.start();
+    SPK.osc = osc;
+    SPK.toneTimer = setTimeout(function(){ SPK.stopTone(); }, 1200);
+    return true;
+  }catch(e){ return false; }
+};
+
+// Stop the tone. Safe to call twice and on nothing playing: this is one of the
+// things that must never throw on the way out, so every step is guarded.
+SPK.stopTone = function(){
+  try{ if(SPK.toneTimer){ clearTimeout(SPK.toneTimer); SPK.toneTimer = null; } }catch(e){}
+  try{ if(SPK.osc){ SPK.osc.stop(); } }catch(e){}
+  try{ if(SPK.osc){ SPK.osc.disconnect(); } }catch(e){}
+  SPK.osc = null;
+};
+
+// Close the AudioContext so nothing is left holding the machine's audio device.
+SPK.closeCtx = function(){
+  const ac = SPK.ac; SPK.ac = null;
+  try{ if(ac && ac.close) ac.close(); }catch(e){}
+};
+
+SPK.notesText = function(){ const el = $('spkNotes'); return el ? String(el.value || '').slice(0,300) : ''; };
+
+// Record the technician's choice for one side, mark it (ring + word), and let
+// Save arm only once BOTH sides have been judged.
+SPK.choose = function(ch, v){
+  if(ch === 'left') SPK.left = v; else SPK.right = v;
+  const ids = SPK.btnIds[ch];
+  for(const key in ids){
+    const el = $(ids[key]);
+    if(el && el.classList) el.classList.toggle('spk-sel', key === v);
+  }
+  const pick = $(ch === 'left' ? 'spkPickLeft' : 'spkPickRight');
+  if(pick) pick.innerHTML = 'You marked this: <b>' + esc(SPK.WORDS[v]) + '</b>';
+  const save = $('spkSave'); if(save) save.disabled = !(SPK.left && SPK.right);
+};
+
+// Which sides carry a given verdict, worded for a sentence: "left speaker",
+// "right speaker", or "left and right speakers".
+SPK.sideWord = function(list){
+  if(list.length === 2) return 'left and right speakers';
+  return (list[0] === 'left') ? 'left speaker' : 'right speaker';
+};
+
+// Finish: stop the tone, close the context, record exactly one result, blank
+// the panel so it takes no more answers, then resolve. Mirrors the keyboard and
+// camera runners so all four end the same way.
+SPK.finish = function(record){
+  SPK.stopTone();
+  SPK.closeCtx();
+  const r = SPK.resolve; SPK.resolve = null;
+  record();
+  const d = $('hwtDetail_speaker'); if(d) d.innerHTML = '';
+  if(r) r();
+};
+
+// The technician has judged both sides and pressed Save. Map the two verdicts
+// to one component result, exactly as the owner set out: any not-working is a
+// Fail, otherwise any quiet/distorted is ATTENTION, otherwise both working is
+// the only PASS. mixer/sink/notes ride along verbatim (the server carries a
+// test's own fields through un-whitelisted).
+SPK.save = function(){
+  if(SPK.settled) return;
+  if(!(SPK.left && SPK.right)) return;      // both sides must be judged first
+  SPK.settled = true;
+  const extra = {left: SPK.left, right: SPK.right, mixer: SPK.mixer, sink: SPK.sink,
+    notes: SPK.notesText()};
+  const failed = [], attn = [];
+  if(SPK.left === 'FAILED') failed.push('left');
+  if(SPK.right === 'FAILED') failed.push('right');
+  if(SPK.left === 'ATTENTION') attn.push('left');
+  if(SPK.right === 'ATTENTION') attn.push('right');
+  if(failed.length){
+    const w = SPK.sideWord(failed), verb = (failed.length === 2) ? 'do' : 'does';
+    SPK.finish(function(){
+      hwFail('speaker', 'the technician found the ' + w + ' ' + verb + ' not work', extra);
+    });
+  }else if(attn.length){
+    const w = SPK.sideWord(attn), verb = (attn.length === 2) ? 'are' : 'is';
+    SPK.finish(function(){
+      hwAttention('speaker', 'the ' + w + ' ' + verb + ' quiet or distorted',
+        'Check the speaker by hand - it may be quiet, distorted, or need replacing - before the machine leaves the bench.',
+        extra);
+    });
+  }else{
+    SPK.finish(function(){ hwPass('speaker', extra); });
+  }
+};
+
+// Build the panel and wire it. Kept in its own method so the runner can wrap it
+// in a try/catch: a panel that will not build is the station being unable to
+// run the test, not a verdict on the speakers.
+SPK.build = function(d){
+  d.innerHTML =
+    '<div class="spk-panel">' +
+      '<p class="hwtw" id="spkInstr" style="margin:0">The station has unmuted this machine and set ' +
+        'the volume. Play each side and listen at that speaker. Mark what you hear - a clear tone is ' +
+        'working, a faint or crackly one is quiet or distorted, silence is not working.</p>' +
+      '<p class="spk-step" id="spkStep"></p>' +
+      '<div class="spk-ch">' +
+        '<div class="spk-ch-head">' +
+          '<span class="spk-ch-name">Left speaker</span>' +
+          '<button class="btn gho sm" type="button" id="spkPlayLeft">Play left</button>' +
+          '<span class="spk-pick" id="spkPickLeft">Not judged yet</span>' +
+        '</div>' +
+        '<div class="spk-verdicts">' +
+          '<button class="btn sm" type="button" id="spkLeftPass">Working</button>' +
+          '<button class="btn gho sm" type="button" id="spkLeftAttn">Quiet or distorted</button>' +
+          '<button class="btn dan sm" type="button" id="spkLeftFail">Not working</button>' +
+        '</div>' +
+      '</div>' +
+      '<div class="spk-ch">' +
+        '<div class="spk-ch-head">' +
+          '<span class="spk-ch-name">Right speaker</span>' +
+          '<button class="btn gho sm" type="button" id="spkPlayRight">Play right</button>' +
+          '<span class="spk-pick" id="spkPickRight">Not judged yet</span>' +
+        '</div>' +
+        '<div class="spk-verdicts">' +
+          '<button class="btn sm" type="button" id="spkRightPass">Working</button>' +
+          '<button class="btn gho sm" type="button" id="spkRightAttn">Quiet or distorted</button>' +
+          '<button class="btn dan sm" type="button" id="spkRightFail">Not working</button>' +
+        '</div>' +
+      '</div>' +
+      '<input class="spk-notes" type="text" id="spkNotes" maxlength="300" ' +
+        'placeholder="Notes (which speaker, what was wrong)">' +
+      '<button class="btn sm" type="button" id="spkSave" disabled>Save speaker result</button>' +
+    '</div>';
+  // Say, in words, what the station did and where the tone is going, so an
+  // operator who hears nothing knows the mixer was already handled.
+  const step = $('spkStep');
+  if(step) step.innerHTML = 'Station: <b>' + esc(SPK.mixer || 'set the volume') + '</b>. ' +
+    'Tone sent to <b>' + esc(SPK.sink) + '</b>.';
+  const wire = function(id, fn){ const el = $(id); if(el) el.addEventListener('click', fn); };
+  wire('spkPlayLeft',  function(){ SPK.playTone('left'); });
+  wire('spkPlayRight', function(){ SPK.playTone('right'); });
+  wire('spkLeftPass',  function(){ SPK.choose('left', 'PASSED'); });
+  wire('spkLeftAttn',  function(){ SPK.choose('left', 'ATTENTION'); });
+  wire('spkLeftFail',  function(){ SPK.choose('left', 'FAILED'); });
+  wire('spkRightPass', function(){ SPK.choose('right', 'PASSED'); });
+  wire('spkRightAttn', function(){ SPK.choose('right', 'ATTENTION'); });
+  wire('spkRightFail', function(){ SPK.choose('right', 'FAILED'); });
+  wire('spkSave',      function(){ SPK.save(); });
+};
+
+/* Run the test: unmute first, then let the technician judge each side. The
+   whole flow sits in a try/finally so the tone is always stopped and the
+   context always closed, and a pagehide guard does the same for the one path
+   the finally cannot cover - the page being torn down while the technician is
+   still deciding. */
+HWT_RUNNERS.speaker = async function(){
+  SPK.reset();
+  const d = $('hwtDetail_speaker');
+  const onHide = function(){ SPK.stopTone(); SPK.closeCtx(); };
+  try{ window.addEventListener('pagehide', onHide); window.addEventListener('beforeunload', onHide); }catch(e){}
+  try{
+    if(!d){
+      hwCannotRun('speaker', 'the station could not build the speaker test panel',
+        'Reload the page and run the speaker test again.', {mixer: '', sink: '', notes: ''});
+      return;
+    }
+    // 1. The station unmutes and sets a known volume. A failure here - the call
+    //    not reaching the service, or the service reporting it could not unmute
+    //    - is could-not-run, never a fail.
+    let prep;
+    try{ prep = await jpost('/api/hwtest/audio-prep', {}); }
+    catch(e){ prep = {ok: false, data: {}}; }
+    const pd = (prep && prep.data) || {};
+    if(!(prep && prep.ok) || pd.ok !== true){
+      hwCannotRun('speaker',
+        SPK.text(pd.reason) || 'the station could not unmute this machine',
+        SPK.text(pd.action) || 'Check this machine has working audio, unmute it by hand, then test again.',
+        {mixer: SPK.text(pd.mixer), sink: SPK.text(pd.sink), notes: ''});
+      return;
+    }
+    SPK.mixer = SPK.text(pd.mixer);
+    SPK.sink = SPK.text(pd.sink) || 'the machine’s default audio output';
+    // 2. No Web Audio means no tone can be emitted - the station cannot run the
+    //    test, so ATTENTION with what to do, not a dead panel and not a fault.
+    if(!SPK.audioApi()){
+      hwCannotRun('speaker',
+        'this browser build cannot play a test tone (the Web Audio API is missing)',
+        'Update the stick (sync-usb.ps1), boot this machine again, then test again.',
+        {mixer: SPK.mixer, sink: SPK.sink, notes: ''});
+      return;
+    }
+    // 3. Build the panel and wait for the technician's two verdicts + Save.
+    await new Promise(function(res){
+      SPK.resolve = res;
+      try{ SPK.build(d); }
+      catch(e){
+        const r = SPK.resolve; SPK.resolve = null;
+        hwCannotRun('speaker',
+          'the station could not build the speaker test panel (' + ((e && e.message) || e || 'no detail') + ')',
+          'Run the speaker test again; if it keeps happening, tell a supervisor.',
+          {mixer: SPK.mixer, sink: SPK.sink, notes: ''});
+        if(r) r();
+      }
+    });
+  }catch(e){
+    // The unmute worked but something else threw: the station being unable to
+    // run the test, not a verdict on the speakers. Only record it if nothing
+    // else already did.
+    if(hwStatus('speaker') === 'IN_PROGRESS')
+      hwCannotRun('speaker',
+        'the station could not run the speaker test (' + ((e && e.message) || e || 'no detail') + ')',
+        'Run the speaker test again; if it keeps happening, test it by hand and tell a supervisor.',
+        {mixer: SPK.mixer, sink: SPK.sink, notes: ''});
+  }finally{
+    SPK.stopTone();
+    SPK.closeCtx();
+    try{ window.removeEventListener('pagehide', onHide); window.removeEventListener('beforeunload', onHide); }catch(e){}
+    if(d) d.innerHTML = '';
+  }
+};
 /* HWTEST:SPEAKER:JS:END */
 
 /* -------------------------------------------------------------------- */

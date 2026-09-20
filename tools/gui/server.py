@@ -2231,6 +2231,119 @@ def hwtest_save(body):
         return test
 
 
+# ----------------------------------------------- speaker test: unmute ----
+# The speaker test's station duty (contract C6, §14.1). A second-hand laptop
+# very often boots muted, at zero volume, or routed to an HDMI monitor that is
+# not there - and then the technician hears nothing and records working speakers
+# as dead. So BEFORE the tone plays, the runner asks this endpoint to unmute the
+# machine and set a known volume, and it reports back what it did (for the
+# record's `mixer`) and where the sound will go (`sink`). If it cannot, the test
+# is could-not-run (ATTENTION), never a failure - an absence of a working mixer
+# is not evidence the speakers are broken.
+#
+# This runs AS THE DESKTOP USER, which is exactly right: PipeWire/WirePlumber
+# and ALSA volumes are per-user, and the GUI already runs as that user (the only
+# account whose audio session and display exist). No elevation, no root.
+#
+# The whole thing is stdlib and TIME-LIMITED: every mixer command has its own
+# short timeout, so a tool that hangs cannot hang the page - the endpoint always
+# answers, quickly, one way or the other.
+AUDIO_PREP_TIMEOUT = 6      # seconds per mixer command; the endpoint cannot block the page
+AUDIO_TARGET_VOLUME = 80    # a known, comfortable level, matching the owner's example
+
+
+def _run_mixer(cmd, timeout=AUDIO_PREP_TIMEOUT):
+    """Run one short mixer command and return (returncode, stdout, stderr).
+    Never raises: a mixer tool that is missing, slow or unhappy is the station
+    being unable to unmute (handled by the caller), not a crash in the server."""
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        return r.returncode, (r.stdout or ""), (r.stderr or "")
+    except FileNotFoundError:
+        return 127, "", "not installed"
+    except subprocess.TimeoutExpired:
+        return 124, "", "timed out"
+    except Exception as exc:  # noqa: BLE001
+        return 1, "", str(exc)
+
+
+def _wpctl_sink_name():
+    """A human name for the default output, read from wpctl inspect. Falls back
+    through the properties Firefox and PipeWire fill in different orders, and
+    returns "" (not the word this module is forbidden to print) when none is
+    there - the caller then uses a plain phrase."""
+    rc, out, _ = _run_mixer(["wpctl", "inspect", "@DEFAULT_AUDIO_SINK@"])
+    if rc != 0:
+        return ""
+    for key in ("node.description", "node.nick", "device.description", "node.name"):
+        m = re.search(r'%s\s*=\s*"?([^"\n]+)"?' % re.escape(key), out)
+        if m and m.group(1).strip():
+            return m.group(1).strip()[:120]
+    return ""
+
+
+def _audio_prep_wpctl():
+    """Unmute the default sink and set it to the target volume with wpctl
+    (WirePlumber over PipeWire - the station's real audio stack). Returns
+    (what_it_did, sink_name) on success, or ("", "") if wpctl could not do it."""
+    rc_mute, _, _ = _run_mixer(["wpctl", "set-mute", "@DEFAULT_AUDIO_SINK@", "0"])
+    rc_vol, _, _ = _run_mixer(
+        ["wpctl", "set-volume", "@DEFAULT_AUDIO_SINK@", "%.2f" % (AUDIO_TARGET_VOLUME / 100.0)])
+    # The unmute is the one that matters; a machine with no default sink makes
+    # both fail, and then we let amixer try before giving up.
+    if rc_mute != 0 and rc_vol != 0:
+        return "", ""
+    return ("unmuted the default output and set it to %d%% (wpctl)" % AUDIO_TARGET_VOLUME,
+            _wpctl_sink_name())
+
+
+def _audio_prep_amixer():
+    """Fallback: unmute and set the common ALSA controls with amixer. Only the
+    controls that actually exist on this card are touched, so the report names
+    what it really did (e.g. "unmuted Master and Speaker, set to 80%")."""
+    done = []
+    for control in ("Master", "Speaker", "Headphone", "PCM"):
+        rc, _, _ = _run_mixer(
+            ["amixer", "-q", "sset", control, "%d%%" % AUDIO_TARGET_VOLUME, "unmute"])
+        if rc == 0:
+            done.append(control)
+    if not done:
+        return ""
+    return "unmuted %s and set to %d%% (amixer)" % (", ".join(done), AUDIO_TARGET_VOLUME)
+
+
+def audio_prep():
+    """Unmute the machine on the bench and set a known volume before the speaker
+    test plays its tone. Returns the shape the runner expects:
+
+        {"ok": True,  "mixer": "<what was done>", "sink": "<where the tone goes>"}
+        {"ok": False, "reason": "<plain English>", "action": "<what to do>"}
+
+    ok:False is a could-not-run, and the runner records ATTENTION, never a
+    failure - the same rule the whole module hangs on. wpctl is tried first
+    (the station runs PipeWire), amixer second; both are already on the stick."""
+    if shutil.which("wpctl"):
+        did, sink = _audio_prep_wpctl()
+        if did:
+            return {"ok": True, "mixer": did,
+                    "sink": sink or "the machine's default audio output"}
+    if shutil.which("amixer"):
+        did = _audio_prep_amixer()
+        if did:
+            return {"ok": True, "mixer": did, "sink": "the machine's default audio output"}
+    # Neither tool could unmute. Say why in plain English and what the operator
+    # can do; the runner turns this into ATTENTION with a reason and an action.
+    if not shutil.which("wpctl") and not shutil.which("amixer"):
+        return {"ok": False,
+                "reason": "the station has no audio mixer, so it could not unmute this machine",
+                "action": "Update the stick (sync-usb.ps1), boot this machine again, then test again."}
+    return {"ok": False,
+            "reason": "the station could not unmute this machine - it has no working audio output "
+                      "(a laptop can boot with sound sent to an HDMI screen that is not there)",
+            "action": "Check the machine has a built-in speaker, unmute it by hand from the desktop, "
+                      "then test again."}
+
+
 # --------------------------------------------------------------- capture ----
 def audit_cmd(*args, env_vars=None):
     """The audit command, elevated when this backend is not already root.
@@ -4867,6 +4980,19 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, {"ok": True, "hardwareTest": saved,
                                     "hwtestMachine": STATE.get("hwtestMachine") or "",
                                     "hwtestNeedsFiling": hwtest_needs_filing()})
+
+        if u.path == "/api/hwtest/audio-prep":
+            # The speaker test's station duty (contract C6): unmute this machine
+            # and set a known volume BEFORE the tone, as the desktop user, so a
+            # laptop that booted muted or routed to a missing HDMI screen does
+            # not make working speakers read as dead. Deliberately NOT behind
+            # operator_gate() for the same reason /api/hwtest is not: nothing is
+            # erased and nothing goes to the server. request_problem() at the top
+            # of do_POST already applies the same Host/Origin guard every other
+            # route has. audio_prep() is stdlib-only and time-limited, so it
+            # always answers and can never hang the page; ok:False makes the
+            # runner record could-not-run, never a fault.
+            return self._send(200, audio_prep())
 
         if u.path == "/api/audit":
             if not STATE["profile"]:
