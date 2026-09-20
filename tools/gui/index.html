@@ -233,7 +233,19 @@
   /* ...................................................................... */
 
   /* HWTEST:CAMERA:CSS:START */
-  /* The camera test's styles (a later phase) - the live preview. */
+  /* The camera test shows the live picture so the technician can judge it: the
+     browser only proves a track opened (owner's §17), the person decides whether
+     the picture is right. The preview sits on solid black so a black or frozen
+     frame reads as a fault rather than as an empty box, and is capped in size so
+     it can never push the two verdict buttons off a small kiosk screen. */
+  .cam-panel{display:flex;flex-direction:column;gap:10px}
+  .cam-video{width:100%;max-width:420px;aspect-ratio:4 / 3;background:#000;
+             border:1px solid var(--line);border-radius:10px;object-fit:contain}
+  .cam-name{margin:0;font-size:13px;color:var(--mut)}
+  .cam-name b{color:var(--ink)}
+  .cam-note{width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid var(--line);
+            border-radius:8px;font:inherit;font-size:13.5px;color:var(--ink);background:#fff}
+  .cam-verdicts{display:flex;flex-wrap:wrap;gap:8px}
   /* HWTEST:CAMERA:CSS:END */
 
   /* ...................................................................... */
@@ -600,10 +612,14 @@
               <button class="btn gho sm" id="hwtRun_camera" onclick="runHwTest('camera')">Test</button>
             </div>
             <div class="hwtw" id="hwtWhy_camera"></div>
-            <div class="hwtd" id="hwtDetail_camera"><!-- the camera test's own
-              controls go here (a later phase): a live preview, and the
-              technician says whether the picture is right. No camera, or a
-              refused permission, is not a broken camera. --></div>
+            <div class="hwtd" id="hwtDetail_camera"><!-- the camera test's runner
+              (HWTEST:CAMERA:JS) builds its controls in here when Test is
+              pressed: it opens the camera, shows the picture live, names the
+              device, and asks Camera is working / Camera is not working. Every
+              track is stopped on the way out so the camera light never stays on.
+              No camera fitted, or a refused permission, is the station being
+              unable to run the test - recorded as needs-attention with what to
+              do, never as a broken camera. --></div>
           </div>
           <!-- HWTEST:CAMERA:END -->
 
@@ -2850,14 +2866,188 @@ HWT_RUNNERS.keyboard=async function(){
 /* -------------------------------------------------------------------- */
 
 /* HWTEST:CAMERA:JS:START */
-/* The camera test (a later phase). Register it with:
-       HWT_RUNNERS.camera = async function(){ ... };
-   Contract C6 for this one: the page is a secure context (127.0.0.1), so
-   getUserMedia is allowed and the camera permission is pre-granted for this
-   origin at boot. The browser may claim only that a video track opened and
-   has frames; the technician says whether the picture is right. No camera
-   device, a refused permission or a missing API is hwCannotRun with the
-   device named - never a failure. Release the track on the way out. */
+/* The camera test. The page is a secure context (127.0.0.1), so getUserMedia is
+   allowed, and als-autostart.sh pre-grants the camera for this origin so the
+   permission doorhanger does not block a kiosk window with no URL bar. The
+   browser may claim only that a video track opened and is showing frames
+   (owner's §17); whether the picture is actually RIGHT is the technician's call,
+   so we open the camera, show it live, and ask.
+
+   The rule the whole module hangs on: the two things that are NOT a broken
+   camera - a refused permission and no camera fitted - are could-not-run
+   (needs-attention, with a reason and an action), NEVER a failure. In fact
+   EVERY way the station can fail to OPEN the camera lands there; only the
+   technician clicking "not working" records a FAILED.
+
+   And the camera light must never be left on: every track is stopped on the way
+   out - down the pass, the fail, an error, a timeout and the page being torn
+   down alike - which is why the whole flow sits in a try/finally and a pagehide
+   guard runs the same stop. Everything the region keeps lives on one namespaced
+   object so it adds no other top-level global (the shell owns those). */
+const CAM = {
+  stream: null,     // the live MediaStream while the preview is up
+  settled: false    // a result has been recorded; ignore a second click or a late stream
+};
+
+// Stop every track so the camera's hardware light goes out. Safe to call twice
+// and safe on a null or odd stream: this is the one thing that must never throw
+// on the way out, so every step is guarded.
+CAM.stop = function(s){
+  s = s || CAM.stream;
+  if(s && s.getTracks){
+    try{ s.getTracks().forEach(function(t){ try{ t.stop(); }catch(e){} }); }catch(e){}
+  }
+  if(s === CAM.stream) CAM.stream = null;
+};
+
+// The device's own name if the open track carries one (Firefox fills the label
+// once the camera is permitted and open), else a plain phrase. Never blank and
+// never the word this module is forbidden to print, so `device` is always
+// something an operator can read on the report.
+CAM.deviceName = function(s){
+  try{
+    var t = s && s.getVideoTracks && s.getVideoTracks()[0];
+    var l = (t && t.label != null) ? String(t.label).trim() : '';
+    if(l) return l;
+  }catch(e){}
+  return 'the machine’s camera';
+};
+
+// getUserMedia that can never hang the page (house rule): if it has neither
+// resolved nor rejected in time, we give up with a timeout so the technician is
+// not stranded on "Testing…". The usual cause is the permission prompt waiting
+// off-screen because the pre-grant pref is missing - which is exactly the
+// "degrade gracefully if the pref is absent" case. A stream that lands AFTER we
+// gave up is stopped at once, so a late grant can never leave the light on.
+CAM.acquire = function(ms){
+  return new Promise(function(resolve, reject){
+    var done = false;
+    var md = (typeof navigator !== 'undefined') && navigator.mediaDevices;
+    if(!md || !md.getUserMedia){ reject({name:'AlsNoApi'}); return; }
+    var timer = setTimeout(function(){ if(done) return; done = true; reject({name:'AlsTimeout'}); }, ms);
+    var p;
+    try{ p = md.getUserMedia({video:true}); }
+    catch(e){ done = true; clearTimeout(timer); reject(e); return; }
+    p.then(function(s){
+      if(done){ CAM.stop(s); return; }   // arrived after we gave up: release it now
+      done = true; clearTimeout(timer); resolve(s);
+    }, function(e){
+      if(done) return; done = true; clearTimeout(timer); reject(e);
+    });
+  });
+};
+
+// Turn a getUserMedia failure into a could-not-run the operator can act on.
+// EVERY failure to OPEN the camera comes through here, so none of them can ever
+// be recorded as a broken camera - the station being unable to run the test is
+// not evidence about the hardware. The reason and action are plain English.
+CAM.cannotRunFor = function(err){
+  var name = (err && err.name) || '';
+  if(name === 'NotAllowedError' || name === 'SecurityError' || name === 'PermissionDeniedError')
+    return {reason: 'the camera permission was refused, so the picture could not be opened',
+      action: 'Grant camera access for this page, or update the stick so it is pre-granted (permissions.default.camera), then test again.'};
+  if(name === 'NotFoundError' || name === 'DevicesNotFoundError' || name === 'OverconstrainedError')
+    return {reason: 'no camera is fitted to this machine',
+      action: 'None if this model has no camera; otherwise check it is enabled in the BIOS, then test again.'};
+  if(name === 'NotReadableError' || name === 'TrackStartError' || name === 'AbortError')
+    return {reason: 'a camera is fitted but the station could not open it - it may be in use, or held off by a privacy switch',
+      action: 'Close anything else using the camera, check the camera shutter or privacy switch, then test again.'};
+  if(name === 'AlsNoApi')
+    return {reason: 'this browser build cannot open the camera (the media API is missing)',
+      action: 'Update the stick (sync-usb.ps1), boot this machine again, then test again.'};
+  if(name === 'AlsTimeout')
+    return {reason: 'the camera did not open in time - the permission prompt may be waiting off-screen',
+      action: 'Update the stick so the camera is pre-granted (permissions.default.camera), then test again.'};
+  return {reason: 'the station could not open the camera (' + (name || (err && err.message) || 'no detail') + ')',
+    action: 'Test the camera again; if it keeps happening, test it by hand and tell a supervisor.'};
+};
+
+CAM.notesText = function(){ var el = $('camNotes'); return el ? String(el.value || '').slice(0,300) : ''; };
+
+/* Open the camera, show it, wait for the technician, record exactly one result.
+   The try/finally is the whole safety story: whatever happens - a pass, a fail,
+   a getUserMedia rejection, a timeout, a thrown error while building the preview
+   - the finally stops every track and blanks the panel, so the camera light is
+   never left on and the panel takes no more answers. A pagehide guard runs the
+   same stop for the one path the finally cannot cover: the page being torn down
+   while the technician is still deciding. */
+HWT_RUNNERS.camera = async function(){
+  CAM.stop();            // release anything a previous run might have left open
+  CAM.settled = false;
+  var stream = null, dev = 'the machine’s camera';
+  var d = $('hwtDetail_camera');
+  var onHide = function(){ CAM.stop(stream); };
+  try{ window.addEventListener('pagehide', onHide); window.addEventListener('beforeunload', onHide); }catch(e){}
+  try{
+    if(!d){
+      hwCannotRun('camera', 'the station could not build the camera test panel',
+        'Reload the page and run the camera test again.', {device: dev, notes: ''});
+      return;
+    }
+    // Open the camera. Any failure to open is a could-not-run, never a fail.
+    try{ stream = await CAM.acquire(15000); }
+    catch(err){
+      var c = CAM.cannotRunFor(err);
+      hwCannotRun('camera', c.reason, c.action, {device: dev, notes: ''});
+      return;
+    }
+    CAM.stream = stream;
+    dev = CAM.deviceName(stream);
+    // Build the preview and the two verdicts, then wait for the technician. A
+    // black or frozen picture is what "not working" looks like, so the wording
+    // says so - the buttons carry words, colour is never the only signal.
+    d.innerHTML =
+      '<div class="cam-panel">' +
+        '<p class="hwtw" id="camInstr" style="margin:0">Look at the live picture below. If it is clear, ' +
+          'moving and the right way round, the camera works. A black or frozen picture, or one that is badly ' +
+          'distorted, does not.</p>' +
+        '<video class="cam-video" id="camVideo" autoplay playsinline muted></video>' +
+        '<p class="cam-name" id="camName"></p>' +
+        '<input class="cam-note" type="text" id="camNotes" maxlength="300" ' +
+          'placeholder="Notes (what is wrong with the picture, if anything)">' +
+        '<div class="cam-verdicts">' +
+          '<button class="btn sm" type="button" id="camPass">Camera is working</button>' +
+          '<button class="btn dan sm" type="button" id="camFail">Camera is not working</button>' +
+        '</div>' +
+      '</div>';
+    var nameEl = $('camName');
+    if(nameEl) nameEl.innerHTML = 'Showing the picture from <b>' + esc(dev) + '</b>.';
+    var v = $('camVideo');
+    if(v){
+      try{ v.srcObject = stream; }
+      catch(e){ try{ v.src = window.URL.createObjectURL(stream); }catch(e2){} }
+      var pl = v.play && v.play();
+      if(pl && pl.catch) pl.catch(function(){});   // autoplay refusal is not our concern; the frames are there
+    }
+    // The technician's answer is the ONLY thing that records a pass or a fail.
+    // `settled` guards a double click (the same stand-in element could be
+    // clicked twice) so a result is recorded once and once only.
+    await new Promise(function(res){
+      $('camPass').addEventListener('click', function(){
+        if(CAM.settled) return; CAM.settled = true;
+        hwPass('camera', {device: dev, notes: CAM.notesText()}); res();
+      });
+      $('camFail').addEventListener('click', function(){
+        if(CAM.settled) return; CAM.settled = true;
+        hwFail('camera', 'the technician found the camera does not work',
+          {device: dev, notes: CAM.notesText()}); res();
+      });
+    });
+  }catch(e){
+    // Opening worked but showing the preview threw: that is the station being
+    // unable to run the test, not a verdict on the camera. Only record it if
+    // nothing else already did.
+    if(hwStatus('camera') === 'IN_PROGRESS')
+      hwCannotRun('camera',
+        'the station opened the camera but could not show the preview (' + ((e && e.message) || e || 'no detail') + ')',
+        'Test the camera again; if it keeps happening, test it by hand and tell a supervisor.',
+        {device: dev, notes: ''});
+  }finally{
+    CAM.stop(stream);
+    try{ window.removeEventListener('pagehide', onHide); window.removeEventListener('beforeunload', onHide); }catch(e){}
+    if(d) d.innerHTML = '';
+  }
+};
 /* HWTEST:CAMERA:JS:END */
 
 /* -------------------------------------------------------------------- */

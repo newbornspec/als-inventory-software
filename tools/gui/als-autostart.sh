@@ -297,6 +297,16 @@ user_pref("browser.topsites.contile.enabled", false);
 user_pref("browser.urlbar.quicksuggest.enabled", false);
 user_pref("extensions.pocket.enabled", false);
 user_pref("dom.push.connection.enabled", false);
+// Pre-grant the camera so the Hardware Test's camera check can open the picture
+// without a permission doorhanger. The profile is rebuilt every boot, and that
+// prompt is unreachable in a --kiosk window with no URL bar, so a fresh profile
+// would otherwise block the test the first time it runs. permissions.default.camera
+// is the site-permission default: 1 = ALLOW, 0 = ask (Firefox's default), 2 = block.
+// This station's browser only ever loads http://127.0.0.1:8800, so an "allow by
+// default" is in practice a grant to that one origin and nothing else. This is
+// belt-and-braces: if the pref is ever missing the camera runner still degrades to
+// needs-attention with what to do, and never reports a false "camera not working".
+user_pref("permissions.default.camera", 1);
 PREFS
 }
 
