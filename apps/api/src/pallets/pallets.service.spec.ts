@@ -170,12 +170,15 @@ describe('report columns', () => {
       'Screen',
       'Battery',
       'Drive health',
+      // Added on purpose (owner, 2026-09-20): the C6 bench-test verdict rides
+      // beside Drive health, so the trailing columns all shift one right.
+      'Hardware test',
       'Grade',
       'Audit status',
       'Moved to pallet',
       'Moved by',
     ]);
-    expect(ASSET_WIDTHS).toEqual([16, 12, 20, 16, 22, 12, 26, 9, 20, 9, 10, 30, 12, 16, 20, 18]);
+    expect(ASSET_WIDTHS).toEqual([16, 12, 20, 16, 22, 12, 26, 9, 20, 9, 10, 30, 28, 12, 16, 20, 18]);
   });
 
   it('asset rows carry the full per-device spec, blank rather than zero-fill', () => {
@@ -185,6 +188,7 @@ describe('report columns', () => {
       cpu: 'Intel Core i5-8350U', ramGb: 16, storage: '256GB NVMe + 1TB HDD',
       screenSize: '14"', batteryHealth: '87%',
       driveHealth: '2 drives: 45% Bad, 94% Good',
+      hardwareTest: 'Failed: keyboard, screen',
       conditionGrade: 'grade_b', auditStatus: 'data_wiped',
       movedToPalletAt: null, movedToPalletByName: null,
     };
@@ -200,16 +204,22 @@ describe('report columns', () => {
     expect(drive).toBe(ASSET_HEADERS.indexOf('Battery') + 1);
     expect(row[ASSET_HEADERS.indexOf('Battery')]).toBe('87%');
     expect(row[drive]).toBe('2 drives: 45% Bad, 94% Good');
+    // Hardware test sits right after Drive health, carrying its one-cell verdict.
+    const hwtest = ASSET_HEADERS.indexOf('Hardware test');
+    expect(hwtest).toBe(drive + 1);
+    expect(row[hwtest]).toBe('Failed: keyboard, screen');
     expect(row[ASSET_HEADERS.indexOf('Moved to pallet')]).toBe('');
     expect(row[ASSET_HEADERS.indexOf('Moved by')]).toBe('');
 
     // A hand-entered device with no profile: blanks, never 'null' or 0.
     const bare = { ...a, manufacturer: null, model: null, deviceType: null, cpu: null,
-      ramGb: null, storage: null, screenSize: null, batteryHealth: null, driveHealth: null };
+      ramGb: null, storage: null, screenSize: null, batteryHealth: null, driveHealth: null,
+      hardwareTest: null };
     const bareRow = assetReportRow('P', bare);
     expect(bareRow[ASSET_HEADERS.indexOf('RAM')]).toBe('');
     expect(bareRow[ASSET_HEADERS.indexOf('CPU')]).toBe('');
     expect(bareRow[ASSET_HEADERS.indexOf('Drive health')]).toBe('');
+    expect(bareRow[ASSET_HEADERS.indexOf('Hardware test')]).toBe('');
   });
 
   it('leads every row with the pallet number, in both layouts', () => {

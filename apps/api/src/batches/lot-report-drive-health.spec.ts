@@ -18,6 +18,16 @@ const ASSETS = [
     unitId: 'U-1',
     hardwareProfile: {
       battery: { health: '87%' },
+      // A finished, all-pass bench test (contract C6). A benign N/A trackpad
+      // is stored PASSED, so the summary reads "Passed" and names nothing.
+      hardwareTest: {
+        status: 'PASSED',
+        speaker: { status: 'PASSED', left: 'PASSED', right: 'PASSED' },
+        keyboard: { status: 'PASSED', deviceType: 'Laptop – Standard' },
+        camera: { status: 'PASSED', device: 'HD Webcam' },
+        screen: { status: 'PASSED', deadPixels: 0 },
+        trackpad: { status: 'PASSED', notApplicable: true },
+      },
       storage: [
         drive(94),
         {
@@ -127,5 +137,20 @@ describe('Lot report: Drive health column', () => {
         if (typeof v === 'string') expect(v).not.toMatch(/unknown/i);
       }
     });
+  });
+});
+
+// The owner asked for the same at-a-glance treatment for the C6 bench test:
+// one cell, worded like the asset-page card, sitting beside Drive health.
+describe('Lot report: Hardware test column', () => {
+  it('sits right after Drive health, carrying the bench-test verdict', async () => {
+    const { headers, col, cell } = await report();
+    expect(headers).toContain('Hardware test');
+    expect(col('Hardware test')).toBe(col('Drive health') + 1);
+    expect(cell(1, 'Hardware test')).toBe('Passed');
+    // A device with no test on record: blank, like a missing battery.
+    expect(cell(4, 'Hardware test') ?? '').toBe('');
+    // Unit cost stays the last column: the total row still writes into it.
+    expect(headers[headers.length - 1]).toBe('Unit cost (£)');
   });
 });

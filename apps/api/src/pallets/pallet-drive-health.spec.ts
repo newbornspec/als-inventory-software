@@ -18,6 +18,16 @@ const DEVICES = [
     palletId: 'p1',
     hardwareProfile: {
       battery: { health: '87%' },
+      // A finished bench test (C6) with one failed component: the summary reads
+      // "Failed:" and names it, exactly as the asset-page card does.
+      hardwareTest: {
+        status: 'FAILED',
+        speaker: { status: 'PASSED', left: 'PASSED', right: 'PASSED' },
+        keyboard: { status: 'FAILED', deviceType: 'Laptop – Standard' },
+        camera: { status: 'PASSED', device: 'HD Webcam' },
+        screen: { status: 'PASSED', deadPixels: 0 },
+        trackpad: { status: 'PASSED', notApplicable: true },
+      },
       storage: [
         {
           capacity: '512GB',
@@ -92,6 +102,13 @@ describe('pallet device report: Drive health column', () => {
       null,
     ]);
     expect(rows[0].batteryHealth).toBe('87%');
+    // The C6 bench test rides through the same projection, worded like the card;
+    // devices without a test on record project to null (a blank cell).
+    expect(rows.map((r) => r.hardwareTest)).toEqual([
+      'Failed: keyboard',
+      null,
+      null,
+    ]);
   });
 
   it('writes it beside Battery in the xlsx', async () => {
@@ -121,5 +138,11 @@ describe('pallet device report: Drive health column', () => {
     expect(ws.getRow(headerRow + 2).getCell(col).value).toBe(
       'Not scanned yet — rescan on the station',
     );
+
+    // Hardware test sits in the very next column, carrying the bench-test verdict.
+    const hw = ASSET_HEADERS.indexOf('Hardware test') + 1;
+    expect(hw).toBe(col + 1);
+    expect(ws.getRow(headerRow).getCell(hw).value).toBe('Hardware test');
+    expect(ws.getRow(headerRow + 1).getCell(hw).value).toBe('Failed: keyboard');
   });
 });

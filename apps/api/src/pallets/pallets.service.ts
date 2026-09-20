@@ -32,6 +32,7 @@ import { Asset, AssetStockStatus } from '../assets/asset.entity';
 import { AssetEventType, AssetHistory } from '../assets/asset-history.entity';
 import { Batch } from '../batches/batch.entity';
 import { driveHealthSummary } from '../devices/drive-health';
+import { hardwareTestSummary } from '../devices/hardware-test';
 import {
   isScopedManager,
   managerCanAccessBatch,
@@ -75,6 +76,10 @@ export interface PalletAssetRow {
   // "2 drives: 45% Bad, 94% Good") - devices/drive-health.ts. null where
   // the device has no drives on record.
   driveHealth: string | null;
+  // The five-part technician bench test (C6) in one line, worst-first
+  // ("Passed", "Failed: keyboard, screen") - devices/hardware-test.ts. null
+  // where the device has no test on record.
+  hardwareTest: string | null;
   conditionGrade: string | null;
   auditStatus: string | null;
   movedToPalletAt: Date | null;
@@ -1862,6 +1867,7 @@ export class PalletsService {
         screenSize: hp?.display?.size ?? null,
         batteryHealth: hp?.battery?.health ?? null,
         driveHealth: driveHealthSummary(hp?.storage) || null,
+        hardwareTest: hardwareTestSummary(hp?.hardwareTest) || null,
         conditionGrade: a.conditionGrade,
         auditStatus: a.auditStatus,
         movedToPalletAt: a.movedToPalletAt,
@@ -2164,12 +2170,14 @@ export const ASSET_HEADERS: string[] = [
   'Battery',
   // Beside Battery: both are wear a buyer prices on.
   'Drive health',
+  // Beside Drive health: the same at-a-glance verdict, now for the C6 bench test.
+  'Hardware test',
   'Grade',
   'Audit status',
   'Moved to pallet',
   'Moved by',
 ];
-export const ASSET_WIDTHS: number[] = [16, 12, 20, 16, 22, 12, 26, 9, 20, 9, 10, 30, 12, 16, 20, 18];
+export const ASSET_WIDTHS: number[] = [16, 12, 20, 16, 22, 12, 26, 9, 20, 9, 10, 30, 28, 12, 16, 20, 18];
 
 export function assetReportRow(
   palletNumber: string,
@@ -2185,6 +2193,7 @@ export function assetReportRow(
     screenSize: string | null;
     batteryHealth: string | null;
     driveHealth: string | null;
+    hardwareTest: string | null;
     conditionGrade: string | null;
     auditStatus: string | null;
     movedToPalletAt: Date | null;
@@ -2205,6 +2214,7 @@ export function assetReportRow(
     a.screenSize ?? '',
     a.batteryHealth ?? '',
     a.driveHealth ?? '',
+    a.hardwareTest ?? '',
     a.conditionGrade ?? '',
     a.auditStatus ?? '',
     a.movedToPalletAt ? new Date(a.movedToPalletAt).toLocaleString('en-GB') : '',
