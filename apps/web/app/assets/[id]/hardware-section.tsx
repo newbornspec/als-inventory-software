@@ -14,9 +14,12 @@
 // Test (contract C6) by lib/hardware-test.ts — the same formatters the xlsx
 // reports use, so one device cannot read "Passed" on this page and "Failed" in
 // an export. Both files are byte-locked to their apps/api twins by a jest spec,
-// so nothing new can be exported from them; the small date and audio-channel
-// helpers below exist only for that reason and decide no status wording of their
+// so a word this page needs is added to BOTH copies (statusBadge) rather than
+// re-spelt here; the small date helper below decides no status wording of its
 // own.
+//
+// One contract is never borrowed for another component: the C5 bands grade a
+// drive's SMART wear, and nothing here re-uses them to grade a battery.
 //
 // The generic walker that used to render the whole section is still here, now
 // feeding a final "Other captured details" card: a key the capture tool starts
@@ -24,13 +27,13 @@
 // card claims it.
 
 import type { ReactNode } from 'react';
+import { driveHealthView, type DriveHealthView } from '@/lib/drive-health';
 import {
-  driveHealthView,
-  statusForPercent,
-  STATUS_LABEL,
-  type DriveHealthView,
-} from '@/lib/drive-health';
-import { hardwareTestView, type HardwareTestView, type HwTestTone } from '@/lib/hardware-test';
+  hardwareTestView,
+  statusBadge,
+  type HardwareTestView,
+  type HwTestTone,
+} from '@/lib/hardware-test';
 import { formatLabel } from '@/lib/asset-options';
 
 // The design's own placeholder for a value we do not hold. One constant so it
@@ -192,12 +195,36 @@ function ParamTable({ rows, caption }: { rows: Row[]; caption: string }) {
   );
 }
 
+// What a card says when it has nothing at all. The default covers a category the
+// audit normally fills but did not this time; a card that is ALWAYS empty for a
+// known reason says that reason instead.
+const NOTHING_CAPTURED = 'Nothing was captured here. Rescan on the station to record it.';
+
 // A card whose rows all come from the mapping above. `caption` describes the
 // table for a screen reader, which cannot see the header bar as a heading.
-function TableCard({ title, rows }: { title: string; rows: Row[] }) {
+//
+// When every row resolved to "—" the card carries one sentence instead of the
+// table — the treatment Storage and Battery already had. A column of dashes
+// cannot tell an operator whether the scan failed, whether the machine has none
+// of this, or whether we simply never look; the sentence can. `emptyMessage` has
+// no default on purpose, so writing a card forces an answer to that question.
+function TableCard({
+  title,
+  rows,
+  emptyMessage,
+}: {
+  title: string;
+  rows: Row[];
+  emptyMessage: string;
+}) {
+  const empty = rows.every((r) => r.value === DASH && !r.note);
   return (
     <Card title={title}>
-      <ParamTable rows={rows} caption={`${title} — captured values for this device`} />
+      {empty ? (
+        <p className="px-3 py-3 text-sm text-neutral-700">{emptyMessage}</p>
+      ) : (
+        <ParamTable rows={rows} caption={`${title} — captured values for this device`} />
+      )}
     </Card>
   );
 }
@@ -205,12 +232,17 @@ function TableCard({ title, rows }: { title: string; rows: Row[] }) {
 /* ------------------------------------------------------- the device header */
 
 // What the warehouse record knows about the device, as opposed to what the
-// machine reported about itself. Status and Last updated cannot come from the
-// profile — they are ours, not the hardware's — so the page passes them in.
+// machine reported about itself. Status and the capture date cannot come from
+// the profile — they are ours, not the hardware's — so the page passes them in.
+//
+// `capturedAt` is when this profile was last taken (the latest audit), NOT when
+// the asset row was last written: a sale or a pallet move touches the row every
+// week and would otherwise date a January scan as today, under a heading that
+// promises current hardware figures.
 export interface HardwareDeviceHeader {
   status?: string | null;
   assetTag?: string | null;
-  updatedAt?: string | null;
+  capturedAt?: string | null;
 }
 
 // Stock status as colour AND word. Deliberately conservative: only a status
@@ -243,9 +275,11 @@ function DeviceHeader({ ident, device }: { ident: Obj; device?: HardwareDeviceHe
   // The SMBIOS asset tag if the machine carries one, otherwise our own printed
   // tag — both are real recorded values, neither is a guess.
   const tag = has(ident.assetTag) ? text(ident.assetTag) : text(device?.assetTag);
-  const updated =
-    device?.updatedAt && !Number.isNaN(new Date(device.updatedAt).getTime())
-      ? new Date(device.updatedAt).toLocaleDateString('en-GB', {
+  // A device that has never been audited has no capture date at all, and says so
+  // with the section's own dash rather than borrowing another date.
+  const captured =
+    device?.capturedAt && !Number.isNaN(new Date(device.capturedAt).getTime())
+      ? new Date(device.capturedAt).toLocaleDateString('en-GB', {
           day: '2-digit',
           month: 'short',
           year: 'numeric',
@@ -269,7 +303,7 @@ function DeviceHeader({ ident, device }: { ident: Obj; device?: HardwareDeviceHe
         <HeaderFact label="Serial number" value={text(ident.serialNumber)} />
         <HeaderFact label="Asset tag" value={tag} />
         <HeaderFact label="Device type" value={text(ident.deviceType)} />
-        <HeaderFact label="Last updated" value={updated} />
+        <HeaderFact label="Profile captured" value={captured} />
       </dl>
     </div>
   );
@@ -351,6 +385,40 @@ function storageRows(drive: Obj, view: DriveHealthView): Row[] {
     { label: 'Used space', value: DASH },
     { label: 'Free space', value: DASH },
     { label: 'Partitions', value: DASH },
+  ];
+}
+
+// A drive the storage controller hides from the capture (Intel RST "RAID On", a
+// RAID-class controller). The station files these in profile.hiddenStorage
+// instead of storage[] precisely because they can never be read or wiped here,
+// so they must still appear as Storage: a machine whose only drives are hidden
+// is the one case where "no drives" would be a dangerous thing to print.
+// Everything about the drive itself is genuinely unknown — only the controller,
+// the kernel's count and the C5 not-measurable verdict were captured.
+function hiddenStorageRows(entry: Obj, view: DriveHealthView): Row[] {
+  const count = typeof entry.count === 'number' && entry.count > 0 ? entry.count : null;
+  return [
+    {
+      label: 'Drives behind the controller',
+      value: count != null ? String(count) : DASH,
+      note: 'The controller hides these from the audit, so they cannot be read or wiped here.',
+    },
+    { label: 'Controller', value: text(entry.controller) },
+    {
+      label: 'Health status',
+      // The same C5 formatter the visible drives use: the entry already carries
+      // a measured:false health object, so this reads "Not measurable — behind a
+      // RAID/Intel RST controller — set the storage mode to AHCI in the BIOS,
+      // then press Rescan". The cell already carries the fix, so it is not
+      // repeated underneath.
+      value: view.cell,
+      tone: view.tone,
+    },
+    // Named so it is obvious we cannot identify these drives, rather than left
+    // out as if we had nothing to say about them.
+    { label: 'Drive model', value: DASH },
+    { label: 'Capacity', value: DASH },
+    { label: 'Serial number', value: DASH },
   ];
 }
 
@@ -448,9 +516,13 @@ function graphicsRows(gpus: Obj[]): Row[] {
     rows.push({ label: `${prefix}Type`, value: text(g.type) });
     rows.push({ label: `${prefix}Video memory`, value: text(g.vram) });
   });
-  if (gpus.length === 0) rows.push({ label: 'GPU 1', value: 'Not detected' });
-  // The design lists a second GPU; a machine with one card says so plainly
-  // rather than leaving the reader to wonder whether we looked.
+  // An empty graphics array is not evidence of no graphics: the capture drops
+  // the key entirely when it enumerated nothing, and a hand-added device never
+  // sets it. Every machine here has a display adapter, so "Not detected" would
+  // be a claim about a machine nobody looked at — the dash is the honest answer.
+  if (gpus.length === 0) rows.push({ label: 'GPU 1', value: DASH });
+  // A second GPU is different: the array exists, so enumeration demonstrably ran
+  // and found one card. Saying so plainly beats leaving the reader to wonder.
   if (gpus.length === 1) rows.push({ label: 'GPU 2', value: 'Not detected' });
   // Driver versions and shared-memory figures belong to a running Windows
   // install; the audit boots its own OS and never sees them.
@@ -459,29 +531,21 @@ function graphicsRows(gpus: Obj[]): Row[] {
   return rows;
 }
 
-// The stored battery health is a bare percentage ("87%"): full-charge capacity
-// over design capacity, as the firmware reports it. The band it falls in comes
-// from drive-health's published owner bands (Good 90-100, Caution 50-89, Bad
-// 0-49) rather than a second scale invented here, and the word is printed
-// beside the number so the tint is never the only signal. A health string that
-// carries no percentage is shown untinted and unlabelled — we will not band
-// what we cannot read.
-function batteryHealthRow(battery: Obj): Row {
-  const raw = text(battery.health);
-  if (raw === DASH) return { label: 'Health', value: DASH };
-  const match = /(\d+(?:\.\d+)?)\s*%/.exec(raw);
-  const percent = match ? Number(match[1]) : NaN;
-  if (!Number.isFinite(percent) || percent < 0 || percent > 100) {
-    return { label: 'Health', value: raw };
-  }
-  const status = statusForPercent(Math.round(percent));
-  const tone: Tone = status === 'good' ? 'good' : status === 'caution' ? 'warn' : 'bad';
-  return { label: 'Health', value: `${raw} · ${STATUS_LABEL[status]}`, tone };
-}
-
+// The stored battery health is full-charge capacity over design capacity as the
+// firmware reports it ("87%"), or whatever a technician typed when the device
+// was hand-added. It is printed exactly as captured, with no verdict word and no
+// tint.
+//
+// The design asks for a tinted health row here as well as on Storage, but a tint
+// needs a word beside it (colour is never the only signal), and a word needs
+// bands — and nobody has set bands for a battery. The C5 bands next door are the
+// owner's rule for a DRIVE's SMART wear: borrowing them would stamp "Caution" in
+// amber on an 85% battery that is perfectly saleable, and would silently re-grade
+// every battery in the estate the day the drive bands move. The figure is the
+// fact; a grade we were never given is not ours to invent.
 function batteryRows(battery: Obj): Row[] {
   return [
-    batteryHealthRow(battery),
+    { label: 'Health', value: text(battery.health) },
     { label: 'Design capacity', value: text(battery.designCapacity) },
     { label: 'Full charge capacity', value: text(battery.fullChargeCapacity) },
     { label: 'Cycle count', value: text(battery.cycleCount) },
@@ -521,24 +585,34 @@ interface TestRow {
   testedOn: string;
 }
 
-// One audio channel's own outcome. The station stores it as its component
-// status word ("PASSED") or as a boolean; anything else is not an outcome.
-function channelWorks(v: unknown): boolean | null {
-  if (typeof v === 'boolean') return v;
-  if (typeof v === 'string') {
-    if (/pass|work|good|^ok$|^yes$/i.test(v)) return true;
-    if (/fail|faulty|bad|dead|^no$/i.test(v)) return false;
+// One audio channel's own outcome, worded by the C6 formatter — null when the
+// station recorded nothing for that side.
+//
+// The kiosk stores each side as the same three words a component uses: PASSED,
+// ATTENTION ("quiet or distorted") or FAILED. All three are real outcomes the
+// technician chose, so all three are handed to statusBadge and come back in its
+// vocabulary. A side must never be squeezed into a pass/fail pair: reading
+// ATTENTION as "no outcome" used to make the row inherit the COMBINED verdict,
+// so a quiet left speaker printed a red "Failed" the technician never gave it.
+function channelOutcome(v: unknown): { label: string; tone: Tone } | null {
+  // An older capture worded a side as a plain boolean or an everyday word.
+  if (typeof v === 'boolean') return statusBadge(v ? 'PASSED' : 'FAILED');
+  if (typeof v !== 'string' || !v.trim()) return null;
+  if (/^(passed|attention|failed|in_progress|not_tested)$/i.test(v.trim())) {
+    return statusBadge(v);
   }
+  if (/pass|work|good|^ok$|^yes$/i.test(v)) return statusBadge('PASSED');
+  if (/fail|faulty|bad|dead|^no$/i.test(v)) return statusBadge('FAILED');
   return null;
 }
 
 // hardwareTestView returns ONE "Speaker" row, because the station runs one
-// speaker test; the owner's design lists the two channels separately. The
-// verdict word, the tone and the sentence all still come from the formatter —
-// only the per-side Passed/Failed is read from the stored channel, which is the
-// one fact a combined row cannot carry. When the speaker test did not finish,
-// BOTH channels inherit the formatter's own status: a channel must never show a
-// green "Passed" for a test nobody ran.
+// speaker test; the owner's design lists the two channels separately. Every word
+// still comes from the formatter — the page only decides WHICH status belongs to
+// this side, which is the one fact a combined row cannot carry. A side the
+// station did not record inherits the component's own verdict, and when the
+// speaker test did not finish BOTH sides do: a channel must never show a green
+// "Passed" for a test nobody ran.
 function speakerRows(view: HardwareTestView, part: Obj): TestRow[] {
   const base = view.rows.find((r) => r.component === 'Speaker');
   const fallbackLabel = base?.statusLabel ?? 'Not tested';
@@ -547,11 +621,11 @@ function speakerRows(view: HardwareTestView, part: Obj): TestRow[] {
   const testedOn = testDate(part.testedAt);
 
   return (['left', 'right'] as const).map((side) => {
-    const works = finished ? channelWorks(part[side]) : null;
+    const own = finished ? channelOutcome(part[side]) : null;
     return {
       component: side === 'left' ? 'Left speaker' : 'Right speaker',
-      statusLabel: works === null ? fallbackLabel : works ? 'Passed' : 'Failed',
-      tone: works === null ? fallbackTone : works ? 'good' : 'bad',
+      statusLabel: own?.label ?? fallbackLabel,
+      tone: own?.tone ?? fallbackTone,
       details: base?.summary || DASH,
       testedOn,
     };
@@ -810,11 +884,16 @@ const DRIVE_CARD_KEYS = [
 
 const GPU_CARD_KEYS = ['manufacturer', 'model', 'type', 'vram'];
 
-// Rendered by their own sections elsewhere on the page, or by the test table
-// above: `locks` is the Device locks section, `driveHealth` is the old kiosk's
-// unprivileged SMART probe (superseded by each drive's own health), and
-// `hardwareTest` would print audio-mixer commands and colour swatches verbatim.
-const HANDLED_ELSEWHERE = new Set(['locks', 'driveHealth', 'hardwareTest']);
+// Rendered by their own sections elsewhere on the page, by the test table above,
+// or by a card of their own: `locks` is the Device locks section, `driveHealth`
+// is the old kiosk's unprivileged SMART probe (superseded by each drive's own
+// health), `hardwareTest` would print audio-mixer commands and colour swatches
+// verbatim, and `hiddenStorage` now has its own Storage card — printed raw here
+// as well, its C5 health object would arrive as a line of JSON.
+const HANDLED_ELSEWHERE = new Set(['locks', 'driveHealth', 'hardwareTest', 'hiddenStorage']);
+
+// Per-entry keys the hidden-storage card already shows.
+const HIDDEN_CARD_KEYS = ['controller', 'count', 'health'];
 
 const CATEGORY_LABELS: Record<string, string> = {
   identification: 'Hardware information',
@@ -836,9 +915,9 @@ function leftoverRows(obj: Obj, shown: string[]): Row[] {
 }
 
 // Anything in the profile that no card above claimed: a leftover key inside a
-// category we do render, a whole category we do not (hiddenStorage today), or a
-// key the capture tool starts sending tomorrow. The point is that nothing can
-// silently disappear from this page just because no card was written for it.
+// category we do render, a whole category we do not, or a key the capture tool
+// starts sending tomorrow. The point is that nothing can silently disappear from
+// this page just because no card was written for it.
 function otherCapturedRows(profile: Obj): Row[] {
   const rows: Row[] = [];
   const push = (group: string, source: Row[]) => {
@@ -850,6 +929,9 @@ function otherCapturedRows(profile: Obj): Row[] {
   }
   subArray(profile, 'storage').forEach((drive, i) => {
     push(`Storage drive ${i + 1}`, leftoverRows(drive, DRIVE_CARD_KEYS));
+  });
+  subArray(profile, 'hiddenStorage').forEach((entry, i) => {
+    push(`Hidden storage ${i + 1}`, leftoverRows(entry, HIDDEN_CARD_KEYS));
   });
   subArray(profile, 'graphics').forEach((gpu, i) => {
     push(`GPU ${i + 1}`, leftoverRows(gpu, GPU_CARD_KEYS));
@@ -889,6 +971,10 @@ export function HardwareSection({
 
   const ident = subObject(profile, 'identification');
   const drives = subArray(profile, 'storage');
+  // Drives the controller hid from the capture. They are real drives — they just
+  // could not be read — so they get Storage cards of their own, and a machine
+  // that has them is never described as having no drives.
+  const hidden = subArray(profile, 'hiddenStorage');
   const gpus = subArray(profile, 'graphics');
   const battery = subObject(profile, 'battery');
   // An absent battery object means a desktop, not a missing reading — the card
@@ -912,7 +998,11 @@ export function HardwareSection({
       <DeviceHeader ident={ident} device={device} />
 
       <div className="mt-4 grid items-start gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        <TableCard title="Hardware information" rows={hardwareInformationRows(ident)} />
+        <TableCard
+          title="Hardware information"
+          rows={hardwareInformationRows(ident)}
+          emptyMessage={NOTHING_CAPTURED}
+        />
 
         {/* One card per drive, so a two-drive machine shows two health figures
             rather than one averaged into meaninglessness. */}
@@ -921,33 +1011,92 @@ export function HardwareSection({
             key={`drive-${i}`}
             title={i === 0 ? 'Storage' : `Storage (Drive ${i + 1})`}
             rows={storageRows(drive, driveHealthView(drive))}
+            emptyMessage={NOTHING_CAPTURED}
           />
         ))}
-        {drives.length === 0 && (
+        {hidden.map((entry, i) => (
+          <TableCard
+            key={`hidden-${i}`}
+            title={
+              hidden.length === 1
+                ? 'Storage (hidden by the controller)'
+                : `Storage (hidden by controller ${i + 1})`
+            }
+            rows={hiddenStorageRows(entry, driveHealthView(entry))}
+            emptyMessage={NOTHING_CAPTURED}
+          />
+        ))}
+        {/* Only when the capture filed nothing either way. An empty storage[] is
+            dropped from the profile whether the audit enumerated no drives or
+            never ran at all — a hand-added device has no drives recorded and
+            nobody scanned it — so this says the drives were not captured rather
+            than asserting the machine has none. */}
+        {drives.length === 0 && hidden.length === 0 && (
           <Card title="Storage">
-            <p className="px-3 py-3 text-sm text-neutral-700">No drives on record.</p>
+            <p className="px-3 py-3 text-sm text-neutral-700">
+              No drive was captured for this device. That is not the same as having none — rescan
+              on the station to record its drives.
+            </p>
           </Card>
         )}
 
-        <TableCard title="BIOS / firmware" rows={biosRows(subObject(profile, 'system'), ident)} />
-        <TableCard title="Processor" rows={processorRows(subObject(profile, 'cpu'))} />
-        <TableCard title="Display" rows={displayRows(subObject(profile, 'display'))} />
-        <TableCard title="Operating system" rows={operatingSystemRows(subObject(profile, 'system'))} />
-        <TableCard title="Memory" rows={memoryRows(subObject(profile, 'memory'))} />
-        <TableCard title="Graphics" rows={graphicsRows(gpus)} />
+        <TableCard
+          title="BIOS / firmware"
+          rows={biosRows(subObject(profile, 'system'), ident)}
+          emptyMessage={NOTHING_CAPTURED}
+        />
+        <TableCard
+          title="Processor"
+          rows={processorRows(subObject(profile, 'cpu'))}
+          emptyMessage={NOTHING_CAPTURED}
+        />
+        <TableCard
+          title="Display"
+          rows={displayRows(subObject(profile, 'display'))}
+          emptyMessage="No display was captured. A desktop has no built-in screen, and an unreadable panel records nothing."
+        />
+        {/* Today this card is always the message: the audit boots the machine
+            from our own live stick, so system.os / osVersion / osBuild are never
+            written. It stays wired to those fields so that the day a capture does
+            read the installed OS, the table fills itself in. */}
+        <TableCard
+          title="Operating system"
+          rows={operatingSystemRows(subObject(profile, 'system'))}
+          emptyMessage="The audit boots this machine from our own live stick, so it never reads the installed operating system."
+        />
+        <TableCard
+          title="Memory"
+          rows={memoryRows(subObject(profile, 'memory'))}
+          emptyMessage={NOTHING_CAPTURED}
+        />
+        <TableCard
+          title="Graphics"
+          rows={graphicsRows(gpus)}
+          emptyMessage={NOTHING_CAPTURED}
+        />
 
         {hasBattery ? (
-          <TableCard title="Battery" rows={batteryRows(battery)} />
+          <TableCard title="Battery" rows={batteryRows(battery)} emptyMessage={NOTHING_CAPTURED} />
         ) : (
           <Card title="Battery">
             <p className="px-3 py-3 text-sm text-neutral-700">No battery detected.</p>
           </Card>
         )}
 
-        <TableCard title="Network" rows={networkRows(subObject(profile, 'network'))} />
-        <TableCard title="Security" rows={securityRows(subObject(profile, 'security'))} />
+        <TableCard
+          title="Network"
+          rows={networkRows(subObject(profile, 'network'))}
+          emptyMessage={NOTHING_CAPTURED}
+        />
+        <TableCard
+          title="Security"
+          rows={securityRows(subObject(profile, 'security'))}
+          emptyMessage={NOTHING_CAPTURED}
+        />
 
-        {other.length > 0 && <TableCard title="Other captured details" rows={other} />}
+        {other.length > 0 && (
+          <TableCard title="Other captured details" rows={other} emptyMessage={NOTHING_CAPTURED} />
+        )}
       </div>
 
       <HardwareTestResults profile={profile} />

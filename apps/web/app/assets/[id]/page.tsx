@@ -397,15 +397,18 @@ export default async function AssetDetailPage({
           <DeviceLocksSection
             locks={(asset.hardwareProfile as { locks?: DeviceLocks } | null)?.locks}
           />
-          {/* Status and Last updated are the warehouse record's own facts, not
-              the machine's — the captured profile cannot supply them, so the
-              hardware profile's header bar is handed them here. */}
+          {/* Status and the capture date are the warehouse record's own facts,
+              not the machine's — the captured profile cannot supply them, so the
+              hardware profile's header bar is handed them here. The date is the
+              latest audit's, i.e. when this profile was taken: asset.updatedAt
+              is the row's mtime and moves on a sale or a pallet move, which
+              would date a January scan as today. */}
           <HardwareSection
             profile={asset.hardwareProfile}
             device={{
               status: asset.stockStatus,
               assetTag: asset.tag,
-              updatedAt: asset.updatedAt,
+              capturedAt: latestAudit?.createdAt ?? null,
             }}
           />
 

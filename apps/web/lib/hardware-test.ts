@@ -215,6 +215,16 @@ function badge(status: string, notApplicable: boolean): { label: string; tone: H
   }
 }
 
+// The same word and tone for a status stored somewhere other than a component's
+// own `status` field. The asset page splits the single speaker test into its two
+// channels, and the station stores each channel as the same PASSED / ATTENTION /
+// FAILED word a component uses; without this the page would keep a second copy
+// of the vocabulary, and a channel the technician marked "quiet or distorted"
+// would be worded by something that has never heard of ATTENTION.
+export function statusBadge(status: unknown): { label: string; tone: HwTestTone } {
+  return badge(statusOf(status), false);
+}
+
 function rowFor(name: Component, part: unknown): HardwareTestRow {
   const p = isObj(part) ? part : {};
   const notApplicable = name === 'trackpad' && p.notApplicable === true;
