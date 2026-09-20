@@ -2,8 +2,13 @@ import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { json, urlencoded } from 'express';
 import { AppModule } from './app.module';
+import { assertProductionSecrets } from './config/assert-production-secrets';
 
 async function bootstrap() {
+  // Before anything else: in production, refuse to boot on a public dev secret
+  // (see assert-production-secrets.ts). Railway keeps the previous deployment
+  // serving when the new one does not come up, so this fails safe.
+  assertProductionSecrets();
   const app = await NestFactory.create(AppModule);
   // Base64 device-photo uploads exceed the default 100kb body limit.
   app.use(json({ limit: '10mb' }));
