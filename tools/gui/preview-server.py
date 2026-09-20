@@ -146,8 +146,50 @@ def bootstrap():
         "server": "https://preview.invalid", "currentUser": "Preview user",
         "operator": STATE["operator"], "workflow": STATE["workflow"],
         "workflows": ["amazon", "goods_in"], "adminPinSet": False, "launch": "preview",
-        "imageSource": "usb", "imageError": None, **queue_status(),
+        "imageSource": "usb", "imageError": None,
+        "hardwareTest": HWTEST["test"], **queue_status(),
     }
+
+
+# The hardware test (contract C6), shaped like server.py's /api/hwtest. Kept in
+# memory for the life of the preview, so the panel can be clicked through: the
+# preview never runs a test, but the shell's states, counts and verdict are
+# the same code on screen.
+HWTEST = {"test": None}
+HWTEST_TESTS = ("speaker", "keyboard", "camera", "screen")
+HWTEST_DONE = ("PASSED", "ATTENTION", "FAILED")
+
+
+def hwtest_save(body):
+    """server.py's hwtest_save(), cut down to what the preview needs: merge
+    the components sent, keep what they replace, derive the overall verdict."""
+    cur = HWTEST["test"] if isinstance(HWTEST["test"], dict) else {}
+    history = [h for h in (cur.get("history") or []) if isinstance(h, dict)]
+    parts = {}
+    for name in HWTEST_TESTS:
+        was = cur.get(name)
+        if isinstance(body, dict) and isinstance(body.get(name), dict):
+            if isinstance(was, dict) and was.get("status") in HWTEST_DONE:
+                history.append(dict(was, test=name))
+            parts[name] = dict(body[name],
+                               testedAt=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+        else:
+            parts[name] = was if isinstance(was, dict) else {"status": "NOT_TESTED"}
+    done = [p for p in parts.values() if p.get("status") in HWTEST_DONE]
+    if len(done) == len(HWTEST_TESTS):
+        status = ("FAILED" if any(p["status"] == "FAILED" for p in done)
+                  else "ATTENTION" if any(p["status"] == "ATTENTION" for p in done)
+                  else "PASSED")
+    else:
+        status = "IN_PROGRESS" if done else "NOT_TESTED"
+    test = {"status": status, "completed": len(done), "total": len(HWTEST_TESTS),
+            "technician": STATE["operator"],
+            "testedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "clockWasNetwork": True}
+    test.update(parts)
+    test["history"] = history[-40:]
+    HWTEST["test"] = test
+    return test
 
 
 def queue_status():
@@ -274,6 +316,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, {"verdict": "preview", "groups": [], "clonezilla": True})
         if u.path == "/api/netcheck":
             return self._send(200, {"verdict": "preview", "steps": []})
+        if u.path == "/api/hwtest":
+            return self._send(200, {"hardwareTest": HWTEST["test"],
+                                    "technician": STATE["operator"],
+                                    "tests": list(HWTEST_TESTS)})
         return self._send(404, {"message": "not in the preview"})
 
     def do_POST(self):  # noqa: N802
@@ -304,6 +350,8 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/api/operator":
             STATE["operator"] = body.get("name") or ""
             return self._send(200, {"operator": STATE["operator"]})
+        if u.path == "/api/hwtest":
+            return self._send(200, {"ok": True, "hardwareTest": hwtest_save(body)})
         return self._send(200, {"ok": True, "message": "preview: nothing done"})
 
 

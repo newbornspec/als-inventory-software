@@ -156,6 +156,62 @@
   /* The confirm dialog lists one drive per line. */
   #ovMsg{white-space:pre-line}
 
+  /* --------------------------------------------- hardware test (C6) ---
+     One card, four tests. Every state is said in WORDS as well as colour
+     (the app's WCAG baseline), so a technician on a washed-out second-hand
+     screen reads the same verdict as one on a good panel. */
+  /* A rule between the tests, not above the first one: the tests are the only
+     .hwt blocks in the card, whichever order they end up in. */
+  .hwt{padding:12px 0}
+  .hwt+.hwt{border-top:1px solid var(--line2)}
+  .hwtr{display:flex;align-items:center;gap:11px;flex-wrap:wrap}
+  .hwtn{font-size:14.5px;font-weight:600;flex:1;min-width:110px}
+  /* The status badge carries the state's words, never a bare colour. */
+  .hwtb{font-size:11.5px;font-weight:700;padding:2px 9px;border-radius:99px;
+        white-space:nowrap;flex:none}
+  .hwtb.ok{background:#f0fdf4;color:#15803d}
+  .hwtb.warn{background:#fffbeb;color:var(--amber)}
+  .hwtb.bad{background:#fef2f2;color:#b91c1c}
+  .hwtb.na{background:#f1f5f9;color:var(--mut)}
+  .hwtb.run{background:var(--blsoft);color:var(--blue)}
+  /* The reason and the action, or - before the test is run - what it does.
+     Wraps rather than truncates: the reason is the part the operator acts
+     on, and half a sentence is worse than none. */
+  .hwtw{font-size:12.5px;color:var(--mut);margin-top:6px;overflow-wrap:anywhere}
+  /* Each test's own area: its controls, its tone button, its video, its
+     on-screen keyboard. Left empty by the shell. */
+  .hwtd:not(:empty){margin-top:10px}
+  #hwtSummary{margin:0}
+
+  /* Each test's own CSS lives in its own region below, so four tests can be
+     written in four worktrees and merged without touching each other. Nothing
+     shared goes inside a region, and no region styles anything outside its
+     own .hwt block. */
+
+  /* HWTEST:SPEAKER:CSS:START */
+  /* The speaker test's styles (a later phase). */
+  /* HWTEST:SPEAKER:CSS:END */
+
+  /* ...................................................................... */
+
+  /* HWTEST:KEYBOARD:CSS:START */
+  /* The keyboard test's styles (a later phase) - the on-screen layout it
+     lights up as keys arrive needs most of them. */
+  /* HWTEST:KEYBOARD:CSS:END */
+
+  /* ...................................................................... */
+
+  /* HWTEST:CAMERA:CSS:START */
+  /* The camera test's styles (a later phase) - the live preview. */
+  /* HWTEST:CAMERA:CSS:END */
+
+  /* ...................................................................... */
+
+  /* HWTEST:SCREEN:CSS:START */
+  /* The screen test's styles (a later phase) - the full-screen colour
+     panels the technician inspects for dead pixels. */
+  /* HWTEST:SCREEN:CSS:END */
+
   /* alerts */
   .alert{border:1px solid #fecaca;background:#fef2f2;border-radius:12px;padding:14px 16px;
          margin-bottom:18px}
@@ -410,6 +466,99 @@
         <div class="card">
           <div class="lbl" style="margin-bottom:6px">Display all system hardware information</div>
           <div class="hw" id="hwGrid"></div>
+        </div>
+
+        <!-- hardware test (contract C6) ---------------------------------
+             ONE more card in the layout that is already here, on purpose:
+             the owner has explicitly deferred a sidebar, and this belongs
+             beside the audit it is filed with. The browser runs ON the
+             machine being audited, so these four tests exercise that
+             machine's real speakers, keys, camera and screen - but the
+             browser may only report what it actually observed, and the
+             technician's Pass/Fail is what the record carries. -->
+        <div class="card" id="hwtCard">
+          <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:8px">
+            <div class="lbl" style="flex:1;min-width:170px">Hardware test</div>
+            <button class="btn gho sm" id="hwtRunAll" onclick="runAllHwTests()">Run all tests</button>
+          </div>
+          <div class="hwtw" style="margin:0 0 4px">Four checks on this machine, run here and
+            confirmed by you. The result is saved onto this machine's audit record.</div>
+
+          <!-- Each test owns everything between its two markers and nothing
+               else in this file, so the four can be written separately and
+               merged without touching each other. Whatever fills a region
+               must keep the three ids the shared code writes into -
+               hwtStat_<test>, hwtWhy_<test> and hwtRun_<test> - and put its
+               own controls inside hwtDetail_<test>. -->
+
+          <!-- HWTEST:SPEAKER:START -->
+          <div class="hwt" id="hwt_speaker">
+            <div class="hwtr">
+              <span class="hwtn">Speaker</span>
+              <span class="hwtb na" id="hwtStat_speaker">Not tested</span>
+              <button class="btn gho sm" id="hwtRun_speaker" onclick="runHwTest('speaker')">Test</button>
+            </div>
+            <div class="hwtw" id="hwtWhy_speaker"></div>
+            <div class="hwtd" id="hwtDetail_speaker"><!-- the speaker test's own
+              controls go here (a later phase): the station unmutes this machine
+              and sets a known volume first, plays a tone left then right, and
+              the technician says which speakers they heard. --></div>
+          </div>
+          <!-- HWTEST:SPEAKER:END -->
+
+          <!-- HWTEST:KEYBOARD:START -->
+          <div class="hwt" id="hwt_keyboard">
+            <div class="hwtr">
+              <span class="hwtn">Keyboard</span>
+              <span class="hwtb na" id="hwtStat_keyboard">Not tested</span>
+              <button class="btn gho sm" id="hwtRun_keyboard" onclick="runHwTest('keyboard')">Test</button>
+            </div>
+            <div class="hwtw" id="hwtWhy_keyboard"></div>
+            <div class="hwtd" id="hwtDetail_keyboard"><!-- the keyboard test's own
+              controls go here (a later phase): an on-screen layout that lights
+              up as keys arrive. A key the browser never sees is REPORTED, not
+              failed - the technician decides. --></div>
+          </div>
+          <!-- HWTEST:KEYBOARD:END -->
+
+          <!-- HWTEST:CAMERA:START -->
+          <div class="hwt" id="hwt_camera">
+            <div class="hwtr">
+              <span class="hwtn">Camera</span>
+              <span class="hwtb na" id="hwtStat_camera">Not tested</span>
+              <button class="btn gho sm" id="hwtRun_camera" onclick="runHwTest('camera')">Test</button>
+            </div>
+            <div class="hwtw" id="hwtWhy_camera"></div>
+            <div class="hwtd" id="hwtDetail_camera"><!-- the camera test's own
+              controls go here (a later phase): a live preview, and the
+              technician says whether the picture is right. No camera, or a
+              refused permission, is not a broken camera. --></div>
+          </div>
+          <!-- HWTEST:CAMERA:END -->
+
+          <!-- HWTEST:SCREEN:START -->
+          <div class="hwt" id="hwt_screen">
+            <div class="hwtr">
+              <span class="hwtn">Screen</span>
+              <span class="hwtb na" id="hwtStat_screen">Not tested</span>
+              <button class="btn gho sm" id="hwtRun_screen" onclick="runHwTest('screen')">Test</button>
+            </div>
+            <div class="hwtw" id="hwtWhy_screen"></div>
+            <div class="hwtd" id="hwtDetail_screen"><!-- the screen test's own
+              controls go here (a later phase): full-screen colours the
+              technician inspects for dead pixels, backlight leakage and
+              discolouration. The blanking has to be stopped first. --></div>
+          </div>
+          <!-- HWTEST:SCREEN:END -->
+
+          <p class="sublbl" style="margin:16px 0 7px">Test results</p>
+          <!-- "N / 4 completed", and the overall verdict ONLY once all four
+               are finished (hwOverall). A half-done run never reads as a pass. -->
+          <div class="health na" id="hwtSummary"><span class="hd"></span><span></span></div>
+          <!-- Said out loud when a result is on screen but not on the record:
+               a technician who has just tested a machine by hand must never be
+               left thinking it was saved when it was not. -->
+          <div class="hwtw hidden" id="hwtSaveMsg"></div>
         </div>
 
         <div class="foot">
@@ -717,6 +866,10 @@ async function bootstrap(){
 
   fillBatches(); fillDrives(); fillImages(); fillHardware(); renderImageSource();
   renderWorkflow();
+  // The hardware test the station is holding for this machine (it survives a
+  // Rescan - see hwtest_carry_forward in server.py). adoptHwTest leaves a run
+  // in progress alone.
+  adoptHwTest(b.hardwareTest);
   bootstrapTail(b);
 }
 
@@ -1092,6 +1245,245 @@ function fillHardware(){
     '</svg></div><div><div class="hwk">'+label+'</div><div class="hwv">'+
     (k==='driveHealth'?driveHealthHTML():(hw[k]||(BOOT.device?'Not detected':'—')))+
     '</div></div></div>').join(''));
+}
+
+/* ----------------------------------------------- hardware test (C6) ---
+   A technician-confirmed functional test of four components, run here on the
+   machine being audited and saved onto its audit record as
+   profile.hardwareTest (no migration - it rides inside the hardware profile).
+
+   This is the SHELL: the state machine, the rendering, the summary and the
+   save. The four tests themselves live in their own regions at the bottom of
+   this script, one each, and register a runner in HWT_RUNNERS. Nothing in a
+   test's region may touch anything here.
+
+   The rule the whole module hangs on: the browser may only claim what it
+   actually observed. It heard nothing, saw nothing and felt no keys - the
+   technician did. So a PASS is a person's answer, and a test the station
+   could not RUN is never a failure (hwCannotRun). */
+const HWT_KEYS=['speaker','keyboard','camera','screen'];
+const HWT_NAMES={speaker:'Speaker',keyboard:'Keyboard',camera:'Camera',screen:'Screen'};
+/* What each test does, shown until it has been run - so a row that says
+   "Not tested" still tells the technician what pressing Test will do. */
+const HWT_ABOUT={
+  speaker:'Not run yet. The station unmutes this machine and plays a tone through each speaker; you confirm what you heard.',
+  keyboard:'Not run yet. Press every key; the keys this page can see light up, and you confirm the rest.',
+  camera:'Not run yet. The camera is opened and shown live; you confirm the picture is right.',
+  screen:'Not run yet. The screen is filled with each colour in turn; you look for dead pixels, leakage and discolouration.'};
+/* The five states, each with the words shown on screen and the colour beside
+   them. Words AND colour, always, and never a non-answer (owner's §8): a
+   status this page cannot name reads as Not tested, which is true. */
+const HWT_LOOK={NOT_TESTED:['Not tested','na'],IN_PROGRESS:['Testing…','run'],
+  PASSED:['Passed','ok'],ATTENTION:['Needs attention','warn'],FAILED:['Failed','bad']};
+const HWT_DONE=['PASSED','ATTENTION','FAILED'];   // a test that has finished
+let HWTEST={};            // the object saved as profile.hardwareTest
+let HWT_RUNNING=false;    // a test is on screen right now
+/* Once this screen has a result of its own, the server's copy is not painted
+   over it: bootstrap polls every 1.5 s while the hardware is being read, and
+   a poll landing mid-test would put an older answer back under the
+   technician's hands. hwSave() adopts the station's answer deliberately. */
+let HWT_LOCAL=false;
+/* Each test's region registers its runner here. Empty on the shell build, and
+   that is not an error: runHwTest says so in the contract's own terms. */
+const HWT_RUNNERS={};
+
+function hwResult(k){const r=HWTEST&&HWTEST[k];return (r&&typeof r==='object')?r:{};}
+function hwStatus(k){const s=hwResult(k).status;return HWT_LOOK[s]?s:'NOT_TESTED';}
+
+/* The overall verdict, DERIVED from the four components and never set by
+   hand. Worst wins, exactly as contract C6 writes it:
+
+       any FAILED -> FAILED, else any ATTENTION -> ATTENTION,
+       else all four PASSED -> PASSED
+
+   and the part that keeps it honest: a run that is not finished reports NO
+   verdict at all, only "2 / 4 completed". Four PASSED is the only way to
+   reach PASSED, so a half-done test can never read as a pass.
+
+   server.py has the same rule in hwtest_overall(), because the record is
+   derived there too. tools/test-hwtest.py drives both sides with all 625
+   combinations and fails if they ever disagree - change them together. */
+function hwOverall(t){
+  t=t||{};
+  let failed=0,attention=0,passed=0,running=0;
+  for(const k of HWT_KEYS){
+    const r=t[k],s=(r&&HWT_LOOK[r.status])?r.status:'NOT_TESTED';
+    if(s==='FAILED')failed++;
+    else if(s==='ATTENTION')attention++;
+    else if(s==='PASSED')passed++;
+    else if(s==='IN_PROGRESS')running++;
+  }
+  const completed=failed+attention+passed,total=HWT_KEYS.length;
+  const status=completed===total
+    ? (failed?'FAILED':(attention?'ATTENTION':'PASSED'))
+    : ((running||completed)?'IN_PROGRESS':'NOT_TESTED');
+  return {status:status,completed:completed,total:total,complete:completed===total,
+    // '' until every test has finished: the screen has nothing to show here,
+    // and neither has the report.
+    verdict:completed===total?status:'',
+    text:completed+' / '+total+' completed'};
+}
+
+/* The Test Results block: the count, the verdict once there is one, and who
+   tested it and when underneath. Pure, for tools/test-hwtest.py. */
+function hwWhen(iso){
+  const d=new Date(iso);
+  return isNaN(d.getTime())?'':d.toLocaleString('en-GB',
+    {day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'});
+}
+function hwSummaryView(t){
+  t=t||{};
+  const o=hwOverall(t),look=HWT_LOOK[o.verdict]||null,bits=[];
+  if(t.technician)bits.push('Tested by '+t.technician);
+  else if(o.completed)bits.push('No technician name on this test — set Operator at the top of the screen');
+  const when=t.testedAt?hwWhen(t.testedAt):'';
+  if(when)bits.push(when);
+  // Same caveat every wipe record carries: the time is only as good as the
+  // clock this machine booted with.
+  if(t.clockWasNetwork===false&&when)
+    bits.push('the station clock was not set from the network, so that time may be wrong');
+  return {cls:look?look[1]:'na',text:o.text+(look?' — '+look[0]:''),detail:bits.join(' · ')};
+}
+
+/* The reason line under a test: why it is not a pass and what to do about it,
+   or what the test does when it has not been run. */
+function hwWhyText(k){
+  const r=hwResult(k),bits=[];
+  if(r.reason)bits.push(r.reason);
+  if(r.action)bits.push(r.action);
+  if(r.notes)bits.push(r.notes);
+  if(bits.length)return bits.join(' — ');
+  if(r.status==='PASSED')return 'Confirmed working by the technician.';
+  if(r.status==='IN_PROGRESS')return 'Testing now…';
+  return HWT_ABOUT[k]||'';
+}
+
+function renderHwTest(){
+  for(const k of HWT_KEYS){
+    const s=hwStatus(k),look=HWT_LOOK[s];
+    const b=$('hwtStat_'+k);
+    if(b){b.textContent=look[0];b.className='hwtb '+look[1];}
+    const w=$('hwtWhy_'+k); if(w)w.textContent=hwWhyText(k);
+    const btn=$('hwtRun_'+k);
+    if(btn){btn.disabled=HWT_RUNNING;
+      btn.textContent=(s==='NOT_TESTED')?'Test':'Test again';}
+  }
+  const v=hwSummaryView(HWTEST),el=$('hwtSummary');
+  if(el){el.className='health '+v.cls;
+    el.innerHTML='<span class="hd"></span><span><b>'+esc(v.text)+'</b>'+
+      (v.detail?'<br>'+esc(v.detail):'')+'</span>';}
+  const all=$('hwtRunAll');
+  if(all)all.disabled=HWT_RUNNING;
+}
+
+/* Record one test's result. A retest never deletes what it replaces (owner's
+   §12): the superseded result is kept, and the server keeps it in `history`.
+   `res.status` is one of the five; anything else would be a bug here, so it
+   is forced to NOT_TESTED rather than shown as a word nobody can read. */
+function hwSet(k,res){
+  if(HWT_KEYS.indexOf(k)<0)return;
+  res=res||{};
+  const s=HWT_LOOK[res.status]?res.status:'NOT_TESTED';
+  HWTEST[k]=Object.assign({},res,{status:s,
+    reason:res.reason||null,action:res.action||null,notes:res.notes||''});
+  HWT_LOCAL=true;
+  renderHwTest();
+}
+/* The technician confirmed it works. */
+function hwPass(k,extra){hwSet(k,Object.assign({},extra,{status:'PASSED'}));}
+/* The technician confirmed it does NOT work. The ONLY way to reach FAILED:
+   see hwCannotRun for why that matters. */
+function hwFail(k,reason,extra){
+  hwSet(k,Object.assign({},extra,{status:'FAILED',
+    reason:reason||'the technician found it does not work'}));
+}
+/* It works, but imperfectly - one dead pixel, one quiet speaker. */
+function hwAttention(k,reason,action,extra){
+  hwSet(k,Object.assign({},extra,{status:'ATTENTION',reason:reason,action:action||null}));
+}
+/* THE rule of contract C6, in one place so it can be checked: a test the
+   station could not RUN is ATTENTION with a reason and an action - NEVER
+   FAILED. No camera on the machine, no audio sink, a permission refused, a
+   browser API missing: none of those are evidence that the hardware is
+   broken, and recording them as a failure would condemn working parts. FAILED
+   is reserved for a human saying "I tested it and it does not work".
+   Every test reports a could-not-run through here. */
+function hwCannotRun(k,reason,action,extra){
+  hwAttention(k,reason||'the station could not run this test',
+    action||'Tell a supervisor, and test this one by hand before the machine leaves the bench.',extra);
+}
+
+/* Run one test. Whatever the runner does - refuse, throw, or simply return -
+   the row never stays on "Testing…" and the controls always come back: a
+   kiosk with no keyboard shortcuts and no address bar has no other way out. */
+async function runHwTest(k){
+  if(HWT_KEYS.indexOf(k)<0)return;
+  const run=HWT_RUNNERS[k],name=(HWT_NAMES[k]||k).toLowerCase();
+  if(typeof run!=='function'){
+    // The shell ships before the tests do. That is the station being unable
+    // to run the test, which is ATTENTION with something to do about it -
+    // not a verdict on the hardware.
+    hwCannotRun(k,'this station’s software does not include the '+name+' test yet',
+      'Sync the stick from Windows (sync-usb.ps1), boot this machine again, then run the test.');
+    await hwSave(k);
+    return;
+  }
+  hwSet(k,{status:'IN_PROGRESS'});
+  try{ await run(); }
+  catch(e){
+    hwCannotRun(k,'the '+name+' test stopped with an unexpected error ('+
+      ((e&&e.message)||e||'no detail')+')',
+      'Run the test again. If it keeps happening, test this one by hand and tell a supervisor.');
+  }
+  if(hwStatus(k)==='IN_PROGRESS')
+    hwCannotRun(k,'the '+name+' test ended without recording a result',
+      'Run the test again, and test this one by hand if it does the same.');
+  await hwSave(k);
+}
+
+/* Run all four, in order, one at a time. Each one saves as it finishes, so a
+   machine switched off half way through keeps what was already done. */
+async function runAllHwTests(){
+  if(HWT_RUNNING)return;
+  HWT_RUNNING=true; renderHwTest();
+  try{ for(const k of HWT_KEYS) await runHwTest(k); }
+  finally{ HWT_RUNNING=false; renderHwTest(); }
+}
+
+/* Save ONE test's result to the station, which stamps the technician and the
+   time, keeps the result it supersedes and derives the overall verdict. The
+   answer replaces what is on screen, so the two can never drift apart.
+
+   One test at a time on purpose: the station treats every result it is sent
+   as a NEW one, so re-sending the three that have not changed would push each
+   of them into the history again and re-date them - a retest that never
+   happened, on every save. */
+async function hwSave(k){
+  const el=$('hwtSaveMsg'),res=HWTEST[k];
+  if(!res||!res.status||res.status==='IN_PROGRESS')return;
+  const body={};body[k]=res;
+  let r;
+  try{ r=await jpost('/api/hwtest',body); }
+  catch(e){ r={ok:false,data:{message:'Could not reach the station service.'}}; }
+  if(r.ok&&r.data&&r.data.hardwareTest){
+    HWTEST=r.data.hardwareTest;
+    if(el)el.classList.add('hidden');
+  }else if(el){
+    el.textContent='This result is on screen but NOT saved to the machine’s record yet: '+
+      ((r.data&&r.data.message)||'the station service did not answer.')+
+      ' Run the test again; if it keeps happening, write the result down and tell a supervisor.';
+    el.classList.remove('hidden');
+  }
+  renderHwTest();
+}
+
+/* What the station already has for the machine on the bench, so a reloaded
+   screen shows the test instead of starting again. Never applied over a run
+   in progress or over a result this screen has just recorded. */
+function adoptHwTest(t){
+  if(HWT_RUNNING||HWT_LOCAL)return;
+  HWTEST=(t&&typeof t==='object')?t:{};
+  renderHwTest();
 }
 
 /* ------------------------------------------------------------- audit --- */
@@ -1845,7 +2237,80 @@ function openOv(t,m,pin,cb,goLabel){$('ovTitle').textContent=t;$('ovMsg').textCo
 function closeOv(){$('ov').style.display='none';ovCb=null;}
 function ovGo(){const c=ovCb;if(c)c();}
 
+/* ==================================================================== *
+ *  The four hardware tests. One region each, filled by one change at a *
+ *  time, kept at the end of the script and apart from each other so    *
+ *  that four of them can be written in four worktrees and merged       *
+ *  without ever meeting. A region may add its own code and register    *
+ *  its runner; it may not change anything above this line.             *
+ *                                                                      *
+ *  A runner is an async function that records its outcome through      *
+ *  hwPass / hwFail / hwAttention / hwCannotRun and then returns. It    *
+ *  must always settle - the shell re-enables the controls when it      *
+ *  does, and a runner that never returns is the one way this page can  *
+ *  be left stuck. FAILED comes only from a person's answer;            *
+ *  everything the station could not do goes through hwCannotRun.       *
+ * ==================================================================== */
+
+/* HWTEST:SPEAKER:JS:START */
+/* The speaker test (a later phase). Register it with:
+       HWT_RUNNERS.speaker = async function(){ ... };
+   Contract C6 for this one: the station unmutes the machine and sets a known
+   volume BEFORE the tone - a second-hand laptop often boots muted or routed
+   to HDMI, and without that step a technician hears nothing and records
+   working speakers as dead - then records what it did in `mixer` and where
+   the tone went in `sink`, and asks about left and right separately. wpctl,
+   amixer and pw-cli are already on the station. A station that could not
+   unmute is hwCannotRun, never a failure. */
+/* HWTEST:SPEAKER:JS:END */
+
+/* -------------------------------------------------------------------- */
+/*                                                                      */
+/* -------------------------------------------------------------------- */
+
+/* HWTEST:KEYBOARD:JS:START */
+/* The keyboard test (a later phase). Register it with:
+       HWT_RUNNERS.keyboard = async function(){ ... };
+   Contract C6 for this one: show the layout, light each key as its keydown
+   arrives, and record detectedKeys / expectedKeys / missingKeys and which
+   layout was shown. A key the browser cannot see is REPORTED, never
+   auto-failed (owner's §3) - the technician's answer is authoritative, and
+   `confirmedBy` says when a human overrode the detection. This is also the
+   only place in the page that may take a global key handler, and it must
+   give it up again when the test ends: the rest of the kiosk has none. */
+/* HWTEST:KEYBOARD:JS:END */
+
+/* -------------------------------------------------------------------- */
+/*                                                                      */
+/* -------------------------------------------------------------------- */
+
+/* HWTEST:CAMERA:JS:START */
+/* The camera test (a later phase). Register it with:
+       HWT_RUNNERS.camera = async function(){ ... };
+   Contract C6 for this one: the page is a secure context (127.0.0.1), so
+   getUserMedia is allowed and the camera permission is pre-granted for this
+   origin at boot. The browser may claim only that a video track opened and
+   has frames; the technician says whether the picture is right. No camera
+   device, a refused permission or a missing API is hwCannotRun with the
+   device named - never a failure. Release the track on the way out. */
+/* HWTEST:CAMERA:JS:END */
+
+/* -------------------------------------------------------------------- */
+/*                                                                      */
+/* -------------------------------------------------------------------- */
+
+/* HWTEST:SCREEN:JS:START */
+/* The screen test (a later phase). Register it with:
+       HWT_RUNNERS.screen = async function(){ ... };
+   Contract C6 for this one: paint each colour full-screen and record which
+   ones were shown; the technician reports dead pixels, backlight leakage and
+   discolouration. Screen blanking has to be stopped first (xset s off -dpms):
+   X's screensaver is live, and a solid colour with no keypresses is exactly
+   when it fires. Put the blanking back afterwards. */
+/* HWTEST:SCREEN:JS:END */
+
 bootstrap();
 pollNet();
+renderHwTest();
 </script>
 </html>

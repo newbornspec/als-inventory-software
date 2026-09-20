@@ -89,6 +89,14 @@ STATE = {
     # as legacy and behave exactly like the old lot-coupled station.
     "role": "",
     "permissions": None,
+    # The hardware functional test for the machine on the bench (contract C6).
+    # It is written INTO the profile as profile.hardwareTest, and kept here as
+    # well because a re-capture replaces the profile wholesale and would take
+    # the test with it -- see hwtest_carry_forward. "hwtestMachine" is the
+    # serial it was run on, so a test is never carried onto a machine that is
+    # provably a different one.
+    "hwtest": None,
+    "hwtestMachine": "",
 }
 # One background job per kind (only one wipe/install runs at a time).
 JOBS = {"wipe": None, "install": None}
@@ -1763,6 +1771,289 @@ def operator_gate():
         return 503, str(exc)
 
 
+# --------------------------------------------------- hardware test (C6) ----
+# A technician-confirmed functional test of four components - speaker,
+# keyboard, camera, screen - run in the kiosk on the machine being audited and
+# carried on that machine's audit record.
+#
+# It rides INSIDE the captured hardware profile, as profile.hardwareTest:
+# hardware_profile is a JSONB column the API's ValidationPipe does not walk
+# into, so there is no migration and no new column. The station also keeps the
+# test OUTSIDE the profile (STATE["hwtest"]), because a re-capture replaces the
+# profile wholesale - see hwtest_carry_forward, which is the whole reason that
+# second copy exists.
+HWTEST_TESTS = ("speaker", "keyboard", "camera", "screen")
+HWTEST_STATES = ("NOT_TESTED", "IN_PROGRESS", "PASSED", "ATTENTION", "FAILED")
+# The three that mean a test has finished. IN_PROGRESS is a screen state and is
+# never stored: hwtest_component refuses it.
+HWTEST_DONE = ("PASSED", "ATTENTION", "FAILED")
+# Plain English for every state. Never "Unknown", here or on screen (owner's §8).
+HWTEST_WORDS = {"NOT_TESTED": "not tested", "IN_PROGRESS": "still running",
+                "PASSED": "passed", "ATTENTION": "needs attention", "FAILED": "failed"}
+# Superseded results kept beside the current one (owner's §12: a retest never
+# deletes what it replaces). Oldest dropped first - this travels inside every
+# record the station files, through a retry queue, into a JSONB column.
+HWTEST_HISTORY_MAX = 40
+HWTEST_MAX_BYTES = 64 * 1024
+# Two screens (or a Run all tests and a single Test) can save at the same
+# moment, and each save is a read-modify-write of the whole object.
+HWTEST_LOCK = threading.Lock()
+
+
+def hwtest_overall(test):
+    """The overall verdict, DERIVED from the four components and never taken
+    from whoever sent the result. Worst wins, exactly as contract C6 writes it:
+
+        any FAILED -> FAILED, else any ATTENTION -> ATTENTION,
+        else all four PASSED -> PASSED
+
+    and the part that keeps it honest: a run that is not finished reports NO
+    verdict at all, only "2 / 4 completed" (status IN_PROGRESS, which is not a
+    verdict). Four PASSED is the only way to reach PASSED, so a half-done test
+    can never read as a pass.
+
+    The kiosk page has the same rule in hwOverall() (tools/gui/index.html),
+    because the screen shows the verdict before anything is saved.
+    tools/test-hwtest.py drives both sides with all 625 combinations and fails
+    if they ever disagree - change them together."""
+    seen = {}
+    for name in HWTEST_TESTS:
+        part = test.get(name) if isinstance(test, dict) else None
+        status = part.get("status") if isinstance(part, dict) else None
+        if status not in HWTEST_STATES:
+            status = "NOT_TESTED"
+        seen[status] = seen.get(status, 0) + 1
+    completed = sum(seen.get(s, 0) for s in HWTEST_DONE)
+    total = len(HWTEST_TESTS)
+    if completed == total:
+        status = ("FAILED" if seen.get("FAILED")
+                  else "ATTENTION" if seen.get("ATTENTION") else "PASSED")
+    elif seen.get("IN_PROGRESS") or completed:
+        status = "IN_PROGRESS"
+    else:
+        status = "NOT_TESTED"
+    return {"status": status, "completed": completed, "total": total}
+
+
+def _hwtest_value(value, depth=0):
+    """One field of a component's result, cleaned for storage, or None when it
+    cannot be stored.
+
+    Deliberately NOT a whitelist of field names. Each of the four tests is
+    written later and brings its own fields - left/right/mixer/sink,
+    detectedKeys/expectedKeys/missingKeys/layout, device,
+    deadPixels/coloursShown - and a whitelist here is exactly how those would
+    disappear without a word. So this only keeps what can be written to JSONB
+    and puts a ceiling on the size and the nesting."""
+    if value is None or isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        # NaN and the infinities are not JSON, and json.dumps emits them
+        # anyway - straight into a column that would then refuse to parse.
+        if isinstance(value, float) and (value != value or value in (float("inf"), float("-inf"))):
+            return None
+        return value
+    if isinstance(value, str):
+        return value.strip()[:500]
+    if depth >= 2:
+        return None
+    if isinstance(value, list):
+        out = [_hwtest_value(v, depth + 1) for v in value[:50]]
+        return [v for v in out if v is not None]
+    if isinstance(value, dict):
+        out = {}
+        for key, val in list(value.items())[:30]:
+            if not isinstance(key, str) or not key.strip():
+                continue
+            clean = _hwtest_value(val, depth + 1)
+            if clean is not None:
+                out[key.strip()[:60]] = clean
+        return out
+    return None
+
+
+def hwtest_component(name, part):
+    """One component's result, cleaned and stamped, or ValueError carrying a
+    sentence the screen can show.
+
+    The rules are contract C6's:
+      - the status must be one of the five. A made-up one is refused rather
+        than stored as a word the report would have to explain away;
+      - IN_PROGRESS is a screen state, not a result: a test still running has
+        nothing to save;
+      - EVERY result that is not a pass carries a plain-English reason. This
+        refusal is the only thing standing between the report and a bare
+        "needs attention" with nothing for anyone to act on."""
+    # The four keys ARE the words for them: "the speaker test", "the screen
+    # test". Nothing to translate, and nothing to get out of step.
+    label = name
+    if not isinstance(part, dict):
+        raise ValueError("The %s result did not arrive as a set of fields, so it was "
+                         "not saved. Run the test again." % label)
+    status = part.get("status")
+    if status not in HWTEST_STATES:
+        raise ValueError("The %s test reported a result this station does not know. It "
+                         "has to be one of: %s." % (label, ", ".join(HWTEST_STATES)))
+    if status == "IN_PROGRESS":
+        raise ValueError("The %s test is still running, so there is no result to save "
+                         "yet." % label)
+    reason = _text(part.get("reason"), 500)
+    if status in ("ATTENTION", "FAILED") and not reason:
+        raise ValueError("The %s test was recorded as \"%s\" with no reason. Every "
+                         "result that is not a pass has to say why in plain English, or "
+                         "nobody reading the report can act on it."
+                         % (label, HWTEST_WORDS[status]))
+    out = {}
+    for key, value in part.items():
+        # The fields this function owns are written below; everything else is
+        # the test's own and is carried through as it came.
+        if key in ("status", "reason", "action", "notes", "testedAt", "test"):
+            continue
+        clean = _hwtest_value(value)
+        if clean is not None:
+            out[key] = clean
+    out["status"] = status
+    out["reason"] = reason
+    out["action"] = _text(part.get("action"), 500)
+    out["notes"] = _text(part.get("notes"), 500) or ""
+    # The STATION's clock, not the browser's: it is the clock every other date
+    # on this record was written with, and clockWasNetwork below says how much
+    # it is worth.
+    out["testedAt"] = utc_iso() if status in HWTEST_DONE else None
+    return out
+
+
+def hwtest_technician():
+    """Who ran the test. The same person every record this station files is
+    stamped with (stamp_provenance): with operator sign-in on that is the
+    signed-in account, with it off the Operator name typed in the header, and
+    failing both the shared account this stick logged in as. "" when the
+    station has no name at all - the screen then says so and what to do about
+    it, rather than inventing one or writing "Unknown"."""
+    who = operator_identity() if operator_signin_on() else None
+    if who:
+        return (who.get("name") or who.get("email") or "")[:120]
+    typed = (STATE.get("operator") or "").strip()
+    if typed:
+        return typed[:120]
+    return (STATE.get("userName") or STATE["conf"].get("AUDIT_EMAIL", "") or "")[:120]
+
+
+def hwtest_machine(profile):
+    """What identifies the machine a hardware test belongs to: the serial its
+    audit record is filed under. "" when the machine reports none, which is NOT
+    the same as a different machine - see hwtest_carry_forward."""
+    ident_ = (profile or {}).get("identification") if isinstance(profile, dict) else None
+    return str((ident_ or {}).get("serialNumber") or "").strip()
+
+
+def attach_hardware_test(profile):
+    """Put the station's hardware test inside the profile, where contract C6
+    says it lives (profile.hardwareTest) and where every upload path carries it
+    for free, since they all send the profile as it is.
+
+    Returns the profile, so a caller writes
+    `"profile": attach_hardware_test(STATE["profile"])` and the fact that the
+    field has to travel with it cannot be missed: /api/audit rebuilds its
+    payload from a FIXED set of keys, so anything not named there and not
+    inside the profile is dropped without a word."""
+    if isinstance(profile, dict):
+        test = STATE.get("hwtest")
+        if test:
+            profile["hardwareTest"] = test
+    return profile
+
+
+def hwtest_carry_forward(profile):
+    """Keep the hardware test across a re-capture, and put it back inside the
+    new profile. Returns the profile.
+
+    THE HAZARD, and it destroys results silently: a capture replaces
+    STATE["profile"] wholesale, and the test rides inside the profile. So
+    pressing Rescan after testing - to pick up a drive that was just plugged
+    in, or to reconnect after a failed upload - threw the result away, and the
+    record uploaded afterwards said the machine had never been tested. The
+    station therefore keeps the test outside the profile too, and re-attaches
+    it to every profile it captures.
+
+    It is dropped only when the new capture is PROVABLY a different machine:
+    both captures reported a serial number and the two differ. A capture that
+    reports no serial is not evidence of a different machine - the same
+    principle as drive health's "never let an absence of evidence be evidence"
+    - and since attaching a test to the wrong machine is the one outcome worse
+    than losing it, the proof has to be positive either way."""
+    test = STATE.get("hwtest")
+    before, now = (STATE.get("hwtestMachine") or ""), hwtest_machine(profile)
+    if not test:
+        STATE["hwtestMachine"] = now
+        return profile
+    if before and now and before != now:
+        STATE["hwtest"] = None
+        STATE["hwtestMachine"] = now
+        return profile
+    STATE["hwtestMachine"] = now or before
+    return attach_hardware_test(profile)
+
+
+def hwtest_save(body):
+    """Merge the components named in `body` into this station's hardware test
+    and return the stored object, or raise ValueError with a sentence for the
+    screen.
+
+    One shape, whether the page saves one test or all four: the body IS the
+    hardwareTest object, and any of the four components it names replaces what
+    was there. The overall status, the technician and the times are the
+    station's to write - the page never sets them.
+
+    Every component NAMED here is treated as a new result: it is re-dated, and
+    what it replaces goes into the history. So a caller sends the test it has
+    just run, not the ones that have not changed - re-sending those would file
+    a retest that never happened (index.html's hwSave sends exactly one)."""
+    if not isinstance(body, dict):
+        raise ValueError("That hardware test result did not arrive as a set of fields, "
+                         "so it was not saved. Run the test again.")
+    given = [name for name in HWTEST_TESTS if name in body]
+    if not given:
+        raise ValueError("That request named none of the four tests (%s), so there was "
+                         "nothing to save." % ", ".join(HWTEST_TESTS))
+    with HWTEST_LOCK:
+        current = STATE.get("hwtest")
+        current = current if isinstance(current, dict) else {}
+        parts, history = {}, [h for h in (current.get("history") or []) if isinstance(h, dict)]
+        for name in HWTEST_TESTS:
+            was = current.get(name)
+            if name in given:
+                if isinstance(was, dict) and was.get("status") in HWTEST_DONE:
+                    # A retest never deletes what it replaces (owner's §12).
+                    history.append(dict(was, test=name))
+                parts[name] = hwtest_component(name, body[name])
+            elif isinstance(was, dict):
+                parts[name] = was
+            else:
+                parts[name] = {"status": "NOT_TESTED", "reason": None, "action": None,
+                               "notes": "", "testedAt": None}
+        test = {"technician": hwtest_technician(), "testedAt": utc_iso(),
+                # As on every wipe record: testedAt is only as good as the
+                # clock, and a live-booted machine with a dead CMOS battery can
+                # be months out.
+                "clockWasNetwork": bool(CLOCK["network"])}
+        test.update(hwtest_overall(parts))
+        test.update(parts)
+        test["history"] = history[-HWTEST_HISTORY_MAX:]
+        size = len(json.dumps(test))
+        if size > HWTEST_MAX_BYTES:
+            raise ValueError("That hardware test result is too big to store (%d KB, and "
+                             "%d KB is the most this station will carry on a record). "
+                             "Shorten the notes and save it again."
+                             % (size // 1024, HWTEST_MAX_BYTES // 1024))
+        STATE["hwtest"] = test
+        STATE["hwtestMachine"] = hwtest_machine(STATE.get("profile")) \
+            or STATE.get("hwtestMachine") or ""
+        # Into the profile at once, so a record filed a second later carries it.
+        attach_hardware_test(STATE.get("profile"))
+        return test
+
+
 # --------------------------------------------------------------- capture ----
 def audit_cmd(*args, env_vars=None):
     """The audit command, elevated when this backend is not already root.
@@ -1907,6 +2198,12 @@ def refresh(do_login=True):
             STATE["profile"], STATE["summary"] = None, ""
             raise
         STATE["profile"], STATE["summary"] = prof, summ
+        # The new profile does not know about the hardware test that was run
+        # before this capture - it is a fresh object from the engine - so put
+        # the test back into it. Without this, pressing Rescan after testing
+        # (for a drive just plugged in, or to reconnect) destroyed the result
+        # and the next record said the machine had never been tested.
+        hwtest_carry_forward(STATE["profile"])
         # Drive health is in the profile already: the engine reads it as root
         # into storage[].health (contract C5). This used to graft a second copy
         # on here, profile["driveHealth"], from the kiosk's own smartctl probe -
@@ -4157,6 +4454,11 @@ class Handler(BaseHTTPRequestHandler):
                 if operator_signin_on() else
                 (STATE.get("userName") or STATE["conf"].get("AUDIT_EMAIL", "") or "Operator"),
                 "operator": STATE.get("operator", ""),
+                # The hardware test held for the machine on the bench
+                # (contract C6), so a reloaded screen - or a second one - shows
+                # what has already been tested instead of starting again. The
+                # page ignores it while a test is running (adoptHwTest).
+                "hardwareTest": STATE.get("hwtest"),
                 "signin": signin_state(),
                 "workflow": current_workflow(),
                 "workflows": allowed_workflows(),
@@ -4239,6 +4541,15 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/api/priorAudit":
             lot = (parse_qs(u.query).get("lotId") or [""])[0]
             return self._send(200, prior_audit(lot) or {"found": False, "unknown": True})
+
+        if u.path == "/api/hwtest":
+            # Read back what this station holds for the machine on the bench
+            # (contract C6). The page also gets it with every /api/bootstrap,
+            # so a reloaded screen needs no extra call; this is the direct
+            # read, and what tools/test-hwtest.py checks the save against.
+            return self._send(200, {"hardwareTest": STATE.get("hwtest"),
+                                    "technician": hwtest_technician(),
+                                    "tests": list(HWTEST_TESTS)})
 
         if u.path == "/api/toolcheck":
             return self._send(200, tool_check())
@@ -4349,13 +4660,37 @@ class Handler(BaseHTTPRequestHandler):
             operator_signout()
             return self._send(200, {"ok": True})
 
+        if u.path == "/api/hwtest":
+            # Deliberately NOT behind operator_gate(). Nothing is erased here
+            # and nothing goes to the server: the result waits inside the
+            # profile until an audit or a wipe files it, and both of those ARE
+            # gated. Refusing to save it because the network is down, or
+            # because a sign-in needs renewing, would throw away a test a
+            # technician has just done by hand on the machine in front of them,
+            # and it cannot be reconstructed from memory afterwards.
+            #
+            # A missing profile is not a refusal either: the result is kept and
+            # hwtest_carry_forward puts it into the next capture.
+            try:
+                saved = hwtest_save(body)
+            except ValueError as exc:
+                return self._send(400, {"message": str(exc)})
+            return self._send(200, {"ok": True, "hardwareTest": saved})
+
         if u.path == "/api/audit":
             if not STATE["profile"]:
                 return self._send(400, {"message": "hardware not captured yet"})
             gate = operator_gate()
             if gate:
                 return self._send(gate[0], {"message": gate[1]})
-            payload = {"lotId": body.get("lotId"), "profile": STATE["profile"]}
+            # This payload is rebuilt from a FIXED set of keys, so a field the
+            # page sends that is not named below never reaches the API. The
+            # hardware test is not one of those fields: it rides INSIDE the
+            # profile (contract C6), and attach_hardware_test is what puts it
+            # there - every time, not only when a test was just saved, because
+            # the profile object here may be a fresh capture.
+            payload = {"lotId": body.get("lotId"),
+                       "profile": attach_hardware_test(STATE["profile"])}
             if body.get("subLotId"):
                 payload["subLotId"] = body["subLotId"]
             if body.get("notes"):
@@ -4543,7 +4878,12 @@ class Handler(BaseHTTPRequestHandler):
             # The workflow is part of the record from the start (see
             # stamp_provenance): switching workflow while this wipe runs must
             # not change what it is filed as. Amazon: no lot, ever.
-            base = {"profile": profile, "auditKind": workflow}
+            # attach_hardware_test: the wipe record carries the profile too, and
+            # the API replaces the stored hardware_profile with whatever
+            # arrives. A wipe record filed without the hardware test would
+            # therefore ERASE a test run minutes earlier (contract C6's
+            # re-audit hazard, from the other direction).
+            base = {"profile": attach_hardware_test(profile), "auditKind": workflow}
             if lot_id and workflow != "amazon":
                 base["lotId"] = lot_id
             if sub_lot_id and workflow != "amazon":
@@ -4709,7 +5049,10 @@ class Handler(BaseHTTPRequestHandler):
                                              "run Start audit first so the device is identified")
                     return
                 payload = {
-                    "profile": STATE["profile"],
+                    # With the hardware test inside it, for the same reason as
+                    # the wipe record above: this profile replaces the stored
+                    # one, so leaving the test out would erase it.
+                    "profile": attach_hardware_test(STATE["profile"]),
                     "restoreImageStatus": result.get("status"),
                     # The workflow read when the restore started (above);
                     # stamp_provenance keeps a workflow the payload names.
