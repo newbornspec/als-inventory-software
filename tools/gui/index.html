@@ -2626,9 +2626,16 @@ const SCR={
   // record exactly one result through the shell's helpers, then resolve.
   finish:function(record){
     SCR.close();
-    const d=$('hwtDetail_screen'); if(d) d.innerHTML='';
     const r=SCR.resolve; SCR.resolve=null;
+    // Record BEFORE blanking the panel. The verdict closures read the dead-pixel
+    // count and the notes out of #scrDead / #scrNotes, and those inputs live
+    // inside hwtDetail_screen - clearing it first detaches them, so in a real
+    // browser getElementById returns null and the technician's count and notes
+    // are silently lost (deadPixels back to 0, notes back to ''). record() runs
+    // hwPass/hwFail/hwAttention -> renderHwTest, which never touches
+    // hwtDetail_screen, so the panel is safe to blank straight afterwards.
     record();
+    const d=$('hwtDetail_screen'); if(d) d.innerHTML='';
     if(r) r();
   },
   // The three verdicts. The dead-pixel count and notes ride along on all three;

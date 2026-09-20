@@ -130,12 +130,33 @@ const vm = require('vm'), fs = require('fs');
 const src = fs.readFileSync(process.argv[2], 'utf8');
 const els = {};
 function mk(id) {
-  const e = { style: {}, _id: id || '', _cls: '', _text: '', innerHTML: '', value: '',
+  const e = { style: {}, _id: id || '', _cls: '', _text: '', _html: '',
+    _declaredIds: [], _declaredEls: {}, value: '',
     disabled: false, tabIndex: 0, type: '', tagName: '', children: [], parentNode: null,
     _listeners: {}, options: [], selectedOptions: [], firstElementChild: { style: {} },
     focus() {}, select() {}, setAttribute() {},
     get id() { return this._id; },
     set id(v) { this._id = String(v); if (this._id) els[this._id] = this; },
+    // innerHTML like a real browser, not the inert string property it used to be:
+    // replacing an element's markup DETACHES the old subtree (so getElementById
+    // can no longer find those ids) and registers the ids the new markup declares.
+    // The screen runner reads the dead-pixel count and notes out of #scrDead /
+    // #scrNotes, which live inside the panel it clears; an inert innerHTML let
+    // those still resolve after the clear and hid a real bug where the result was
+    // read from an already-blanked panel. This makes that clear actually bite.
+    get innerHTML() { return this._html; },
+    set innerHTML(v) {
+      (this._declaredIds || []).forEach(cid => {
+        if (els[cid] === this._declaredEls[cid]) delete els[cid];
+      });
+      this._declaredIds = []; this._declaredEls = {};
+      this._html = String(v == null ? '' : v);
+      let m; const re = /id=["']([^"']+)["']/g;
+      while ((m = re.exec(this._html))) {
+        const cid = m[1], child = mk(cid);
+        els[cid] = child; this._declaredIds.push(cid); this._declaredEls[cid] = child;
+      }
+    },
     get className() { return this._cls; }, set className(v) { this._cls = String(v); },
     get textContent() { return this._text; }, set textContent(v) { this._text = String(v == null ? '' : v); },
     appendChild(c) { this.children.push(c); c.parentNode = this; return c; },
