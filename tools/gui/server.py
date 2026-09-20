@@ -1787,9 +1787,9 @@ def operator_gate():
 
 
 # --------------------------------------------------- hardware test (C6) ----
-# A technician-confirmed functional test of four components - speaker,
-# keyboard, camera, screen - run in the kiosk on the machine being audited and
-# carried on that machine's audit record.
+# A technician-confirmed functional test of five components - speaker,
+# keyboard, camera, screen, trackpad - run in the kiosk on the machine being
+# audited and carried on that machine's audit record.
 #
 # It rides INSIDE the captured hardware profile, as profile.hardwareTest:
 # hardware_profile is a JSONB column the API's ValidationPipe does not walk
@@ -1797,7 +1797,12 @@ def operator_gate():
 # test OUTSIDE the profile (STATE["hwtest"]), because a re-capture replaces the
 # profile wholesale - see hwtest_carry_forward, which is the whole reason that
 # second copy exists.
-HWTEST_TESTS = ("speaker", "keyboard", "camera", "screen")
+#
+# Trackpad is LAST, matching index.html's HWT_KEYS order (Run all runs the tests
+# in this order). Every save and the overall verdict key off this tuple - the
+# /api/hwtest handler ignores any component not named here - so a test is not
+# fully wired in until it is registered on BOTH sides. Change them together.
+HWTEST_TESTS = ("speaker", "keyboard", "camera", "screen", "trackpad")
 HWTEST_STATES = ("NOT_TESTED", "IN_PROGRESS", "PASSED", "ATTENTION", "FAILED")
 # The three that mean a test has finished. IN_PROGRESS is a screen state and is
 # never stored: hwtest_component refuses it.
@@ -1816,21 +1821,23 @@ HWTEST_LOCK = threading.Lock()
 
 
 def hwtest_overall(test):
-    """The overall verdict, DERIVED from the four components and never taken
+    """The overall verdict, DERIVED from the components and never taken
     from whoever sent the result. Worst wins, exactly as contract C6 writes it:
 
         any FAILED -> FAILED, else any ATTENTION -> ATTENTION,
-        else all four PASSED -> PASSED
+        else all PASSED -> PASSED
 
     and the part that keeps it honest: a run that is not finished reports NO
-    verdict at all, only "2 / 4 completed" (status IN_PROGRESS, which is not a
-    verdict). Four PASSED is the only way to reach PASSED, so a half-done test
-    can never read as a pass.
+    verdict at all, only "2 / 5 completed" (status IN_PROGRESS, which is not a
+    verdict). Every test PASSED is the only way to reach PASSED, so a half-done
+    test can never read as a pass. A machine with no trackpad is not half-done:
+    that benign N/A is stored as PASSED (notApplicable), so it satisfies the
+    count without changing the verdict.
 
     The kiosk page has the same rule in hwOverall() (tools/gui/index.html),
     because the screen shows the verdict before anything is saved.
-    tools/test-hwtest.py drives both sides with all 625 combinations and fails
-    if they ever disagree - change them together."""
+    tools/test-hwtest.py drives both sides with every combination of the states
+    across the tests and fails if they ever disagree - change them together."""
     seen = {}
     for name in HWTEST_TESTS:
         part = test.get(name) if isinstance(test, dict) else None
@@ -1854,12 +1861,13 @@ def _hwtest_value(value, depth=0):
     """One field of a component's result, cleaned for storage, or None when it
     cannot be stored.
 
-    Deliberately NOT a whitelist of field names. Each of the four tests is
-    written later and brings its own fields - left/right/mixer/sink,
+    Deliberately NOT a whitelist of field names. Each test
+    brings its own fields - left/right/mixer/sink,
     detectedKeys/expectedKeys/missingKeys/layout, device,
-    deadPixels/coloursShown - and a whitelist here is exactly how those would
-    disappear without a word. So this only keeps what can be written to JSONB
-    and puts a ceiling on the size and the nesting."""
+    deadPixels/coloursShown, moved/leftClick/rightClick/notApplicable - and a
+    whitelist here is exactly how those would disappear without a word. So this
+    only keeps what can be written to JSONB and puts a ceiling on the size and
+    the nesting."""
     if value is None or isinstance(value, bool):
         return value
     if isinstance(value, (int, float)):
@@ -2073,8 +2081,8 @@ def hwtest_refresh(base):
     hwtest_save re-attaches to the SAME profile object. But refresh() assigns a
     NEW object to STATE["profile"], so after a Rescan mid-wipe the tests
     finished afterwards attached only to the new one, and the wipe record filed
-    the half-done copy from the start - knocking an asset that had 4 / 4 on
-    file back to 2 / 4, because the API replaces the stored profile wholesale.
+    the half-done copy from the start - knocking an asset that had 5 / 5 on
+    file back to 2 / 5, because the API replaces the stored profile wholesale.
 
     Only hardwareTest is refreshed: it describes the MACHINE, not the erase
     event. And only when the station's test still belongs to the machine this
@@ -2170,8 +2178,8 @@ def hwtest_save(body):
     and return the stored object, or raise ValueError with a sentence for the
     screen.
 
-    One shape, whether the page saves one test or all four: the body IS the
-    hardwareTest object, and any of the four components it names replaces what
+    One shape, whether the page saves one test or all of them: the body IS the
+    hardwareTest object, and any of the components it names replaces what
     was there. The overall status, the technician and the times are the
     station's to write - the page never sets them.
 
@@ -2184,8 +2192,8 @@ def hwtest_save(body):
                          "so it was not saved. Run the test again.")
     given = [name for name in HWTEST_TESTS if name in body]
     if not given:
-        raise ValueError("That request named none of the four tests (%s), so there was "
-                         "nothing to save." % ", ".join(HWTEST_TESTS))
+        raise ValueError("That request named none of the tests this station runs (%s), so "
+                         "there was nothing to save." % ", ".join(HWTEST_TESTS))
     with HWTEST_LOCK:
         current = STATE.get("hwtest")
         current = current if isinstance(current, dict) else {}
