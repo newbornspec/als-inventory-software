@@ -3,29 +3,37 @@
 """The KEYBOARD hardware test (contract C6), the one region it owns.
 
 The shell (tools/test-hwtest.py) proves the five-state machine, the save and the
-carry-forward. This proves the KEYBOARD test that drops into it: draw an on-screen
-layout, light each key as it is released (keyup, matched by event.code), count what
-was seen against the layout, and record exactly one technician-chosen result.
+carry-forward. This proves the KEYBOARD test that drops into it: pick which kind
+of keyboard is on the bench, draw the matching on-screen layout, light each key as
+it is PRESSED (keydown, matched by event.code), count what was seen against the
+layout, and record exactly one technician-chosen result.
 
 The rules this file pins down:
   1. The runner registers itself (HWT_RUNNERS.keyboard) and matches keys by
      event.code.
-  2. A technician PASS stores PASSED with the contract's fields
-     (detectedKeys, expectedKeys, missingKeys, layout, confirmedBy, notes).
-  3. "Some keys don't work" stores ATTENTION with a plain-English reason and an
-     action; a FAIL stores FAILED - only the human's click sets the state.
-  4. THE rule that keeps the module honest, twice over here:
-       a) a key the browser never saw is REPORTED (missingKeys), NEVER
-          auto-failed - the runner records nothing on its own; and
-       b) a station that could not RUN the test is ATTENTION with a reason and an
-          action, NEVER FAILED.
-  5. THE suppression the owner demands (§3): while capturing, the verdict buttons
-     are disabled AND guarded in code, so pressing the very keys under test (P, F,
-     Enter, Space) can never file a verdict. Verdicts arm only after Stop
-     capturing, which is a mouse click.
-  6. This is the one place that takes a document-level key handler, and it gives
-     it back on Stop and on a verdict - nothing is left listening. The region
-     never says "Unknown".
+  2. THE bug the owner hit on real hardware: F3 opened Find, F5 reloaded, F7 popped
+     Caret Browsing - because the old code detected on keyup, after the browser had
+     already acted. The fix, proved here: while capturing, a document keydown
+     listener preventDefaults AND stopPropagations every press (F3/F5/F7, the
+     function row, Tab/Space/Enter/Backspace, the arrows and the nav keys) before
+     the browser can act, and lights the key.
+  3. That keydown listener exists ONLY while capturing: it is attached on
+     capture-start and removed the instant capture stops (Stop capturing, going back
+     to the chooser, a verdict, a new run), so it never swallows keys in the notes
+     field or the rest of the kiosk.
+  4. Three device layouts (Laptop Standard / Laptop Extended / Desktop Extended),
+     chosen before the test, data-driven, ISO default with an ISO/ANSI sub-choice,
+     with NO network lookup.
+  5. Every on-screen key is clickable: a click marks it seen too (touchscreens, and
+     keys the browser cannot see). A key the browser never saw is REPORTED in
+     missingKeys, NEVER auto-failed.
+  6. The two verdicts: "Keyboard is good" -> PASSED (hwPass) with the contract's
+     fields; "Keyboard has an issue" -> FAILED (hwFail) with a reason drawn from the
+     technician's note. A working notes field, saved in the result. The verdicts are
+     disabled AND guarded in code while capturing, so pressing the keys under test
+     can never file one.
+  7. A station that could not RUN the test is ATTENTION with a reason and an action,
+     NEVER FAILED. The region never says "Unknown".
 
 Sections 3+ need node and drive index.html under a DOM stand-in, the way
 tools/test-hwtest.py and tools/test-hwtest-screen.py do. Without node it says SKIP
@@ -76,37 +84,47 @@ print("1. the keyboard region, read straight out of index.html")
 check("all three keyboard regions are present and close", bool(CSS) and bool(MARKUP) and bool(JS),
       (len(CSS), len(MARKUP), len(JS)))
 check("the runner registers itself", "HWT_RUNNERS.keyboard=asyncfunction" in JSNS, JS[:200])
-check("it matches keys by event.code, not by character", "e&&e.code" in JSNS or "e.code" in JSNS, JS[:0])
+check("it matches keys by event.code, not by character", "e.code" in JS, JS[:0])
 check("it stores the contract's keyboard fields",
       all(f in JS for f in ("detectedKeys", "expectedKeys", "missingKeys",
-                            "layout", "confirmedBy", "notes")))
+                            "layout", "deviceType", "confirmedBy", "notes")))
 check("confirmedBy is recorded as the technician", "confirmedBy:'technician'" in JSNS, JS[:0])
-check("it offers both layouts the contract names (iso-105 default, ansi-104)",
-      "iso-105" in JS and "ansi-104" in JS)
+check("it offers the three device types the brief names, chosen before the test",
+      all(d in JS for d in ("laptop-standard", "laptop-extended", "desktop-extended")))
+check("the layouts are data-driven (a device table, not hand-written per layout)",
+      "KBD_DEVICES" in JS and "KBD_GROUPS" in JS)
 check("the region NEVER says 'Unknown' (owner's §8)", "nknown" not in MINE,
       [m.start() for m in re.finditer("nknown", MINE)])
 
+# THE fix, visible in the source: detection is on a document keydown listener that
+# preventDefaults AND stopPropagations, and it is removed again on stop. The old
+# too-late keyup detection is gone.
+check("THE fix: it captures on a document keydown listener (not keyup, which was too late)",
+      "document.addEventListener('keydown'" in JSNS, JS[:0])
+check("...and it cancels the browser's default AND stops the event before it acts",
+      "preventDefault" in JS and "stopPropagation" in JS, JS[:0])
+check("...and removes that keydown listener again, so nothing is left listening",
+      "document.removeEventListener('keydown'" in JSNS, JS[:0])
+check("it no longer relies on a document keyup handler for detection",
+      "document.addEventListener('keyup'" not in JSNS, JS[:0])
+
 # The suppression the owner asks for, visible in the source: the verdicts are
-# guarded on KBD.capturing, and the global handler preventDefaults so a key press
-# cannot activate anything while the technician is pressing the keys under test.
+# guarded on KBD.capturing, so pressing the keys under test cannot file one.
 check("verdicts are guarded so a keypress cannot fire one while capturing",
       "if(KBD.capturing)return" in JSNS, JS[:0])
-check("the capturing handler preventDefaults every press", "preventDefault" in JS, JS[:0])
+check("Continue starts disabled until a device is chosen (the affordance)",
+      'id="kbdContinue" disabled' in JS, JS[:0])
 
-# It takes the ONE global key handler the kiosk allows (keyup, never a keydown
-# handler - the shell forbids that and tools/test-hwtest.py enforces it), and it
-# gives it back again.
-check("it takes NO global keydown handler (the shell's rule)",
-      "addEventListener('keydown'" not in JSNS and "onkeydown" not in JS, JS[:0])
-check("it captures with a document-level keyup handler",
-      "document.addEventListener('keyup'" in JSNS, JS[:0])
-check("...and gives it up again (removeEventListener), so nothing is left listening",
-      "document.removeEventListener('keyup'" in JSNS, JS[:0])
+# The on-screen keys are clickable, and it is offline-first: no network of any kind.
+check("every on-screen key gets a click handler (a click marks it seen too)",
+      "b.addEventListener('click'" in JSNS, JS[:0])
+check("the region adds no network/fetch (offline-first station)",
+      "fetch(" not in JS and "XMLHttpRequest" not in JS and "/api/hwtest/" not in JS, JS[:0])
 
 # ------------------------------------------------ 2. no station-side duty --
 print("2. the keyboard test needs no station-side preparation")
 # Unlike speaker (unmute), screen (stop blanking) and camera (pre-grant), the
-# keyboard test is pure browser input - keyup needs nothing set up at boot. So
+# keyboard test is pure browser input - keydown needs nothing set up at boot. So
 # it ships with the page alone, and must NOT reach for a station endpoint or a
 # boot-time command (which would drag in a duty this test does not have).
 check("the region calls no station audio/prep endpoint", "/api/hwtest/" not in JS, "")
@@ -137,7 +155,7 @@ function mk(id) {
     _declaredIds: [], _declaredEls: {}, value: '',
     disabled: false, tabIndex: 0, type: '', tagName: '', children: [], parentNode: null,
     _listeners: {}, options: [], selectedOptions: [], firstElementChild: { style: {} },
-    focus() {}, select() {}, setAttribute() {},
+    focus() {}, select() {}, setAttribute() {}, getAttribute() { return null; },
     get id() { return this._id; },
     set id(v) { this._id = String(v); if (this._id) els[this._id] = this; },
     // innerHTML like a real browser: replacing markup DETACHES the old subtree
@@ -167,12 +185,10 @@ function mk(id) {
     removeEventListener(t, f) { const a = this._listeners[t]; if (!a) return;
       const i = a.indexOf(f); if (i >= 0) a.splice(i, 1); },
     dispatch(t, ev) { (this._listeners[t] || []).slice().forEach(f => f(ev)); },
-    // A real pointer click reports detail>=1; a click the browser synthesises from
-    // Enter/Space on a focused button reports detail 0. The keyboard controls act
-    // only on detail>0, so the harness models both: click() is the mouse, keyClick()
-    // is a key press landing on a focused button.
-    click() { this.dispatch('click', { detail: 1 }); },
-    keyClick() { this.dispatch('click', { detail: 0 }); } };
+    // A real pointer click reports detail>=1; the keyboard test no longer needs a
+    // detail guard (the keydown handler cancels every press while capturing), but
+    // the harness keeps click() modelling a mouse click.
+    click() { this.dispatch('click', { detail: 1 }); } };
   const set = () => new Set(e._cls.split(' ').filter(Boolean));
   const put = (s) => { e._cls = Array.from(s).join(' '); };
   e.classList = { add(...c) { const s = set(); c.forEach(x => s.add(x)); put(s); },
@@ -183,7 +199,7 @@ function mk(id) {
   return e;
 }
 // The document itself is an mk node, so it carries real addEventListener /
-// removeEventListener / dispatch - which is what the keyboard test's global key
+// removeEventListener / dispatch - which is what the keyboard test's keydown
 // handler needs, and what lets this test feed it synthetic keydowns.
 const document = mk('__document__');
 document.getElementById = (id) => els[id] || (els[id] = mk(id));
@@ -208,112 +224,138 @@ run(`ORIG_CREATE = document.createElement; SAVED = [];
       hwtestNeedsFiling: false } }; };
   jpost = STAND_IN;`);
 const reset = () => run(`HWTEST = {}; HWT_RUNNING = false; HWT_MACHINE = ''; HWT_NOTE = '';
-  HWT_NEEDS_FILING = false; HWT_SAVES = 0; BOOT = {}; SAVED = [];
+  HWT_NEEDS_FILING = false; HWT_SAVES = 0; BOOT = {}; SAVED = []; PD = []; SP = [];
   document.createElement = ORIG_CREATE; jpost = STAND_IN;
   for (const k of HWT_KEYS) { delete HWT_UNSAVED[k]; }
-  KBD.stopCapture(); KBD.seen = new Set(); KBD.layout = 'iso-105'; KBD.keyEls = {}; KBD.resolve = null;
+  KBD.stopCapture(); KBD.device = ''; KBD.pending = ''; KBD.iso = true;
+  KBD.built = null; KBD.seen = new Set(); KBD.keyEls = {}; KBD.resolve = null;
   document.getElementById('hwtDetail_keyboard').innerHTML = '';
   renderHwTest();`);
+// Press keys as the browser does: keydown FIRST (which is where the fix acts),
+// with spies that record every preventDefault / stopPropagation the handler makes.
 const press = (codes) => run(
   "[" + codes.map(c => "'" + c + "'").join(",") + "].forEach(function(code){" +
-  " document.dispatch('keydown',{code:code,preventDefault:function(){}});" +
-  " document.dispatch('keyup',{code:code,preventDefault:function(){}}); });");
+  " document.dispatch('keydown',{code:code," +
+  " preventDefault:function(){PD.push(code);}," +
+  " stopPropagation:function(){SP.push(code);}}); });");
+const kd = () => run(`document._listeners['keydown'] ? document._listeners['keydown'].length : 0`);
 
 // The runner is registered by the region, at load, and matches by event.code.
 out.registered = run(`typeof HWT_RUNNERS.keyboard`);
 
-// ---- A technician PASS, with the suppression guards exercised along the way.
+// ---- A technician "Keyboard is good": the chooser, the guards, the keydown fix.
 reset();
 let p = run(`runHwTest('keyboard')`);
 out.inProgress = run(`HWTEST.keyboard ? HWTEST.keyboard.status : ''`);
-out.layout0 = run(`KBD.layout`);
-out.expected0 = run(`KBD.compute().exp`);
+out.capturingBeforeChoose = run(`KBD.capturing`);
+out.keydownBeforeChoose = kd();
+// Continue does NOTHING until a device is chosen (Continue is disabled too, this
+// is the matching code guard) - no board, no capture.
+run(`document.getElementById('kbdContinue').click();`);
+out.deviceAfterEarlyContinue = run(`KBD.device`);
+out.capturingAfterEarlyContinue = run(`KBD.capturing`);
+// Choose the desktop layout, then Continue.
+run(`document.getElementById('kbdDev_desktop-extended').click();`);
+out.pending = run(`KBD.pending`);
+out.continueEnabled = run(`document.getElementById('kbdContinue').disabled === false`);
+run(`document.getElementById('kbdContinue').click();`);
+out.device = run(`KBD.device`);
 out.capturing0 = run(`KBD.capturing`);
-out.passDisabledCap = run(`document.getElementById('kbdPass').disabled`);
-// Press the danger keys among others: P, F, Enter and Space are exactly the keys
-// that must NOT trigger a verdict while the technician is testing them.
-press(['KeyA', 'KeyP', 'KeyF', 'Enter', 'Space']);
+out.isoDefault = run(`KBD.iso`);
+out.expected0 = run(`KBD.compute().exp`);
+out.goodDisabledCap = run(`document.getElementById('kbdGood').disabled`);
+out.notesDisabledCap = run(`document.getElementById('kbdNotes').disabled`);
+out.keydownDuringCap = kd();
+// Press the very keys the owner reported: F3/F5/F7 and the function/nav keys, plus
+// the keys that could file a verdict (Enter/Space). All must be cancelled AND lit.
+press(['KeyA', 'F3', 'F5', 'F7', 'F1', 'F12', 'Tab', 'Space', 'Enter', 'Backspace',
+       'ArrowUp', 'Home', 'End', 'PageUp', 'PageDown']);
+out.pd = run(`PD.slice()`);
+out.sp = run(`SP.slice()`);
 out.seenCount = run(`KBD.seen.size`);
+out.litF3 = run(`!!(KBD.keyEls['F3'] && KBD.keyEls['F3'].classList.contains('kbd-seen'))`);
 out.litA = run(`!!(KBD.keyEls['KeyA'] && KBD.keyEls['KeyA'].classList.contains('kbd-seen'))`);
-out.detDuringCap = run(`KBD.compute().det`);
 out.statusAfterKeys = run(`HWTEST.keyboard ? HWTEST.keyboard.status : ''`);
-// A stray click on a verdict while capturing must record NOTHING (code guard).
-run(`document.getElementById('kbdPass').click(); document.getElementById('kbdFail').click();`);
+// A stray click on a verdict WHILE capturing must record NOTHING (code guard).
+run(`document.getElementById('kbdGood').click(); document.getElementById('kbdIssue').click();`);
 out.statusAfterStrayClick = run(`HWTEST.keyboard ? HWTEST.keyboard.status : ''`);
-out.listenersDuringCap = run(`document._listeners['keyup'] ? document._listeners['keyup'].length : 0`);
-// Stop capturing with the mouse, and only now do the verdicts arm.
+// Stop capturing with the mouse: verdicts and notes arm, and the keydown handler
+// is handed back at once.
 run(`document.getElementById('kbdToggle').click();`);
 out.capturingAfterStop = run(`KBD.capturing`);
-out.passDisabledAfterStop = run(`document.getElementById('kbdPass').disabled`);
-out.listenersAfterStop = run(`document._listeners['keyup'] ? document._listeners['keyup'].length : 0`);
+out.goodDisabledAfterStop = run(`document.getElementById('kbdGood').disabled`);
+out.notesDisabledAfterStop = run(`document.getElementById('kbdNotes').disabled`);
+out.keydownAfterStop = kd();
+// The notes field takes text now the handler is gone (the owner's bug), and it is
+// carried into the result.
 run(`document.getElementById('kbdNotes').value = 'all keys felt fine';`);
-run(`document.getElementById('kbdPass').click();`);
+run(`document.getElementById('kbdGood').click();`);
 await p;
-out.pass = run(`HWTEST.keyboard`);
-out.passSaved = run(`SAVED.length`);
-out.listenersAfterPass = run(`document._listeners['keyup'] ? document._listeners['keyup'].length : 0`);
+out.good = run(`HWTEST.keyboard`);
+out.goodSaved = run(`SAVED.length`);
+out.keydownAfterGood = kd();
 
-// ---- "Some keys don't work": ATTENTION with a plain-English reason and action.
+// ---- A click on an on-screen key marks it seen (touchscreens / keys the browser
+// cannot see). Fresh run so the count is clean.
 reset();
 p = run(`runHwTest('keyboard')`);
+run(`document.getElementById('kbdDev_desktop-extended').click(); document.getElementById('kbdContinue').click();`);
+out.clickBefore = run(`KBD.seen.has('F9')`);
+run(`KBD.keyEls['F9'].click();`);
+out.clickAfter = run(`KBD.seen.has('F9')`);
+out.clickDet = run(`KBD.compute().det`);
+run(`document.getElementById('kbdToggle').click(); document.getElementById('kbdGood').click();`);
+await p;
+
+// ---- "Keyboard has an issue" -> FAILED, with the reason drawn from the note.
+reset();
+p = run(`runHwTest('keyboard')`);
+run(`document.getElementById('kbdDev_laptop-standard').click(); document.getElementById('kbdContinue').click();`);
 press(['KeyA']);
 run(`document.getElementById('kbdToggle').click();`);
-run(`document.getElementById('kbdAttn').click();`);
+run(`document.getElementById('kbdNotes').value = 'F7 not responding';`);
+run(`document.getElementById('kbdIssue').click();`);
 await p;
-out.attn = run(`HWTEST.keyboard`);
+out.issue = run(`HWTEST.keyboard`);
 
-// ---- A FAIL is the technician's own answer, and the only way to FAILED. Here
-// the whole keyboard is dead: nothing lit, but that is not what fails it - the
-// human's click is.
+// ---- The three device layouts, selected correctly, with the right key totals;
+// and going back to the chooser removes the keydown listener.
+// The ISO/ANSI sub-choice persists within a run, so each count is read with the
+// standard forced explicitly (clicking ISO/ANSI), which also exercises the toggle.
 reset();
 p = run(`runHwTest('keyboard')`);
-run(`document.getElementById('kbdToggle').click();`);
-run(`document.getElementById('kbdFail').click();`);
-await p;
-out.fail = run(`HWTEST.keyboard`);
-
-// ---- Switching layout mid-run keeps the keys already seen and recomputes the
-// expected total against the new layout.
-reset();
-p = run(`runHwTest('keyboard')`);
-press(['KeyA']);
-out.expIso = run(`KBD.compute().exp`);
+run(`document.getElementById('kbdDev_laptop-standard').click(); document.getElementById('kbdContinue').click();
+     document.getElementById('kbdIso').click();`);
+out.expLaptopStdIso = run(`KBD.compute().exp`);
 run(`document.getElementById('kbdAnsi').click();`);
-out.layoutAnsi = run(`KBD.layout`);
-out.expAnsi = run(`KBD.compute().exp`);
-out.seenKept = run(`KBD.seen.has('KeyA')`);
-run(`document.getElementById('kbdToggle').click(); document.getElementById('kbdPass').click();`);
+out.expLaptopStdAnsi = run(`KBD.compute().exp`);
+run(`document.getElementById('kbdBack').click();`);
+out.keydownAfterBack = kd();
+out.capturingAfterBack = run(`KBD.capturing`);
+run(`document.getElementById('kbdDev_laptop-extended').click(); document.getElementById('kbdContinue').click();
+     document.getElementById('kbdIso').click();`);
+out.expLaptopExt = run(`KBD.compute().exp`);
+run(`document.getElementById('kbdBack').click();
+     document.getElementById('kbdDev_desktop-extended').click(); document.getElementById('kbdContinue').click();
+     document.getElementById('kbdIso').click();`);
+out.expDesktopIso = run(`KBD.compute().exp`);
+run(`document.getElementById('kbdAnsi').click();`);
+out.expDesktopAnsi = run(`KBD.compute().exp`);
+run(`document.getElementById('kbdIso').click(); document.getElementById('kbdToggle').click();
+     document.getElementById('kbdGood').click();`);
 await p;
-out.switchLayout = run(`HWTEST.keyboard ? HWTEST.keyboard.layout : ''`);
+out.savedDevice = run(`HWTEST.keyboard ? HWTEST.keyboard.deviceType : ''`);
+out.savedLayout = run(`HWTEST.keyboard ? HWTEST.keyboard.layout : ''`);
 
-// ---- The station could not build the panel: ATTENTION with a reason and an
-// action, NEVER FAILED.
+// ---- The station could not draw the layout: ATTENTION with a reason and an
+// action, NEVER FAILED. (Runs LAST because it breaks document.createElement.)
 reset();
-run(`document.createElement = function () { throw new Error('no DOM here'); };`);
 p = run(`runHwTest('keyboard')`);
+run(`document.createElement = function () { throw new Error('no DOM here'); };`);
+run(`document.getElementById('kbdDev_laptop-standard').click(); document.getElementById('kbdContinue').click();`);
 await p;
 out.cannot = run(`HWTEST.keyboard`);
 run(`document.createElement = ORIG_CREATE;`);
-
-// ---- While capturing, the three controls that stay enabled (Stop capturing and
-// the two layout toggles) are in the tab order, so testing Tab then Enter could
-// tab onto one and Enter would click it. Enter/Space synthesise a click with
-// detail 0; a mouse reports detail>=1. A detail-0 click must do NOTHING - or the
-// sweep ends silently and a later key could file a verdict the technician never
-// chose. A real mouse click on the same button must still work.
-reset();
-p = run(`runHwTest('keyboard')`);
-press(['KeyA']);
-run(`document.getElementById('kbdToggle').keyClick();`);   // Enter on "Stop capturing"
-out.capAfterKeyToggle = run(`KBD.capturing`);
-out.passStillLocked = run(`document.getElementById('kbdPass').disabled`);
-run(`document.getElementById('kbdAnsi').keyClick();`);      // Enter on the ANSI toggle
-out.layoutAfterKeyToggle = run(`KBD.layout`);
-run(`document.getElementById('kbdToggle').click();`);       // the mouse still stops it
-out.capAfterMouseToggle = run(`KBD.capturing`);
-run(`document.getElementById('kbdPass').click();`);
-await p;
-out.keyGuardPass = run(`HWTEST.keyboard ? HWTEST.keyboard.status : ''`);
 
 process.stdout.write(JSON.stringify(out));
 """
@@ -331,81 +373,101 @@ process.stdout.write(JSON.stringify(out));
     check("HWT_RUNNERS.keyboard is a function", o.get("registered") == "function", o.get("registered"))
     check("the shell sets the row to IN_PROGRESS before the runner records",
           o.get("inProgress") == "IN_PROGRESS", o.get("inProgress"))
-    check("the default layout is ISO-105 (the UK/EU laptop default)",
-          o.get("layout0") == "iso-105", o.get("layout0"))
-    check("...and its expected total is 105 keys", o.get("expected0") == 105, o.get("expected0"))
-    check("capture starts at once so keys can be pressed straight away",
-          o.get("capturing0") is True, o.get("capturing0"))
 
-    # The suppression: verdicts are OFF while capturing, and pressing the danger
-    # keys neither activates a verdict nor is auto-recorded.
-    check("the verdict buttons are disabled while capturing (the affordance)",
-          o.get("passDisabledCap") is True, o.get("passDisabledCap"))
-    check("key releases are seen and light their key while capturing",
-          o.get("seenCount") == 5 and o.get("litA") is True and o.get("detDuringCap") == 5,
-          (o.get("seenCount"), o.get("litA"), o.get("detDuringCap")))
-    check("pressing P / F / Enter / Space records NO verdict - the run is still in progress",
+    # The chooser comes first: no board, no capture, no keydown handler until a
+    # device is chosen and Continue is pressed.
+    check("no key is captured, and no keydown handler is bound, on the type chooser",
+          o.get("capturingBeforeChoose") is False and o.get("keydownBeforeChoose") == 0,
+          (o.get("capturingBeforeChoose"), o.get("keydownBeforeChoose")))
+    check("Continue does nothing until a device is chosen (the code guard)",
+          o.get("deviceAfterEarlyContinue") == "" and o.get("capturingAfterEarlyContinue") is False,
+          (o.get("deviceAfterEarlyContinue"), o.get("capturingAfterEarlyContinue")))
+    check("choosing a device sets it pending and enables Continue",
+          o.get("pending") == "desktop-extended" and o.get("continueEnabled") is True,
+          (o.get("pending"), o.get("continueEnabled")))
+    check("Continue starts the test on the chosen device, ISO by default",
+          o.get("device") == "desktop-extended" and o.get("capturing0") is True
+          and o.get("isoDefault") is True, (o.get("device"), o.get("capturing0"), o.get("isoDefault")))
+    check("the desktop-extended ISO layout is the full 105 keys",
+          o.get("expected0") == 105, o.get("expected0"))
+
+    # The suppression AND the fix, together: verdicts/notes off while capturing,
+    # exactly one keydown handler attached, and every danger key both cancelled and
+    # lit rather than acted on by the browser.
+    check("the verdict buttons and the notes field are disabled while capturing",
+          o.get("goodDisabledCap") is True and o.get("notesDisabledCap") is True,
+          (o.get("goodDisabledCap"), o.get("notesDisabledCap")))
+    check("exactly one document keydown handler is attached while capturing",
+          o.get("keydownDuringCap") == 1, o.get("keydownDuringCap"))
+    dangerous = {"F3", "F5", "F7", "F1", "F12", "Tab", "Space", "Enter", "Backspace",
+                 "ArrowUp", "Home", "End", "PageUp", "PageDown"}
+    pd = set(o.get("pd") or [])
+    sp = set(o.get("sp") or [])
+    check("THE fix: F3/F5/F7 and the function/nav/edit keys have their default cancelled on keydown",
+          dangerous.issubset(pd), sorted(dangerous - pd))
+    check("...and the event is stopped as well, before anything downstream can act",
+          dangerous.issubset(sp), sorted(dangerous - sp))
+    check("each press is seen and lights its key (Press F3 -> F3 lights up)",
+          o.get("seenCount") == 15 and o.get("litF3") is True and o.get("litA") is True,
+          (o.get("seenCount"), o.get("litF3"), o.get("litA")))
+    check("pressing Enter / Space / F-keys records NO verdict - the run is still in progress",
           o.get("statusAfterKeys") == "IN_PROGRESS", o.get("statusAfterKeys"))
     check("a stray click on a verdict WHILE capturing records nothing (the code guard)",
           o.get("statusAfterStrayClick") == "IN_PROGRESS", o.get("statusAfterStrayClick"))
-    check("exactly one document key handler is attached while capturing",
-          o.get("listenersDuringCap") == 1, o.get("listenersDuringCap"))
-    check("Stop capturing (a mouse click) ends capture and arms the verdicts",
-          o.get("capturingAfterStop") is False and o.get("passDisabledAfterStop") is False,
-          (o.get("capturingAfterStop"), o.get("passDisabledAfterStop")))
-    check("...and hands the global key handler back on Stop",
-          o.get("listenersAfterStop") == 0, o.get("listenersAfterStop"))
+    check("Stop capturing (a mouse click) ends capture and arms the verdicts and notes",
+          o.get("capturingAfterStop") is False and o.get("goodDisabledAfterStop") is False
+          and o.get("notesDisabledAfterStop") is False,
+          (o.get("capturingAfterStop"), o.get("goodDisabledAfterStop"), o.get("notesDisabledAfterStop")))
+    check("...and hands the keydown handler back on Stop (so the notes field takes text)",
+          o.get("keydownAfterStop") == 0, o.get("keydownAfterStop"))
 
-    ps = o.get("pass") or {}
-    check("a technician PASS stores PASSED", ps.get("status") == "PASSED", ps)
-    check("...with the contract's fields, confirmed by the technician",
-          ps.get("detectedKeys") == 5 and ps.get("expectedKeys") == 105
-          and isinstance(ps.get("missingKeys"), list) and len(ps.get("missingKeys")) == 100
-          and ps.get("layout") == "iso-105" and ps.get("confirmedBy") == "technician"
-          and ps.get("notes") == "all keys felt fine", ps)
-    check("a PASS is saved through the shell (hwSave ran)", o.get("passSaved", 0) >= 1, o.get("passSaved"))
-    check("the global key handler is gone once the test ends", o.get("listenersAfterPass") == 0,
-          o.get("listenersAfterPass"))
+    gd = o.get("good") or {}
+    check("'Keyboard is good' stores PASSED", gd.get("status") == "PASSED", gd)
+    check("...with the contract's fields, confirmed by the technician, and the note saved",
+          gd.get("detectedKeys") == 15 and gd.get("expectedKeys") == 105
+          and isinstance(gd.get("missingKeys"), list) and len(gd.get("missingKeys")) == 90
+          and gd.get("layout") == "ISO" and gd.get("confirmedBy") == "technician"
+          and gd.get("notes") == "all keys felt fine"
+          and "Desktop" in (gd.get("deviceType") or "") and "Extended" in (gd.get("deviceType") or ""),
+          gd)
+    check("a good result is saved through the shell (hwSave ran)", o.get("goodSaved", 0) >= 1, o.get("goodSaved"))
+    check("the keydown handler is gone once the test ends", o.get("keydownAfterGood") == 0,
+          o.get("keydownAfterGood"))
 
-    at = o.get("attn") or {}
-    check("'some keys don't work' is ATTENTION, not a failure", at.get("status") == "ATTENTION", at)
-    check("...with a plain-English reason and an action, and the unseen keys carried",
-          "some keys do not work" in (at.get("reason") or "")
-          and bool(at.get("action")) and at.get("detectedKeys") == 1
-          and len(at.get("missingKeys") or []) == 104, at)
+    check("an on-screen key that was not pressed is not seen until it is clicked",
+          o.get("clickBefore") is False, o.get("clickBefore"))
+    check("clicking an on-screen key marks it seen (mouse/touch fallback)",
+          o.get("clickAfter") is True and o.get("clickDet") == 1,
+          (o.get("clickAfter"), o.get("clickDet")))
 
-    fl = o.get("fail") or {}
-    check("a technician FAIL stores FAILED (only a human's click can)", fl.get("status") == "FAILED", fl)
-    check("...and a dead keyboard is FAILED by the human, not auto-failed by absence",
-          "does not work" in (fl.get("reason") or "") and fl.get("detectedKeys") == 0
-          and fl.get("expectedKeys") == 105, fl)
+    iss = o.get("issue") or {}
+    check("'Keyboard has an issue' stores FAILED (the technician's own answer)",
+          iss.get("status") == "FAILED", iss)
+    check("...with the fault drawn from the note, and the note carried in the result",
+          "F7 not responding" in (iss.get("reason") or "")
+          and iss.get("notes") == "F7 not responding" and iss.get("detectedKeys") == 1, iss)
 
-    check("switching to ANSI keeps the keys already seen", o.get("seenKept") is True, o.get("seenKept"))
-    check("...and recomputes the expected total (105 -> 104)",
-          o.get("expIso") == 105 and o.get("layoutAnsi") == "ansi-104" and o.get("expAnsi") == 104,
-          (o.get("expIso"), o.get("layoutAnsi"), o.get("expAnsi")))
-    check("...and the recorded layout is the one that was on screen at the end",
-          o.get("switchLayout") == "ansi-104", o.get("switchLayout"))
+    check("Laptop Standard is ~84 keys (ISO 85 / ANSI 84), no numpad",
+          o.get("expLaptopStdIso") == 85 and o.get("expLaptopStdAnsi") == 84,
+          (o.get("expLaptopStdIso"), o.get("expLaptopStdAnsi")))
+    check("going back to the chooser removes the keydown listener and stops capture",
+          o.get("keydownAfterBack") == 0 and o.get("capturingAfterBack") is False,
+          (o.get("keydownAfterBack"), o.get("capturingAfterBack")))
+    check("Laptop Extended adds a numpad (~99; ISO 102 here)",
+          o.get("expLaptopExt") == 102, o.get("expLaptopExt"))
+    check("Desktop Extended is the full 105 (ISO) / 104 (ANSI)",
+          o.get("expDesktopIso") == 105 and o.get("expDesktopAnsi") == 104,
+          (o.get("expDesktopIso"), o.get("expDesktopAnsi")))
+    check("the recorded device type and standard are the ones on screen at the end",
+          "Desktop" in (o.get("savedDevice") or "") and o.get("savedLayout") == "ISO",
+          (o.get("savedDevice"), o.get("savedLayout")))
 
     cn = o.get("cannot") or {}
-    check("a station that could not build the panel is ATTENTION, NEVER FAILED",
+    check("a station that could not draw the layout is ATTENTION, NEVER FAILED",
           cn.get("status") == "ATTENTION" and cn.get("status") != "FAILED", cn)
     check("...and it says why and what to do",
-          "could not build the keyboard test panel" in (cn.get("reason") or "")
+          "could not draw the keyboard layout" in (cn.get("reason") or "")
           and "Run the keyboard test again" in (cn.get("action") or ""), cn)
-
-    # The guard against a pressed key clicking a live control (Enter on a button
-    # is a keydown default the keyup handler cannot cancel): a detail-0 click is
-    # ignored, so testing Tab-then-Enter can neither stop the sweep nor arm a verdict.
-    check("Enter on 'Stop capturing' (a detail-0 click) does NOT stop the sweep",
-          o.get("capAfterKeyToggle") is True, o.get("capAfterKeyToggle"))
-    check("...so the verdict buttons stay locked - a key cannot file a verdict mid-sweep",
-          o.get("passStillLocked") is True, o.get("passStillLocked"))
-    check("Enter on a layout toggle (detail-0) does NOT switch layout",
-          o.get("layoutAfterKeyToggle") == "iso-105", o.get("layoutAfterKeyToggle"))
-    check("a real mouse click (detail>=1) still stops the sweep, and the run completes",
-          o.get("capAfterMouseToggle") is False and o.get("keyGuardPass") == "PASSED",
-          (o.get("capAfterMouseToggle"), o.get("keyGuardPass")))
 
 shutil.rmtree(TMP, True)
 print("\n%d passed, %d failed" % (PASS[0], len(FAIL)))

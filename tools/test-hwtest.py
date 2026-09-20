@@ -268,10 +268,27 @@ check("the shared code sits outside every region",
               for m in ("HWTEST:SPEAKER:JS:START", "HWTEST:CAMERA:JS:START")))
 check("index.html never says 'Unknown' about a hardware test",
       "Unknown" not in HTML.replace("d.model!=='Unknown model'", ""))
-check("the page still binds no global key handler (the keyboard test's region says why)",
-      "addEventListener('keydown'" not in HTML and 'addEventListener("keydown"' not in HTML
-      and "onkeydown" not in HTML.replace(
-          'onkeydown="if(event.key===\'Enter\')doSignIn()"', ""))
+# The keyboard test (contract C6) needs ONE keydown listener, and only while it
+# is actively capturing keys: detection has to be on keydown, not keyup, or the
+# browser acts on F3/F5/F7 (Find, reload, caret browsing) before the page can
+# cancel them. That listener is allowed ONLY inside the keyboard region, added on
+# capture-start and removed the instant capture stops, so it never becomes an
+# always-on global key grab that swallows keys in the sign-in box, the notes field
+# and the rest of the kiosk. So the rule now has two halves: NO keydown handler may
+# be bound anywhere OUTSIDE the keyboard region (the sign-in field's inline Enter
+# handler stays the one allowed inline onkeydown), and the one INSIDE the region
+# must be paired with a removeEventListener (added on start, removed on stop).
+_KBD_JS = HTML[HTML.find("/* HWTEST:KEYBOARD:JS:START */"):HTML.find("/* HWTEST:KEYBOARD:JS:END */")]
+_OUTSIDE = HTML.replace(_KBD_JS, "")
+_OUTSIDE_NO_SIGNIN = _OUTSIDE.replace('onkeydown="if(event.key===\'Enter\')doSignIn()"', "")
+check("no global keydown handler is bound outside the keyboard test region",
+      "addEventListener('keydown'" not in _OUTSIDE
+      and 'addEventListener("keydown"' not in _OUTSIDE
+      and "onkeydown" not in _OUTSIDE_NO_SIGNIN)
+check("the keyboard region's keydown listener is paired with a removeEventListener "
+      "(added on capture-start, removed on capture-stop)",
+      ("addEventListener('keydown'" not in _KBD_JS)
+      or ("removeEventListener('keydown'" in _KBD_JS))
 
 node = shutil.which("node")
 if not node:
