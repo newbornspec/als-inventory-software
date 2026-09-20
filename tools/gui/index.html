@@ -2680,6 +2680,16 @@ const KBD={
   // preventDefaults so a release cannot activate a focused control (Space fires a
   // button on keyup) or scroll the page - so pressing the keys under test can do
   // nothing but light them up.
+  //
+  // Two presses slip a keyup handler by design, because their default happens on
+  // keydown and the kiosk is not allowed a keydown handler: Tab MOVES focus, and
+  // Enter ACTIVATES whatever now has focus. Left alone, testing Tab then Enter
+  // would tab off the board onto a live control (Stop capturing, a layout toggle)
+  // and Enter would click it - silently ending the sweep, or later filing a
+  // verdict the technician never chose. Two things close that: the live buttons
+  // ignore keyboard-synthesised clicks (see their handlers, detail>0), and here we
+  // pull focus straight back to the board after every key, so the next Enter finds
+  // only the board (a plain div, nothing to activate).
   onKeyUp:function(e){
     if(!KBD.capturing)return;
     if(e&&e.preventDefault)e.preventDefault();
@@ -2688,6 +2698,13 @@ const KBD={
     const el=KBD.keyEls[code];
     if(el&&el.classList) el.classList.add('kbd-seen');
     KBD.updateStatus();
+    // If Tab (or a stray click) parked focus off the board, take it back so the
+    // very next press cannot reach a live control. preventScroll keeps the panel
+    // from jumping as it happens on every key.
+    const board=$('kbdBoard');
+    if(board&&board.focus&&e&&e.target&&e.target!==board){
+      try{ board.focus({preventScroll:true}); }catch(err){ try{ board.focus(); }catch(err2){} }
+    }
   },
 
   // Enable/disable the verdicts and notes and set the wording, from KBD.capturing
@@ -2799,9 +2816,17 @@ HWT_RUNNERS.keyboard=async function(){
             '<button class="btn dan sm" type="button" id="kbdFail">Keyboard is faulty</button>'+
           '</div>'+
         '</div>';
-      $('kbdIso').addEventListener('click',function(){ KBD.setLayout('iso-105'); });
-      $('kbdAnsi').addEventListener('click',function(){ KBD.setLayout('ansi-104'); });
-      $('kbdToggle').addEventListener('click',function(){ if(KBD.capturing) KBD.stopCapture(); else KBD.startCapture(); });
+      // These three stay enabled during capture (the operator drives them with the
+      // mouse - the pointer is the exit on a machine whose keyboard is dead). But
+      // that also puts them in the tab order, so testing Tab then Enter could tab
+      // onto one and activate it. A mouse click reports detail>=1; a click that
+      // Enter or Space synthesised on a focused button reports detail 0. Acting
+      // only on detail>0 lets the mouse work while a pressed key can never click
+      // them - the guard the owner asks for, without a forbidden keydown handler.
+      const byMouse=function(fn){ return function(e){ if(e&&e.detail>0) fn(); }; };
+      $('kbdIso').addEventListener('click',byMouse(function(){ KBD.setLayout('iso-105'); }));
+      $('kbdAnsi').addEventListener('click',byMouse(function(){ KBD.setLayout('ansi-104'); }));
+      $('kbdToggle').addEventListener('click',byMouse(function(){ if(KBD.capturing) KBD.stopCapture(); else KBD.startCapture(); }));
       $('kbdPass').addEventListener('click',function(){ KBD.pass(); });
       $('kbdAttn').addEventListener('click',function(){ KBD.attention(); });
       $('kbdFail').addEventListener('click',function(){ KBD.fail(); });

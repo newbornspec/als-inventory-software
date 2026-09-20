@@ -167,7 +167,12 @@ function mk(id) {
     removeEventListener(t, f) { const a = this._listeners[t]; if (!a) return;
       const i = a.indexOf(f); if (i >= 0) a.splice(i, 1); },
     dispatch(t, ev) { (this._listeners[t] || []).slice().forEach(f => f(ev)); },
-    click() { this.dispatch('click', {}); } };
+    // A real pointer click reports detail>=1; a click the browser synthesises from
+    // Enter/Space on a focused button reports detail 0. The keyboard controls act
+    // only on detail>0, so the harness models both: click() is the mouse, keyClick()
+    // is a key press landing on a focused button.
+    click() { this.dispatch('click', { detail: 1 }); },
+    keyClick() { this.dispatch('click', { detail: 0 }); } };
   const set = () => new Set(e._cls.split(' ').filter(Boolean));
   const put = (s) => { e._cls = Array.from(s).join(' '); };
   e.classList = { add(...c) { const s = set(); c.forEach(x => s.add(x)); put(s); },
@@ -290,6 +295,26 @@ await p;
 out.cannot = run(`HWTEST.keyboard`);
 run(`document.createElement = ORIG_CREATE;`);
 
+// ---- While capturing, the three controls that stay enabled (Stop capturing and
+// the two layout toggles) are in the tab order, so testing Tab then Enter could
+// tab onto one and Enter would click it. Enter/Space synthesise a click with
+// detail 0; a mouse reports detail>=1. A detail-0 click must do NOTHING - or the
+// sweep ends silently and a later key could file a verdict the technician never
+// chose. A real mouse click on the same button must still work.
+reset();
+p = run(`runHwTest('keyboard')`);
+press(['KeyA']);
+run(`document.getElementById('kbdToggle').keyClick();`);   // Enter on "Stop capturing"
+out.capAfterKeyToggle = run(`KBD.capturing`);
+out.passStillLocked = run(`document.getElementById('kbdPass').disabled`);
+run(`document.getElementById('kbdAnsi').keyClick();`);      // Enter on the ANSI toggle
+out.layoutAfterKeyToggle = run(`KBD.layout`);
+run(`document.getElementById('kbdToggle').click();`);       // the mouse still stops it
+out.capAfterMouseToggle = run(`KBD.capturing`);
+run(`document.getElementById('kbdPass').click();`);
+await p;
+out.keyGuardPass = run(`HWTEST.keyboard ? HWTEST.keyboard.status : ''`);
+
 process.stdout.write(JSON.stringify(out));
 """
     with open(harness, "w", encoding="utf-8") as fh:
@@ -368,6 +393,19 @@ process.stdout.write(JSON.stringify(out));
     check("...and it says why and what to do",
           "could not build the keyboard test panel" in (cn.get("reason") or "")
           and "Run the keyboard test again" in (cn.get("action") or ""), cn)
+
+    # The guard against a pressed key clicking a live control (Enter on a button
+    # is a keydown default the keyup handler cannot cancel): a detail-0 click is
+    # ignored, so testing Tab-then-Enter can neither stop the sweep nor arm a verdict.
+    check("Enter on 'Stop capturing' (a detail-0 click) does NOT stop the sweep",
+          o.get("capAfterKeyToggle") is True, o.get("capAfterKeyToggle"))
+    check("...so the verdict buttons stay locked - a key cannot file a verdict mid-sweep",
+          o.get("passStillLocked") is True, o.get("passStillLocked"))
+    check("Enter on a layout toggle (detail-0) does NOT switch layout",
+          o.get("layoutAfterKeyToggle") == "iso-105", o.get("layoutAfterKeyToggle"))
+    check("a real mouse click (detail>=1) still stops the sweep, and the run completes",
+          o.get("capAfterMouseToggle") is False and o.get("keyGuardPass") == "PASSED",
+          (o.get("capAfterMouseToggle"), o.get("keyGuardPass")))
 
 shutil.rmtree(TMP, True)
 print("\n%d passed, %d failed" % (PASS[0], len(FAIL)))
