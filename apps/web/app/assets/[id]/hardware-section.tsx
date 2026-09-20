@@ -3,11 +3,14 @@
 // added to the capture script show up here with no frontend change. Read-only —
 // this is machine-captured data, kept separate from the editable warehouse fields.
 //
-// One exception to "generic": each drive's health (contract C5) is shown up
-// front as a percentage and a status in words, worded by lib/drive-health.ts -
-// the same formatter the reports use - rather than dumped as a JSON blob.
+// Two exceptions to "generic", both machine records that read as pure jargon if
+// dumped: each drive's health (contract C5) is shown up front as a percentage
+// and a status in words by lib/drive-health.ts, and the technician Hardware Test
+// (contract C6) is shown as a clean per-component summary by lib/hardware-test.ts
+// - the same formatters the reports use - rather than as JSON blobs.
 
 import { driveHealthView, type DriveHealthView } from '@/lib/drive-health';
+import { hardwareTestView, type HwTestTone } from '@/lib/hardware-test';
 
 const CATEGORY_LABELS: Record<string, string> = {
   identification: 'Identification',
@@ -141,6 +144,60 @@ function DriveHealthCard({ drive }: { drive: unknown }) {
   );
 }
 
+// The same tone->class map drive health uses, so a "Passed" here reads the same
+// as a "Good" drive beside it. Colour is only ever a hint: the word is always shown.
+const HWT_TONE: Record<HwTestTone, string> = {
+  good: 'border-emerald-200 bg-emerald-50 text-emerald-900',
+  warn: 'border-amber-200 bg-amber-50 text-amber-900',
+  bad: 'border-red-200 bg-red-50 text-red-900',
+  neutral: 'border-neutral-200 bg-white text-neutral-700',
+};
+
+function HwtBadge({ label, tone }: { label: string; tone: HwTestTone }) {
+  return (
+    <span className={`shrink-0 rounded-full border px-2 py-0.5 text-xs font-semibold ${HWT_TONE[tone]}`}>
+      {label}
+    </span>
+  );
+}
+
+// The technician Hardware Test (contract C6) as a human summary: an overall
+// badge in colour AND words, who ran it and when, then one plain line per
+// component. Renders nothing when the device has no test on record. Deliberately
+// never prints the stored jargon (audio mixer/sink, missing-key lists, colour
+// swatches, raw booleans) or the history log - hardwareTestView drops all of it.
+function HardwareTestCard({ test }: { test: unknown }) {
+  const v = hardwareTestView(test);
+  if (!v.present) return null;
+  return (
+    <div className="mt-4 rounded-lg border border-neutral-200 bg-neutral-50 p-4">
+      <div className="flex items-baseline justify-between gap-3">
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-neutral-500">
+          Hardware functional test
+        </h3>
+        <HwtBadge label={v.overall.label} tone={v.overall.tone} />
+      </div>
+      {v.meta && <div className="mt-1 text-xs text-neutral-500">{v.meta}</div>}
+      <ul className="mt-3 space-y-1.5">
+        {v.rows.map((row) => (
+          <li key={row.component} className="flex items-baseline justify-between gap-4 text-sm">
+            <div className="min-w-0">
+              <span className="font-medium text-neutral-800">{row.component}</span>
+              {row.summary && <span className="text-neutral-500"> — {row.summary}</span>}
+            </div>
+            <HwtBadge label={row.statusLabel} tone={row.tone} />
+          </li>
+        ))}
+      </ul>
+      {v.earlierCount > 0 && (
+        <div className="mt-2 text-xs text-neutral-400">
+          {v.earlierCount} earlier result{v.earlierCount === 1 ? '' : 's'} on record
+        </div>
+      )}
+    </div>
+  );
+}
+
 function KVRows({ obj, drive = false }: { obj: Record<string, unknown>; drive?: boolean }) {
   const entries = Object.entries(obj).filter(
     ([k, v]) => v != null && v !== '' && (!drive || driveEntryShown(k, v)),
@@ -207,8 +264,15 @@ export function HardwareSection({ profile }: { profile: Record<string, unknown> 
   // buying decision on. `driveHealth` is the old kiosk's unprivileged SMART
   // probe, grafted onto profiles before C5: it ran without root, so it mostly
   // reads "unknown" - superseded by each drive's own health above.
+  // `hardwareTest` is the technician functional test (contract C6): the walker
+  // would print its audio-mixer commands, missing-key lists, colour swatches and
+  // history log verbatim, so it is shown only by HardwareTestCard below.
   const extra = Object.keys(profile).filter(
-    (k) => !CATEGORY_ORDER.includes(k) && k !== 'locks' && k !== 'driveHealth',
+    (k) =>
+      !CATEGORY_ORDER.includes(k) &&
+      k !== 'locks' &&
+      k !== 'driveHealth' &&
+      k !== 'hardwareTest',
   );
   const ordered = [...known, ...extra];
 
@@ -218,6 +282,10 @@ export function HardwareSection({ profile }: { profile: Record<string, unknown> 
         <h2 className="text-xs font-semibold uppercase tracking-wide text-neutral-900">Hardware profile</h2>
         <span className="text-xs text-neutral-500">Auto-captured · read-only</span>
       </div>
+      {/* The technician functional test, shown up front as its own summary rather
+          than dumped into the auto-captured grid below (it renders nothing when
+          there is no test on record). */}
+      <HardwareTestCard test={profile.hardwareTest} />
       <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {ordered.map((cat) => (
           <CategoryCard key={cat} name={cat} value={profile[cat]} />
