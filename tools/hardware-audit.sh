@@ -2216,6 +2216,17 @@ CPU_CORES=""; { [ -n "$CPU_SOCKETS" ] && [ -n "$CPU_PERCORE" ]; } && CPU_CORES=$
 CPU_THREADS="$CPU_ALL"
 CPU_MAXMHZ=$(cpu_val 'CPU max MHz')
 CPU_MAX=""; [ -n "$CPU_MAXMHZ" ] && CPU_MAX=$(awk -v m="$CPU_MAXMHZ" 'BEGIN{ if(m+0>0) printf "%.1f GHz", m/1000 }')
+# The BASE (rated) clock is the "@ 2.10GHz" the chip prints in its own model
+# name, so it is read from there and nowhere else.
+#
+# lscpu's "CPU min MHz" is NOT the base clock — it is the lowest idle P-state,
+# 400 MHz on most laptops — and writing that into a spec sheet would understate
+# every machine we sell. A chip whose name carries no frequency (most AMD parts,
+# and Intel's hybrid chips) therefore has no base clock here at all, which is
+# the honest answer: the row stays empty rather than wrong.
+CPU_BASE=$(printf '%s' "$CPU_MODEL" \
+  | grep -oE '@[[:space:]]*[0-9]+(\.[0-9]+)?[[:space:]]*GHz' | head -n1 \
+  | sed -e 's/^@[[:space:]]*//' -e 's/[[:space:]]*GHz$/ GHz/')
 CPU_GEN=""
 if [ "$CPU_VENDOR" = "Intel" ]; then
   n=$(printf '%s' "$CPU_MODEL" | grep -oE 'i[3579][- ]?[0-9]{4,5}' | grep -oE '[0-9]{4,5}' | head -n1)
@@ -3020,16 +3031,58 @@ fi
 "
 
 # --- graphics ---
+# A dedicated card's REAL video memory, as its own driver publishes it in bytes
+# (/sys/class/drm/card*/device/mem_info_vram_total, which amdgpu and i915 write).
+# $1 is the PCI slot exactly as lspci prints it, e.g. "01:00.0".
+#
+# Nothing here is ever derived from a PCI BAR size. A BAR is an address window,
+# not the memory behind it: an 8 GB card commonly exposes a 256 MB BAR, and
+# Resizable BAR moves it around at will. Reading one as VRAM would invent a
+# number, which is exactly what this tool must never do — so a card whose driver
+# does not publish a total gets no figure at all and the row stays empty.
+als_gpu_vram() {
+  local slot="$1" d tot
+  for d in /sys/class/drm/card*/device; do
+    [ -r "$d/mem_info_vram_total" ] || continue
+    case "$(readlink -f "$d" 2>/dev/null)" in
+      *"$slot") ;;
+      *) continue ;;
+    esac
+    tot=$(cat "$d/mem_info_vram_total" 2>/dev/null)
+    case "$tot" in ''|*[!0-9]*) continue ;; esac
+    [ "$tot" -gt 0 ] 2>/dev/null || continue
+    awk -v b="$tot" 'BEGIN { if (b >= 1073741824) printf "%.0f GB", b/1073741824; else printf "%.0f MB", b/1048576 }'
+    return 0
+  done
+  return 1
+}
+
 GFX_ELEMS=""
 while IFS= read -r l; do
   [ -z "$l" ] && continue
+  # lspci -mm puts the slot first, before the first quote: "00:02.0 "VGA ...".
+  slot=$(printf '%s' "$l" | awk '{print $1}')
   vend=$(printf '%s' "$l" | awk -F'"' '{print $4}')
   dev=$(printf '%s' "$l" | awk -F'"' '{print $6}')
   case "$vend" in *Intel*) vend="Intel"; gtype="Integrated";;
     *NVIDIA*) vend="NVIDIA"; gtype="Dedicated";;
     *Advanced\ Micro*|*AMD*|*ATI*) vend="AMD"; gtype="";;
     *) gtype="";; esac
-  o_begin; o_s manufacturer "$vend"; o_s model "$dev"; o_s type "$gtype"
+  # Video memory, and only where it can be said honestly:
+  #   Integrated — there IS no dedicated memory, the GPU carves it out of system
+  #     RAM, so the sentence is the true answer and no number would be.
+  #   Dedicated  — the driver's own total, or nothing.
+  #   Untyped    — left empty on purpose. AMD ships both APUs and discrete cards
+  #     under the same vendor string, and amdgpu publishes mem_info_vram_total
+  #     for an APU too (the UMA carve-out), so a figure taken here could not be
+  #     told apart from real dedicated memory. Better an empty row than one that
+  #     reads as a spec the buyer is paying for.
+  vram=""
+  case "$gtype" in
+    Integrated) vram="Shared with system memory" ;;
+    Dedicated)  vram=$(als_gpu_vram "$slot") ;;
+  esac
+  o_begin; o_s manufacturer "$vend"; o_s model "$dev"; o_s type "$gtype"; o_s vram "$vram"
   GFX_ELEMS="$GFX_ELEMS,$(o_end)"
 done <<GFXEOF
 $(lspci -mm 2>/dev/null | grep -iE '"(VGA compatible controller|3D controller|Display controller)"')
@@ -3068,7 +3121,7 @@ done
 # (bytes 66/67 hold the low bytes); that is precise enough to identify the
 # marketed panel size, where the header's centimetre fields at 21/22 are not.
 # Those cm fields are kept as the fallback for panels with no DTD size.
-DISP_RES=""; DISP_SIZE=""
+DISP_RES=""; DISP_SIZE=""; DISP_HZ=""
 if [ "$DEVICE_TYPE" = "Laptop" ]; then
   for e in /sys/class/drm/*-eDP-*/edid /sys/class/drm/*-LVDS-*/edid /sys/class/drm/*-DSI-*/edid; do
     # DELIBERATELY -r, NOT -s. The kernel declares the DRM 'edid' attribute as a
@@ -3093,12 +3146,27 @@ if [ "$DEVICE_TYPE" = "Laptop" ]; then
         # are non-zero. Reading descriptor 1 blindly fails on panels that put a
         # display descriptor (monitor name, range limits) first, which is what the
         # Latitude 3310 does: its edid is a full 128 bytes yet yielded no size.
-        hmm = 0; vmm = 0; hpx = 0; vpx = 0
+        hmm = 0; vmm = 0; hpx = 0; vpx = 0; hz = ""
         for (o = 54; o <= 108; o += 18) {
           if (b[o] == 0 && b[o+1] == 0) continue          # not a timing descriptor
           if (hpx == 0) {
             hpx = (int(b[o+4] / 16) * 256) + b[o+2]
             vpx = (int(b[o+7] / 16) * 256) + b[o+5]
+            # Refresh rate of the PREFERRED mode - this first detailed timing
+            # descriptor is by definition the panel preferred one. EDID does not
+            # store a rate; it stores the three numbers it is computed from:
+            #   pixel clock (bytes 0-1, in 10 kHz units) / (htotal * vtotal)
+            # where each total is the active pixels plus that axis blanking (the
+            # low nibble of the same byte whose high nibble holds the actives).
+            pclk = ((b[o+1] * 256) + b[o]) * 10000
+            ht = hpx + ((b[o+4] % 16) * 256) + b[o+3]
+            vt = vpx + ((b[o+7] % 16) * 256) + b[o+6]
+            if (pclk > 0 && ht > 0 && vt > 0) {
+              r = pclk / (ht * vt)
+              # Outside this range the descriptor is not a rate we read
+              # correctly, so nothing is reported rather than "3 Hz".
+              if (r >= 23 && r <= 400) hz = sprintf("%d Hz", int(r + 0.5))
+            }
           }
           h = (int(b[o+14] / 16) * 256) + b[o+12]
           v = ((b[o+14] % 16) * 256) + b[o+13]
@@ -3126,12 +3194,63 @@ if [ "$DEVICE_TYPE" = "Laptop" ]; then
           }
         }
         res = (hpx > 0 && vpx > 0) ? sprintf("%dx%d", hpx, vpx) : ""
-        printf "%s|%s", size, res
+        printf "%s|%s|%s", size, res, hz
       }')
     DISP_SIZE=${EOUT%%|*}
-    DISP_RES=${EOUT#*|}
+    EREST=${EOUT#*|}
+    DISP_RES=${EREST%%|*}
+    DISP_HZ=${EREST#*|}
     [ -n "$DISP_SIZE" ] && break
   done
+fi
+
+# --- touchscreen -------------------------------------------------------------
+# The kernel's own answer, never a guess from the model name (a "Latitude 5300
+# 2-in-1" is a touch machine; a "Latitude 5300" is not, and half the stock is
+# labelled neither way).
+#
+# A touch DIGITISER declares INPUT_PROP_DIRECT - you touch the thing you are
+# pointing at - where a touchpad declares INPUT_PROP_POINTER. That is the same
+# bit libinput itself uses to tell the two apart, and it is the only reliable
+# way: both devices report multi-touch absolute axes, so the axes alone cannot
+# separate a touchscreen from the trackpad every laptop already has.
+#
+# "no" is recorded ONLY when the input list was readable AND at least one device
+# published a PROP line. A kernel that publishes no PROP bits at all has not
+# answered the question, and an unanswered question must leave the row empty
+# rather than tell an operator a touch machine has no touch.
+DISP_TOUCH=""
+if [ -r /proc/bus/input/devices ]; then
+  DISP_TOUCH=$(awk '
+    # One device block ends; decide what it was before the next begins.
+    #
+    # A PEN digitiser is DIRECT too, and a convertible that only takes a stylus
+    # is not what a buyer reads "Touchscreen: Yes" as. A machine that does take
+    # a finger publishes a SECOND device for it, which this still catches - so
+    # excluding the pen costs nothing and overstates nothing.
+    function flush() {
+      if ((direct && absany && name !~ /(^|[^a-z])(pen|stylus)([^a-z]|$)/) \
+          || name ~ /touch *screen/) touch = 1
+      if (propseen) anyprop = 1
+      direct = 0; absany = 0; propseen = 0; name = ""
+    }
+    /^$/                { flush(); next }
+    /^N: Name=/         { name = tolower($0) }
+    # The bitmaps are hex words, most significant first, so the DIRECT bit
+    # (value 2) lives in the low nibble of the LAST word. strtonum() would read
+    # the word outright and is gawk-only - the live image ships mawk.
+    /^B: PROP=/ {
+      propseen = 1
+      v = $0; sub(/^B: PROP=/, "", v); n = split(v, w, /[ \t]+/)
+      d = substr(w[n], length(w[n]), 1)
+      if (d ~ /^[2367abefABEF]$/) direct = 1
+    }
+    /^B: ABS=/ {
+      v = $0; sub(/^B: ABS=/, "", v)
+      if (v ~ /[1-9a-fA-F]/) absany = 1
+    }
+    END { flush(); if (touch) print "yes"; else if (anyprop) print "no" }
+  ' /proc/bus/input/devices 2>/dev/null)
 fi
 
 # --- why did the panel size come back empty? ---
@@ -3175,55 +3294,302 @@ for n in /sys/class/net/*; do
   [ -r "$n/address" ] && NET_MAC=$(cat "$n/address" 2>/dev/null) && break
 done
 
-# ================= assemble the profile JSON =================
-o_begin
-o_s manufacturer "$MFR"; o_s model "$MODEL"; o_s productName "$PRODUCT_NAME"
-o_s productFamily "$FAMILY"; o_s deviceType "$DEVICE_TYPE"
-o_s serialNumber "$SERIAL"; o_s serviceTag "$SERIAL"
-o_s expressServiceCode "$EXPRESS"; o_s biosUuid "$UUID"; o_s assetTag "$ASSET_TAG"
-IDENT=$(o_end)
+# --- OS-DETECT-BEGIN (tools/test-os-detect.py slices out everything between
+# these two markers and drives it against fixtures, so nothing in here may
+# depend on the rest of this file beyond pval() and lock-checks.sh) ----------
+#
+# THE INSTALLED OPERATING SYSTEM.
+#
+# The station boots its OWN Linux, so nothing it runs can ask the installed
+# Windows what it is — which is why the whole Operating System card on the asset
+# page has always been empty. But the lock checks already solved that problem:
+# they mount the machine's Windows volume READ-ONLY and read its registry hives
+# offline with hivex, because that is where Autopilot and Entra enrolment live.
+# This block borrows that machinery whole, to fill in the six fields the asset
+# page's Operating System card wants. It never mounts anything itself.
+#
+# The rules it keeps, which are the rules that make this tool safe to point at a
+# customer's machine:
+#   * the disk is mounted READ-ONLY, by lock_mount_windows, always;
+#   * every read of it runs under a time limit, so a dying disk cannot wedge a
+#     capture that still has a whole machine left to profile;
+#   * no answer is ever the word "Unknown". A wiped machine says "No operating
+#     system installed", which is TRUE and is exactly what the operator wants to
+#     see; anything we could not read says what stopped us and, where the
+#     operator can do something about it, what to do.
 
-o_begin
-o_s biosVersion "$BIOS_VER"; o_s biosReleaseDate "$BIOS_DATE"; o_s bootMode "$BOOT_MODE"
-o_s secureBoot "$SECURE_BOOT"; o_s tpmVersion "$TPM_VER"
-SYSTEM=$(o_end)
+# One read of the customer's disk under a time limit — the same shape as the
+# drive-health read (als_health_to), for the same reason: a hive on a failing
+# NTFS volume can block in the kernel for minutes.
+als_os_to() {
+  if command -v timeout >/dev/null 2>&1; then timeout "${ALS_OS_TIMEOUT:-20}" "$@"; else "$@"; fi
+}
 
-o_begin
-o_s manufacturer "$CPU_VENDOR"; o_s model "$CPU_MODEL"; o_s generation "$CPU_GEN"
-o_n cores "$CPU_CORES"; o_n threads "$CPU_THREADS"; o_s maxClock "$CPU_MAX"
-CPU=$(o_end)
+# One value out of an offline hive. Deliberately not lock_hive_get: that one
+# belongs to the lock report and runs hivexget untimed, and changing it would
+# change every detector's behaviour to fill in a display row.
+als_os_hive() {
+  [ -r "$1" ] || return 1
+  als_os_to hivexget "$1" "$2" "$3" 2>/dev/null
+}
 
-o_begin
-o_n totalGb "$RAM_GB"; o_s type "$RAM_TYPE"; o_s speed "$RAM_SPEED"
-# Only when it disagrees with the installed total — the OS-visible figure is a
-# diagnostic, not the spec, so it must never be what a label or export shows.
-[ -n "$RAM_DETECTED" ] && [ "$RAM_DETECTED" != "$RAM_GB" ] && o_n detectedGb "$RAM_DETECTED"
-o_n modules "$RAM_MODULES"; o_n slots "$RAM_SLOTS"; o_n maxGb "$RAM_MAX"
-MEMORY=$(o_end)
+# A REG_DWORD as a plain number. Current hivex prints one as a decimal, older
+# builds as "dword:0000000a" and some as "0x0a" — accept all three, and refuse
+# anything else rather than letting a hivex artefact through as a build number.
+als_os_num() {
+  local v
+  v=$(printf '%s' "$1" | tr -d '[:space:]')
+  case "$v" in
+    dword:*) v=$(printf '%d' "0x${v#dword:}" 2>/dev/null) ;;
+    0[xX]*)  v=$(printf '%d' "$v" 2>/dev/null) ;;
+  esac
+  case "$v" in ''|*[!0-9]*) return 1 ;; esac
+  printf '%s' "$v"
+}
 
-o_begin
-o_s size "$DISP_SIZE"; o_s resolution "$DISP_RES"
-o_s detectDebug "$DISP_DEBUG"
-DISPLAY_OBJ=$(o_end)
+# The edition, but only when it ADDS something. ProductName usually names it
+# already ("Windows 10 Pro"), so appending EditionID blindly gives "Windows 10
+# Pro Pro"; a Server or an Education image, on the other hand, can carry a bare
+# "Windows 10" with the edition only in EditionID. Returns non-zero when there
+# is nothing worth adding.
+als_os_edition() {
+  local short lower name squashed raw
+  case "$2" in
+    Professional*Workstation*) short="Pro for Workstations" ;;
+    Professional*)             short="Pro" ;;
+    Core*Single*Language*)     short="Home Single Language" ;;
+    CoreN)                     short="Home N" ;;
+    Core)                      short="Home" ;;
+    # ServerStandard / ServerDatacenter: the product name already says Server,
+    # so only the tier is worth adding.
+    Server?*)                  short="${2#Server}" ;;
+    '')                        return 1 ;;
+    *)                         short="$2" ;;
+  esac
+  [ -n "$short" ] || return 1
 
-o_begin
-o_s health "$BAT_HEALTH"; o_s designCapacity "$BAT_DESIGN"; o_s fullChargeCapacity "$BAT_FULL"
-o_n cycleCount "$BAT_CYCLES"; o_s status "$BAT_STATUS"
-BATTERY=$(o_end)
+  name=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
+  lower=$(printf '%s' "$short" | tr '[:upper:]' '[:lower:]')
+  case "$name" in *"$lower"*) return 1 ;; esac
+  # And again with the spaces taken out, so "Windows 10 IoT Enterprise" is not
+  # given a second "IoTEnterprise" on the end of it.
+  squashed=$(printf '%s' "$name" | tr -d ' ')
+  raw=$(printf '%s' "$2" | tr '[:upper:]' '[:lower:]' | tr -d ' ')
+  case "$squashed" in *"$raw"*) return 1 ;; esac
+  printf '%s' "$short"
+}
 
-o_begin
-o_s ethernet "$NET_ETH"; o_s wifi "$NET_WIFI"; o_s bluetooth "$NET_BT"; o_s macAddress "$NET_MAC"
-NETWORK=$(o_end)
+# Every filesystem on the machine's OWN disks, as lsblk key="value" lines.
+# Removable and USB devices are skipped for exactly the reason the storage scan
+# skips them: the station's own boot stick must never be read as the machine.
+als_os_volumes() {
+  lock_has lsblk || return 1
+  als_os_to lsblk -Pno NAME,TYPE,FSTYPE,MOUNTPOINT,RM,TRAN 2>/dev/null
+}
+
+# What the disks say, in one word, from the lines above on stdin. Pure text in,
+# one token out, so every branch can be driven by a test without a disk:
+#   NONE          internal disks were seen and carry nothing that can hold an OS
+#   LINUX <mnt>   a Linux root is already mounted, so it is free to read
+#   OTHER         a non-Windows system is there and we did not read it
+#   (nothing)     there was no internal disk to look at, so there is no answer
+als_os_disk_verdict() {
+  local line fs mp rm tran type disks=0 other=0 linux_mp=""
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    rm=$(pval "$line" RM); tran=$(pval "$line" TRAN)
+    [ "$rm" = "1" ] && continue
+    [ "$tran" = "usb" ] && continue
+    type=$(pval "$line" TYPE); fs=$(pval "$line" FSTYPE); mp=$(pval "$line" MOUNTPOINT)
+    [ "$type" = "disk" ] && disks=$((disks + 1))
+    case "$fs" in
+      ext2|ext3|ext4|xfs|btrfs|f2fs|reiserfs)
+        other=1
+        # Mounted already, and not the live system's own root — which IS an
+        # /etc/os-release, and reporting the station's Ubuntu as the machine's
+        # operating system would be the worst answer this block could give.
+        if [ -n "$mp" ] && [ "$mp" != "/" ] && [ -z "$linux_mp" ]; then linux_mp="$mp"; fi
+        ;;
+      # A filesystem that can hold a system, or hides whether it does. Note
+      # ntfs: we only reach this function when no READABLE Windows was found, so
+      # an NTFS volume here is a data disk or one we could not open — either way
+      # "no operating system installed" would be a lie.
+      ntfs|ntfs3|apfs|hfsplus|zfs_member|LVM2_member|crypto_LUKS)
+        other=1 ;;
+    esac
+  done
+  [ -n "$linux_mp" ] && { printf 'LINUX %s' "$linux_mp"; return 0; }
+  [ "$other" = "1" ] && { printf 'OTHER'; return 0; }
+  [ "$disks" -gt 0 ] && { printf 'NONE'; return 0; }
+  return 0
+}
+
+# No readable Windows: say what IS on the disks, and nothing more than that.
+als_os_without_windows() {
+  local verdict mp pretty
+  verdict=$(als_os_volumes | als_os_disk_verdict)
+  case "$verdict" in
+    NONE)
+      OS_NAME="No operating system installed"
+      return 0 ;;
+    LINUX\ *)
+      mp=${verdict#LINUX }
+      # PRETTY_NAME is the distribution's own one-line description.
+      pretty=$(als_os_to sed -n 's/^PRETTY_NAME=//p' "$mp/etc/os-release" 2>/dev/null \
+        | head -n1 | sed -e 's/^"//' -e 's/"$//')
+      if [ -n "$pretty" ]; then OS_NAME="$pretty"; return 0; fi
+      ;;
+  esac
+  # A non-Windows volume we did not open, or no disk to look at. Both are "we
+  # did not find Windows", and neither is "there is nothing installed".
+  OS_NAME="No Windows installation found"
+}
+
+# The registry key every Windows version has kept its own description in.
+OS_CV='Microsoft\Windows NT\CurrentVersion'
+
+OS_NAME=""; OS_VERSION=""; OS_BUILD=""; OS_ARCH=""; OS_PRODUCT_ID=""; OS_INSTALLED_ON=""
+
+als_read_installed_os() {
+  OS_NAME=""; OS_VERSION=""; OS_BUILD=""; OS_ARCH=""; OS_PRODUCT_ID=""; OS_INSTALLED_ON=""
+
+  # lock-checks.sh is not on this stick, so the mount-and-read machinery does
+  # not exist at all. The lock report says the same thing in its own words.
+  if ! command -v lock_locate_hives >/dev/null 2>&1; then
+    OS_NAME="Could not read the installed OS on this build — the registry reader is missing. Re-sync the stick and run the audit again."
+    return 0
+  fi
+  # Not root, so the machine's disk cannot be mounted at all — and this is the
+  # branch that would be most expensive to get wrong. Without this guard the
+  # failed mount falls through to the disk scan, which would find NTFS it could
+  # not open, or nothing it could see, and print a confident answer about a
+  # machine nobody managed to look at. The lock checks refuse the same way.
+  if [ "${LOCK_IS_ROOT:-0}" != "1" ]; then
+    OS_NAME="Could not read the installed OS — the audit is not running as root, so the machine's disk could not be opened. Re-run with sudo."
+    return 0
+  fi
+  # hivex absent: Windows may very well be installed and we simply cannot open
+  # it. That is a different answer from "there is no Windows here".
+  if ! lock_has hivexget; then
+    OS_NAME="Could not read the installed OS on this build — hivexget is not installed. Update the stick."
+    return 0
+  fi
+
+  if ! lock_locate_hives; then
+    if [ -n "$WIN_ENCRYPTED" ]; then
+      OS_NAME="Windows present but encrypted (BitLocker) — cannot be read without the recovery key"
+      return 0
+    fi
+    als_os_without_windows
+    return 0
+  fi
+
+  local pn build ubr ed arch inst
+  pn=$(als_os_hive "$WIN_SOFTWARE" "$OS_CV" ProductName)
+  build=$(als_os_num "$(als_os_hive "$WIN_SOFTWARE" "$OS_CV" CurrentBuild)") ||
+    build=$(als_os_num "$(als_os_hive "$WIN_SOFTWARE" "$OS_CV" CurrentBuildNumber)") || build=""
+
+  # Neither of the two values every Windows since XP has written: this hive is
+  # not going to give us anything, so stop reading it. That matters most on a
+  # FAILING disk, where each read burns the whole time limit — bailing here caps
+  # a dead drive at two of them instead of eight.
+  if [ -z "$pn" ] && [ -z "$build" ]; then
+    # The volume carries Windows\System32\config — that is the only reason
+    # lock_locate_hives returned at all — so Windows IS installed here; the hive
+    # just would not give up its name, which is what a truncated or damaged
+    # SOFTWARE hive looks like. "None" would be a lie, and "Unknown" is banned.
+    OS_NAME="Windows is installed but its registry could not be read to identify it — read the disk on another machine to confirm the edition"
+    return 0
+  fi
+
+  ubr=$(als_os_num "$(als_os_hive "$WIN_SOFTWARE" "$OS_CV" UBR)") || ubr=""
+  # 22631.2861 — the update build revision is what tells one patch level from
+  # another, and it is a separate value from the build.
+  [ -n "$build" ] && OS_BUILD="$build${ubr:+.$ubr}"
+
+  # DisplayVersion is the modern name (23H2); ReleaseId is what Windows 10 wrote
+  # up to 2004 and what an older image still carries.
+  OS_VERSION=$(als_os_hive "$WIN_SOFTWARE" "$OS_CV" DisplayVersion)
+  [ -z "$OS_VERSION" ] && OS_VERSION=$(als_os_hive "$WIN_SOFTWARE" "$OS_CV" ReleaseId)
+
+  OS_PRODUCT_ID=$(als_os_hive "$WIN_SOFTWARE" "$OS_CV" ProductId)
+
+  # InstallDate is a unix epoch in UTC. Bounded at both ends because a truncated
+  # hive happily yields 0 or 4294967295, and "installed in 2106" is worse than
+  # no date at all. Printed as a plain ISO date, which reads the same in every
+  # country the stock is sold in.
+  inst=$(als_os_num "$(als_os_hive "$WIN_SOFTWARE" "$OS_CV" InstallDate)") || inst=""
+  if [ -n "$inst" ] && [ "$inst" -gt 1104537600 ] 2>/dev/null && [ "$inst" -lt 4102444800 ] 2>/dev/null; then
+    OS_INSTALLED_ON=$(date -u -d "@$inst" '+%Y-%m-%d' 2>/dev/null)
+  fi
+
+  # Architecture comes from the SYSTEM hive's environment block, the same place
+  # a running Windows reads %PROCESSOR_ARCHITECTURE% from. Anything we do not
+  # recognise is left empty rather than mapped to a guess.
+  if [ -n "$WIN_SYSTEM" ]; then
+    arch=$(als_os_hive "$WIN_SYSTEM" 'ControlSet001\Control\Session Manager\Environment' PROCESSOR_ARCHITECTURE)
+    case "$arch" in
+      AMD64|amd64) OS_ARCH="64-bit" ;;
+      x86|X86)     OS_ARCH="32-bit" ;;
+      ARM64|arm64) OS_ARCH="64-bit (ARM)" ;;
+      ARM|arm)     OS_ARCH="32-bit (ARM)" ;;
+    esac
+  fi
+
+  # A build but no name. The same sentence as above, and the fields that DID
+  # read are kept: a build number on its own is still a real fact about the
+  # machine, and throwing it away would help nobody.
+  if [ -z "$pn" ]; then
+    OS_NAME="Windows is installed but its registry could not be read to identify it — read the disk on another machine to confirm the edition"
+    return 0
+  fi
+
+  OS_NAME="$pn"
+  # Microsoft never updated ProductName for Windows 11: a fully patched 11
+  # machine still reports "Windows 10 Pro" in this key, and the build number is
+  # the only thing in the registry that says otherwise (11 starts at 22000).
+  # BOTH halves are values we read — this is not an inference about the machine,
+  # it is two registry values being reconciled by Microsoft's own documented
+  # numbering. It matters because a resale listing that calls a Windows 11
+  # laptop a Windows 10 one is priced wrong.
+  if [ -n "$build" ] && [ "$build" -ge 22000 ] 2>/dev/null; then
+    case "$OS_NAME" in "Windows 10"*) OS_NAME="Windows 11${OS_NAME#Windows 10}" ;; esac
+  fi
+  ed=$(als_os_edition "$OS_NAME" "$(als_os_hive "$WIN_SOFTWARE" "$OS_CV" EditionID)") &&
+    OS_NAME="$OS_NAME $ed"
+  return 0
+}
+# --- OS-DETECT-END ----------------------------------------------------------
 
 # --- device locks & management status ---------------------------------------
 # Sourced rather than inlined so detectors can be added without touching this
 # file, and so the whole thing is testable against fixtures
 # (test-lock-checks.sh) — the LOCKED branches cannot be exercised on an
 # unlocked bench machine, and those are the branches that matter.
+#
+# WHY THIS RUNS BEFORE THE PROFILE IS ASSEMBLED, when it used to run after it:
+# the installed-OS read below needs lock-checks.sh's mount-and-read-the-registry
+# machinery, and `system` (which carries the OS) is built a few lines further
+# down — so at the old position the functions did not exist yet. Of the two ways
+# out, moving the sourcing earlier is the one that leaves the lock report itself
+# untouched: lock-checks.sh does nothing at source time but define functions and
+# set its own defaults, and the only thing it borrows from this file is esc(),
+# defined near the top. Assembling `system` later instead would have split the
+# profile build in half around an unrelated block.
+#
+# The ORDER inside the block matters and is deliberate:
+#   1. source, so the functions exist;
+#   2. read the installed OS, which mounts the Windows volume READ-ONLY through
+#      lock_mount_windows and leaves it mounted;
+#   3. run the lock detectors, which reuse that same mount (WIN_MNT is already
+#      set, so nothing is mounted twice) and unmount it when they finish.
+# Reading the OS after run_lock_checks would find the volume already unmounted
+# while WIN_SOFTWARE still pointed into it — a path that no longer exists.
 LOCKS_JSON=""
 LOCKS_STATUS=""
 if [ -r "$SELF_DIR/lock-checks.sh" ]; then
   . "$SELF_DIR/lock-checks.sh"
+  als_read_installed_os
   run_lock_checks
   LOCKS_JSON=$(lock_json)
   LOCKS_STATUS=$(lock_status)
@@ -3236,6 +3602,9 @@ else
   # found clean. UNVERIFIED is the honest value and it is what the rest of the
   # pipeline already understands.
   LOCKS_STATUS="UNVERIFIED"
+  # Same story for the OS: without lock-checks.sh there is no registry reader,
+  # so say that rather than leaving the card blank as if we had looked.
+  als_read_installed_os
   echo
   echo "  !!  DEVICE LOCK CHECKS DID NOT RUN"
   echo "      lock-checks.sh was not found next to this script"
@@ -3245,6 +3614,55 @@ else
   echo "      that came back clear. Re-sync the stick and run it again."
   echo
 fi
+
+# ================= assemble the profile JSON =================
+o_begin
+o_s manufacturer "$MFR"; o_s model "$MODEL"; o_s productName "$PRODUCT_NAME"
+o_s productFamily "$FAMILY"; o_s deviceType "$DEVICE_TYPE"
+o_s serialNumber "$SERIAL"; o_s serviceTag "$SERIAL"
+o_s expressServiceCode "$EXPRESS"; o_s biosUuid "$UUID"; o_s assetTag "$ASSET_TAG"
+IDENT=$(o_end)
+
+o_begin
+o_s biosVersion "$BIOS_VER"; o_s biosReleaseDate "$BIOS_DATE"; o_s bootMode "$BOOT_MODE"
+o_s secureBoot "$SECURE_BOOT"; o_s tpmVersion "$TPM_VER"
+# The installed OS, read out of its own registry by als_read_installed_os above.
+# os always carries something — either the product name or the sentence that
+# says why there is none — so the asset page's Operating System card and the
+# batch report's "Operating system" column stop being silently blank.
+o_s os "$OS_NAME"; o_s osVersion "$OS_VERSION"; o_s osBuild "$OS_BUILD"
+o_s osArchitecture "$OS_ARCH"; o_s osProductId "$OS_PRODUCT_ID"
+o_s osInstalledOn "$OS_INSTALLED_ON"
+SYSTEM=$(o_end)
+
+o_begin
+o_s manufacturer "$CPU_VENDOR"; o_s model "$CPU_MODEL"; o_s generation "$CPU_GEN"
+o_n cores "$CPU_CORES"; o_n threads "$CPU_THREADS"
+o_s baseClock "$CPU_BASE"; o_s maxClock "$CPU_MAX"
+CPU=$(o_end)
+
+o_begin
+o_n totalGb "$RAM_GB"; o_s type "$RAM_TYPE"; o_s speed "$RAM_SPEED"
+# Only when it disagrees with the installed total — the OS-visible figure is a
+# diagnostic, not the spec, so it must never be what a label or export shows.
+[ -n "$RAM_DETECTED" ] && [ "$RAM_DETECTED" != "$RAM_GB" ] && o_n detectedGb "$RAM_DETECTED"
+o_n modules "$RAM_MODULES"; o_n slots "$RAM_SLOTS"; o_n maxGb "$RAM_MAX"
+MEMORY=$(o_end)
+
+o_begin
+o_s size "$DISP_SIZE"; o_s resolution "$DISP_RES"; o_s refreshRate "$DISP_HZ"
+o_s touchscreen "$DISP_TOUCH"
+o_s detectDebug "$DISP_DEBUG"
+DISPLAY_OBJ=$(o_end)
+
+o_begin
+o_s health "$BAT_HEALTH"; o_s designCapacity "$BAT_DESIGN"; o_s fullChargeCapacity "$BAT_FULL"
+o_n cycleCount "$BAT_CYCLES"; o_s status "$BAT_STATUS"
+BATTERY=$(o_end)
+
+o_begin
+o_s ethernet "$NET_ETH"; o_s wifi "$NET_WIFI"; o_s bluetooth "$NET_BT"; o_s macAddress "$NET_MAC"
+NETWORK=$(o_end)
 
 o_begin
 o_s tpm "$TPM_VER"; o_s secureBoot "$SECURE_BOOT"
@@ -3280,7 +3698,11 @@ printf "  %-14s %s\n" "RAM"      "${RAM_GB:-?} GB ${RAM_TYPE} ${RAM_SPEED}"
 if [ -n "$RAM_DETECTED" ] && [ "$RAM_DETECTED" != "$RAM_GB" ]; then
   printf "  %-14s %s\n" "" "(OS sees ${RAM_DETECTED} GB — remainder reserved by firmware)"
 fi
-[ -n "$DISP_SIZE" ] && printf "  %-14s %s\n" "Screen"   "$DISP_SIZE${DISP_RES:+  ·  $DISP_RES}"
+[ -n "$DISP_SIZE" ] && printf "  %-14s %s\n" "Screen"   "$DISP_SIZE${DISP_RES:+  ·  $DISP_RES}${DISP_HZ:+  ·  $DISP_HZ}${DISP_TOUCH:+  ·  touch $DISP_TOUCH}"
+# The installed OS is worth a line of its own: on a wiped machine it reads "No
+# operating system installed", which is the one thing the operator most wants
+# confirmed before the box leaves the bench.
+printf "  %-14s %s\n" "OS"       "${OS_NAME}${OS_VERSION:+  ·  $OS_VERSION}${OS_BUILD:+  ·  build $OS_BUILD}"
 printf "  %-14s %s\n" "Storage"  "$(printf '%s' "$STORAGE" | grep -oE '"capacity":"[^"]*"' | sed 's/.*://; s/"//g' | paste -sd', ' -)"
 # One line per drive: "Drive health   nvme0n1: 94% Good (basis)".
 if [ -n "$SMART_SUMMARY" ]; then

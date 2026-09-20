@@ -65,9 +65,18 @@ export interface HardwareProfile {
     [key: string]: unknown;
   };
   system?: {
+    // The INSTALLED operating system, read offline from its own registry hives
+    // by tools/hardware-audit.sh (the station boots its own Linux, so this is
+    // the only way to see it). `os` is either the product name or a plain
+    // sentence saying why there is none — "No operating system installed" on a
+    // wiped machine, or what stopped the read. It is never the word "Unknown",
+    // so anything rendering it can print it verbatim.
     os?: string;
-    osVersion?: string;
-    osBuild?: string;
+    osVersion?: string; // the feature update, e.g. "23H2"
+    osBuild?: string; // CurrentBuild plus UBR, e.g. "22631.2861"
+    osArchitecture?: string; // "64-bit" | "32-bit" | "64-bit (ARM)" | "32-bit (ARM)"
+    osProductId?: string; // the installation's Windows product id
+    osInstalledOn?: string; // ISO date, from the registry's install epoch
     biosVersion?: string;
     biosReleaseDate?: string;
     bootMode?: string; // UEFI | Legacy

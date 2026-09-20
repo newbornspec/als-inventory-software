@@ -466,16 +466,29 @@ function displayRows(display: Obj): Row[] {
   ];
 }
 
+// The installed OS, which the station now reads offline out of the machine's own
+// registry hives (it mounts the Windows volume read-only — the same mount the
+// lock checks already make — and reads them with hivex).
+//
+// `os` carries one of two quite different things and the card must not dress
+// either one up. Usually it is a product name, "Windows 11 Pro". When there was
+// nothing to name it is a plain sentence the station wrote instead: "No
+// operating system installed" for a wiped machine, "Windows present but
+// encrypted (BitLocker) — cannot be read without the recovery key", or what
+// stopped the read and what the operator should do about it. Both go through
+// text() unchanged, so a sentence prints as a sentence — and neither is ever
+// the word "Unknown".
 function operatingSystemRows(system: Obj): Row[] {
   return [
     { label: 'OS name', value: text(system.os) },
     { label: 'Version', value: text(system.osVersion) },
     { label: 'Build', value: text(system.osBuild) },
-    // The audit boots the machine from our own live stick, so nothing here can
-    // report the installed OS's architecture, install date or licence.
-    { label: 'Architecture', value: DASH },
-    { label: 'Installation date', value: DASH },
-    { label: 'Product ID', value: DASH },
+    { label: 'Architecture', value: text(system.osArchitecture) },
+    { label: 'Installation date', value: text(system.osInstalledOn) },
+    { label: 'Product ID', value: text(system.osProductId) },
+    // The Windows Experience Index is a WinSAT score Microsoft removed from the
+    // UI in Windows 8 and stopped refreshing; nothing reads it and nothing
+    // should. The row stays so the card matches the design, permanently empty.
     { label: 'Windows Experience Index', value: DASH },
   ];
 }
@@ -1055,14 +1068,14 @@ export function HardwareSection({
           rows={displayRows(subObject(profile, 'display'))}
           emptyMessage="No display was captured. A desktop has no built-in screen, and an unreadable panel records nothing."
         />
-        {/* Today this card is always the message: the audit boots the machine
-            from our own live stick, so system.os / osVersion / osBuild are never
-            written. It stays wired to those fields so that the day a capture does
-            read the installed OS, the table fills itself in. */}
+        {/* Empty here now means the profile PREDATES the OS read, not that the
+            OS is unreadable: a current capture always writes system.os, even if
+            only to say there is no operating system installed. So the message
+            asks for a rescan rather than repeating the old "we never look". */}
         <TableCard
           title="Operating system"
           rows={operatingSystemRows(subObject(profile, 'system'))}
-          emptyMessage="The audit boots this machine from our own live stick, so it never reads the installed operating system."
+          emptyMessage="This profile was captured before the audit read the installed operating system. Rescan on the station to record it."
         />
         <TableCard
           title="Memory"
