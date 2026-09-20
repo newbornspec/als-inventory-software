@@ -208,8 +208,34 @@
   /* ...................................................................... */
 
   /* HWTEST:SCREEN:CSS:START */
-  /* The screen test's styles (a later phase) - the full-screen colour
-     panels the technician inspects for dead pixels. */
+  /* The screen test paints the whole viewport one colour at a time so the
+     technician can hunt for dead pixels, backlight leakage and discolouration.
+     Two surfaces: the controls that live in the row (.scr-*), and the
+     full-screen colour overlay (#scrOverlay). The overlay's control card is a
+     dark, bordered box on purpose - it has to stay readable floating over pure
+     white and pure red alike, because the colour underneath must never be able
+     to swallow the way out. */
+  .scr-panel{display:flex;flex-direction:column;gap:10px}
+  .scr-line{display:flex;flex-wrap:wrap;gap:10px 12px;align-items:center}
+  .scr-line label{font-size:13px;color:var(--mut)}
+  .scr-num{width:74px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;
+           font:inherit;color:var(--ink);background:#fff}
+  .scr-notes{flex:1 1 200px;min-width:160px;padding:8px 10px;border:1px solid var(--line);
+             border-radius:8px;font:inherit;color:var(--ink);background:#fff}
+  .scr-verdicts{display:flex;flex-wrap:wrap;gap:8px}
+  #scrOverlay{position:fixed;inset:0;z-index:2147483000;
+              display:flex;align-items:flex-end;justify-content:center;padding:26px}
+  .scr-card{background:#111;color:#fff;border:2px solid #fff;border-radius:14px;
+            padding:14px 16px;max-width:min(560px,92vw);box-shadow:0 10px 44px rgba(0,0,0,.55);
+            display:flex;flex-wrap:wrap;gap:10px 12px;align-items:center;justify-content:center}
+  .scr-card .scr-name{font-size:15px;font-weight:700;min-width:150px;text-align:center}
+  .scr-card .scr-hint{flex-basis:100%;text-align:center;margin:0;font-size:12.5px;color:#dcdcdc}
+  .scr-nav{border:2px solid #fff;background:#fff;color:#111;font-weight:600;border-radius:9px;
+           padding:10px 18px;font-size:14px;cursor:pointer}
+  .scr-nav:disabled{opacity:.4;cursor:default}
+  .scr-x{position:fixed;top:16px;right:16px;width:48px;height:48px;border-radius:12px;
+         background:#111;color:#fff;border:2px solid #fff;font-size:24px;line-height:1;
+         cursor:pointer;z-index:2147483001}
   /* HWTEST:SCREEN:CSS:END */
 
   /* alerts */
@@ -552,10 +578,13 @@
               <button class="btn gho sm" id="hwtRun_screen" onclick="runHwTest('screen')">Test</button>
             </div>
             <div class="hwtw" id="hwtWhy_screen"></div>
-            <div class="hwtd" id="hwtDetail_screen"><!-- the screen test's own
-              controls go here (a later phase): full-screen colours the
-              technician inspects for dead pixels, backlight leakage and
-              discolouration. The blanking has to be stopped first. --></div>
+            <div class="hwtd" id="hwtDetail_screen"><!-- the screen test's runner
+              (HWTEST:SCREEN:JS) builds its controls in here when Test is
+              pressed: a button that paints the whole screen each colour in
+              turn, a dead-pixel count, notes, and the three verdicts. The
+              colours are a full-screen overlay with an always-visible Close, so
+              a machine with a dead keyboard is never trapped on one. Screen
+              blanking is stopped at boot in als-autostart.sh. --></div>
           </div>
           <!-- HWTEST:SCREEN:END -->
 
@@ -2448,13 +2477,212 @@ function ovGo(){const c=ovCb;if(c)c();}
 /* -------------------------------------------------------------------- */
 
 /* HWTEST:SCREEN:JS:START */
-/* The screen test (a later phase). Register it with:
-       HWT_RUNNERS.screen = async function(){ ... };
-   Contract C6 for this one: paint each colour full-screen and record which
-   ones were shown; the technician reports dead pixels, backlight leakage and
-   discolouration. Screen blanking has to be stopped first (xset s off -dpms):
-   X's screensaver is live, and a solid colour with no keypresses is exactly
-   when it fires. Put the blanking back afterwards. */
+/* The screen test. The kiosk page is already full-screen, so a solid colour is
+   just a position:fixed overlay painted over everything - there is no
+   Fullscreen API to call and nothing to ask permission for. The technician
+   steps through black, white, red, green and blue looking for dead pixels,
+   backlight leakage and discolouration, records how many dead pixels they saw,
+   and gives the verdict. The browser only painted a colour; the human judges
+   the glass (owner's §17).
+
+   A dead pixel or two is "needs attention", not a failure - a panel is FAILED
+   only when the technician calls it unusable.
+
+   The way out matters more than anything else here. On a machine whose keyboard
+   is dead the pointer is the ONLY exit, so a big always-visible Close is the
+   real safety hatch and Escape is a bonus on top. That Escape is a keyup bound
+   to the overlay ELEMENT, never the document: the kiosk keeps no global key
+   handler (only the keyboard test may, and its region says why), and a listener
+   that lives and dies with the overlay leaves nothing behind. The verdict
+   buttons live in the row's own panel, which the overlay covers, so closing the
+   colours is always the step before recording - a colour can never hide them.
+
+   Everything is hung on one namespaced object so the region adds no other
+   top-level global (the shell owns those). */
+const SCR={
+  // Each colour carries the plain-English name shown beside it: colour is never
+  // the only signal, so a technician reading "Red - 3 of 5" is not relying on
+  // being able to tell red from green in the first place.
+  colours:[
+    {key:'black',name:'Black',css:'#000000'},
+    {key:'white',name:'White',css:'#ffffff'},
+    {key:'red',  name:'Red',  css:'#ff0000'},
+    {key:'green',name:'Green',css:'#00ff00'},
+    {key:'blue', name:'Blue', css:'#0000ff'}
+  ],
+  overlay:null,   // the full-screen colour layer while it is up, else null
+  onKey:null,     // the overlay's own Escape (keyup) handler, removed on close
+  wake:null,      // a screen wake-lock sentinel, if the browser granted one
+  idx:0,          // which colour is showing
+  shown:[],       // the colour keys actually painted, in the order first seen
+  resolve:null,   // resolves the runner's promise once a result is recorded
+
+  // Best-effort release of the wake lock. It is a nice-to-have on top of the
+  // station turning DPMS off in als-autostart.sh, and must never throw on exit.
+  dropWake:function(){
+    try{ if(SCR.wake&&SCR.wake.release) SCR.wake.release(); }catch(e){}
+    SCR.wake=null;
+  },
+
+  // Take the colour overlay down: remove the layer, drop its Escape handler and
+  // release the wake lock. This records NOTHING - it just returns the
+  // technician to the panel, where the verdict buttons are.
+  close:function(){
+    const ov=SCR.overlay;
+    if(ov){
+      if(SCR.onKey) try{ ov.removeEventListener('keyup',SCR.onKey); }catch(e){}
+      if(ov.parentNode) ov.parentNode.removeChild(ov);
+    }
+    SCR.overlay=null; SCR.onKey=null;
+    SCR.dropWake();
+    const b=$('scrBegin');
+    if(b) b.textContent=SCR.shown.length?'Show the colours again':'Show the colours';
+  },
+
+  // Paint the current colour and update the label and the Previous/Next state.
+  paint:function(){
+    if(!SCR.overlay)return;
+    const c=SCR.colours[SCR.idx];
+    SCR.overlay.style.background=c.css;
+    if(SCR.shown.indexOf(c.key)<0) SCR.shown.push(c.key);
+    const name=$('scrName');
+    if(name) name.textContent=c.name+' — '+(SCR.idx+1)+' of '+SCR.colours.length;
+    const prev=$('scrPrev'),next=$('scrNext');
+    if(prev) prev.disabled=(SCR.idx===0);
+    if(next) next.disabled=(SCR.idx===SCR.colours.length-1);
+  },
+  step:function(d){
+    SCR.idx=Math.max(0,Math.min(SCR.colours.length-1,SCR.idx+d));
+    SCR.paint();
+  },
+
+  // Open the full-screen colour overlay. Wrapped so that if the page somehow
+  // cannot build it, that is the STATION being unable to run the test - recorded
+  // as could-not-run (ATTENTION with a reason and an action), never as a broken
+  // screen. FAILED is only ever the technician's own answer.
+  open:function(){
+    try{
+      const ov=document.createElement('div');
+      ov.id='scrOverlay'; ov.tabIndex=-1;
+      const card=document.createElement('div'); card.className='scr-card';
+      const prev=document.createElement('button');
+      prev.className='scr-nav'; prev.id='scrPrev'; prev.type='button'; prev.textContent='Previous';
+      prev.addEventListener('click',function(){ SCR.step(-1); });
+      const name=document.createElement('div'); name.className='scr-name'; name.id='scrName';
+      const next=document.createElement('button');
+      next.className='scr-nav'; next.id='scrNext'; next.type='button'; next.textContent='Next';
+      next.addEventListener('click',function(){ SCR.step(1); });
+      const hint=document.createElement('p'); hint.className='scr-hint';
+      hint.textContent='Close these colours to record your result.';
+      card.appendChild(prev); card.appendChild(name); card.appendChild(next); card.appendChild(hint);
+      const x=document.createElement('button');
+      x.className='scr-x'; x.type='button'; x.textContent='×';
+      x.setAttribute('aria-label','Close the colours');
+      x.addEventListener('click',function(){ SCR.close(); });
+      ov.appendChild(card); ov.appendChild(x);
+      // The Escape key, on the overlay itself. keyup (not the press event) keeps
+      // the kiosk's single-global-key-handler rule intact, and binding it to the
+      // element means it is gone the instant the overlay is.
+      SCR.onKey=function(e){
+        if(e&&(e.key==='Escape'||e.key==='Esc'||e.keyCode===27)) SCR.close();
+      };
+      ov.addEventListener('keyup',SCR.onKey);
+      (document.body||document.documentElement).appendChild(ov);
+      SCR.overlay=ov;
+      try{ ov.focus(); }catch(e){}
+      SCR.paint();
+      // Ask the browser to keep the panel awake too, guarded to the last
+      // property because an older engine has no wakeLock at all. If the overlay
+      // is already closed by the time it resolves, hand the lock straight back.
+      try{
+        if(navigator&&navigator.wakeLock&&navigator.wakeLock.request){
+          navigator.wakeLock.request('screen').then(function(s){
+            if(SCR.overlay){ SCR.wake=s; } else { try{ s.release(); }catch(e){} }
+          }).catch(function(){});
+        }
+      }catch(e){}
+    }catch(e){
+      SCR.finish(function(){
+        hwCannotRun('screen',
+          'the station could not open the full-screen colour panels ('+((e&&e.message)||e||'no detail')+')',
+          'Run the screen test again; if it keeps happening, check the screen by hand before the machine leaves the bench.');
+      });
+    }
+  },
+
+  // What the technician entered, clamped to a sensible whole number.
+  deadPixels:function(){
+    const el=$('scrDead'); let n=el?parseInt(el.value,10):0;
+    if(!(n>=0)) n=0;
+    return n>9999?9999:n;
+  },
+  notesText:function(){ const el=$('scrNotes'); return el?String(el.value||'').slice(0,300):''; },
+  // The fields EVERY screen result carries (contract C6), whatever the verdict.
+  extra:function(){
+    return {deadPixels:SCR.deadPixels(),coloursShown:SCR.shown.slice(),notes:SCR.notesText()};
+  },
+
+  // Finish: take the overlay down, clear the panel so it takes no more answers,
+  // record exactly one result through the shell's helpers, then resolve.
+  finish:function(record){
+    SCR.close();
+    const d=$('hwtDetail_screen'); if(d) d.innerHTML='';
+    const r=SCR.resolve; SCR.resolve=null;
+    record();
+    if(r) r();
+  },
+  // The three verdicts. The dead-pixel count and notes ride along on all three;
+  // only the human's choice sets the state.
+  pass:function(){ SCR.finish(function(){ hwPass('screen',SCR.extra()); }); },
+  attention:function(){
+    const n=SCR.deadPixels();
+    const reason=n>0?(n+' dead pixel'+(n===1?'':'s')+' reported by the technician')
+                    :'the technician reported a minor screen fault';
+    SCR.finish(function(){ hwAttention('screen',reason,null,SCR.extra()); });
+  },
+  fail:function(){
+    SCR.finish(function(){ hwFail('screen','the technician found the screen unusable',SCR.extra()); });
+  }
+};
+
+/* Build the row's panel, then wait for the technician. Everything is rebuilt
+   fresh each run so nothing from a previous run lingers. */
+HWT_RUNNERS.screen=async function(){
+  SCR.idx=0; SCR.shown=[]; SCR.overlay=null; SCR.onKey=null; SCR.wake=null;
+  const d=$('hwtDetail_screen');
+  return new Promise(function(res){
+    SCR.resolve=res;
+    if(!d){
+      // No panel to build into is the station being unable to run the test.
+      hwCannotRun('screen','the station could not build the screen test panel',
+        'Reload the page and run the screen test again.');
+      SCR.resolve=null; res(); return;
+    }
+    d.innerHTML=
+      '<div class="scr-panel">'+
+        '<p class="hwtw" style="margin:0">Show the colours full-screen, step through them with '+
+          'Previous and Next, and look for dead pixels, backlight leakage and discolouration. Close the '+
+          'colours to record what you found. A dead pixel or two is "needs attention"; mark the panel '+
+          'faulty only if it is unusable.</p>'+
+        '<div class="scr-line">'+
+          '<button class="btn gho sm" type="button" id="scrBegin">Show the colours</button>'+
+          '<label for="scrDead">Dead pixels seen</label>'+
+          '<input class="scr-num" type="number" id="scrDead" min="0" value="0" inputmode="numeric">'+
+          '<input class="scr-notes" type="text" id="scrNotes" maxlength="300" '+
+            'placeholder="Notes (where, what you saw)">'+
+        '</div>'+
+        '<div class="scr-verdicts">'+
+          '<button class="btn sm" type="button" id="scrPass">Screen is good</button>'+
+          '<button class="btn gho sm" type="button" id="scrAttn">Needs attention</button>'+
+          '<button class="btn dan sm" type="button" id="scrFail">Panel is faulty</button>'+
+        '</div>'+
+      '</div>';
+    $('scrBegin').addEventListener('click',function(){ SCR.open(); });
+    $('scrPass').addEventListener('click',function(){ SCR.pass(); });
+    $('scrAttn').addEventListener('click',function(){ SCR.attention(); });
+    $('scrFail').addEventListener('click',function(){ SCR.fail(); });
+  });
+};
 /* HWTEST:SCREEN:JS:END */
 
 bootstrap();

@@ -349,6 +349,22 @@ write_chromium_prefs() {  # write_chromium_prefs <user-data-dir>
         > "$1/Default/Preferences"
 }
 
+# Stop X blanking the screen, for the hardware test's dead-pixel check (contract
+# C6, screen test). A solid colour held with no keypresses is EXACTLY when X's
+# screensaver and DPMS fire, so a technician inspecting a full-screen white
+# panel would watch it go dark under them and record a working backlight as
+# dead. The kiosk page also asks for a wake lock, but that cannot be relied on
+# alone. This needs a live display and the xset binary; if either is missing it
+# is a no-op, never a boot-stopper.
+stop_screen_blanking() {
+    command -v xset >/dev/null 2>&1 || { log "xset not present - screen blanking left as the image set it"; return 0; }
+    [ -n "${DISPLAY:-}" ] || { log "no DISPLAY yet - screen blanking left as the image set it"; return 0; }
+    xset s off >/dev/null 2>&1
+    xset s noblank >/dev/null 2>&1
+    xset -dpms >/dev/null 2>&1
+    log "screen blanking and DPMS turned off so the dead-pixel test is not interrupted"
+}
+
 if [ "$MODE" = "kiosk" ]; then
     BROWSER=""
     for b in ${ALS_BROWSER:-} firefox-esr firefox chromium chromium-browser google-chrome-stable epiphany-browser; do
@@ -394,6 +410,7 @@ if [ "$MODE" = "kiosk" ]; then
             *)  ARGS="--kiosk --start-fullscreen --no-first-run --window-position=0,0 --user-data-dir=${HOME:-/tmp}/als-kiosk-profile" ;;
         esac
         log "kiosk: $BROWSER $ARGS $URL"
+        stop_screen_blanking
         # No "Starting full screen" popup. It was the ONE note this script
         # raised on a successful kiosk boot, and it was wrong twice over: the
         # kiosk session has no notification service, so note() fell back to a
@@ -411,6 +428,7 @@ fi
 
 log "opening a normal (non-kiosk) browser window at $URL"
 note "ALS Audit Station is ready" "Opening $URL in a normal window."
+stop_screen_blanking
 # firefox-esr by name when the layer carries it. xdg-open picks the desktop's
 # DEFAULT browser, which on this image is firefox_firefox.desktop - the snap's
 # entry, which does not exist once snapd is masked - and dpkg -x never ran
