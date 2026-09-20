@@ -3126,6 +3126,17 @@ const KBD={
   // outlived a sweep it would do nothing.
   onKeyDown:function(e){
     if(!KBD.capturing)return;
+    // The grab is on the whole document, so it also sees keys meant for anything
+    // the operator opened by mouse WHILE the sweep is live: the Settings gear and
+    // the restart button sit in the always-visible header and are not locked during
+    // a test. If we cancelled those keystrokes, the Wi-Fi / server / admin-PIN
+    // fields in Settings (and the sign-in box) would silently refuse every letter -
+    // the exact "keys vanish in Settings" fault the brief forbids. So when a key is
+    // destined for a text field, stand down completely: no cancel, no stop, no mark,
+    // and the field keeps the keystroke. The keyboard board itself carries no text
+    // fields (its keys are buttons), so a genuine sweep is never affected.
+    const t=e&&e.target, tag=t&&t.tagName;
+    if(tag==='INPUT'||tag==='TEXTAREA'||tag==='SELECT'||(t&&t.isContentEditable))return;
     if(e){ if(e.preventDefault)e.preventDefault(); if(e.stopPropagation)e.stopPropagation(); }
     const code=e&&e.code; if(!code)return;
     KBD.markSeen(code);

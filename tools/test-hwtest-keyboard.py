@@ -307,6 +307,36 @@ out.clickDet = run(`KBD.compute().det`);
 run(`document.getElementById('kbdToggle').click(); document.getElementById('kbdGood').click();`);
 await p;
 
+// ---- The grab must NEVER swallow keys meant for a field the operator is typing
+// in. The Settings gear and the restart button live in the always-visible header
+// and open by mouse WHILE a sweep is live; their fields (Wi-Fi / server / admin
+// PIN, and the sign-in box) are real text inputs. A keydown whose target is a text
+// field must pass straight through - not cancelled, not stopped, not marked - so
+// those overlays stay typeable. A press with no field focused is still captured.
+reset();
+p = run(`runHwTest('keyboard')`);
+run(`document.getElementById('kbdDev_desktop-extended').click(); document.getElementById('kbdContinue').click();`);
+out.fieldSeenBefore = run(`KBD.seen.has('KeyZ')`);
+run(`document.dispatch('keydown',{code:'KeyZ',target:{tagName:'INPUT'},
+  preventDefault:function(){PD.push('field-KeyZ');},
+  stopPropagation:function(){SP.push('field-KeyZ');}});`);
+out.fieldInputPd = run(`PD.indexOf('field-KeyZ')>=0`);
+out.fieldInputSp = run(`SP.indexOf('field-KeyZ')>=0`);
+out.fieldSeenAfter = run(`KBD.seen.has('KeyZ')`);
+run(`document.dispatch('keydown',{code:'Enter',target:{tagName:'TEXTAREA'},
+  preventDefault:function(){PD.push('field-Enter');},
+  stopPropagation:function(){SP.push('field-Enter');}});`);
+out.fieldTextareaPd = run(`PD.indexOf('field-Enter')>=0`);
+// A normal press (no text field focused) is still cancelled and marked, so the
+// sweep itself is untouched by the guard.
+run(`document.dispatch('keydown',{code:'KeyM',
+  preventDefault:function(){PD.push('board-KeyM');},
+  stopPropagation:function(){SP.push('board-KeyM');}});`);
+out.boardPd = run(`PD.indexOf('board-KeyM')>=0`);
+out.boardSeen = run(`KBD.seen.has('KeyM')`);
+run(`document.getElementById('kbdToggle').click(); document.getElementById('kbdGood').click();`);
+await p;
+
 // ---- "Keyboard has an issue" -> FAILED, with the reason drawn from the note.
 reset();
 p = run(`runHwTest('keyboard')`);
@@ -439,6 +469,20 @@ process.stdout.write(JSON.stringify(out));
     check("clicking an on-screen key marks it seen (mouse/touch fallback)",
           o.get("clickAfter") is True and o.get("clickDet") == 1,
           (o.get("clickAfter"), o.get("clickDet")))
+
+    # The grab stands down for a key aimed at a text field, so a modal opened by
+    # mouse mid-sweep (Settings gear / restart / sign-in) stays typeable - the key
+    # is neither cancelled, stopped, nor marked. A press with nothing focused is
+    # still captured, so the sweep works unchanged.
+    check("a key meant for a text field is NOT swallowed (Settings/sign-in stay typeable)",
+          o.get("fieldSeenBefore") is False and o.get("fieldInputPd") is False
+          and o.get("fieldInputSp") is False and o.get("fieldSeenAfter") is False,
+          (o.get("fieldInputPd"), o.get("fieldInputSp"), o.get("fieldSeenAfter")))
+    check("a textarea keystroke is let through too (multi-line fields stay typeable)",
+          o.get("fieldTextareaPd") is False, o.get("fieldTextareaPd"))
+    check("a normal press (no field focused) is still captured, so the sweep is unaffected",
+          o.get("boardPd") is True and o.get("boardSeen") is True,
+          (o.get("boardPd"), o.get("boardSeen")))
 
     iss = o.get("issue") or {}
     check("'Keyboard has an issue' stores FAILED (the technician's own answer)",
