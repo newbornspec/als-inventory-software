@@ -298,6 +298,29 @@ export class DevicesService {
         (assetStatus && derivedMayReplace(assetStatus, asset.auditStatus)
           ? assetStatus
           : null);
+      // THE RE-AUDIT HAZARD, the API's half of it (contract C6). The hardware
+      // functional test rides INSIDE the profile as profile.hardwareTest, and
+      // this update replaces hardware_profile wholesale — so a machine tested
+      // on Monday and re-audited on Wednesday (a fresh station boot, a later
+      // wipe record, or just an updated grade) lost Monday's test from the
+      // asset page, the Reports column and the report view. The station cannot
+      // prevent it: its copy lives in that process's memory and cannot reach
+      // across a reboot. The previous value only exists HERE, so this is the
+      // only place it can be kept.
+      //
+      // One key, merged, no migration: when the arriving profile has no test
+      // and the stored one does, the stored one stays. The asset was found by
+      // tag, which IS this machine's identity (hostTag), so there is no
+      // question of carrying a test onto different hardware. A profile that
+      // brings its own test always wins — deliberately not "whichever is
+      // newer", because the station's clock may be unset and says so itself
+      // (clockWasNetwork), and a date that cannot be trusted is no basis for
+      // choosing which result to keep.
+      const storedTest = asset.hardwareProfile?.hardwareTest;
+      const assetProfile =
+        normalisedProfile && !normalisedProfile.hardwareTest && storedTest
+          ? { ...normalisedProfile, hardwareTest: storedTest }
+          : normalisedProfile;
       // Refresh auto-captured hardware identity + profile, and the grade when the
       // operator supplied one; leave the lot as set (moving it only if a different
       // lot was chosen) and never touch cost, location, stock status or notes.
@@ -310,7 +333,7 @@ export class DevicesService {
         serialNumber: serial,
         expressServiceCode: expressCode,
         // cast: QueryDeepPartialEntity rejects the profile's open index signature.
-        hardwareProfile: normalisedProfile as any,
+        hardwareProfile: assetProfile as any,
         // Newest physical inspection wins, matching what the web audit form already
         // does (assets.service.ts createAudit). Guarded so a stick that sends no
         // grade leaves whatever the warehouse set.

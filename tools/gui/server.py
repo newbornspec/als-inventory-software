@@ -97,6 +97,21 @@ STATE = {
     # provably a different one.
     "hwtest": None,
     "hwtestMachine": "",
+    # A test read off the stick at boot and NOT yet believed: it is held here
+    # until a capture proves the machine on the bench is the one it was run on
+    # (hwtest_restore).
+    "hwtestPending": None,
+    # Is the test this station holds on a RECORD yet? Saving a test sends it
+    # nowhere: it waits inside the profile until an audit or a wipe files it.
+    # So a test run after Start audit was pressed reaches the server only when
+    # Start audit is pressed again - and the card has to say so, because the
+    # technician has no other way to know. False on every save, True from each
+    # path that actually files a record carrying it.
+    "hwtestFiled": False,
+    # Has ANY record been filed for the machine on the bench this session? It
+    # is what turns "press Start audit when you have finished testing" into
+    # "press Start audit AGAIN": only then is there a filed record missing it.
+    "recordFiled": False,
 }
 # One background job per kind (only one wipe/install runs at a time).
 JOBS = {"wipe": None, "install": None}
@@ -1924,15 +1939,22 @@ def hwtest_component(name, part):
 
 
 def hwtest_technician():
-    """Who ran the test. The same person every record this station files is
-    stamped with (stamp_provenance): with operator sign-in on that is the
-    signed-in account, with it off the Operator name typed in the header, and
-    failing both the shared account this stick logged in as. "" when the
-    station has no name at all - the screen then says so and what to do about
-    it, rather than inventing one or writing "Unknown"."""
-    who = operator_identity() if operator_signin_on() else None
-    if who:
-        return (who.get("name") or who.get("email") or "")[:120]
+    """Who ran the test: with operator sign-in on, the signed-in account and
+    NOTHING else; with it off, the Operator name typed in the header, and
+    failing that the account this stick logged in as. "" when the station has
+    no name at all - the screen then says so and what to do about it, rather
+    than inventing one or writing "Unknown".
+
+    Why sign-in stops at the signed-in account: /api/hwtest is deliberately not
+    gated, so a test can be saved with nobody signed in. Falling through then
+    stamped the test with AUDIT_EMAIL - the SHARED stick account, a stick and
+    not a person - while the header said "Not signed in", and nothing ever
+    re-stamped it when a real operator filed the audit. /api/bootstrap already
+    refuses to show that address for the same reason. The typed Operator name
+    is no use either: renderSignin hides that field while sign-in is on."""
+    if operator_signin_on():
+        who = operator_identity()
+        return (who.get("name") or who.get("email") or "")[:120] if who else ""
     typed = (STATE.get("operator") or "").strip()
     if typed:
         return typed[:120]
@@ -1945,6 +1967,128 @@ def hwtest_machine(profile):
     the same as a different machine - see hwtest_carry_forward."""
     ident_ = (profile or {}).get("identification") if isinstance(profile, dict) else None
     return str((ident_ or {}).get("serialNumber") or "").strip()
+
+
+# Where a test in progress is kept so a reboot cannot take it. RAM is the
+# fallback for a stick that will not take a write, exactly as the queue's is.
+HWTEST_FALLBACK = "/tmp/als-hwtest-current.jsonl"
+
+
+def hwtest_path():
+    """Beside audit-queue.jsonl on the stick, and for the same reason the queue
+    is there: this is hands-on work that cannot be reconstructed afterwards."""
+    base = os.path.dirname(CONF_PATH) if CONF_PATH else None
+    return os.path.join(base, "hwtest-current.jsonl") if base else HWTEST_FALLBACK
+
+
+def hwtest_forget_disk():
+    """Drop the stored copy. Called whenever the station stops holding a test,
+    so the file can never be older than what the station believes."""
+    for path in (hwtest_path(), HWTEST_FALLBACK):
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+
+def hwtest_remember():
+    """Keep the current test on disk, so a machine that restarts mid-test does
+    not silently lose the components already done.
+
+    server.py is started ONCE per boot (als-autostart.sh) with no restart loop,
+    and the test lived only in this process's memory - so a laptop that sleeps,
+    a dud battery, or the keyboard test landing on a power combination took
+    three components' worth of hands-on work with it and said nothing. The
+    offline queue and the in-progress wipe markers are already kept this way;
+    the hardware test was the one record of work that was not. The caller holds
+    HWTEST_LOCK."""
+    test = STATE.get("hwtest")
+    if not test:
+        hwtest_forget_disk()
+        return
+    _durable_jsonl_write(hwtest_path(), HWTEST_FALLBACK,
+                         [{"hwtest": test,
+                           "hwtestMachine": STATE.get("hwtestMachine") or ""}])
+
+
+def hwtest_restore():
+    """Read the test left by an earlier run of this process and hold it aside
+    until a capture proves it belongs to the machine on the bench. Returns the
+    serial it is waiting for, or "".
+
+    Deliberately NOT hwtest_carry_forward's rule. Within one session the
+    station keeps a test across a capture that reports no serial, because the
+    machine has not left the bench. Across a REBOOT that reasoning is gone: the
+    ordinary use of this stick is to shut one machine down, carry the stick to
+    the next one and boot it, so a stored test may well belong to the machine
+    before this one. Attaching a test to the wrong machine is worse than losing
+    it, so here the proof has to be positive - the same serial, both known -
+    and anything else is thrown away."""
+    rows = _read_jsonl(hwtest_path()) or _read_jsonl(HWTEST_FALLBACK)
+    row = rows[-1] if rows else None
+    test = (row or {}).get("hwtest")
+    if not isinstance(test, dict) or not test:
+        hwtest_forget_disk()
+        return ""
+    machine = str((row or {}).get("hwtestMachine") or "").strip()
+    if not machine:
+        # Nothing to prove it against, and it can never be proved later.
+        hwtest_forget_disk()
+        return ""
+    STATE["hwtestPending"] = {"hwtest": test, "hwtestMachine": machine}
+    return machine
+
+
+def hwtest_record_filed(payload):
+    """A record has just been sent (or queued on disk, which is the same
+    promise): whatever it carries is on the machine's record now.
+
+    Read from the payload rather than assumed, so the two can never drift: a
+    wipe record filed for a machine the station has since stopped holding a
+    test for carries the pinned copy, not the current one, and must not mark
+    the current one as filed."""
+    STATE["recordFiled"] = True
+    test = STATE.get("hwtest")
+    carried = ((payload or {}).get("profile") or {}).get("hardwareTest")
+    if test and carried == test:
+        STATE["hwtestFiled"] = True
+
+
+def hwtest_needs_filing():
+    """True when this station holds a test that a record ALREADY FILED for this
+    machine does not carry - the operator has to press Start audit again or it
+    never reaches the server. The card says exactly that, because everything
+    else on screen says the test is saved, and it is: saved HERE."""
+    return bool(STATE.get("hwtest")) and bool(STATE.get("recordFiled")) \
+        and not STATE.get("hwtestFiled")
+
+
+def hwtest_refresh(base):
+    """A record whose profile was pinned earlier, with only its hardware test
+    brought up to date. Returns a base to build the payload from.
+
+    A wipe pins the profile at the START (a wipe takes hours, and a Rescan in
+    the middle must not change what the erase is filed under). That pinning
+    used to cover the hardware test as well, and mostly did no harm because
+    hwtest_save re-attaches to the SAME profile object. But refresh() assigns a
+    NEW object to STATE["profile"], so after a Rescan mid-wipe the tests
+    finished afterwards attached only to the new one, and the wipe record filed
+    the half-done copy from the start - knocking an asset that had 4 / 4 on
+    file back to 2 / 4, because the API replaces the stored profile wholesale.
+
+    Only hardwareTest is refreshed: it describes the MACHINE, not the erase
+    event. And only when the station's test still belongs to the machine this
+    record is filed under - otherwise the pinned copy is the right one, because
+    it is that machine's own test."""
+    profile = base.get("profile") if isinstance(base, dict) else None
+    if not isinstance(profile, dict) or not STATE.get("hwtest"):
+        return base
+    if hwtest_machine(profile) != (STATE.get("hwtestMachine") or ""):
+        return base
+    fresh = dict(base)
+    # A copy: the pinned profile itself must not change under the wipe.
+    fresh["profile"] = attach_hardware_test(dict(profile))
+    return fresh
 
 
 def attach_hardware_test(profile):
@@ -1981,15 +2125,41 @@ def hwtest_carry_forward(profile):
     reports no serial is not evidence of a different machine - the same
     principle as drive health's "never let an absence of evidence be evidence"
     - and since attaching a test to the wrong machine is the one outcome worse
-    than losing it, the proof has to be positive either way."""
+    than losing it, the proof has to be positive either way.
+
+    A test read off the stick at boot (hwtest_restore) is decided here too, by
+    the STRICTER rule that function explains: same serial, both known, or it is
+    thrown away."""
+    pending = STATE.get("hwtestPending")
+    if pending:
+        # Once only: this is the first capture since it was read off the stick,
+        # and if this machine cannot prove it owns the test, nothing later can.
+        STATE["hwtestPending"] = None
+        was, here = (pending.get("hwtestMachine") or ""), hwtest_machine(profile)
+        if was and here and was == here:
+            STATE["hwtest"] = pending.get("hwtest")
+            STATE["hwtestMachine"] = here
+            # Restored, so it is on no record THIS process has filed - and the
+            # record it may already be on was filed by a run that is gone.
+            STATE["hwtestFiled"], STATE["recordFiled"] = False, False
+        else:
+            hwtest_forget_disk()
     test = STATE.get("hwtest")
     before, now = (STATE.get("hwtestMachine") or ""), hwtest_machine(profile)
+    changed = bool(before and now and before != now)
+    if changed:
+        # A different machine is on the bench. Whatever was filed for the one
+        # that has left says nothing about this one, and leaving the flags set
+        # would have the card tell the technician to press Start audit "again"
+        # for a machine no record has ever been filed for.
+        STATE["hwtestFiled"], STATE["recordFiled"] = False, False
     if not test:
         STATE["hwtestMachine"] = now
         return profile
-    if before and now and before != now:
+    if changed:
         STATE["hwtest"] = None
         STATE["hwtestMachine"] = now
+        hwtest_forget_disk()
         return profile
     STATE["hwtestMachine"] = now or before
     return attach_hardware_test(profile)
@@ -2049,8 +2219,15 @@ def hwtest_save(body):
         STATE["hwtest"] = test
         STATE["hwtestMachine"] = hwtest_machine(STATE.get("profile")) \
             or STATE.get("hwtestMachine") or ""
+        # A result that has just been recorded is on NO record: this save sends
+        # nothing to the server, it only puts the test where the next audit or
+        # wipe will carry it. Saying that out loud is what stops "saved" being
+        # read as "on the machine's record" (hwtest_needs_filing).
+        STATE["hwtestFiled"] = False
         # Into the profile at once, so a record filed a second later carries it.
         attach_hardware_test(STATE.get("profile"))
+        # And onto the stick, so a machine that restarts keeps it.
+        hwtest_remember()
         return test
 
 
@@ -4459,6 +4636,14 @@ class Handler(BaseHTTPRequestHandler):
                 # what has already been tested instead of starting again. The
                 # page ignores it while a test is running (adoptHwTest).
                 "hardwareTest": STATE.get("hwtest"),
+                # WHICH MACHINE that test belongs to. Without it the card had
+                # no way to tell "the same test" from "the test for the machine
+                # that was on this bench before", and kept a completed verdict
+                # on screen for hardware it had never been run on.
+                "hwtestMachine": STATE.get("hwtestMachine") or "",
+                # True when the operator has to press Start audit AGAIN or the
+                # test reaches nothing at all (hwtest_needs_filing).
+                "hwtestNeedsFiling": hwtest_needs_filing(),
                 "signin": signin_state(),
                 "workflow": current_workflow(),
                 "workflows": allowed_workflows(),
@@ -4548,6 +4733,8 @@ class Handler(BaseHTTPRequestHandler):
             # so a reloaded screen needs no extra call; this is the direct
             # read, and what tools/test-hwtest.py checks the save against.
             return self._send(200, {"hardwareTest": STATE.get("hwtest"),
+                                    "hwtestMachine": STATE.get("hwtestMachine") or "",
+                                    "hwtestNeedsFiling": hwtest_needs_filing(),
                                     "technician": hwtest_technician(),
                                     "tests": list(HWTEST_TESTS)})
 
@@ -4675,7 +4862,11 @@ class Handler(BaseHTTPRequestHandler):
                 saved = hwtest_save(body)
             except ValueError as exc:
                 return self._send(400, {"message": str(exc)})
-            return self._send(200, {"ok": True, "hardwareTest": saved})
+            # The same two facts bootstrap carries, because the page adopts
+            # this answer straight onto the card and the two must not disagree.
+            return self._send(200, {"ok": True, "hardwareTest": saved,
+                                    "hwtestMachine": STATE.get("hwtestMachine") or "",
+                                    "hwtestNeedsFiling": hwtest_needs_filing()})
 
         if u.path == "/api/audit":
             if not STATE["profile"]:
@@ -4713,6 +4904,12 @@ class Handler(BaseHTTPRequestHandler):
             stamp_provenance(payload)
             out, queued, err = upload_audit(payload)
             PRIOR_CACHE["key"] = None       # this device's history just changed
+            # This record carries the hardware test inside its profile, so the
+            # test is on the machine's record now. A test run AFTER this point
+            # is not, and the card has to say so - that is the whole job of
+            # hwtest_needs_filing. Queued counts: the record is on disk and
+            # uploads itself.
+            hwtest_record_filed(payload)
             if queued:
                 # Never lose the unit: it is on disk and will upload itself.
                 return self._send(200, {"queued": True, "waiting": queue_count(),
@@ -4905,11 +5102,20 @@ class Handler(BaseHTTPRequestHandler):
                     # started["epoch"]: when the engine really began - a
                     # namespace that waited its turn did not start when the
                     # request came in.
+                    #
+                    # hwtest_refresh: everything about this profile stays as it
+                    # was at wipe start, EXCEPT the hardware test, which
+                    # describes the machine rather than the erase. Tests
+                    # finished during a wipe that had a Rescan in it attached
+                    # to a different profile object, and filing the pinned copy
+                    # knocked the asset's test back to what it was hours ago.
                     if signed_base is not None:
-                        payload = build_wipe_payload(signed_base, result, dev, drive, method,
+                        payload = build_wipe_payload(hwtest_refresh(signed_base), result, dev,
+                                                     drive, method,
                                                      started["epoch"], clock_at_start)
                     else:
-                        payload = build_wipe_payload(base, result, dev, drive, method,
+                        payload = build_wipe_payload(hwtest_refresh(base), result, dev,
+                                                     drive, method,
                                                      started["epoch"], clock_at_start)
                         stamp_provenance(payload)
                     # On disk before the upload starts: a power cut during the
@@ -4920,6 +5126,8 @@ class Handler(BaseHTTPRequestHandler):
                     # Uploaded or queued - either way it is no longer only in
                     # this process's memory.
                     pending_remove(pid)
+                    # And the hardware test it carries is on the record now.
+                    hwtest_record_filed(payload)
                     if queued:
                         # Only the upload is pending; the record, dates and
                         # all, is on disk and uploads itself later.
@@ -5070,6 +5278,8 @@ class Handler(BaseHTTPRequestHandler):
                     payload.pop(OPERATOR_TAG, None)
                     payload.update(install_who)
                 out, queued, err = upload_audit(payload)
+                # Carries the profile, so it carries the hardware test with it.
+                hwtest_record_filed(payload)
                 if queued:
                     result["queued"] = True
                     result["waiting"] = queue_count()
@@ -5214,6 +5424,15 @@ def main():
             mount_image_server(force=True)   # so the first poll already knows
         except Exception:  # noqa: BLE001
             pass
+        # A hardware test left on the stick by an earlier boot. Held aside, not
+        # adopted: the capture below decides whether it belongs to the machine
+        # this stick is now plugged into (hwtest_restore, hwtest_carry_forward).
+        try:
+            waiting = hwtest_restore()
+            if waiting:
+                print("hardware test: one from an earlier boot is held for serial %s" % waiting)
+        except Exception as exc:  # noqa: BLE001
+            print("hardware test: %s" % exc)
         refresh()
     threading.Thread(target=boot, daemon=True).start()
     threading.Thread(target=write_boot_report, daemon=True).start()

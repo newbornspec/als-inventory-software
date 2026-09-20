@@ -84,6 +84,14 @@ TESTS = list(srv.HWTEST_TESTS)
 STATES = list(srv.HWTEST_STATES)
 DONE = ("PASSED", "ATTENTION", "FAILED")
 TMP = tempfile.mkdtemp(prefix="als-hwt-")
+# The station keeps the test in progress on the stick, beside audit.conf
+# (hwtest_remember). Both of its paths are pointed into the temp directory
+# before the FIRST save: without this the file lands beside the audit.conf in
+# tools/, dropping a stray file into the checkout, and the fallback would be a
+# real /tmp - which on Windows does not exist, sending the write through
+# write_boot_file's remount of the boot medium.
+srv.CONF_PATH = None
+srv.HWTEST_FALLBACK = os.path.join(TMP, "hwtest-fallback.jsonl")
 
 with open(PAGE, encoding="utf-8") as fh:
     HTML = fh.read()
@@ -311,15 +319,25 @@ const IN = JSON.parse(fs.readFileSync(process.argv[3], 'utf8'));
 ctx.IN = IN;
 
 // A stand-in station service: it answers the way server.py does - it MERGES
-// what it is sent into what it holds, and hands the whole object back - so
-// hwSave adopts an answer instead of hanging on a fetch that never settles.
-run(`SAVED=[]; HELD={};
-  jpost=async(u,b)=>{SAVED.push({u:u,b:JSON.parse(JSON.stringify(b))});
+// what it is sent into what it holds, and hands the whole object back, with
+// the machine it holds it for and whether a record already filed for that
+// machine is missing it - so hwSave adopts an answer instead of hanging on a
+// fetch that never settles. REFUSE names tests it will not accept, which is
+// how the "on screen but not saved" path is driven.
+run(`SAVED=[]; HELD={}; MACHINE='HOST1'; NEEDS=false; REFUSE={};
+  STAND_IN=async(u,b)=>{SAVED.push({u:u,b:JSON.parse(JSON.stringify(b))});
+    const k=Object.keys(b)[0];
+    if(REFUSE[k])return {ok:false,status:400,data:{message:REFUSE[k]}};
     HELD=Object.assign({technician:'Ann Operator',testedAt:'2026-09-20T12:00:00Z',
       clockWasNetwork:true},HELD,b);
-    return {ok:true,status:200,data:{hardwareTest:JSON.parse(JSON.stringify(HELD))}};};`);
-const reset = () => run(`HWTEST={}; HELD={}; HWT_LOCAL=false; HWT_RUNNING=false;
-  for (const k of HWT_KEYS) delete HWT_RUNNERS[k]; renderHwTest();`);
+    return {ok:true,status:200,data:{hardwareTest:JSON.parse(JSON.stringify(HELD)),
+      hwtestMachine:MACHINE,hwtestNeedsFiling:NEEDS}};};
+  jpost=STAND_IN;`);
+const reset = () => run(`HWTEST={}; HELD={}; SAVED=[]; REFUSE={}; jpost=STAND_IN;
+  HWT_RUNNING=false; HWT_MACHINE=''; HWT_NOTE=''; HWT_NEEDS_FILING=false; HWT_SAVES=0;
+  MACHINE='HOST1'; NEEDS=false; BOOT={};
+  for (const k of HWT_KEYS) { delete HWT_RUNNERS[k]; delete HWT_UNSAVED[k]; }
+  renderHwTest();`);
 
 // The shell before anything has been tested.
 reset();
@@ -381,11 +399,102 @@ out.buttonsBack = run(`!document.getElementById('hwtRunAll').disabled &&
 
 // The station service refuses the save: the result is on screen and says so.
 reset();
-run(`jpost=async()=>({ok:false,status:400,data:{message:'The screen test was recorded as "needs attention" with no reason.'}});
+run(`REFUSE={screen:'The screen test was recorded as "needs attention" with no reason.'};
      hwPass('screen',{});`);
 await run(`hwSave('screen')`);
 out.saveFailed = { msg: el('hwtSaveMsg').textContent,
   shown: !el('hwtSaveMsg').classList.contains('hidden') };
+
+// ...and the NEXT test saving does not quietly erase it. The station's copy
+// says "not tested" for the one it refused, so taking that object wholesale
+// put the technician's answer back to Not tested and hid the warning with it.
+reset();
+run(`REFUSE={speaker:'The speaker test was recorded as "failed" with no reason.'};
+     hwFail('speaker','the technician heard nothing from either speaker');`);
+await run(`hwSave('speaker')`);
+run(`hwPass('camera',{device:'Integrated Camera'});`);
+await run(`hwSave('camera')`);
+out.afterOther = { speaker: el('hwtStat_speaker').textContent,
+  camera: el('hwtStat_camera').textContent, summary: el('hwtSummary').innerHTML,
+  msg: el('hwtSaveMsg').textContent,
+  shown: !el('hwtSaveMsg').classList.contains('hidden') };
+
+// A result is protected from the moment it is recorded, but nothing is said
+// until the station has actually refused it - otherwise every ordinary save
+// would flash "NOT saved" on its way past.
+reset();
+run(`hwPass('keyboard',{});`);
+out.justRecorded = { msgShown: !el('hwtSaveMsg').classList.contains('hidden') };
+run(`adoptHwTest(null,'HOST1',false)`);
+out.justRecorded.kept = el('hwtStat_keyboard').textContent;
+
+// One test at a time, from EITHER entry point: a second tap on Test while a
+// test is in flight must not start the same runner again underneath it.
+reset();
+run(`STARTS=0; RELEASE=null; HOLD=new Promise(r=>{RELEASE=r;});
+     HWT_RUNNERS.speaker=async()=>{STARTS++; await HOLD; hwPass('speaker',{});};`);
+const running = run(`runHwTest('speaker')`);
+out.lock = { started: run(`STARTS`),
+  rowDisabled: run(`document.getElementById('hwtRun_speaker').disabled`),
+  allDisabled: run(`document.getElementById('hwtRunAll').disabled`) };
+run(`runHwTest('speaker'); runAllHwTests();`);
+out.lock.startsWhileRunning = run(`STARTS`);
+run(`RELEASE()`);
+await running;
+out.lock.startsAfter = run(`STARTS`);
+out.lock.buttonsBack = run(`!document.getElementById('hwtRun_speaker').disabled &&
+  !document.getElementById('hwtRunAll').disabled`);
+
+// A different machine on the bench. The station drops its copy (carry_forward)
+// and names the machine it now holds one for; the card must follow it down
+// rather than keeping a completed verdict for hardware never tested.
+const fourPasses = () => {
+  reset();
+  run(`for(const k of HWT_KEYS) HWT_RUNNERS[k]=async()=>{hwPass(k,{});};`);
+  return run(`runAllHwTests()`);
+};
+await fourPasses();
+out.beforeSwap = { summary: el('hwtSummary').innerHTML, machine: run(`HWT_MACHINE`) };
+run(`adoptHwTest(null,'HOST2',false)`);
+out.swapped = { summary: el('hwtSummary').innerHTML,
+  speaker: el('hwtStat_speaker').textContent, msg: el('hwtSaveMsg').textContent,
+  shown: !el('hwtSaveMsg').classList.contains('hidden') };
+
+// The station SERVICE restarted: the same machine, but its copy is gone - the
+// test is in its memory only. The card must not keep claiming 4 / 4.
+await fourPasses();
+run(`adoptHwTest(null,'HOST1',false)`);
+out.restarted = { summary: el('hwtSummary').innerHTML, msg: el('hwtSaveMsg').textContent };
+
+// An answer that was already in flight when the last save landed carries the
+// older copy: dropped, or a saved result would read as Not tested.
+await fourPasses();
+run(`adoptHwTest(null,'HOST1',false,HWT_SAVES-1)`);
+out.stalePoll = el('hwtSummary').innerHTML;
+
+// A result the station REFUSED is not dropped by an adopt either: the station
+// has not got it to hand back.
+reset();
+run(`REFUSE={screen:'The station service is busy.'}; hwPass('screen',{});`);
+await run(`hwSave('screen')`);
+run(`adoptHwTest(null,'HOST1',false)`);
+out.unsavedKept = { screen: el('hwtStat_screen').textContent,
+  msg: el('hwtSaveMsg').textContent };
+
+// Saved here, but the audit was already filed without it.
+reset();
+run(`NEEDS=true; HWT_RUNNERS.camera=async()=>{hwPass('camera',{});};`);
+await run(`runHwTest('camera')`);
+out.needsFiling = { msg: el('hwtSaveMsg').textContent,
+  shown: !el('hwtSaveMsg').classList.contains('hidden') };
+
+// No technician name: the message must name the control that is ON SCREEN -
+// renderSignin hides the Operator field whenever sign-in is on.
+reset();
+run(`BOOT={signin:{required:true}}; hwPass('camera',{});`);
+out.noNameSignin = el('hwtSummary').innerHTML;
+run(`BOOT={signin:{required:false}}; renderHwTest();`);
+out.noNameOperator = el('hwtSummary').innerHTML;
 
 // What the station already holds is shown on a reloaded screen, but never
 // painted over a run in progress.
@@ -498,6 +607,57 @@ process.stdout.write(JSON.stringify(out));
     check("a result that could not be saved says so, instead of looking saved",
           sf.get("shown") is True and "NOT saved" in sf.get("msg", "")
           and "needs attention" in sf.get("msg", ""), sf)
+
+    ao = o.get("afterOther") or {}
+    check("a refused result is still on screen after the NEXT test saves fine",
+          ao.get("speaker") == "Failed" and ao.get("camera") == "Passed", ao)
+    check("...and the warning is still up, naming only what is still unsaved",
+          ao.get("shown") is True and "NOT saved" in ao.get("msg", "")
+          and "speaker" in ao.get("msg", "") and "camera" not in ao.get("msg", ""), ao)
+    check("...and the count says two tests are done, not one",
+          "2 / 4 completed" in ao.get("summary", ""), ao.get("summary"))
+
+    jr = o.get("justRecorded") or {}
+    check("a result just recorded is protected from the station's copy without "
+          "putting a warning on screen for every ordinary save",
+          jr.get("msgShown") is False and jr.get("kept") == "Passed", jr)
+
+    lk = o.get("lock") or {}
+    check("a test in flight disables both its own row and Run all",
+          lk.get("rowDisabled") is True and lk.get("allDisabled") is True, lk)
+    check("pressing Test or Run all again does NOT start a second run of the same test",
+          lk.get("started") == 1 and lk.get("startsWhileRunning") == 1, lk)
+    check("and the controls come back when that single test ends",
+          lk.get("startsAfter") == 1 and lk.get("buttonsBack") is True, lk)
+
+    check("four passes, saved, belong to the machine the station names",
+          "4 / 4 completed — Passed" in (o.get("beforeSwap") or {}).get("summary", "")
+          and (o.get("beforeSwap") or {}).get("machine") == "HOST1", o.get("beforeSwap"))
+    sw = o.get("swapped") or {}
+    check("a Rescan onto a DIFFERENT machine clears the card instead of keeping the verdict",
+          "0 / 4 completed" in sw.get("summary", "") and "Passed" not in sw.get("summary", "")
+          and sw.get("speaker") == "Not tested", sw)
+    check("...and says why, rather than the rows just changing under the technician",
+          sw.get("shown") is True and "machine on the bench changed" in sw.get("msg", ""), sw)
+    rs = o.get("restarted") or {}
+    check("the station losing its copy (a service restart) clears the card too",
+          "0 / 4 completed" in rs.get("summary", "") and "Passed" not in rs.get("summary", ""), rs)
+    check("...and says the station no longer holds it, so it is not on the record",
+          "no longer holds" in rs.get("msg", "") and "again" in rs.get("msg", ""), rs)
+    check("an answer already in flight when a save landed is dropped, not painted back",
+          "4 / 4 completed — Passed" in (o.get("stalePoll") or ""), o.get("stalePoll"))
+    uk = o.get("unsavedKept") or {}
+    check("a result the station refused survives an adopt - it has none to hand back",
+          uk.get("screen") == "Passed" and "NOT saved" in uk.get("msg", ""), uk)
+
+    nf = o.get("needsFiling") or {}
+    check("a test saved after the audit was filed says the record does not carry it",
+          nf.get("shown") is True and "not on the machine" in nf.get("msg", "")
+          and "Start audit again" in nf.get("msg", ""), nf)
+    check("with sign-in on, an unnamed technician is told to SIGN IN",
+          "sign in at the top" in (o.get("noNameSignin") or ""), o.get("noNameSignin"))
+    check("with it off, they are told to set Operator - the control that is on screen",
+          "set Operator at the top" in (o.get("noNameOperator") or ""), o.get("noNameOperator"))
 
     ad = o.get("adopted") or {}
     check("a reloaded screen shows what the station already holds",
@@ -621,6 +781,46 @@ try:
     check("/api/audit still carries the hardware test, inside the profile",
           code == 200 and sent.get("profile", {}).get("hardwareTest") == srv.STATE["hwtest"],
           (code, sorted(sent.keys()) if sent else ans))
+
+    # WHERE the result actually is. Saving a test sends it nowhere: it waits
+    # inside the profile until an audit or a wipe files it. Start audit sits
+    # ABOVE the hardware test card, so testing after filing is the natural
+    # order - and until this said so, the card claimed the result was on the
+    # machine's record when nothing had carried it there.
+    srv.STATE["recordFiled"], srv.STATE["hwtestFiled"] = False, False
+    code, ans = call("POST", "/api/hwtest", {"screen": {"status": "PASSED"}})
+    check("a save names the machine the station is holding the test for",
+          ans.get("hwtestMachine") == "HOST1", ans.get("hwtestMachine"))
+    check("a test run before the audit has nothing to warn about",
+          ans.get("hwtestNeedsFiling") is False, ans)
+    call("POST", "/api/audit", {"lotId": "lot-1"})
+    code, ans = call("GET", "/api/hwtest")
+    check("filing the audit puts it on the record, so there is nothing left to do",
+          ans.get("hwtestNeedsFiling") is False, ans)
+    code, ans = call("POST", "/api/hwtest", {"camera": {"status": "PASSED"}})
+    check("a test run AFTER the audit was filed says the record does not carry it",
+          ans.get("hwtestNeedsFiling") is True, ans)
+    code, boot = call("GET", "/api/bootstrap")
+    check("and every bootstrap says so too, so a reloaded screen still warns",
+          boot.get("hwtestNeedsFiling") is True and boot.get("hwtestMachine") == "HOST1", boot)
+    call("POST", "/api/audit", {"lotId": "lot-1"})
+    code, ans = call("GET", "/api/hwtest")
+    check("pressing Start audit again is what clears it",
+          ans.get("hwtestNeedsFiling") is False, ans)
+
+    # Operator sign-in on, nobody signed in. /api/hwtest is deliberately not
+    # gated, so this is reachable - and the shared account this stick logged in
+    # with names a stick, not a person.
+    srv.STATE["conf"]["AUDIT_EMAIL"] = "station-stick@als.test"
+    srv.operator_signin_on = lambda: True
+    srv.operator_identity = lambda: None
+    try:
+        code, ans = call("POST", "/api/hwtest", {"keyboard": {"status": "PASSED"}})
+        check("with sign-in on and nobody signed in, the test is NOT stamped with the "
+              "shared stick account or the hidden Operator field",
+              ans["hardwareTest"]["technician"] == "", ans["hardwareTest"].get("technician"))
+    finally:
+        srv.operator_signin_on, srv.operator_identity = real_on, real_who
 finally:
     httpd.shutdown()
 
@@ -693,6 +893,114 @@ try:
     payload = {"lotId": "lot-1", "profile": srv.attach_hardware_test(srv.STATE["profile"])}
     check("a record uploaded after a Rescan still carries the test that was run before it",
           payload["profile"].get("hardwareTest") == after, payload["profile"].get("hardwareTest"))
+finally:
+    srv.capture = real_capture
+
+# --------------------------------------------- 7. what survives a restart --
+# The test lived only in this process's memory, and server.py is started ONCE
+# per boot with no restart loop - so a laptop that slept, a dud battery, or the
+# keyboard test landing on a power combination took the work with it and said
+# nothing. It is kept beside the audit queue now, by the STRICTER rule: across
+# a reboot the stick has usually been carried to the next machine, so the test
+# is only restored onto a machine that positively proves it is the same one.
+print("7. a restart must not lose the test, and must not hand it to another machine")
+srv.CONF_PATH = os.path.join(TMP, "audit.conf")
+try:
+    srv.STATE["hwtest"], srv.STATE["hwtestMachine"] = None, ""
+    srv.STATE["hwtestPending"] = None
+    srv.STATE["profile"] = copy.deepcopy(SAME)
+    srv.hwtest_save({"keyboard": {"status": "PASSED", "detectedKeys": 104}})
+    ON_DISK = copy.deepcopy(srv.STATE["hwtest"])
+    check("a saved result is written to the stick, beside the audit queue",
+          os.path.exists(srv.hwtest_path()), srv.hwtest_path())
+
+    def reboot_with(profile):
+        """A fresh boot: nothing in memory, the file still on the stick, and
+        then the first capture of whatever machine this stick is now in."""
+        srv.STATE["hwtest"], srv.STATE["hwtestMachine"] = None, ""
+        srv.STATE["hwtestPending"] = None
+        srv.STATE["hwtestFiled"], srv.STATE["recordFiled"] = True, True
+        srv.hwtest_restore()
+        rescan_with(profile)
+
+    reboot_with(SAME)
+    check("the same machine gets its test back after a restart",
+          srv.STATE["hwtest"] == ON_DISK, srv.STATE["hwtest"])
+    check("and it is back inside the profile the next record will carry",
+          (srv.STATE["profile"] or {}).get("hardwareTest") == ON_DISK)
+    check("a restored test is on no record this run has filed, and says so",
+          srv.STATE["hwtestFiled"] is False and srv.STATE["recordFiled"] is False)
+
+    reboot_with(NONAME)
+    check("a machine that cannot PROVE it is the same one does not get it - across a "
+          "boot the stick has usually been moved to the next machine",
+          srv.STATE["hwtest"] is None
+          and "hardwareTest" not in (srv.STATE["profile"] or {}), srv.STATE["hwtest"])
+    check("and the stale copy is deleted rather than waiting for the next machine",
+          not os.path.exists(srv.hwtest_path()))
+
+    srv.STATE["profile"] = copy.deepcopy(SAME)
+    srv.hwtest_save({"camera": {"status": "PASSED"}})
+    reboot_with(OTHER)
+    check("a different serial does not get it either",
+          srv.STATE["hwtest"] is None and not os.path.exists(srv.hwtest_path()),
+          srv.STATE["hwtest"])
+
+    srv.STATE["profile"] = copy.deepcopy(SAME)
+    srv.STATE["hwtestMachine"] = ""
+    srv.hwtest_save({"screen": {"status": "PASSED"}})
+    srv.STATE["hwtestFiled"], srv.STATE["recordFiled"] = True, True
+    rescan_with(OTHER)
+    check("swapping machines mid-session deletes the stored copy as well, so the next "
+          "boot cannot find it", srv.STATE["hwtest"] is None
+          and not os.path.exists(srv.hwtest_path()))
+    check("and what was filed for the machine that left is not held against the new one",
+          srv.STATE["recordFiled"] is False and srv.hwtest_needs_filing() is False)
+    # The same, with no test held at all: the audit filed for the previous
+    # machine must not make the next one's first test read as "already filed
+    # without it".
+    srv.STATE["hwtest"], srv.STATE["hwtestMachine"] = None, "HOST1"
+    srv.STATE["hwtestFiled"], srv.STATE["recordFiled"] = True, True
+    rescan_with(OTHER)
+    srv.hwtest_save({"camera": {"status": "PASSED"}})
+    check("a first test on the next machine does not claim an audit was filed without it",
+          srv.hwtest_needs_filing() is False, srv.STATE["recordFiled"])
+
+    # ----------------------------- 8. the test on a wipe record -----------
+    # A wipe pins its profile at the start (a wipe takes hours, and a Rescan in
+    # the middle must not change what the erase is filed under). The hardware
+    # test is the exception: it describes the MACHINE, not the erase event.
+    print("8. a wipe record carries the test as it is now, not as it was at wipe start")
+    srv.STATE["hwtest"], srv.STATE["hwtestMachine"] = None, ""
+    srv.STATE["profile"] = copy.deepcopy(SAME)
+    srv.hwtest_save({"speaker": {"status": "PASSED"}})
+    pinned = {"profile": srv.attach_hardware_test(srv.STATE["profile"]), "auditKind": "goods_in"}
+    HALF = copy.deepcopy(pinned["profile"]["hardwareTest"])
+    # The Rescan mid-wipe: STATE["profile"] becomes a NEW object, so everything
+    # tested afterwards attaches to that one and never to the pinned copy.
+    rescan_with(SAME)
+    srv.hwtest_save({"camera": {"status": "PASSED"}})
+    check("the pinned profile is left holding the half-done test (this is the hazard)",
+          pinned["profile"]["hardwareTest"] == HALF)
+    built = srv.hwtest_refresh(pinned)
+    check("the record built from it carries the tests finished DURING the wipe",
+          built["profile"]["hardwareTest"] == srv.STATE["hwtest"]
+          and built["profile"]["hardwareTest"]["completed"] == 2,
+          built["profile"].get("hardwareTest"))
+    check("everything else stays pinned exactly as it was at wipe start",
+          {k: v for k, v in built["profile"].items() if k != "hardwareTest"}
+          == {k: v for k, v in pinned["profile"].items() if k != "hardwareTest"})
+    check("and the pinned profile itself is not changed under the running wipe",
+          pinned["profile"]["hardwareTest"] == HALF)
+
+    # A machine swapped in mid-wipe: the station now holds ANOTHER machine's
+    # test, and it must not land on this record.
+    rescan_with(OTHER)
+    srv.hwtest_save({"screen": {"status": "PASSED"}})
+    built = srv.hwtest_refresh(pinned)
+    check("a test for the machine now on the bench never reaches an earlier machine's "
+          "wipe record", built["profile"]["hardwareTest"] == HALF,
+          built["profile"].get("hardwareTest"))
 finally:
     srv.capture = real_capture
 

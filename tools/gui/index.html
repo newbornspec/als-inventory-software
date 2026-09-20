@@ -481,8 +481,16 @@
             <div class="lbl" style="flex:1;min-width:170px">Hardware test</div>
             <button class="btn gho sm" id="hwtRunAll" onclick="runAllHwTests()">Run all tests</button>
           </div>
+          <!-- What this says has to be exactly true, because nothing else on
+               the screen can correct it: a test is kept HERE the moment it is
+               recorded, and only reaches the machine's record when an audit or
+               a wipe is filed. Start audit sits above this card, so testing
+               after filing is the natural order and used to lose the result
+               silently - hwtSaveMsg says so when it happens. -->
           <div class="hwtw" style="margin:0 0 4px">Four checks on this machine, run here and
-            confirmed by you. The result is saved onto this machine's audit record.</div>
+            confirmed by you. Each result is kept on this station and goes onto the machine’s
+            audit record when the audit is filed — so press Start audit after testing, not
+            before.</div>
 
           <!-- Each test owns everything between its two markers and nothing
                else in this file, so the four can be written separately and
@@ -557,7 +565,10 @@
           <div class="health na" id="hwtSummary"><span class="hd"></span><span></span></div>
           <!-- Said out loud when a result is on screen but not on the record:
                a technician who has just tested a machine by hand must never be
-               left thinking it was saved when it was not. -->
+               left thinking it was saved when it was not. Written ONLY by
+               hwSaveMsgText, from the state, every time the card is drawn - it
+               carries three different pieces of news and nothing may show or
+               hide it as a side effect of something else. -->
           <div class="hwtw hidden" id="hwtSaveMsg"></div>
         </div>
 
@@ -845,6 +856,10 @@ function connClick(){ if(BOOT.error||NET_STATE!=='connected') openSettings(); }
 /* --------------------------------------------------------- bootstrap --- */
 async function bootstrap(){
   let b;
+  // Taken BEFORE the request: an answer assembled before a hardware-test save
+  // landed carries the older copy, and painting that back would read as "Not
+  // tested" for a result that is stored. adoptHwTest drops it.
+  const hwSeq=HWT_SAVES;
   try{ b=await jget('/api/bootstrap'); }
   catch(e){ setTimeout(bootstrap,3000); return; }
   BOOT=b; LOTS=b.lots||[]; DRIVES=b.drives||[];
@@ -866,10 +881,11 @@ async function bootstrap(){
 
   fillBatches(); fillDrives(); fillImages(); fillHardware(); renderImageSource();
   renderWorkflow();
-  // The hardware test the station is holding for this machine (it survives a
-  // Rescan - see hwtest_carry_forward in server.py). adoptHwTest leaves a run
-  // in progress alone.
-  adoptHwTest(b.hardwareTest);
+  // The hardware test the station is holding, and WHICH MACHINE it holds it
+  // for (it survives a Rescan of the same machine and is dropped for a
+  // different one - hwtest_carry_forward in server.py). adoptHwTest leaves a
+  // run in progress, and an unsaved result, alone.
+  adoptHwTest(b.hardwareTest,b.hwtestMachine,b.hwtestNeedsFiling,hwSeq);
   bootstrapTail(b);
 }
 
@@ -1277,12 +1293,35 @@ const HWT_LOOK={NOT_TESTED:['Not tested','na'],IN_PROGRESS:['Testing…','run'],
   PASSED:['Passed','ok'],ATTENTION:['Needs attention','warn'],FAILED:['Failed','bad']};
 const HWT_DONE=['PASSED','ATTENTION','FAILED'];   // a test that has finished
 let HWTEST={};            // the object saved as profile.hardwareTest
-let HWT_RUNNING=false;    // a test is on screen right now
-/* Once this screen has a result of its own, the server's copy is not painted
-   over it: bootstrap polls every 1.5 s while the hardware is being read, and
-   a poll landing mid-test would put an older answer back under the
-   technician's hands. hwSave() adopts the station's answer deliberately. */
-let HWT_LOCAL=false;
+let HWT_RUNNING=false;    // a test, or its save, is on screen right now
+/* Which machine the results on screen belong to, as the STATION names it, and
+   which of them are on screen but NOT on the station.
+
+   Both exist for one rule: the card must never show a verdict for hardware it
+   was not run on, and must never quietly drop a technician's answer. The
+   station is where the result actually lives - it drops the test the moment a
+   Rescan proves a different machine is on the bench (hwtest_carry_forward) -
+   so this screen follows it, including down to nothing. The one exception is a
+   result recorded here whose save was refused: the station does not have it
+   and cannot hand it back, so it stays on screen and is named in hwtSaveMsg
+   until it saves. */
+let HWT_MACHINE='';
+/* test -> true while the save for it is still in flight, or the station's own
+   words when it refused. Both are "the station has not got this", which is
+   what protects it from being painted over; only the refusals are announced,
+   because a save that has not come back yet is not news. */
+const HWT_UNSAVED={};
+/* Counted up on every save that lands, so a /api/bootstrap answer that was
+   already in flight when the save landed is dropped rather than painting the
+   older copy back over a result that IS stored. */
+let HWT_SAVES=0;
+/* One sentence about what just happened to the station's copy, said under the
+   card: a verdict that disappears without a word is as bad as one that stays. */
+let HWT_NOTE='';
+/* The station holds this result but a record has already been filed for this
+   machine without it (hwtest_needs_filing). Nothing else on screen can show
+   that, and the operator has to act on it. */
+let HWT_NEEDS_FILING=false;
 /* Each test's region registers its runner here. Empty on the shell build, and
    that is not an error: runHwTest says so in the contract's own terms. */
 const HWT_RUNNERS={};
@@ -1325,17 +1364,26 @@ function hwOverall(t){
 }
 
 /* The Test Results block: the count, the verdict once there is one, and who
-   tested it and when underneath. Pure, for tools/test-hwtest.py. */
+   tested it and when underneath. Pure but for hwSigninOn, which only decides
+   WHICH control the operator is pointed at. For tools/test-hwtest.py. */
 function hwWhen(iso){
   const d=new Date(iso);
   return isNaN(d.getTime())?'':d.toLocaleString('en-GB',
     {day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'});
 }
+/* Which control the operator actually has. renderSignin HIDES the Operator
+   name field while sign-in is on, so "set Operator at the top of the screen"
+   pointed at something that was not on the screen - and with sign-in on the
+   station now refuses to stamp the shared stick account as the technician, so
+   that is exactly when this message appears. */
+function hwSigninOn(){return !!(BOOT&&BOOT.signin&&BOOT.signin.required);}
 function hwSummaryView(t){
   t=t||{};
   const o=hwOverall(t),look=HWT_LOOK[o.verdict]||null,bits=[];
   if(t.technician)bits.push('Tested by '+t.technician);
-  else if(o.completed)bits.push('No technician name on this test — set Operator at the top of the screen');
+  else if(o.completed)bits.push('No technician name on this test — '+
+    (hwSigninOn()?'sign in at the top of the screen':'set Operator at the top of the screen')+
+    ', then run the test again so it is recorded against a person');
   const when=t.testedAt?hwWhen(t.testedAt):'';
   if(when)bits.push(when);
   // Same caveat every wipe record carries: the time is only as good as the
@@ -1358,6 +1406,35 @@ function hwWhyText(k){
   return HWT_ABOUT[k]||'';
 }
 
+/* The one line under the card, and everything that has to be SAID rather than
+   left to a colour: results that are on screen but not on the station, a
+   station copy that has replaced what was here, and a result the machine's
+   record does not carry yet.
+
+   Rebuilt from the state every time the card is drawn, never shown or hidden
+   as a side effect of something else. That is precisely what went wrong
+   before: one save failing showed the warning and the NEXT save - for a
+   different test - hid it again, so a result that was never stored sat there
+   looking stored. */
+function hwSaveMsgText(){
+  // Only the ones the station has actually REFUSED. A save still in flight is
+  // marked unsaved too - that is what keeps it from being overwritten - but
+  // announcing it would put a warning on screen during every normal save.
+  const bits=[],refused=HWT_KEYS.filter(k=>typeof HWT_UNSAVED[k]==='string');
+  if(refused.length){
+    bits.push('On screen but NOT saved to the machine’s record yet: '+
+      refused.map(k=>HWT_NAMES[k].toLowerCase()).join(', ')+'. '+
+      HWT_UNSAVED[refused[refused.length-1]]+
+      ' Run '+(refused.length>1?'those tests':'that test')+
+      ' again; if it keeps happening, write the result down and tell a supervisor.');
+  }
+  if(HWT_NOTE)bits.push(HWT_NOTE);
+  if(HWT_NEEDS_FILING)bits.push('This result is on this station but not on the machine’s '+
+    'record: the audit was already filed without it. Press Start audit again to put it on '+
+    'the record.');
+  return bits.join(' ');
+}
+
 function renderHwTest(){
   for(const k of HWT_KEYS){
     const s=hwStatus(k),look=HWT_LOOK[s];
@@ -1374,6 +1451,8 @@ function renderHwTest(){
       (v.detail?'<br>'+esc(v.detail):'')+'</span>';}
   const all=$('hwtRunAll');
   if(all)all.disabled=HWT_RUNNING;
+  const msg=$('hwtSaveMsg'),said=hwSaveMsgText();
+  if(msg){msg.textContent=said;msg.classList.toggle('hidden',!said);}
 }
 
 /* Record one test's result. A retest never deletes what it replaces (owner's
@@ -1386,7 +1465,13 @@ function hwSet(k,res){
   const s=HWT_LOOK[res.status]?res.status:'NOT_TESTED';
   HWTEST[k]=Object.assign({},res,{status:s,
     reason:res.reason||null,action:res.action||null,notes:res.notes||''});
-  HWT_LOCAL=true;
+  // On screen and not on the station until hwSave says otherwise. Marked
+  // BEFORE the save goes, so nothing arriving in between can paint over it.
+  // IN_PROGRESS is not marked: it is a screen state with nothing to save, and
+  // announcing it as unsaved while the technician is still answering would be
+  // a warning about a test that has not finished.
+  if(HWT_DONE.indexOf(s)>=0)HWT_UNSAVED[k]=true;
+  HWT_NOTE='';
   renderHwTest();
 }
 /* The technician confirmed it works. */
@@ -1418,36 +1503,48 @@ function hwCannotRun(k,reason,action,extra){
    kiosk with no keyboard shortcuts and no address bar has no other way out. */
 async function runHwTest(k){
   if(HWT_KEYS.indexOf(k)<0)return;
-  const run=HWT_RUNNERS[k],name=(HWT_NAMES[k]||k).toLowerCase();
-  if(typeof run!=='function'){
-    // The shell ships before the tests do. That is the station being unable
-    // to run the test, which is ATTENTION with something to do about it -
-    // not a verdict on the hardware.
-    hwCannotRun(k,'this station’s software does not include the '+name+' test yet',
-      'Sync the stick from Windows (sync-usb.ps1), boot this machine again, then run the test.');
+  /* ONE test at a time, and the lock lives here rather than in runAllHwTests,
+     because the per-row Test buttons are an entry point of their own. The flag
+     used to be set only by Run all, so a second tap on Test - trivial on a
+     kiosk touchscreen - started the same runner again underneath the first,
+     reset its row to "Testing…" and left two runs live; whichever settled last
+     was the answer that got filed, which need not be the one the technician
+     was looking at. None of the four test regions can guard that on its own,
+     and this is the only place it can be done once for all of them. */
+  if(HWT_RUNNING)return;
+  HWT_RUNNING=true;
+  try{
+    const run=HWT_RUNNERS[k],name=(HWT_NAMES[k]||k).toLowerCase();
+    if(typeof run!=='function'){
+      // The shell ships before the tests do. That is the station being unable
+      // to run the test, which is ATTENTION with something to do about it -
+      // not a verdict on the hardware.
+      hwCannotRun(k,'this station’s software does not include the '+name+' test yet',
+        'Sync the stick from Windows (sync-usb.ps1), boot this machine again, then run the test.');
+      await hwSave(k);
+      return;
+    }
+    hwSet(k,{status:'IN_PROGRESS'});
+    try{ await run(); }
+    catch(e){
+      hwCannotRun(k,'the '+name+' test stopped with an unexpected error ('+
+        ((e&&e.message)||e||'no detail')+')',
+        'Run the test again. If it keeps happening, test this one by hand and tell a supervisor.');
+    }
+    if(hwStatus(k)==='IN_PROGRESS')
+      hwCannotRun(k,'the '+name+' test ended without recording a result',
+        'Run the test again, and test this one by hand if it does the same.');
     await hwSave(k);
-    return;
-  }
-  hwSet(k,{status:'IN_PROGRESS'});
-  try{ await run(); }
-  catch(e){
-    hwCannotRun(k,'the '+name+' test stopped with an unexpected error ('+
-      ((e&&e.message)||e||'no detail')+')',
-      'Run the test again. If it keeps happening, test this one by hand and tell a supervisor.');
-  }
-  if(hwStatus(k)==='IN_PROGRESS')
-    hwCannotRun(k,'the '+name+' test ended without recording a result',
-      'Run the test again, and test this one by hand if it does the same.');
-  await hwSave(k);
+  }finally{ HWT_RUNNING=false; renderHwTest(); }
 }
 
 /* Run all four, in order, one at a time. Each one saves as it finishes, so a
-   machine switched off half way through keeps what was already done. */
+   machine switched off half way through keeps what was already done. The lock
+   is runHwTest's - this only refuses to START a run while one is going, so the
+   two entry points cannot disagree about what "a test is running" means. */
 async function runAllHwTests(){
   if(HWT_RUNNING)return;
-  HWT_RUNNING=true; renderHwTest();
-  try{ for(const k of HWT_KEYS) await runHwTest(k); }
-  finally{ HWT_RUNNING=false; renderHwTest(); }
+  for(const k of HWT_KEYS) await runHwTest(k);
 }
 
 /* Save ONE test's result to the station, which stamps the technician and the
@@ -1459,30 +1556,81 @@ async function runAllHwTests(){
    of them into the history again and re-date them - a retest that never
    happened, on every save. */
 async function hwSave(k){
-  const el=$('hwtSaveMsg'),res=HWTEST[k];
+  const res=HWTEST[k];
   if(!res||!res.status||res.status==='IN_PROGRESS')return;
   const body={};body[k]=res;
   let r;
   try{ r=await jpost('/api/hwtest',body); }
   catch(e){ r={ok:false,data:{message:'Could not reach the station service.'}}; }
   if(r.ok&&r.data&&r.data.hardwareTest){
-    HWTEST=r.data.hardwareTest;
-    if(el)el.classList.add('hidden');
-  }else if(el){
-    el.textContent='This result is on screen but NOT saved to the machine’s record yet: '+
-      ((r.data&&r.data.message)||'the station service did not answer.')+
-      ' Run the test again; if it keeps happening, write the result down and tell a supervisor.';
-    el.classList.remove('hidden');
+    delete HWT_UNSAVED[k];
+    HWTEST=hwMerge(r.data.hardwareTest);
+    HWT_MACHINE=r.data.hwtestMachine||HWT_MACHINE;
+    HWT_NEEDS_FILING=!!r.data.hwtestNeedsFiling;
+    HWT_NOTE='';
+    HWT_SAVES++;
+  }else{
+    HWT_UNSAVED[k]=(r.data&&r.data.message)||'The station service did not answer.';
   }
   renderHwTest();
 }
 
-/* What the station already has for the machine on the bench, so a reloaded
-   screen shows the test instead of starting again. Never applied over a run
-   in progress or over a result this screen has just recorded. */
-function adoptHwTest(t){
-  if(HWT_RUNNING||HWT_LOCAL)return;
-  HWTEST=(t&&typeof t==='object')?t:{};
+/* The station's object, with any result this screen holds that the station
+   does NOT have kept over it.
+
+   Per component, never wholesale, and this is the whole reason: the station's
+   copy carries NOT_TESTED for a test whose own save it refused, so assigning
+   it over this one put that test back to "Not tested" on screen and took the
+   technician's answer with it - the one thing the card promises can never
+   happen. Everything else (the technician, the time, the history) is the
+   station's, because that is what the record will carry. */
+function hwMerge(t){
+  const out=Object.assign({},(t&&typeof t==='object')?t:{});
+  for(const k of HWT_KEYS) if(HWT_UNSAVED[k]&&HWTEST[k])out[k]=HWTEST[k];
+  return out;
+}
+
+/* What the station holds for the machine on the bench, painted onto the card.
+
+   The station is where the result LIVES, so this follows it - including down
+   to nothing. It used to refuse every station answer for the rest of the
+   page's life as soon as one test had been run here, which meant the card kept
+   "4 / 4 completed — Passed" from machine A on screen after a Rescan had moved
+   every other panel on to machine B, and kept a verdict the station had
+   already dropped after its own service restarted. A technician reading a
+   completed verdict for hardware nobody has tested is the exact failure
+   contract C6 exists to prevent.
+
+   Three things are never painted over: a run in progress, a result recorded
+   here whose save has not landed (the station has not got it to give back),
+   and an answer that was already in flight when a save landed. */
+function adoptHwTest(t,machine,needsFiling,seq){
+  if(HWT_RUNNING)return;
+  if(seq!==undefined&&seq!==HWT_SAVES)return;
+  machine=machine||'';
+  // Provably a different machine, by the same positive-proof rule the station
+  // uses: both sides name one and they differ. A result recorded here belongs
+  // to the machine that was on the bench when it was recorded, so once a
+  // different one is there, keeping it - saved or not - would show one
+  // machine's answer against another's hardware.
+  const other=!!(HWT_MACHINE&&machine&&machine!==HWT_MACHINE);
+  if(other)for(const k of HWT_KEYS) delete HWT_UNSAVED[k];
+  const had=HWT_KEYS.filter(k=>hwStatus(k)!=='NOT_TESTED');
+  HWTEST=hwMerge(t);
+  HWT_MACHINE=machine;
+  HWT_NEEDS_FILING=!!needsFiling;
+  // Said out loud when the station's copy has less on it than the screen had.
+  // Both reasons are legitimate - a different machine on the bench, or the
+  // station service restarted - and both leave a technician who would
+  // otherwise have to notice the rows changing under them.
+  const lost=had.filter(k=>hwStatus(k)==='NOT_TESTED');
+  HWT_NOTE=!lost.length?''
+    :other?('The machine on the bench changed, so the test on screen was run on a different '+
+            'machine and has been cleared. Test this one.')
+    :('The station no longer holds the earlier result for '+
+      lost.map(k=>HWT_NAMES[k].toLowerCase()).join(', ')+
+      ', so it is not on this machine’s record. Run '+
+      (lost.length>1?'those tests':'that test')+' again.');
   renderHwTest();
 }
 
