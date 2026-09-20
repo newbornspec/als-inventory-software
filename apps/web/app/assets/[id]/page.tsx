@@ -397,7 +397,17 @@ export default async function AssetDetailPage({
           <DeviceLocksSection
             locks={(asset.hardwareProfile as { locks?: DeviceLocks } | null)?.locks}
           />
-          <HardwareSection profile={asset.hardwareProfile} />
+          {/* Status and Last updated are the warehouse record's own facts, not
+              the machine's — the captured profile cannot supply them, so the
+              hardware profile's header bar is handed them here. */}
+          <HardwareSection
+            profile={asset.hardwareProfile}
+            device={{
+              status: asset.stockStatus,
+              assetTag: asset.tag,
+              updatedAt: asset.updatedAt,
+            }}
+          />
 
           <div className="md:col-span-2">
             <PhotosSection assetId={asset.id} photos={photos} canManage={canEdit} />
