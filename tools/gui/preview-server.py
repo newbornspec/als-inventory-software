@@ -32,6 +32,11 @@ Scenario knobs (environment variables, all optional):
                       no-network | server-unreachable | flap (cycles through
                       all three, 12 s each, so the chip can be watched
                       changing - the page polls every 10 s).
+    PREVIEW_HEALTH    unreadable: the second drive's health cannot be measured
+                      and a storage controller is hiding two more drives - the
+                      two rows that must say WHY and WHAT TO DO, and must never
+                      say "Unknown". Left unset, every drive has a measured
+                      percentage (94% Good and 74% Caution).
     PREVIEW_NAMESPACES  set to 1 to add a second namespace (nvme0n2) of the
                       same NVMe drive, to see the namespace warning (owner
                       decision D36) and the second namespace waiting its
@@ -91,6 +96,27 @@ DRIVES = [
 for _d in DRIVES:
     _d["controller"] = "nvme0" if _d["device"].startswith("/dev/nvme") else None
     _d["namespaces"] = [_d["device"]] if _d["controller"] else []
+
+# PREVIEW_HEALTH=unreadable: the branch that is easy to get wrong and hard to
+# photograph - a drive whose health CANNOT be measured, and a controller hiding
+# drives from Linux entirely. Neither may ever read "Unknown": each says what
+# is wrong and what the operator should do about it. Same shape server.py's
+# health_view() / drive_health_lines() produce.
+HIDDEN_ROWS = []
+if os.environ.get("PREVIEW_HEALTH") == "unreadable":
+    DRIVES[1]["health"] = {"measured": False,
+                           "reason": "the drive does not report health data",
+                           "action": "none on this machine — test it on another"
+                                     " machine or replace",
+                           "source": "ata-hdd"}
+    DRIVES[1]["healthView"] = {
+        "cls": "na",
+        "title": "Not measurable — the drive does not report health data",
+        "detail": "none on this machine — test it on another machine or replace"}
+    HIDDEN_ROWS = [{"cls": "na",
+                    "title": "Not measurable — behind a RAID/Intel RST controller",
+                    "detail": "set the storage mode to AHCI in the BIOS, then press Rescan",
+                    "drive": "2 drives hidden by the storage controller"}]
 if os.environ.get("PREVIEW_NAMESPACES") == "1":
     DRIVES.insert(1, dict(DRIVES[0], device="/dev/nvme0n2", name="nvme0n2", size="1 GB",
                           bytes=1000000000))
@@ -112,7 +138,7 @@ def bootstrap():
                                         drive="%s %s (%s)" % (d["size"],
                                                               "NVMe" if d["controller"] else "HDD",
                                                               d["name"]))
-                                   for d in DRIVES]},
+                                   for d in DRIVES] + HIDDEN_ROWS},
         "lots": [{"id": "lot-1", "batchNumber": "B-0042", "actualUnitCount": 12,
                   "expectedUnitCount": 20, "createdAt": "2026-09-01T09:00:00Z",
                   "createdByName": "Preview"}],
