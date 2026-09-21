@@ -350,9 +350,33 @@ describe('rollupWipe - legacy rows keep the interim rule (D11)', () => {
   });
 
   it('legacy rows older than the first per-drive record are history', () => {
-    const r = rollupWipe([legacy('failed', -10), ev('A', 'wiped', 0)]);
+    // WITH the expectation, as production always passes it: a verdict of
+    // "wiped" now means "and we knew which drives there were", so a fixture
+    // that omits it is asserting something the certificate route never does.
+    const r = rollupWipe(
+      [legacy('failed', -10), ev('A', 'wiped', 0)],
+      [{ serialNumber: 'A', model: null }],
+    );
     expect(r.verdict).toBe('wiped');
     expect(r.basis).toBe('drives');
+  });
+
+  it('a wipe with no drive list behind it cannot be certified', () => {
+    // The certificate gate's own hole: `missing` outcomes are the only thing
+    // that produces 'incomplete', and they can only come from the expectation.
+    // An empty one therefore rolled up exactly like a fully accounted machine.
+    const r = rollupWipe([ev('A', 'wiped', 0)]);
+    expect(r.verdict).toBe('incomplete');
+    expect(r.reason).toBe('unverifiable');
+    expect(refusalFor(r)).toMatch(/never recorded which drives/i);
+  });
+
+  it('but a drive list we DID read and found nothing external in still certifies', () => {
+    const r = rollupWipe(
+      [ev('A', 'wiped', 0, { hardwareProfile: { storage: [{ serialNumber: 'A' }] } })],
+      [{ serialNumber: 'A', model: null }],
+    );
+    expect(r.verdict).toBe('wiped');
   });
 
   it('a legacy failure filed after the per-drive records makes it worse', () => {

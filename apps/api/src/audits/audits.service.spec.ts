@@ -184,6 +184,12 @@ describe('groupDayEvents', () => {
 
   it('a failed drive re-wiped the same day reads wiped', () => {
     const a = { serialNumber: 'DRV-A', model: 'SSD', devicePath: '/dev/sda' };
+    // The wipe-time profile every real per-drive station row carries. The day
+    // view now judges against the expected drive list, exactly as the
+    // certificate does, so a fixture without one is asserting "wiped" for a
+    // machine whose drives were never recorded - which the certificate
+    // refuses, and which this block exists to keep in step.
+    const profile = { storage: [{ serialNumber: 'DRV-A', model: 'SSD' }] };
     const d = groupDayEvents([
       row({
         id: 'e1',
@@ -192,6 +198,7 @@ describe('groupDayEvents', () => {
         wiped_drive_serial: 'DRV-A',
         wiped_drive: a,
         wipe_source: 'station',
+        hardware_profile: profile,
       }),
       row({
         id: 'e2',
@@ -201,6 +208,7 @@ describe('groupDayEvents', () => {
         wiped_drive_serial: 'DRV-A',
         wiped_drive: a,
         wipe_source: 'station',
+        hardware_profile: profile,
       }),
     ])[0];
     expect(d.dataWipeStatus).toBe('wiped');

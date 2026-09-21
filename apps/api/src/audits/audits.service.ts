@@ -3,7 +3,11 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { AssetAudit } from '../assets/asset-audit.entity';
 import { isScopedManager, type RequestUser } from '../common/ownership';
-import { rollupWipe, type RollupRow } from '../devices/wipe-rollup';
+import {
+  rollupWipe,
+  expectedDrivesFromRows,
+  type RollupRow,
+} from '../devices/wipe-rollup';
 import type { WipedDrive } from '../devices/wipe-detail';
 
 // The cross-asset audit feed behind the Audit workspace. asset_audits is one
@@ -270,7 +274,14 @@ export function groupDayEvents(rows: DayEventRow[]): AuditDayDevice[] {
   for (const d of devices) {
     const wipes = wipesByAsset.get(d.assetId);
     if (!wipes?.length) continue;
-    const verdict = rollupWipe(wipes).verdict;
+    // WITH the expected drives, or the comment above is false. Without them
+    // nothing can ever be `missing`, so the 'incomplete' branch below was
+    // unreachable and the workspace showed "wiped" for a machine the
+    // certificate refuses - the exact disagreement this block exists to
+    // prevent. Every other caller of rollupWipe passes these; this one was
+    // relying on the parameter's default, which is what made the omission
+    // silent.
+    const verdict = rollupWipe(wipes, expectedDrivesFromRows(wipes)).verdict;
     if (verdict === 'wiped') d.dataWipeStatus = 'wiped';
     else if (verdict === 'failed' || verdict === 'incomplete')
       d.dataWipeStatus = 'failed';

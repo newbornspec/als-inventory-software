@@ -82,7 +82,7 @@ export type DriveStatus = 'wiped' | 'failed' | 'missing';
 // Why the verdict is not 'wiped' ('none', 'incomplete' and 'failed' mirror
 // the verdict; 'discard' and 'mixed' are failures with their own wording).
 export type RollupReason =
-  'none' | 'failed' | 'discard' | 'mixed' | 'incomplete';
+  'none' | 'failed' | 'discard' | 'mixed' | 'incomplete' | 'unverifiable';
 
 export interface DriveOutcome<R extends RollupRow = RollupRow> {
   key: string;
@@ -396,7 +396,51 @@ export function rollupWipe<R extends RollupRow>(
   );
   const drives = perDrive(identified, expectedDrives);
   if (lateLegacy.length) drives.push(outcomeFor(MACHINE_KEY, lateLegacy));
-  return worst(drives);
+  const rolled = worst(drives);
+
+  // The expectation is the whole reason "wiped" can mean "all of them". A
+  // `missing` outcome - the only thing that produces 'incomplete' - can only
+  // come from a drive that is IN expectedDrives. So an EMPTY expectation
+  // produces no missing outcomes, and a machine whose drive list was never
+  // read rolls up exactly like one where every drive is accounted for.
+  //
+  // That is this codebase's recurring failure at its most expensive point: an
+  // absence of evidence read as evidence of absence, at the gate that issues
+  // an erasure certificate. Reachable with no station bug at all - a wipe
+  // posted without a profile, or a profile whose storage[] was dropped
+  // because the enumeration returned nothing.
+  //
+  // Refusing here is the safe direction: it withholds a certificate until the
+  // machine is audited again, rather than certifying a machine we never
+  // looked at.
+  if (rolled.verdict === 'wiped' && !expectationKnown(identified, expectedDrives))
+    return {
+      verdict: 'incomplete',
+      reason: 'unverifiable',
+      basis: 'drives',
+      drives,
+    };
+  return rolled;
+}
+
+// Whether we actually KNOW which drives this machine has.
+//
+// An expectation with entries is knowledge. An empty one is knowledge only if
+// a station row carried a storage list we read - and every entry in it was
+// legitimately excluded as external or removable. Absent, unreadable or empty
+// storage is not "this machine has no drives"; an empty storage[] is dropped
+// from the profile whether the audit enumerated nothing or never ran.
+function expectationKnown(
+  identified: RollupRow[],
+  expected: ExpectedDrive[],
+): boolean {
+  if (expected.length) return true;
+  return identified.some((r) => {
+    const storage = (
+      r.hardwareProfile as { storage?: unknown } | null | undefined
+    )?.storage;
+    return Array.isArray(storage) && storage.length > 0;
+  });
 }
 
 // --- Which records belong to which drive -------------------------------------
@@ -624,6 +668,15 @@ export function refusalFor(r: WipeRollup): string | null {
       return DISCARD_REFUSAL;
     case 'mixed':
       return MIXED_REFUSAL;
+    case 'unverifiable':
+      return (
+        'This device was wiped, but the station never recorded which drives it has, so there is nothing to ' +
+        'check the wipe against and no way to show that every internal drive was erased. That happens when a ' +
+        'wipe was filed without a hardware profile, or when the drive enumeration returned nothing. ' +
+        'No erasure certificate can be issued on that basis. Audit the device again with the ALS audit station ' +
+        'so its drives are on record; if it genuinely was fully erased, record the erasure manually and the ' +
+        'certificate will say it was entered manually.'
+      );
     case 'incomplete': {
       const missing = r.drives.filter((d) => d.status === 'missing');
       return (
