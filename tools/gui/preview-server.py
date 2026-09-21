@@ -132,7 +132,12 @@ def bootstrap():
                    "hw": {"processor": "Intel Core i5-8350U", "memory": "16 GB",
                           "storage": "512 GB NVMe + 500 GB HDD", "display": "14in 1920x1080",
                           "network": "Intel Wi-Fi", "batteryLine": "82% health",
-                          "tpm": "2.0"},
+                          "tpm": "2.0",
+                          # The installed OS, as server.py's ident() joins it.
+                          # PREVIEW_OS=none shows the machine the technician
+                          # most wants to be sure about: one with nothing on it.
+                          "os": "" if os.environ.get("PREVIEW_OS") == "none"
+                                else "Windows 11 Pro 23H2 build 22631.2861 64-bit"},
                    # server.py's drive_health_lines(): one row per drive (contract C5).
                    "driveHealth": [dict(d["healthView"],
                                         drive="%s %s (%s)" % (d["size"],

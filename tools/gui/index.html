@@ -1531,6 +1531,11 @@ const HWDEF=[
   ['processor','Processor','<path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/><rect x="5" y="5" width="14" height="14" rx="2"/>'],
   ['memory','Memory','<rect x="2" y="7" width="20" height="10" rx="2"/><path d="M6 17v3M10 17v3M14 17v3M18 17v3"/>'],
   ['storage','Storage','<rect x="2" y="7" width="20" height="10" rx="2"/><path d="M6 12h.01M10 12h6"/>'],
+  /* Right after Storage on purpose: it describes what is ON that disk. This is
+     the line that tells the technician the machine is not blank before anyone
+     presses Wipe. Empty when the capture found no OS - the row then reads like
+     any other line with nothing behind it, which is the truth. */
+  ['os','Operating system','<rect x="2" y="4" width="20" height="14" rx="2"/><path d="M8 21h8M12 18v3"/>'],
   ['display','Display','<rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/>'],
   ['optical','Optical','<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="2.5"/>'],
   ['network','Network','<path d="M5 12.5a10 10 0 0 1 14 0M8.5 16a5.5 5.5 0 0 1 7 0M12 20h.01"/>'],

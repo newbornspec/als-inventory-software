@@ -2753,6 +2753,7 @@ def ident():
     net = p.get("network") or {}
     bat = p.get("battery") or {}
     sec = p.get("security") or {}
+    sysm = p.get("system") or {}
 
     def joins(parts, sep=" · "):
         return sep.join(str(x) for x in parts if x)
@@ -2800,6 +2801,17 @@ def ident():
                                   bat.get("status")]),
             "tpm": joins([sec.get("tpm") or "No TPM detected",
                           ("Secure Boot %s" % sec["secureBoot"]) if sec.get("secureBoot") else ""]),
+            # The INSTALLED operating system, read out of the machine's own
+            # registry during the capture. It belongs on the bench screen and
+            # not only in the web record: it is how the technician knows
+            # whether the machine in front of them still holds someone's data,
+            # and it is the one line that says "this disk is not blank" before
+            # anyone presses Wipe. An encrypted or unreadable install says so
+            # in its own words (als_os_* wrote the sentence), so whatever is
+            # here is already the honest answer - never dress it up.
+            "os": joins([sysm.get("os"), sysm.get("osVersion"),
+                         ("build %s" % sysm["osBuild"]) if sysm.get("osBuild") else "",
+                         sysm.get("osArchitecture")]),
         },
     }
 
