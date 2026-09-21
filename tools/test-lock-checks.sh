@@ -256,6 +256,104 @@ check_domain
 check "missing SECURITY hive -> domain UNKNOWN" UNKNOWN "$(row_status domainJoin)"
 
 echo
+echo "== an ENROLLED machine must never read as PASS =="
+# The same two mistakes 45526b2 took out of check_entra lived on here, because
+# that fix went looking at one function instead of one construct: enrolment
+# subkeys were kept only if GUID-shaped, and hivexsh's exit status was thrown
+# away. Either one made an Intune-enrolled machine report PASS.
+_saved_locate4=$(declare -f lock_locate_hives)
+_saved_has6=$(declare -f lock_has)
+_saved_get4=$(declare -f lock_hive_get)
+mkdir -p "$FIX"; echo x > "$FIX/sw3"
+lock_locate_hives() { WIN_SOFTWARE="$FIX/sw3"; WIN_SYSTEM="$FIX/sw3"; return 0; }
+lock_has() { return 0; }
+LOCK_IS_ROOT=1
+
+# A listing line that is not GUID-shaped, for a real enrolment with a
+# management server URL.
+hivexsh() { printf '  not-a-guid-shaped-name\n'; return 0; }
+lock_hive_get() {
+  case "$3" in
+    DiscoveryServiceFullURL) printf 'https://enrollment.manage.microsoft.com/'; return 0 ;;
+    *) return 1 ;;
+  esac
+}
+LOCK_ROWS=""; check_mdm
+check "non-GUID enrolment subkey -> not PASS" LOCKED "$(row_status mdm)"
+
+# The Enrollments subtree will not walk. The `cd Microsoft` probe passes, so
+# only the listing's own exit status can catch this.
+# The key path arrives on STDIN (printf ... | hivexsh "$hive"), not in $@ —
+# the hive path is the only argument. The `cd Microsoft` probe must still pass,
+# so only the Enrollments listing fails.
+hivexsh() { local _in; _in=$(cat); case "$_in" in *Enrollments*) return 2 ;; esac; return 0; }
+LOCK_ROWS=""; check_mdm
+check "Enrollments listing fails -> UNKNOWN"  UNKNOWN "$(row_status mdm)"
+
+unset -f hivexsh
+eval "$_saved_get4"; eval "$_saved_has6"; eval "$_saved_locate4"
+
+echo
+echo "== a legacy boot must leave a ROW, not vanish =="
+# check_setup_mode used to `return 0` with no row on a non-UEFI boot. A missing
+# row is worse than UNKNOWN: it is absent from the report, the JSON and the
+# roll-up, so the UNKNOWN that forces UNVERIFIED never exists and the device
+# read CLEAR.
+LOCK_ROWS=""
+export LOCK_SYSROOT="$FIX/legacy"; mkdir -p "$LOCK_SYSROOT"
+LOCK_IS_ROOT=1
+check_setup_mode
+check "legacy boot files a row"            UNKNOWN "$(row_status setupMode)"
+check "and the device is not CLEAR"        UNVERIFIED "$(lock_status)"
+
+echo
+echo "== an unrecognised is_enabled is not a 'no password' =="
+LOCK_ROWS=""
+export LOCK_SYSROOT="$FIX/biosodd"
+mkdir -p "$LOCK_SYSROOT/sys/class/firmware-attributes/dell-wmi-sysman/authentication/Admin"
+printf 'Not Supported\n' > "$LOCK_SYSROOT/sys/class/firmware-attributes/dell-wmi-sysman/authentication/Admin/is_enabled"
+check_bios_password
+check "unparseable value -> not PASS"      UNKNOWN "$(row_status biosPassword)"
+
+echo
+echo "== TPM: the command succeeding is not the field being there =="
+LOCK_ROWS=""
+export LOCK_SYSROOT="$FIX/tpmnofield"
+mkdir -p "$LOCK_SYSROOT/sys/class/tpm/tpm0"
+echo 2 > "$LOCK_SYSROOT/sys/class/tpm/tpm0/tpm_version_major"
+_saved_has4=$(declare -f lock_has)
+lock_has() { return 0; }
+tpm2_getcap() { printf 'TPM2_PT_FIXED:\n  some.other.property: 0\n'; return 0; }
+check_tpm
+check "no ownerAuthSet property -> not PASS" UNKNOWN "$(row_status tpm)"
+# The field present and 0 is a real answer and must still pass.
+tpm2_getcap() { printf 'ownerAuthSet: 0\n'; return 0; }
+LOCK_ROWS=""; check_tpm
+check "ownerAuthSet: 0 -> PASS"            PASS "$(row_status tpm)"
+unset -f tpm2_getcap; eval "$_saved_has4"
+
+echo
+echo "== BitLocker: a partial scan is not 'no encrypted volumes' =="
+LOCK_ROWS=""
+export LOCK_SYSROOT="$FIX/ble"
+mkdir -p "$LOCK_SYSROOT"
+LOCK_IS_ROOT=1
+_saved_has5=$(declare -f lock_has)
+lock_has() { return 0; }
+# blkid sees only the boot stick; the internal disk is behind a RAID controller.
+# The Windows mount already found an encrypted volume by signature.
+blkid() { printf '/dev/sdb1: LABEL="ALSAUDIT" TYPE="vfat"\n'; return 0; }
+WIN_ENCRYPTED=1
+check_bitlocker
+check "signature-found encryption -> WARNING" WARNING "$(row_status bitlocker)"
+# And the inverse: a stick merely LABELLED BitLocker is not an encrypted volume.
+WIN_ENCRYPTED=""
+blkid() { printf '/dev/sdc1: LABEL="BitLocker Recovery Keys" TYPE="vfat"\n'; return 0; }
+LOCK_ROWS=""; check_bitlocker
+check "a label is not a volume type -> PASS" PASS "$(row_status bitlocker)"
+unset -f blkid; eval "$_saved_has5"; WIN_ENCRYPTED=""
+
+echo
 echo "== an unreadable hive must not read as 'no Autopilot traces' =="
 # A real machine, known to the owner to be Autopilot-registered, reported "No
 # local Autopilot traces" while the MDM row on the SAME audit said the SOFTWARE

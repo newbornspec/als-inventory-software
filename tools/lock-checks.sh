@@ -261,7 +261,18 @@ check_secure_boot() {
 }
 
 check_setup_mode() {
-  [ -d "$LOCK_SYSROOT/sys/firmware/efi" ] || return 0
+  # A check that files NO ROW is worse than one that reports UNKNOWN: it does
+  # not appear in the report, the JSON or the roll-up, so the UNKNOWN that
+  # would have forced UNVERIFIED never exists and a legacy/CSM boot could read
+  # CLEAR. (run_lock_checks only manufactures a fallback row when a detector
+  # returns non-zero, and this returned 0.) check_secure_boot files an explicit
+  # UNKNOWN in exactly this condition; match it.
+  if [ ! -d "$LOCK_SYSROOT/sys/firmware/efi" ]; then
+    lock_add setupMode "UEFI Setup Mode" UNKNOWN \
+      "Booted in Legacy/CSM mode, so the firmware's Setup Mode cannot be read. Re-run from a UEFI boot to determine it." \
+      "/sys/firmware/efi absent — UEFI variables unavailable" low
+    return
+  fi
   local b
   b=$(lock_efivar_byte SetupMode)
   case "$b" in
@@ -303,6 +314,18 @@ check_tpm() {
         lock_add tpm "TPM" DETECTED "$detail, owner authorisation SET (provisioned by a previous owner; clearable from firmware)" "/sys/class/tpm + tpm2_getcap" medium
         return
       fi
+      # The command succeeding is not the field being there. A different
+      # tpm2-tools layout, a TPM 1.2, or the wrong property group all print
+      # output with no ownerAuthSet line at all - and the grep above fails
+      # identically for "the field says 0" and "the field is absent". Saying
+      # "no owner authorisation set" at HIGH confidence on the second is how a
+      # provisioned TPM - the one outcome here that scores - turned clean.
+      if ! printf '%s' "$caps" | grep -qi 'ownerAuthSet'; then
+        lock_add tpm "TPM" UNKNOWN \
+          "$detail, but tpm2_getcap did not report ownerAuthSet, so whether a previous owner provisioned it is not known" \
+          "/sys/class/tpm + tpm2_getcap (no ownerAuthSet property)" low
+        return
+      fi
       lock_add tpm "TPM" PASS "$detail, no owner authorisation set" "/sys/class/tpm + tpm2_getcap" high
       return
     fi
@@ -333,8 +356,16 @@ check_bios_password() {
       # result as 0 is how this check used to claim a password-locked machine
       # was clear — reproduced, and the reason for the unreadable flag.
       if v=$(cat "$base/$which/is_enabled" 2>/dev/null) && [ -n "$v" ]; then
-        readany=1
-        [ "$v" = "1" ] && detail="${detail}${which} password is SET. "
+        # Only 0 and 1 are answers. Anything else - "Not Supported", a value
+        # with a trailing CR, a 2 from a firmware that counts differently - was
+        # read as "not 1" and therefore as no password, at high confidence.
+        # An unrecognised value is an unread one: check_absolute's `*)` arm
+        # already treats this class of input that way.
+        case "$(printf '%s' "$v" | tr -d '\r[:space:]')" in
+          1) readany=1; detail="${detail}${which} password is SET. " ;;
+          0) readany=1 ;;
+          *) unreadable=1 ;;
+        esac
       else
         unreadable=1
       fi
@@ -850,10 +881,29 @@ check_mdm() {
     return
   fi
 
-  local enrolments
+  # The SAME two mistakes 45526b2 took out of check_entra's JoinInfo listing,
+  # which lived here untouched because that fix went looking at one function
+  # instead of one construct:
+  #
+  #   - subkeys were kept only if they matched ^[0-9a-f]{8}- . A listing line
+  #     that does not (a leading space, a name that is not GUID-shaped) was
+  #     dropped, and an ENROLLED machine then reported PASS.
+  #   - hivexsh's exit status was discarded, so a subtree that would not walk
+  #     was indistinguishable from one holding no enrolments. The `cd Microsoft`
+  #     probe above proves the HIVE opens; it says nothing about Enrollments.
+  #
+  # The shape was never the evidence. Take every listed subkey and let the
+  # per-enrolment reads below decide, and treat a failed listing as unknown.
+  local enrolments ls_rc
   enrolments=$(printf "$hivesh_ls" 'Microsoft\Enrollments' 2>/dev/null \
-    | hivexsh "$WIN_SOFTWARE" 2>/dev/null \
-    | grep -Ei '^[0-9a-f]{8}-' | head -40)
+    | hivexsh "$WIN_SOFTWARE" 2>/dev/null)
+  ls_rc=$?
+  if [ "$ls_rc" -ne 0 ]; then
+    lock_add mdm "Intune / MDM enrolment" UNKNOWN \
+      "The Enrollments key could not be listed, so enrolment state is unknown. A hive left dirty by fast start-up or hibernation reads this way." \
+      'offline registry (Enrollments listing failed)' low
+    return
+  fi
 
   local g p url upn org="" provider="" name
   for g in $enrolments; do
@@ -863,6 +913,23 @@ check_mdm() {
     local key='Microsoft\Enrollments\'"$g"
     p=$(lock_hive_get "$WIN_SOFTWARE" "$key" ProviderID 2>/dev/null)
     url=$(lock_hive_get "$WIN_SOFTWARE" "$key" DiscoveryServiceFullURL 2>/dev/null)
+    # A READ that failed is not an enrolment that lacks a management server.
+    # lock_hive_get returns non-zero when the value is absent (fine - that is
+    # what a built-in Local/Cloud/Deploy Authority entry looks like) and ALSO
+    # when hivexget could not read the hive at all. Only the second is a
+    # problem, and the two were the same empty string: every enrolment then
+    # fell to `continue` and the machine reported PASS with a detail asserting
+    # the built-in entries "are present" - a positive claim about a listing we
+    # may never have obtained. hivexget is only guarded for its presence, not
+    # its success, so this is reachable whenever the SOFTWARE hive opens for
+    # hivexsh but not for hivexget.
+    if [ -z "$url" ] && ! lock_hive_get "$WIN_SOFTWARE" "$key" ProviderID >/dev/null 2>&1 \
+       && ! lock_hive_haskey "$WIN_SOFTWARE" "$key"; then
+      lock_add mdm "Intune / MDM enrolment" UNKNOWN \
+        "An enrolment key was listed but could not be read, so enrolment state is unknown." \
+        'offline registry (enrolment values unreadable)' low
+      return
+    fi
     name=$(_mdm_provider "$p" "$url")
     [ -n "$name" ] || continue
     provider="$provider
@@ -1318,13 +1385,42 @@ check_bitlocker() {
     lock_add bitlocker "BitLocker" UNKNOWN "blkid returned nothing, so volume encryption could not be determined" "block device scan (no output)" low
     return
   fi
+  # Count the TYPE field, not the line. `grep -ci BitLocker` counted any line
+  # containing the word, so a USB stick labelled "BitLocker Recovery Keys" on a
+  # vfat volume raised a WARNING about an encrypted disk that does not exist -
+  # the whole-record grep this file's own roll-up forbids at the status field.
   local enc
-  enc=$(printf '%s' "$out" | grep -ci 'BitLocker')
+  enc=$(printf '%s' "$out" | grep -c 'TYPE="[Bb]it[Ll]ocker')
   if [ "${enc:-0}" -gt 0 ]; then
     lock_add bitlocker "BitLocker" WARNING "$enc encrypted volume(s) found — the recovery key is needed to read or verify them" "blkid volume signatures" high
     return
   fi
-  lock_add bitlocker "BitLocker" PASS "No BitLocker-encrypted volumes found" "blkid volume signatures" medium
+
+  # Two ways this used to report a machine with an encrypted disk as having
+  # none, both reproduced:
+  #
+  #   1. blkid enumerated only PART of the machine. On a live-USB boot blkid
+  #      always prints the stick, so the empty-output guard above never fires;
+  #      an internal disk hidden behind a RAID/Intel RST controller, unbound or
+  #      failing, simply is not in the list, and its absence read as "no
+  #      BitLocker anywhere".
+  #   2. An older libblkid types a BitLocker volume as plain ntfs. This file
+  #      already knows blkid's TYPE is unreliable - lock_is_bitlocker exists
+  #      for exactly that and falls back to the -FVE-FS- signature.
+  #
+  # WIN_ENCRYPTED is set by the Windows mount attempt, which runs before this
+  # detector and uses that signature. Honouring it also stops the report
+  # contradicting itself: the Microsoft rows said "a BitLocker volume is
+  # present and cannot be read" while this row said there were none.
+  if [ -n "${WIN_ENCRYPTED:-}" ]; then
+    lock_add bitlocker "BitLocker" WARNING \
+      "An encrypted volume was found by signature while looking for Windows, though blkid did not type it as BitLocker. The recovery key is needed to read or verify it." \
+      "volume signature (-FVE-FS-)" high
+    return
+  fi
+  lock_add bitlocker "BitLocker" PASS \
+    "No BitLocker-encrypted volumes found among the volumes blkid could see" \
+    "blkid volume signatures" medium
 }
 
 # =============================================================================
