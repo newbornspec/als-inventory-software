@@ -764,6 +764,28 @@ _autopilot_verdict() {
 check_autopilot() {
   lock_win_blocked autopilot "Windows Autopilot" && return
 
+  # Prove the hive can be READ before reporting what is not in it.
+  #
+  # The four reads below come back empty in two completely different cases: the
+  # value is genuinely absent, or hivexget could not open the hive at all. They
+  # were indistinguishable, so a hive that would not open produced four empty
+  # strings and _autopilot_verdict's last branch announced "No local Autopilot
+  # traces" - a claim to have looked. Found on a real machine whose SOFTWARE
+  # hive could not be walked (the MDM row on the same audit said so) and which
+  # the owner knew was Autopilot-registered: the row said the device carried no
+  # local traces when nothing had been read.
+  #
+  # ProductName has been in that key since NT, so failing to read IT means the
+  # hive is the problem, not the key. check_mdm proves the same thing with a
+  # hivexsh `cd`; this is the hivexget equivalent, because that is the tool
+  # these four reads actually use.
+  if ! lock_hive_get "$WIN_SOFTWARE" 'Microsoft\Windows NT\CurrentVersion' ProductName >/dev/null 2>&1; then
+    lock_add autopilot "Windows Autopilot" UNKNOWN \
+      "The SOFTWARE hive could not be read, so nothing can be concluded about Autopilot from this machine - not even that it carries no local traces. Registration lives in Microsoft's cloud against the hardware hash and survives a wipe, so confirm with a network-connected OOBE or ask the seller for proof of deregistration." \
+      'offline registry (hivexget could not read the hive)' low
+    return
+  fi
+
   local ap='Microsoft\Provisioning\Diagnostics\AutoPilot'
   local pc='Microsoft\Provisioning\AutopilotPolicyCache'
   local dom tid json avail

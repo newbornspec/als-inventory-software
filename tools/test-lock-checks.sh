@@ -256,6 +256,47 @@ check_domain
 check "missing SECURITY hive -> domain UNKNOWN" UNKNOWN "$(row_status domainJoin)"
 
 echo
+echo "== an unreadable hive must not read as 'no Autopilot traces' =="
+# A real machine, known to the owner to be Autopilot-registered, reported "No
+# local Autopilot traces" while the MDM row on the SAME audit said the SOFTWARE
+# hive could not be walked. The four hivexget reads return empty both when a
+# value is absent and when the hive will not open, so "we looked and found
+# nothing" was printed for a machine nothing had been read from.
+_saved_locate3=$(declare -f lock_locate_hives)
+_saved_has3=$(declare -f lock_has)
+_saved_get3=$(declare -f lock_hive_get)
+mkdir -p "$FIX"; echo x > "$FIX/sw2"
+lock_locate_hives() { WIN_SOFTWARE="$FIX/sw2"; WIN_SYSTEM="$FIX/sw2"; return 0; }
+lock_has() { return 0; }
+
+# Every read fails, exactly as an unopenable hive behaves.
+lock_hive_get() { return 1; }
+LOCK_ROWS=""; check_autopilot
+check "unreadable hive -> UNKNOWN"          UNKNOWN "$(row_status autopilot)"
+case "$(row_detail autopilot)" in
+  *"could not be read"*) ok "says the hive could not be read" ;;
+  *) bad "says the hive could not be read" "an unreadable-hive reason" "$(row_detail autopilot)" ;;
+esac
+case "$(row_detail autopilot)" in
+  *"No local Autopilot traces"*) bad "must not claim it looked" "no such claim" "$(row_detail autopilot)" ;;
+  *) ok "does not claim it looked and found nothing" ;;
+esac
+
+# The hive opens (ProductName reads) but carries no Autopilot keys: the
+# "no local traces" wording is correct here and must survive.
+lock_hive_get() {
+  case "$3" in ProductName) printf 'Windows 11 Pro'; return 0 ;; *) return 1 ;; esac
+}
+LOCK_ROWS=""; check_autopilot
+check "readable hive, no traces -> UNKNOWN" UNKNOWN "$(row_status autopilot)"
+case "$(row_detail autopilot)" in
+  *"No local Autopilot traces"*) ok "a readable hive still says no local traces" ;;
+  *) bad "a readable hive still says no local traces" "the no-traces wording" "$(row_detail autopilot)" ;;
+esac
+
+eval "$_saved_get3"; eval "$_saved_has3"; eval "$_saved_locate3"
+
+echo
 echo "== an Entra-joined machine must never read as CLEAR =="
 # The three ways check_entra used to answer PASS on a device that is bound to
 # somebody's tenant. Each is a "we did not establish this" dressed up as "we
