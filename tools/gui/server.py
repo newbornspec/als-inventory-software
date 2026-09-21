@@ -2896,13 +2896,18 @@ def ident():
             "storage": joins([joins([d.get("capacity"), d.get("type")], " ")
                               for d in st], ", "),
             "display": joins([dsp.get("size"), dsp.get("resolution")]),
-            "optical": "Present" if has_optical() else "Not present",
+            "optical": {True: "Present", False: "Not present"}.get(
+                has_optical(), "Could not check for an optical drive"),
             "network": joins([nic(net.get("wifi")), nic(net.get("bluetooth")),
                               nic(net.get("ethernet"))]),
             "batteryLine": joins([bat.get("fullChargeCapacity") or bat.get("designCapacity"),
                                   ("Health %s" % bat["health"]) if bat.get("health") else "",
                                   bat.get("status")]),
-            "tpm": joins([sec.get("tpm") or "No TPM detected",
+            # The capture now fills security.tpm with either a version or the
+            # sentence saying why there is none, so this fallback is only ever
+            # reached by a profile from an older engine - and even then it must
+            # not turn a field nobody wrote into a finding about the machine.
+            "tpm": joins([sec.get("tpm") or "TPM not reported by this capture",
                           ("Secure Boot %s" % sec["secureBoot"]) if sec.get("secureBoot") else ""]),
             # The INSTALLED operating system, read out of the machine's own
             # registry during the capture. It belongs on the bench screen and
@@ -2960,6 +2965,12 @@ def drive_serial(value):
 
 
 DRIVES_CACHE = {"ts": 0.0, "data": []}
+# Whether the LAST drive scan actually ran. An empty drive list means two very
+# different things - "this machine has no internal drives" and "the scan
+# failed" - and the screen can only tell the operator which if the difference
+# is recorded somewhere. Starts True so a station that has not scanned yet
+# does not accuse itself.
+DRIVES_SCAN = {"ok": True, "why": ""}
 
 # Where sysfs is. Only ever changed by tests (tools/test-wipe-gate.py builds a
 # fake tree in a temp folder) - nothing on the station sets it.
@@ -3026,9 +3037,28 @@ def list_drives(force=False):
             # profile, so a drive that was not there at capture is never wiped
             # under this machine's name.
             ["lsblk", "-dPb", "-o", "NAME,SIZE,MODEL,TRAN,RM,ROTA,TYPE,SERIAL"],
-            capture_output=True, text=True, timeout=8).stdout
-    except Exception:
+            capture_output=True, text=True, timeout=8)
+        if out.returncode != 0:
+            raise OSError("lsblk exited %d" % out.returncode)
+        out = out.stdout
+    except Exception as exc:  # noqa: BLE001
+        # An empty list is what a machine with NO internal drives looks like,
+        # and the screen says exactly that: "No internal drive detected". A
+        # failed scan is not that. lsblk missing, the 8 s timeout expiring on a
+        # dying disk, or a non-zero exit all used to land here and read as a
+        # machine with nothing to wipe - so the operator concludes the box is
+        # empty and moves it on WITH ITS DATA.
+        #
+        # A stale list is far better than a false empty one: the wipe gate
+        # re-validates every drive against the captured profile before it
+        # touches anything, so nothing can be erased on the strength of this.
+        DRIVES_SCAN["ok"] = False
+        DRIVES_SCAN["why"] = str(exc) or exc.__class__.__name__
+        if DRIVES_CACHE["data"]:
+            return with_health(DRIVES_CACHE["data"])
         return drives
+    DRIVES_SCAN["ok"] = True
+    DRIVES_SCAN["why"] = ""
     for line in out.splitlines():
         name = lsblk_field(line, "NAME")
         if not name:
@@ -3492,20 +3522,37 @@ def net_check():
     steps.append(("Look up the server name", dns_ok, dns_detail))
 
     # A clock that is days out makes every HTTPS call fail with an empty error.
+    #
+    # This step used to start at OK and only ever be taken away, so a station
+    # that could not fetch a reference time at all - no internet, the probe
+    # blocked, DNS down - printed a green tick against a clock nobody had
+    # checked. That is the reassuring answer given for the failure, and it is
+    # worst exactly where it is most likely to be wrong: a machine with a dead
+    # CMOS battery that has never reached a time server. Comparing the clock
+    # with nothing proves nothing, so it now says so.
     now = time.strftime("%a %d %b %Y %H:%M UTC", time.gmtime())
-    clock_ok, clock_detail = True, now
+    clock_ok, clock_unverified = True, False
+    clock_detail = now
     try:
         resp = urllib.request.urlopen("http://clients3.google.com/generate_204", timeout=10)
         real = resp.headers.get("Date")
-        if real:
+        if not real:
+            clock_unverified = True
+            clock_detail = "%s — not checked: the reference server sent no Date header" % now
+        else:
             import email.utils
             drift = abs(time.time() - email.utils.mktime_tz(email.utils.parsedate_tz(real)))
             if drift > 300:
                 clock_ok = False
                 clock_detail = "%s — WRONG by %d days (breaks HTTPS)" % (now, drift // 86400)
+            else:
+                clock_detail = "%s — agrees with a network time source" % now
     except Exception:  # noqa: BLE001
-        pass
-    steps.append(("System clock", clock_ok, clock_detail))
+        clock_unverified = True
+        clock_detail = ("%s — NOT CHECKED: no reference time could be fetched, so this is "
+                        "only what the machine believes. A clock that is days out breaks "
+                        "HTTPS, and this station has not proved its own." % now)
+    steps.append(("System clock", clock_ok, clock_detail, clock_unverified))
 
     api_ok, api_detail = False, "no AUDIT_URL set"
     if api_url:
@@ -3521,16 +3568,24 @@ def net_check():
     # treated as failures in their own right they cried wolf on a working
     # station, and the operator went looking for a network fault that was not
     # there. When the API is reachable, a failed diagnostic is advisory.
+    # Every step is (name, ok, detail); one of them carries a fourth value
+    # saying the check could not be run at all. Normalised here so the two
+    # loops below do not each have to know which.
+    steps = [s if len(s) == 4 else (s[0], s[1], s[2], False) for s in steps]
+
     if api_ok:
         verdict = "Everything working — ALS Inventory is reachable."
     else:
         verdict = "Everything reachable."
-        for name, ok, _detail in steps:
-            if not ok:
+        for name, ok, _detail, unverified in steps:
+            # A step that could not be run is not a failure, and naming it as
+            # the first one would send the operator after the wrong fault.
+            if not ok and not unverified:
                 verdict = "First failure: %s" % name
                 break
-    return {"steps": [{"name": n, "ok": bool(o), "detail": d,
-                       "advisory": bool(api_ok and not o)} for n, o, d in steps],
+    return {"steps": [{"name": n, "ok": bool(o) and not u, "detail": d,
+                       "unverified": bool(u),
+                       "advisory": bool(api_ok and not o)} for n, o, d, u in steps],
             "verdict": verdict, "ok": bool(api_ok),
             "interfaces": ifaces, "routes": routes}
 
@@ -4447,15 +4502,25 @@ def tool_check():
 
 
 def has_optical():
-    """True if this machine has an optical drive (lsblk type 'rom')."""
+    """Has this machine an optical drive (lsblk type 'rom')?
+
+    True / False / None, where None is "the scan did not answer". The third
+    value is the whole point: an lsblk that is missing, times out or exits
+    non-zero produces exactly the same empty device list as a machine with no
+    optical drive in it, and the old code turned that into a confident "Not
+    present" - and then CACHED it, so one failed call settled the question for
+    the rest of the session. A failure is never cached; only an answer is.
+    """
     if OPTICAL_CACHE:
         return OPTICAL_CACHE[0]
     try:
-        out = subprocess.run(["lsblk", "-dno", "TYPE"], capture_output=True,
-                             text=True, timeout=6).stdout
-        found = "rom" in out.split()
+        r = subprocess.run(["lsblk", "-dno", "TYPE"], capture_output=True,
+                           text=True, timeout=6)
+        if r.returncode != 0:
+            return None
+        found = "rom" in r.stdout.split()
     except Exception:  # noqa: BLE001
-        found = False
+        return None
     OPTICAL_CACHE.append(found)
     return found
 
@@ -5034,6 +5099,11 @@ class Handler(BaseHTTPRequestHandler):
                 "summary": STATE["summary"],
                 "lots": STATE["lots"],
                 "drives": list_drives(),
+                # Whether that list is trustworthy. An empty list with
+                # drivesScanOk false means the scan failed, not that the
+                # machine has no drives - the page must not print "No internal
+                # drive detected" on the strength of a failed lsblk.
+                "drivesScanOk": DRIVES_SCAN["ok"],
                 "osImages": list_os_images(),
                 "wipeMethod": STATE["conf"].get("AUDIT_WIPE_METHOD", "auto"),
                 "server": STATE["conf"].get("AUDIT_URL", ""),

@@ -462,5 +462,91 @@ check("main() starts the worker", "target=net_worker" in open(
     os.path.join(HERE, "gui", "server.py"), encoding="utf-8").read())
 
 print("")
+print("the diagnostics' System clock step")
+
+# net_check's clock step used to start at True and only ever be taken away, so
+# a station that could not fetch a reference time AT ALL printed a green tick
+# against a clock nobody had checked - and that is the case where the clock is
+# most likely to be wrong, because a machine with a dead CMOS battery that has
+# never reached a time server is exactly a machine with no internet.
+#
+# Everything else in net_check is stubbed to a fixed, offline answer so these
+# cases differ only in what the time reference did.
+def _clock_case(opener):
+    real_sub, real_open, real_conf = srv.subprocess.run, srv.urllib.request.urlopen, STATE_CONF[0]
+
+    class _R:
+        stdout = ""
+        stderr = ""
+        returncode = 1
+
+    srv.subprocess.run = lambda *a, **k: _R()
+    srv.urllib.request.urlopen = opener
+    srv.STATE["conf"] = {}
+    try:
+        res = srv.net_check()
+    finally:
+        srv.subprocess.run = real_sub
+        srv.urllib.request.urlopen = real_open
+        srv.STATE["conf"] = real_conf
+    return [s for s in res["steps"] if s["name"] == "System clock"][0], res
+
+
+STATE_CONF = [srv.STATE.get("conf") or {}]
+
+
+class _Resp:
+    def __init__(self, date):
+        self.headers = {"Date": date} if date else {}
+
+
+def _boom(*_a, **_k):
+    raise OSError("network is unreachable")
+
+
+s, res = _clock_case(_boom)
+check("clock: a reference time that could not be fetched is NOT a green tick",
+      s["ok"] is False, s)
+check("clock: and it is not a red failure either", s["unverified"] is True, s)
+check("clock: it says the clock was not checked",
+      "NOT CHECKED" in s["detail"], s)
+check("clock: it says what the machine merely believes",
+      "believes" in s["detail"], s)
+check("clock: an unchecked clock is never named as the first failure",
+      "System clock" not in res["verdict"], res["verdict"])
+
+# A reference that answered but carried no Date header is the same nothing.
+s, _ = _clock_case(lambda *a, **k: _Resp(None))
+check("clock: a reference with no Date header is not a green tick either",
+      s["ok"] is False and s["unverified"] is True, s)
+
+# A reference that agrees: this is the only way to a green tick.
+s, _ = _clock_case(lambda *a, **k: _Resp(
+    time.strftime("%a, %d %b %Y %H:%M:%S GMT", time.gmtime())))
+check("clock: a clock that AGREES with a network source passes",
+      s["ok"] is True and s["unverified"] is False, s)
+check("clock: and the detail says what it was compared against",
+      "network time source" in s["detail"], s)
+
+# A reference that disagrees: a real, red failure, and the operator is told.
+s, res = _clock_case(lambda *a, **k: _Resp(
+    time.strftime("%a, %d %b %Y %H:%M:%S GMT", time.gmtime(time.time() - 9 * 86400))))
+check("clock: a clock that is days out fails", s["ok"] is False and not s["unverified"], s)
+check("clock: and says it breaks HTTPS", "breaks HTTPS" in s["detail"], s)
+# The verdict names the FIRST failing step, and in these cases the network is
+# stubbed offline so an earlier one always fails first. What matters is that a
+# measured-wrong clock is ELIGIBLE to be named and an unchecked one is not, so
+# that is asserted on the step itself, and the rule it feeds on the source.
+check("clock: a clock measured wrong counts as a failure the verdict can name",
+      s["ok"] is False and s["unverified"] is False, s)
+check("the first-failure rule skips steps that could not be run",
+      "if not ok and not unverified:" in open(
+          os.path.join(HERE, "gui", "server.py"), encoding="utf-8").read())
+
+# Every step carries the flag, so the page never has to guess.
+check("every diagnostic step carries the unverified flag",
+      all("unverified" in st for st in res["steps"]), res["steps"][:2])
+
+print("")
 print("%d passed, %d failed" % (PASS[0], len(FAIL)))
 sys.exit(1 if FAIL else 0)

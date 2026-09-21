@@ -235,6 +235,11 @@ LSBLK = "\n".join([
 
 class _Run:
     stdout = LSBLK
+    # A real CompletedProcess carries one, and list_drives now checks it: an
+    # lsblk that exits non-zero is a scan that did not happen, not a machine
+    # with no disks in it. A fixture without this field is a fixture of a
+    # command that never runs on the bench.
+    returncode = 0
 
 
 # A fresh copy of the module: the one above has list_drives stubbed out. Its

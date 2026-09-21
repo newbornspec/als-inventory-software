@@ -429,6 +429,10 @@ try:
 
     class _R:
         stdout = LSBLK
+        # A real CompletedProcess always carries one, and list_drives now
+        # checks it: an lsblk that exits non-zero must not read as a machine
+        # with no internal drives.
+        returncode = 0
 
     real_run = srv.subprocess.run
     srv.subprocess.run = lambda *a, **k: _R()

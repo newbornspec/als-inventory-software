@@ -1052,6 +1052,12 @@
 <script>
 const $=(id)=>document.getElementById(id);
 let BOOT={}, LOTS=[], DRIVES=[], METHOD_SET=false;
+/* Whether the station's drive scan actually ran. An empty DRIVES means
+   two different things and only this tells them apart: a machine with no
+   internal drives, or an lsblk that timed out on a dying disk. Saying
+   "No internal drive detected" for the second sends the operator away
+   with a machine that still holds its data. */
+let DRIVES_OK=true;
 
 /* While hardware detection runs, bootstrap() polls every 1.5s. The old code
    rewrote every control's innerHTML on every poll, which (a) closed any open
@@ -1159,7 +1165,7 @@ async function bootstrap(){
   const hwSeq=HWT_SAVES;
   try{ b=await jget('/api/bootstrap'); }
   catch(e){ setTimeout(bootstrap,3000); return; }
-  BOOT=b; LOTS=b.lots||[]; DRIVES=b.drives||[];
+  BOOT=b; LOTS=b.lots||[]; DRIVES=b.drives||[]; DRIVES_OK=b.drivesScanOk!==false;
 
   // Only until the station's own probe has answered; from then on pollNet
   // owns the chip (bootstrap re-runs on Rescan and while capturing, and must
@@ -1342,10 +1348,16 @@ function driveLabel(d){
   if(ns.length>1)bits.push('same NVMe drive as '+ns.filter(x=>x!==d.device).join(', '));
   return bits.join(' · ');
 }
+/* The empty-list option, which must never claim a machine has no drives on
+   the strength of a scan that did not run. */
+function noDrivesOption(){
+  return DRIVES_OK ? '<option value="">No internal drive detected</option>'
+    : '<option value="">The drive scan did not complete — press Rescan</option>';
+}
 function driveOpts(){return DRIVES.map(d=>'<option value="'+esc(d.device)+'" data-bytes="'+(d.bytes||0)+
   '" data-rota="'+(d.rotational?1:0)+'">'+esc(driveLabel(d))+'</option>').join('');}
 function fillDrives(){
-  fillSelect($('iDrive'),DRIVES.length?driveOpts():'<option value="">No internal drive detected</option>');
+  fillSelect($('iDrive'),DRIVES.length?driveOpts():noDrivesOption());
   fillWipeDrives();
   // Seed the method from config ONCE. Re-applying it on every poll silently
   // undid the operator's choice (e.g. picking the fast zero pass).
@@ -1382,7 +1394,7 @@ function fillWipeDrives(){
     setHTML(box,'<div class="sel"><span class="li"><svg width="16" height="16" viewBox="0 0 24 24" '+
       'fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="20" height="10" rx="2"/>'+
       '<path d="M6 12h.01M10 12h6"/></svg></span><select id="wDrive" onchange="estimate()">'+
-      (DRIVES.length?driveOpts():'<option value="">No internal drive detected</option>')+
+      (DRIVES.length?driveOpts():noDrivesOption())+
       '</select><span class="ri"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" '+
       'stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 9l6 6 6-6"/></svg></span></div>');
   }
@@ -1561,7 +1573,11 @@ function fillHardware(){
     '<div class="hwi"><div class="hwic"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" '+
     'stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">'+path+
     '</svg></div><div><div class="hwk">'+label+'</div><div class="hwv">'+
-    (k==='driveHealth'?driveHealthHTML():(hw[k]||(BOOT.device?'Not detected':'—')))+
+    /* An empty line means the CAPTURE has no value for it - a tool that was
+       missing, a read that needed privilege it did not have, a command that
+       timed out. It does not mean the machine has no processor, no network
+       and no battery, which is what the old wording claimed. */
+    (k==='driveHealth'?driveHealthHTML():(hw[k]||(BOOT.device?'Not reported by this capture':'—')))+
     '</div></div></div>').join(''));
 }
 
@@ -2587,11 +2603,15 @@ async function loadNetCheck(){
   for(const s of t.steps){
     /* advisory = this step failed but ALS Inventory is reachable anyway, so it
        is information, not a fault. Amber ⓘ, never red. */
-    const col=s.ok?'var(--green)':(s.advisory?'var(--amber,#b45309)':'var(--red)');
-    const gly=s.ok?'✓':(s.advisory?'ⓘ':'✗');
+    /* unverified = the check could not be RUN, which is neither a pass nor a
+       failure. It gets its own glyph so a green tick always means something
+       was actually measured. */
+    const col=s.unverified?'var(--amber,#b45309)':(s.ok?'var(--green)':(s.advisory?'var(--amber,#b45309)':'var(--red)'));
+    const gly=s.unverified?'?':(s.ok?'✓':(s.advisory?'ⓘ':'✗'));
     h+='<div style="margin-bottom:5px"><span style="color:'+col+'">'+gly+'</span> '+
        s.name+' <span style="color:var(--mut2)">— '+s.detail+
-       (s.advisory?' <i>(not a problem — the station is online)</i>':'')+'</span></div>';
+       (s.unverified?' <i>(not checked)</i>':
+        (s.advisory?' <i>(not a problem — the station is online)</i>':''))+'</span></div>';
   }
   /* The backend already gathers these; not showing them meant the one thing
      that identifies a routing fault was unreachable from a keyboard-grabbed

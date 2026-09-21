@@ -781,6 +781,59 @@ if len(lines) == 6:
           and lines[5]["title"].startswith(u"Not measurable — behind a RAID"), lines[5])
 check("ident: the Storage line no longer carries a second, probed health note",
       "Health" not in dev["hw"]["storage"], dev["hw"]["storage"])
+
+# The optical row, which is the same question as drive health asked about a
+# drive that may not be there: a scan that did not run must not answer it.
+# "Not present" is a claim about the machine, and an lsblk that died produces
+# exactly the empty device list that a machine with no optical drive does.
+
+
+class _ROpt:
+    def __init__(self, out, rc=0):
+        self.stdout = out
+        self.returncode = rc
+
+
+def _optical_panel():
+    return srv.ident()["hw"]["optical"]
+
+
+real_run = srv.subprocess.run
+try:
+    del srv.OPTICAL_CACHE[:]
+    srv.subprocess.run = lambda *a, **k: _ROpt("disk\nrom\n")
+    check("optical: a drive that lsblk listed reads Present", _optical_panel() == "Present")
+
+    del srv.OPTICAL_CACHE[:]
+    srv.subprocess.run = lambda *a, **k: _ROpt("disk\n")
+    check("optical: a scan that came back without one reads Not present",
+          _optical_panel() == "Not present")
+
+    # lsblk exited non-zero. The old code read the partial stdout, found no
+    # 'rom' in it, and said so.
+    del srv.OPTICAL_CACHE[:]
+    srv.subprocess.run = lambda *a, **k: _ROpt("disk\n", rc=1)
+    v = _optical_panel()
+    check("optical: a scan that FAILED never reads as 'Not present'", "Not present" not in v, v)
+    check("optical: a scan that failed says it could not check", v.startswith("Could not check"), v)
+
+    # And the bug that made it permanent: the failure was cached, so one dead
+    # call answered for the rest of the session even after lsblk came back.
+    def _boom(*a, **k):
+        raise OSError("lsblk is not on this build")
+
+    del srv.OPTICAL_CACHE[:]
+    srv.subprocess.run = _boom
+    v = _optical_panel()
+    check("optical: lsblk missing entirely is not 'Not present' either",
+          v.startswith("Could not check"), v)
+    check("optical: a failed probe is never cached", not srv.OPTICAL_CACHE, srv.OPTICAL_CACHE)
+    srv.subprocess.run = lambda *a, **k: _ROpt("disk\nrom\n")
+    check("optical: the next scan after a failure still finds the drive",
+          _optical_panel() == "Present")
+finally:
+    srv.subprocess.run = real_run
+    del srv.OPTICAL_CACHE[:]
 # Two drives of the same size and type: the rows must say WHICH one is bad,
 # or the operator cannot tell which disk to pull.
 twins = copy.deepcopy(PROFILE)

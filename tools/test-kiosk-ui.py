@@ -398,6 +398,20 @@ def main():
     # Save in the PIN-locked Settings - so the instruction led nowhere.
     with open(os.path.join(HERE, "gui", "server.py"), encoding="utf-8") as fh:
         server = fh.read()
+    # The hardware panel's empty-line text. An empty line means the CAPTURE has
+    # no value - a missing tool, a read that needed privilege, a command that
+    # timed out - and it used to be printed as "Not detected", which is a claim
+    # about the machine in front of the operator. Every other line on that
+    # panel is a fact read off the hardware, so the one that is not must not
+    # look like one.
+    # In a quoted string, not in a comment: the comment explaining the old
+    # wording quotes it, and a grep of the whole file would fail on the note
+    # that records why it went.
+    check("the hardware panel never prints 'Not detected' for a line it has no value for",
+          not re.search(r"""['"]Not detected['"]""", html), "")
+    check("an empty hardware line says the capture did not report it",
+          "Not reported by this capture" in html, "")
+
     told = re.findall(r"[Pp]ress Rescan|then Rescan", server)
     btn = re.search(r'<button[^>]*onclick="rescan\(\)"[^>]*>\s*Rescan\s*</button>', html)
     check("the station's messages name Rescan (the thing this checks exists)", len(told) >= 2, told)

@@ -352,7 +352,13 @@ print("3. no readable Windows: what the disks actually say")
 NO_WINDOWS = "lock_locate_hives() { return 1; }\n"
 
 # A wiped machine: one internal disk, only an EFI system partition left.
-WIPED = r'''
+#
+# The readability stub is part of the fixture, not scaffolding round it: "this
+# disk carries nothing" is now an answer that has to be EARNED by a read that
+# came back, so a wiped machine is only a wiped machine if its disk can be
+# read. The fixtures where that read fails are further down.
+READS_OK = "als_os_disk_readable() { return 0; }\n"
+WIPED = READS_OK + r'''
 als_os_volumes() { printf '%s\n' \
   'NAME="/dev/sda" TYPE="disk" FSTYPE="" MOUNTPOINT="" RM="0" TRAN="sata"' \
   'NAME="/dev/sda1" TYPE="part" FSTYPE="vfat" MOUNTPOINT="" RM="0" TRAN="sata"'; }
@@ -394,7 +400,7 @@ check("the station's own mounted root is never read as the machine's OS",
       r["os"] == "No Windows installation found", r)
 
 # The station's boot stick is removable, so it can never be the machine either.
-STICK = r'''
+STICK = READS_OK + r'''
 als_os_volumes() { printf '%s\n' \
   'NAME="/dev/sda" TYPE="disk" FSTYPE="" MOUNTPOINT="" RM="0" TRAN="sata"' \
   'NAME="/dev/sdb1" TYPE="part" FSTYPE="ext4" MOUNTPOINT="/media/als" RM="1" TRAN="usb"'; }
@@ -423,6 +429,101 @@ os.makedirs(os.path.join(TMP, "empty-mnt"))
 r = record(run_case(NO_WINDOWS + NO_RELEASE))
 check("a Linux root with no os-release is not given an invented name",
       r["os"] == "No Windows installation found", r)
+
+
+print("3b. a disk that could not be read is not an empty disk")
+
+# THE CASE THIS BLOCK EXISTS FOR: a locked self-encrypting drive. The drive is
+# full of the customer's data and will not return so much as its first sector,
+# so no partition table and no filesystem can be identified on it - which from
+# lsblk is the spitting image of the wiped machine above. BitLocker at least
+# gets NAMED by libblkid; this one names nothing, and the only thing that tells
+# the two apart is trying to read the disk and having the read refused.
+LOCKED_SED = r'''
+als_os_disk_readable() { return 1; }
+als_os_volumes() { printf '%s\n' \
+  'NAME="/dev/sda" TYPE="disk" FSTYPE="" MOUNTPOINT="" RM="0" TRAN="sata"'; }
+'''
+r = record(run_case(NO_WINDOWS + LOCKED_SED))
+check("a disk that refused every read is never 'no OS installed'",
+      "No operating system" not in r["os"], r)
+check("a disk that refused every read says it could not be READ",
+      r["os"].startswith("A disk is present but could not be read at all"), r)
+check("a disk that refused every read is named, so the operator can check it",
+      "/dev/sda" in r["os"], r)
+check("a disk that refused every read points at the likely cause",
+      "self-encrypting" in r["os"], r)
+
+# The control, and the reason the check above cannot be had for free: the SAME
+# disk, read successfully, is still allowed to be an empty machine. A guard
+# that refused to say "wiped" at all would be no more honest than one that
+# always says it.
+SAME_DISK_READS = r'''
+als_os_disk_readable() { return 0; }
+als_os_volumes() { printf '%s\n' \
+  'NAME="/dev/sda" TYPE="disk" FSTYPE="" MOUNTPOINT="" RM="0" TRAN="sata"'; }
+'''
+r = record(run_case(NO_WINDOWS + SAME_DISK_READS))
+check("a disk that DID read back is still allowed to be an empty machine",
+      r["os"] == "No operating system installed", r)
+
+# Unreadable, but something readable was also found: the finding wins. The
+# guard only stands between the disks and the claim that they carry nothing.
+UNREADABLE_PLUS_NTFS = r'''
+als_os_disk_readable() { return 1; }
+als_os_volumes() { printf '%s\n' \
+  'NAME="/dev/sda" TYPE="disk" FSTYPE="" MOUNTPOINT="" RM="0" TRAN="sata"' \
+  'NAME="/dev/sdb2" TYPE="part" FSTYPE="ntfs" MOUNTPOINT="" RM="0" TRAN="sata"'; }
+'''
+r = record(run_case(NO_WINDOWS + UNREADABLE_PLUS_NTFS))
+check("an unreadable disk does not bury a Windows volume that WAS found",
+      r["os"].startswith("A Windows (NTFS) volume is present"), r)
+
+# We could not even ask. That is not a refusal and not an empty disk - it is a
+# broken build, and it says so rather than guessing which of the two it was.
+CANNOT_ASK = r'''
+als_os_disk_readable() { return 2; }
+als_os_volumes() { printf '%s\n' \
+  'NAME="/dev/sda" TYPE="disk" FSTYPE="" MOUNTPOINT="" RM="0" TRAN="sata"'; }
+'''
+r = record(run_case(NO_WINDOWS + CANNOT_ASK))
+check("a disk we could not even test-read is never 'no OS installed'",
+      "No operating system" not in r["os"], r)
+check("a disk we could not even test-read tells the operator to re-sync",
+      "Re-sync the stick" in r["os"], r)
+
+# And the scan itself failing. This one drives the REAL als_os_volumes with a
+# real lsblk on PATH that prints one line and then dies, because the bug being
+# guarded against is precisely that a half-finished list is indistinguishable
+# from a finished one by the time the verdict sees it.
+SCANFAIL_BIN = os.path.join(TMP, "bin-scanfail")
+os.makedirs(SCANFAIL_BIN)
+w(os.path.join(SCANFAIL_BIN, "lsblk"), """#!/bin/sh
+printf '%s\\n' 'NAME="/dev/sda" TYPE="disk" FSTYPE="" MOUNTPOINT="" RM="0" TRAN="sata"'
+exit 1
+""", executable=True)
+SCAN_DIED = ('als_os_disk_readable() { return 0; }\n'
+             'PATH="$(cd "%s" && pwd):$PATH"\n' % SCANFAIL_BIN.replace("\\", "/"))
+r = record(run_case(NO_WINDOWS + SCAN_DIED))
+check("a volume scan that died half way is never 'no OS installed'",
+      "No operating system" not in r["os"], r)
+check("a volume scan that died half way says the scan did not complete",
+      "did not complete" in r["os"], r)
+check("a volume scan that died half way says what to do about it",
+      "Re-run the audit" in r["os"], r)
+
+# The same lsblk, exiting cleanly: the sentinel is only ever added on failure,
+# so the ordinary path is untouched by any of this.
+SCANFAIL_OK_BIN = os.path.join(TMP, "bin-scanok")
+os.makedirs(SCANFAIL_OK_BIN)
+w(os.path.join(SCANFAIL_OK_BIN, "lsblk"), """#!/bin/sh
+printf '%s\\n' 'NAME="/dev/sda" TYPE="disk" FSTYPE="" MOUNTPOINT="" RM="0" TRAN="sata"'
+""", executable=True)
+SCAN_OK = ('als_os_disk_readable() { return 0; }\n'
+           'PATH="$(cd "%s" && pwd):$PATH"\n' % SCANFAIL_OK_BIN.replace("\\", "/"))
+r = record(run_case(NO_WINDOWS + SCAN_OK))
+check("a volume scan that finished cleanly still reads as an empty machine",
+      r["os"] == "No operating system installed", r)
 
 
 print("4. BitLocker, missing tools, missing privilege")
@@ -753,6 +854,28 @@ check("the lsblk scan of the disks runs under the timeout", not untimed, untimed
 untimed = [l for l in code_lines(OS_BLOCK.replace("/etc/os-release", "OSRELEASEPATH"))
            if "OSRELEASEPATH" in l and "als_os_to" not in l]
 check("the /etc/os-release read of the disk runs under the timeout", not untimed, untimed)
+
+# THE TEST-READ. Telling a blank disk from an unreadable one means touching the
+# customer's disk directly rather than through a tool that knows what it is
+# looking at, so the one line that does it is pinned here: a single sector, into
+# /dev/null, under the timeout. `of=` pointing anywhere else would be a WRITE to
+# a machine we have been asked to examine, and no test further up would notice.
+dd_lines = [l for l in os_code if re.search(r"(?<![\w-])dd\s", l) and "command -v" not in l]
+check("the disk test-read is a single dd line (the fixture of the rules below)",
+      len(dd_lines) == 1, dd_lines)
+check("the disk test-read runs under the timeout",
+      all("als_os_to dd" in l for l in dd_lines), dd_lines)
+check("the disk test-read only ever writes to /dev/null",
+      all("of=/dev/null" in l for l in dd_lines), dd_lines)
+check("the disk test-read reads ONE sector, not the disk",
+      all(re.search(r"bs=512\s+count=1\b", l) for l in dd_lines), dd_lines)
+# Against the RAW source, not code_lines: that strips quoted text, which is
+# exactly where the device being read has to appear.
+raw_dd = [l.strip() for l in OS_BLOCK.splitlines()
+          if re.search(r"(?<![\w-])dd\s", l) and not l.strip().startswith("#")
+          and "command -v" not in l]
+check("the disk being probed is the one that was listed, not a literal device",
+      raw_dd and all(re.search(r'if="\$1"', l) for l in raw_dd), raw_dd)
 
 # THE PRODUCT KEY. MSDM embeds a working 29-character OEM key at offset 56, and
 # the only safe way to report the table is never to open it: the file is mode

@@ -1444,9 +1444,20 @@ firmware_erase() {
         fi
       elif [ -n "$others" ]; then
         fw_why namespaces
+        # A LIMITATION, not just a fallback reason. fw_why is first-reason-wins
+        # (see its definition), so on a drive that already recorded some other
+        # reason - a consumer NVMe with no sanitize support records
+        # "unsupported" first - this line was swallowed entirely. The record
+        # then read "wiped, clean, no limitations" for a drive whose other
+        # namespace was never touched, and the certificate asserted the data
+        # was unrecoverable. The engine KNEW the erase did not cover the drive.
+        FW_NS_UNCOVERED="$others"
         echo "    nvme format not used: it would erase only $d, not the drive's other namespace(s) $others (FNA $fna)."
       else
         fw_why namespaces
+        # Same again for the case the sweep called the pattern verbatim: the
+        # enumeration FAILED, which is not "there is only one namespace".
+        FW_NS_UNLISTED=1
         echo "    nvme format not used: the drive's namespaces could not be listed, so it is not known to cover the whole drive."
       fi
       fw_why unsupported
@@ -2006,9 +2017,21 @@ gui_wipe_one() {
     smart_counts "$dev"; WR_SM_RB="$SC_REALLOC"; WR_SM_PB="$SC_PENDING"
   fi
 
-  FW_LEVEL=""; FW_WHY=""; FW_TRIED=""
+  FW_LEVEL=""; FW_WHY=""; FW_TRIED=""; FW_NS_UNCOVERED=""; FW_NS_UNLISTED=""
   if firmware_erase "$dev" "$d"; then m="$M"; fw=1; fi
   WR_TRIED="$FW_TRIED"; WR_FALLBACK="$FW_WHY"
+
+  # Namespace coverage reaches the RECORD, not just the console. An overwrite
+  # of $dev erases one namespace; a drive's other namespaces are other regions
+  # of the same flash, and they report the SAME drive serial - so the asset
+  # ends up with one "wiped" row and nothing saying the rest was never
+  # touched. A detached sibling is worse: lsblk cannot see it, so the kiosk
+  # never offers it and the operator is never warned either.
+  if [ -n "$FW_NS_UNCOVERED" ]; then
+    wr_limit "this erase covered only $d; the drive's other namespace(s) $FW_NS_UNCOVERED were not erased and may still hold data"
+  elif [ -n "$FW_NS_UNLISTED" ]; then
+    wr_limit "the drive's namespaces could not be listed, so this erase is not known to have covered the whole drive"
+  fi
 
   # No TRIM here, on purpose. This used to run blkdiscard when the firmware
   # erase failed on an SSD and record it as the wipe - then the zeros check
@@ -2198,12 +2221,40 @@ if command -v mokutil >/dev/null 2>&1; then
   SECURE_BOOT=$(mokutil --sb-state 2>/dev/null | grep -io 'enabled\|disabled' | head -n1)
 fi
 [ -z "$SECURE_BOOT" ] && [ "$BOOT_MODE" = "Legacy" ] && SECURE_BOOT="n/a"
+# --- TPM-DETECT-BEGIN (tools/test-tpm-detect.py slices out everything between
+# these two markers and runs it against a fake /sys, so every branch below is
+# proved on a machine that has none of them) ---------------------------------
 TPM_VER=""
-if [ -r /sys/class/tpm/tpm0/tpm_version_major ]; then
-  TPM_VER="$(cat /sys/class/tpm/tpm0/tpm_version_major 2>/dev/null).0"
-elif [ -e /sys/class/tpm/tpm0 ]; then
+# What to say when there is no TPM device. Never empty, because the field it
+# feeds used to be, and an empty one was printed as "No TPM detected" - a claim
+# about the MACHINE made from the absence of a device node.
+#
+# A TPM that is turned off in the firmware is not handed to the operating
+# system at all, so it is missing from /sys in exactly the way a machine with
+# no TPM is; and a disabled fTPM is one of the commonest configurations on
+# second-hand business stock, so this is not a corner case. What CAN tell the
+# two apart is the firmware's own ACPI tables: TPM2 (or TCPA for a 1.2 part) is
+# the platform declaring the chip, whether or not it then hands it over. The
+# tables are tested for BY FILENAME and never opened, the same rule the licence
+# check follows next door.
+TPM_ABSENT=""
+TPM_SYS="${LOCK_SYSROOT:-}"
+if [ -r "$TPM_SYS/sys/class/tpm/tpm0/tpm_version_major" ]; then
+  TPM_VER="$(cat "$TPM_SYS/sys/class/tpm/tpm0/tpm_version_major" 2>/dev/null).0"
+elif [ -e "$TPM_SYS/sys/class/tpm/tpm0" ]; then
   TPM_VER="present"
+elif [ ! -d "$TPM_SYS/sys/class/tpm" ]; then
+  TPM_ABSENT="Could not check for a TPM — this station's kernel exposes no TPM subsystem, so nothing can be concluded about the machine"
+elif [ ! -d "$TPM_SYS/sys/firmware/acpi/tables" ]; then
+  TPM_ABSENT="No TPM was handed to the operating system, and the firmware's own tables could not be read to tell a machine with no TPM from one with its TPM turned off"
+elif [ -e "$TPM_SYS/sys/firmware/acpi/tables/TPM2" ]; then
+  TPM_ABSENT="Present in firmware but not available — the machine declares a TPM 2.0 (ACPI TPM2) and did not hand it over, which is what a TPM disabled or hidden in the BIOS looks like"
+elif [ -e "$TPM_SYS/sys/firmware/acpi/tables/TCPA" ]; then
+  TPM_ABSENT="Present in firmware but not available — the machine declares a TPM 1.2 (ACPI TCPA) and did not hand it over, which is what a TPM disabled or hidden in the BIOS looks like"
+else
+  TPM_ABSENT="No TPM detected, and the firmware declares none either"
 fi
+# --- TPM-DETECT-END ---------------------------------------------------------
 
 # --- CPU ---
 LSCPU=$(LC_ALL=C lscpu 2>/dev/null)
@@ -3113,10 +3164,16 @@ $(lspci -mm 2>/dev/null | grep -iE '"(VGA compatible controller|3D controller|Di
 GFXEOF
 GRAPHICS="[${GFX_ELEMS#,}]"
 
+# --- DEVTYPE-BEGIN (tools/test-device-type.py slices out everything between
+# these two markers and runs it against a fake /sys) -------------------------
 # --- battery ---
 BAT_HEALTH=""; BAT_DESIGN=""; BAT_FULL=""; BAT_CYCLES=""; BAT_STATUS=""
-for b in /sys/class/power_supply/BAT*; do
+# Whether a battery DEVICE is there, which is a different question from whether
+# its numbers could be read. See the device-type fallback below.
+BAT_PRESENT=""
+for b in "${LOCK_SYSROOT:-}"/sys/class/power_supply/BAT*; do
   [ -e "$b" ] || continue
+  BAT_PRESENT=1
   ef=$(cat "$b/energy_full" 2>/dev/null); efd=$(cat "$b/energy_full_design" 2>/dev/null)
   full=${ef:-$(cat "$b/charge_full" 2>/dev/null)}
   design=${efd:-$(cat "$b/charge_full_design" 2>/dev/null)}
@@ -3128,7 +3185,14 @@ for b in /sys/class/power_supply/BAT*; do
   break
 done
 [ "$BAT_CYCLES" = "0" ] && BAT_CYCLES=""
-[ -z "$DEVICE_TYPE" ] && { [ -n "$BAT_HEALTH" ] && DEVICE_TYPE="Laptop" || DEVICE_TYPE="Desktop"; }
+# Chassis type was blank, so the battery decides. On PRESENCE, never on health:
+# a laptop whose battery is flat, removed, or reporting a design capacity of
+# zero - all three are ordinary on second-hand stock - still has the battery
+# BAY wired into sysfs, and reading the absence of a percentage as "this is a
+# desktop" put a wrong device type on the record AND skipped the built-in
+# display capture below, which runs for laptops only.
+[ -z "$DEVICE_TYPE" ] && { [ -n "$BAT_PRESENT" ] && DEVICE_TYPE="Laptop" || DEVICE_TYPE="Desktop"; }
+# --- DEVTYPE-END ------------------------------------------------------------
 
 # --- display: the BUILT-IN panel, laptops only ---
 # Deliberately placed after the battery check above, because that is what settles
@@ -3407,8 +3471,29 @@ als_os_edition() {
 # Removable and USB devices are skipped for exactly the reason the storage scan
 # skips them: the station's own boot stick must never be read as the machine.
 als_os_volumes() {
+  local out rc
   lock_has lsblk || return 1
-  als_os_to lsblk -Pno NAME,TYPE,FSTYPE,MOUNTPOINT,RM,TRAN 2>/dev/null
+  out=$(als_os_to lsblk -Pno NAME,TYPE,FSTYPE,MOUNTPOINT,RM,TRAN 2>/dev/null); rc=$?
+  [ -n "$out" ] && printf '%s\n' "$out"
+  # lsblk failing - or being killed by the timeout part way through - leaves us
+  # holding SOME of the machine's volumes with no way to tell which ones are
+  # missing. Concluding "nothing is installed" from a truncated list is the
+  # same mistake as concluding it from an empty one, so the failure is put INTO
+  # the list as a line of its own and the verdict below refuses on it.
+  [ "$rc" -eq 0 ] || printf '%s\n' 'NAME="" TYPE="als-scan-failed" FSTYPE="" MOUNTPOINT="" RM="0" TRAN=""'
+  return 0
+}
+
+# Can this disk be read at all? Kept apart from the verdict below so a test can
+# answer it without a disk, and so the verdict stays driven by its stdin.
+#   0  the first sector came back
+#   1  the disk is there and refused to be read
+#   2  we could not even ask
+als_os_disk_readable() {
+  command -v dd >/dev/null 2>&1 || return 2
+  [ -n "$1" ] && [ -b "$1" ] || return 2
+  als_os_to dd if="$1" of=/dev/null bs=512 count=1 >/dev/null 2>&1 || return 1
+  return 0
 }
 
 # What the disks say, in one word, from the lines above on stdin. Pure text in,
@@ -3418,16 +3503,27 @@ als_os_volumes() {
 #   LINUX <mnt>   a Linux root is already mounted, so it is free to read
 #   NTFS          a Windows filesystem is there and we did not manage to open it
 #   OTHER         a non-Windows system is there and we did not read it
+#   SCANFAILED    the volume scan did not finish, so the list is not the machine
+#   UNREADABLE d  a disk is there and refused to be read, so it holds no answer
+#   UNCHECKED d   a disk is there and we could not even try to read it
 #   (nothing)     there was no internal disk to look at, so there is no answer
 als_os_disk_verdict() {
   local line fs mp rm tran type disks=0 other=0 ntfs=0 enc=0 linux_mp=""
+  local name names="" scan_failed=0 bad="" unchecked=""
   while IFS= read -r line; do
     [ -n "$line" ] || continue
+    type=$(pval "$line" TYPE)
+    # Put there by als_os_volumes when lsblk itself failed.
+    [ "$type" = "als-scan-failed" ] && { scan_failed=1; continue; }
     rm=$(pval "$line" RM); tran=$(pval "$line" TRAN)
     [ "$rm" = "1" ] && continue
     [ "$tran" = "usb" ] && continue
-    type=$(pval "$line" TYPE); fs=$(pval "$line" FSTYPE); mp=$(pval "$line" MOUNTPOINT)
-    [ "$type" = "disk" ] && disks=$((disks + 1))
+    fs=$(pval "$line" FSTYPE); mp=$(pval "$line" MOUNTPOINT)
+    if [ "$type" = "disk" ]; then
+      disks=$((disks + 1))
+      name=$(pval "$line" NAME)
+      [ -n "$name" ] && names="$names $name"
+    fi
     case "$fs" in
       ext2|ext3|ext4|xfs|btrfs|f2fs|reiserfs)
         other=1
@@ -3463,6 +3559,25 @@ als_os_disk_verdict() {
   [ -n "$linux_mp" ] && { printf 'LINUX %s' "$linux_mp"; return 0; }
   [ "$ntfs" = "1" ] && { printf 'NTFS'; return 0; }
   [ "$other" = "1" ] && { printf 'OTHER'; return 0; }
+
+  # Everything below here is about to say the disks carry nothing. That is the
+  # one answer in this function that can only be earned by having LOOKED, and
+  # the two ways of not having looked both arrive here indistinguishable from a
+  # genuinely blank machine: a scan that did not finish, and a disk that no
+  # filesystem was identified on because none of it could be read. A locked
+  # self-encrypting drive is the case that matters - all of the customer's data
+  # is still on it, and from lsblk it is the spitting image of a wiped disk.
+  [ "$scan_failed" = "1" ] && { printf 'SCANFAILED'; return 0; }
+  for name in $names; do
+    als_os_disk_readable "$name"
+    case $? in
+      1) [ -n "$bad" ] || bad="$name" ;;
+      2) [ -n "$unchecked" ] || unchecked="$name" ;;
+    esac
+  done
+  [ -n "$bad" ] && { printf 'UNREADABLE %s' "$bad"; return 0; }
+  [ -n "$unchecked" ] && { printf 'UNCHECKED %s' "$unchecked"; return 0; }
+
   [ "$disks" -gt 0 ] && { printf 'NONE'; return 0; }
   return 0
 }
@@ -3475,7 +3590,7 @@ OS_ENCRYPTED_MSG="Windows present but encrypted (BitLocker) — cannot be read w
 
 # No readable Windows: say what IS on the disks, and nothing more than that.
 als_os_without_windows() {
-  local verdict mp pretty
+  local verdict mp pretty dev
   verdict=$(als_os_volumes | als_os_disk_verdict)
   case "$verdict" in
     NONE)
@@ -3490,6 +3605,21 @@ als_os_without_windows() {
       # volume left dirty by fast startup or hibernation, looks like from here.
       # Both are fixable at the bench, so say which two things to check.
       OS_NAME="A Windows (NTFS) volume is present but could not be opened to read it — check that ntfs-3g is on the stick and that Windows was shut down rather than hibernated, then re-run the audit"
+      return 0 ;;
+    SCANFAILED)
+      OS_NAME="Could not read the installed OS — the scan of this machine's disks did not complete, so the volumes it did list are not known to be all of them. Re-run the audit."
+      return 0 ;;
+    UNREADABLE\ *)
+      # The BitLocker sentence's sibling. There, libblkid named the encryption
+      # for us; here the drive will not give up even its first sector, so we
+      # cannot name anything - but "no operating system installed" would be a
+      # far worse answer than saying plainly that the disk was not read.
+      dev=${verdict#UNREADABLE }
+      OS_NAME="A disk is present but could not be read at all ($dev refused even its first sector), so nothing can be said about what is installed on it — this is what a locked self-encrypting drive or a failing disk looks like from here. Check the drive's security state before treating this machine as empty."
+      return 0 ;;
+    UNCHECKED\ *)
+      dev=${verdict#UNCHECKED }
+      OS_NAME="Could not read the installed OS — no filesystem was identified on $dev and this build could not test-read the disk to tell an empty drive from an unreadable one. Re-sync the stick and run the audit again."
       return 0 ;;
     LINUX\ *)
       mp=${verdict#LINUX }
@@ -3875,7 +4005,11 @@ o_s ethernet "$NET_ETH"; o_s wifi "$NET_WIFI"; o_s bluetooth "$NET_BT"; o_s macA
 NETWORK=$(o_end)
 
 o_begin
-o_s tpm "$TPM_VER"; o_s secureBoot "$SECURE_BOOT"
+# security.tpm is the operator-facing line (system.tpmVersion above stays a
+# version and nothing else, so a reader that compares it is not handed prose).
+# When there is no version, this carries the sentence that says WHY - it is the
+# field the asset card and the bench panel both fall back to.
+o_s tpm "${TPM_VER:-$TPM_ABSENT}"; o_s secureBoot "$SECURE_BOOT"
 o_s lockStatus "$LOCKS_STATUS"
 SECURITY=$(o_end)
 
