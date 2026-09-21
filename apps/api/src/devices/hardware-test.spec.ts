@@ -175,6 +175,56 @@ describe.each(COPIES)('hardware test one-cell summary (%s copy)', (_name, m) => 
     expect(m.hardwareTestSummary(DESKTOP_NA)).toBe('Passed');
   });
 
+  // "Movement and buttons work" is a test RESULT, and it was reached by
+  // finding no gesture explicitly set to false - so a record with the gestures
+  // missing altogether earned the same sentence as a pad that was actually
+  // pushed around. The station writes all four, which is precisely why nobody
+  // would notice an older or partial record claiming a pass it never got.
+  describe('the trackpad line never invents a result', () => {
+    const line = (trackpad: unknown) =>
+      m
+        .hardwareTestView({ status: 'PASSED', trackpad })
+        .rows.find((r: { component: string }) => r.component === 'Trackpad')
+        ?.summary;
+
+    it('says movement and buttons work only when all four were seen', () => {
+      expect(
+        line({
+          status: 'PASSED',
+          moved: true,
+          leftClick: true,
+          rightClick: true,
+          scrolled: true,
+        }),
+      ).toBe('Movement and buttons work');
+    });
+
+    it('does not claim a pass for gestures that were never recorded', () => {
+      const s = line({ status: 'PASSED', moved: true, leftClick: true });
+      expect(s).not.toBe('Movement and buttons work');
+      expect(s).toContain('Not fully tested');
+      expect(s).toContain('right button');
+      expect(s).toContain('scrolling');
+      expect(s).not.toContain('movement');
+    });
+
+    it('says nothing was tested when nothing was recorded', () => {
+      expect(line({ status: 'PASSED' })).toBe('Not tested');
+    });
+
+    it('still names a real fault ahead of anything missing', () => {
+      expect(line({ status: 'FAILED', moved: false, leftClick: true })).toBe(
+        'Movement not detected',
+      );
+    });
+
+    it('still reads N/A for a machine with no trackpad', () => {
+      expect(line({ status: 'PASSED', notApplicable: true })).toBe(
+        'No trackpad fitted',
+      );
+    });
+  });
+
   it('no test on record: a blank cell, like a missing battery', () => {
     for (const t of [null, undefined, 'junk', 42, [], [null], true]) {
       expect(m.hardwareTestSummary(t)).toBe('');

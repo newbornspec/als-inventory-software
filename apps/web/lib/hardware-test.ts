@@ -169,18 +169,40 @@ function screenSummary(part: Obj): string {
   return `${dead} dead pixel${dead === 1 ? '' : 's'}`;
 }
 
+// The four gestures the pad is asked for, and the words each one is reported
+// in. One list so a gesture cannot be checked for a fault and then left out of
+// the "everything worked" line.
+const TRACKPAD_GESTURES: [string, string][] = [
+  ['moved', 'movement'],
+  ['leftClick', 'left button'],
+  ['rightClick', 'right button'],
+  ['scrolled', 'scrolling'],
+];
+
 function trackpadSummary(part: Obj): string {
   // A machine with no trackpad (a desktop) is not a fault: it is benign N/A.
   if (part.notApplicable === true) return 'No trackpad fitted';
   // Name only what the pad did NOT do; the raw booleans never reach the screen.
-  const faults: string[] = [];
-  if (part.moved === false) faults.push('movement not detected');
-  if (part.leftClick === false) faults.push('left button not detected');
-  if (part.rightClick === false) faults.push('right button not detected');
-  if (part.scrolled === false) faults.push('scrolling not detected');
+  const faults = TRACKPAD_GESTURES.filter(([k]) => part[k] === false).map(
+    ([, label]) => `${label} not detected`,
+  );
   if (faults.length) {
     const joined = faults.join(', ');
     return joined.charAt(0).toUpperCase() + joined.slice(1);
+  }
+  // A gesture that is neither true nor false was never recorded, and this line
+  // is the one a buyer reads: "Movement and buttons work" said of a pad that
+  // was never asked to move is a test result invented out of a missing field.
+  // The station writes all four, so this is an older or partial record - and
+  // that is exactly when the claim would go unnoticed.
+  const missing = TRACKPAD_GESTURES.filter(([k]) => part[k] !== true).map(
+    ([, label]) => label,
+  );
+  if (missing.length === TRACKPAD_GESTURES.length) {
+    return 'Not tested';
+  }
+  if (missing.length) {
+    return `Not fully tested — no result recorded for ${missing.join(', ')}`;
   }
   return 'Movement and buttons work';
 }
