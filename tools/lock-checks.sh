@@ -169,6 +169,41 @@ lock_hive_haskey() {
   printf 'cd %s\nls\n' "$key" | hivexsh "$hive" >/dev/null 2>&1
 }
 
+# Read a key's DEFAULT (unnamed) value.
+#
+# lock_hive_get above runs `hivexget hive key value` and there is no spelling of
+# `value` that means "the unnamed one", so the LSA policy values — which are all
+# stored in the default value of their key — are out of its reach. hivexsh can
+# do it: its `lsval` command with NO argument prints the current node's default
+# value.
+#
+# NOT VERIFIED AGAINST HIVEX. There is no hivex on the machine this was written
+# on, so the `lsval` behaviour here is taken from its documentation and has
+# never been run against a real SECURITY hive. That is deliberately not
+# load-bearing: NOTHING in check_domain decides a verdict from this reader. It
+# supplies the domain's NAME and nothing else, and the evidence that decides the
+# verdict comes from lock_hive_haskey (cd + ls), which this file already depends
+# on elsewhere and which is known to work. If lsval turns out to behave
+# differently, a domain-joined machine is still reported as domain joined — it
+# is reported without the domain's name, which is a worse report, not a wrong
+# one.
+#
+# NUL BYTES. These values are binary: a small header followed by the name in
+# UTF-16LE, so every other byte is 00. Bash command substitution DROPS NUL bytes
+# silently, which mangles anything read through `$( )` without warning, so the
+# NULs are stripped INSIDE the pipeline, before the substitution can eat them.
+lock_hive_get_default() {
+  local hive="$1" key="$2" out
+  [ -r "$hive" ] || return 1
+  lock_has hivexsh || return 1
+  # The key goes in as an ARGUMENT, never inside the format string — printf
+  # reads \E, \b, \n, \t and friends as escapes and would silently corrupt a
+  # path like Policy\Secrets. See the note in check_mdm.
+  out=$(printf 'cd %s\nlsval\n' "$key" | hivexsh "$hive" 2>/dev/null | LC_ALL=C tr -d '\000\r')
+  [ -n "$out" ] || return 1
+  printf '%s' "$out"
+}
+
 # =============================================================================
 # FIRMWARE DETECTORS — readable from the live USB, whatever OS is installed
 # =============================================================================
@@ -557,6 +592,19 @@ check_absolute() {
 
 WIN_SOFTWARE=""
 WIN_SYSTEM=""
+# The SECURITY hive. It sits in the same directory as the other two and is where
+# the LSA keeps the machine's domain membership — the one place that holds PROOF
+# of an Active Directory join rather than a side effect of one.
+#
+# It is worth being clear about why this is readable at all, because on a live
+# Windows it is not: `reg query HKLM\SECURITY` is Access Denied to everything
+# short of SYSTEM. That denial is a Windows ACL, enforced by the Windows kernel
+# on a running machine. There is no running machine here. The disk is powered
+# off and mounted read-only, hivex parses the hive FILE as a data structure, and
+# a file's Windows ACL means nothing to a Linux process reading its bytes as
+# root. So the check that cannot be done live is exactly the one that can be
+# done offline.
+WIN_SECURITY=""
 
 lock_locate_hives() {
   [ -n "$WIN_SOFTWARE" ] && return 0
@@ -564,7 +612,39 @@ lock_locate_hives() {
   local cfg="$WIN_MNT/Windows/System32/config"
   [ -r "$cfg/SOFTWARE" ] && WIN_SOFTWARE="$cfg/SOFTWARE"
   [ -r "$cfg/SYSTEM" ]   && WIN_SYSTEM="$cfg/SYSTEM"
+  [ -r "$cfg/SECURITY" ] && WIN_SECURITY="$cfg/SECURITY"
+  # SOFTWARE remains the gate, deliberately. SECURITY is missing on a damaged or
+  # part-copied install, and making it a precondition here would turn every
+  # Windows check — Autopilot, MDM, Entra — UNKNOWN over a hive only one of them
+  # needs. Each check reports what its own inputs allow.
   [ -n "$WIN_SOFTWARE" ]
+}
+
+# Which control set the registry reads should address.
+#
+# ControlSet001 is hard-coded throughout this file and is right on nearly every
+# machine, but not on all of them: SYSTEM\Select\Current is a DWORD naming the
+# set Windows last booted, and it reads 2 after a Last Known Good boot. Pointing
+# every lookup at a set that is stale — or at one that is not in the hive at all
+# — would return nothing from every read, and "nothing found" is how this file
+# would then have said PASS about a managed machine. Cheap to get right, so get
+# it right.
+#
+# Conservative by construction: the resolved name is adopted ONLY when the key
+# is actually there. Anything unexpected leaves ControlSet001 in place, which is
+# where this file has always looked.
+WIN_CTRLSET='ControlSet001'
+lock_resolve_controlset() {
+  WIN_CTRLSET='ControlSet001'
+  [ -n "$WIN_SYSTEM" ] && [ -r "$WIN_SYSTEM" ] || return 1
+  local n
+  n=$(lock_hive_get "$WIN_SYSTEM" 'Select' 'Current' 2>/dev/null | tr -cd '0-9')
+  case "$n" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$n" -ge 1 ] && [ "$n" -le 999 ] || return 1
+  local cs
+  cs=$(printf 'ControlSet%03d' "$n")
+  lock_hive_haskey "$WIN_SYSTEM" "$cs" || return 1
+  WIN_CTRLSET="$cs"
 }
 
 # Why every Windows detector starts the same way: distinguish "no Windows on
@@ -775,83 +855,425 @@ $name"
   _mdm_verdict "$provider" "$org"
 }
 
-# --- Entra ID / Azure AD join and domain join --------------------------------
+# --- shared helpers for the two directory checks ------------------------------
+
+# Trim a registry string: drop NULs and CRs, then leading and trailing space.
+_lock_sz() {
+  printf '%s' "$1" | LC_ALL=C tr -d '\000\r' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//'
+}
+
+# Join accumulated evidence lines into one readable sentence fragment.
+_lock_join() {
+  printf '%s\n' "$1" | grep -v '^[[:space:]]*$' |
+    awk 'NR>1{printf "; "} {printf "%s", $0} END{ if (NR) printf "\n" }'
+}
+
+# Pull a host or domain name out of an LSA policy blob.
+#
+# These values are not tidy REG_SZ strings: they are a short binary header
+# followed by the name in UTF-16LE. The NULs are already gone by the time this
+# sees the data (lock_hive_get_default strips them inside the pipeline), but the
+# header bytes are not, so print the longest thing that actually LOOKS like a
+# name rather than printing the blob. A blob that yields nothing means "could
+# not name it" — it never means "not joined", and no verdict turns on it.
+_lock_lsa_name() {
+  printf '%s' "$1" | LC_ALL=C tr -c 'A-Za-z0-9.-' '\n' |
+    LC_ALL=C grep -E '^[A-Za-z0-9][A-Za-z0-9.-]{0,62}[A-Za-z0-9]$' |
+    awk '{ if (length($0) > length(b)) b=$0 } END { if (b != "") print b }'
+}
+
+# cn=...,DC=contoso,DC=com  ->  contoso.com
+_lock_dn_domain() {
+  printf '%s' "$1" | tr 'A-Z' 'a-z' | tr ',' '\n' | sed -n 's/^[[:space:]]*dc=//p' |
+    awk 'NR>1{printf "."} {printf "%s", $0} END{ if (NR) printf "\n" }'
+}
+
+# Bytes of real content in one cached-logon slot.
+#
+# Split out as its own function for two reasons. The NUL stripping has to happen
+# INSIDE the pipeline — bash throws NUL bytes out of a command substitution
+# without saying a word, so counting after the fact gives a number that happens
+# to be right for the wrong reason. And it gives the fixtures one thing to stub.
+#
+# PRESENCE AND SIZE ONLY. The blob is encrypted credential material for somebody
+# who used to work somewhere. Nothing here decrypts it, nothing here wants to,
+# and nothing that does may be added.
+_lock_nl_bytes() {
+  hivexget "$WIN_SECURITY" 'Cache' "$1" 2>/dev/null |
+    LC_ALL=C tr -d '\000' | wc -c | tr -d ' \n'
+}
+
+# How many of the ten cached-logon slots hold something that is not padding.
+# An unused slot is zero-filled, so the NUL strip above empties it; a real
+# cached credential is a couple of hundred bytes of ciphertext. The 16-byte
+# floor is a margin against a slot header being mistaken for a credential.
+_lock_cached_logons() {
+  local i n=0 bytes
+  lock_has hivexget || { printf '0'; return 1; }
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    bytes=$(_lock_nl_bytes 'NL$'"$i")
+    case "$bytes" in ''|*[!0-9]*) continue ;; esac
+    [ "$bytes" -gt 16 ] && n=$((n+1))
+  done
+  printf '%s' "$n"
+}
+
+# --- Microsoft Entra ID (Azure AD) join ---------------------------------------
+#
+# PRIVACY. The same rule as check_mdm above, restated here because this is the
+# key where breaking it is most tempting: JoinInfo holds the previous user's
+# UserEmail, sitting right next to the tenant fields. IT IS NEVER READ. This
+# audit ends up in an inventory database that gets exported and emailed, and a
+# former employee's address is nobody's business here. What proves the lock, and
+# what an administrator actually needs in order to deregister the device, is the
+# ORGANISATION and the DEVICE: TenantId, TenantDisplayName, IdpDomain, DeviceId.
+# That is the whole list. Do not add UserEmail capture.
+#
+# JoinType is deliberately not read either. It is a DWORD with no published
+# mapping anyone can point at, the numbers reported in the wild disagree, and a
+# verdict resting on a guessed enum is a verdict that will be wrong on some
+# build of Windows nobody tested. Presence of a join is established from the key
+# itself; the type of join changes nothing about who has to release it.
 check_entra() {
   # Needs hivexsh for the JoinInfo subkey listing, not just hivexget.
-  lock_win_blocked entra "Entra ID / domain join" hivexsh && return
+  lock_win_blocked entra "Microsoft Entra ID join" hivexsh && return
 
-  # Both answers live in the SYSTEM hive. Without it we have read nothing, and
-  # the old code fell straight through to PASS — claiming a domain-joined
-  # machine was clear on the strength of two lookups that never ran.
+  # The answer lives in the SYSTEM hive. Without it we have read nothing, and
+  # the old code fell straight through to PASS — claiming a joined machine was
+  # clear on the strength of lookups that never ran.
   if [ -z "$WIN_SYSTEM" ] || [ ! -r "$WIN_SYSTEM" ]; then
-    lock_add entra "Entra ID / domain join" UNKNOWN \
-      "The Windows SYSTEM hive could not be read, so directory membership is unknown" \
+    lock_add entra "Microsoft Entra ID join" UNKNOWN \
+      "The Windows SYSTEM hive could not be read, so an Entra ID join can neither be confirmed nor ruled out" \
       "offline registry (SYSTEM hive unreadable)" low
     return
   fi
 
-  local joined=""
-  # CloudDomainJoin\JoinInfo holds one subkey per Entra-joined identity.
-  if lock_hive_haskey "$WIN_SYSTEM" 'ControlSet001\Control\CloudDomainJoin\JoinInfo'; then
-    local sub rc
-    # Key name as an argument, never inside the format string - see check_mdm.
-    # This particular path survives, but only by luck: \C and \J are not printf
-    # escapes. A segment starting with a b e f n r t v u x or a digit would be
-    # mangled the same way \Enrollments was, and \c would truncate the command.
-    sub=$(printf 'cd %s\nls\n' 'ControlSet001\Control\CloudDomainJoin\JoinInfo' | hivexsh "$WIN_SYSTEM" 2>/dev/null)
-    rc=$?
-    # Two ways this used to report an Entra-joined machine as CLEAR, which is
-    # the worst answer this file can give:
-    #
-    # 1. It kept only subkeys matching ^[0-9a-f]{8}- . The subkey under JoinInfo
-    #    is reported in the wild as a GUID and as a 40-character certificate
-    #    thumbprint; a thumbprint matched nothing, so `joined` stayed empty and
-    #    the run fell through to PASS. The shape was never the evidence -
-    #    lock_hive_haskey above has ALREADY proved the key exists, and JoinInfo
-    #    is absent entirely on a machine that was never joined. So any listing
-    #    at all is the signal, whatever the subkey happens to be called.
-    #
-    # 2. hivexsh's failures were indistinguishable from an empty listing: a
-    #    dirty or truncated hive exits non-zero with nothing on stdout, and that
-    #    also read as "no subkeys" and PASSed. Per this file's governing rule a
-    #    read that did not happen is UNKNOWN, never PASS.
-    if [ "$rc" -ne 0 ]; then
-      lock_add entra "Entra ID / domain join" UNKNOWN \
-        "The CloudDomainJoin key is present but could not be listed, so an Entra ID join can neither be confirmed nor ruled out. A hive left dirty by fast start-up or hibernation reads this way." \
-        'offline registry SYSTEM\...\CloudDomainJoin (listing failed)' low
-      return
-    fi
-    if printf '%s' "$sub" | grep -q '[^[:space:]]'; then
-      joined="Entra ID (Azure AD) joined"
-    else
-      # The key only exists on a device that was joined, so an empty listing is
-      # odd rather than reassuring. Say so instead of calling the device clear.
-      lock_add entra "Entra ID / domain join" UNKNOWN \
-        "The CloudDomainJoin key exists but names no joined identity. That key is not present on a device that was never joined, so this cannot be read as clear." \
-        'offline registry SYSTEM\...\CloudDomainJoin (key present, no entries)' low
-      return
-    fi
-  fi
+  lock_resolve_controlset
+  local cdj="$WIN_CTRLSET"'\Control\CloudDomainJoin'
+  local ji="$cdj"'\JoinInfo'
 
-  # NOTE: Tcpip\Parameters\Domain is the DNS domain suffix, which a machine can
-  # carry without being domain-JOINED. It is reported as an indicator, not as
-  # proof, and never on its own as a lock.
-  local dom
-  dom=$(lock_hive_get "$WIN_SYSTEM" 'ControlSet001\Services\Tcpip\Parameters' Domain 2>/dev/null)
-
-  if [ -n "$joined" ]; then
-    lock_add entra "Entra ID / domain join" LOCKED \
-      "$joined${dom:+; DNS domain $dom} — the device is bound to an organisation's directory" \
-      'offline registry SYSTEM\...\CloudDomainJoin' high
+  # CloudDomainJoin\JoinInfo holds one subkey per Entra-joined identity, and is
+  # absent entirely on a device that was never joined.
+  if ! lock_hive_haskey "$WIN_SYSTEM" "$ji"; then
+    # NOTE THE WORDING, AND NOTE HOW IT DIFFERS FROM check_domain's.
+    # Domain membership is genuinely recorded on the machine, so finding none is
+    # close to a real negative. An Entra join is not like that in one direction:
+    # the tenant's own record of this device is in Microsoft's cloud, so while
+    # an absent JoinInfo does say the device is not joined right now, it can
+    # never say the organisation has let go of it. That is the tenant's
+    # statement to make, not ours.
+    lock_add entra "Microsoft Entra ID join" PASS \
+      "No CloudDomainJoin\\JoinInfo key. Windows writes that key when a device is joined to a tenant, so this device is not currently joined to one. That is not the same as released: only the owning tenant can confirm it has given the device up, and this says nothing about an Autopilot registration, which is held in the cloud against the hardware hash. The registry transaction logs are not replayed offline either, so a join made just before a fast-start-up or hibernation shutdown may not have reached the hive we are reading." \
+      "offline registry SYSTEM\\$WIN_CTRLSET\\Control\\CloudDomainJoin (absent)" medium
     return
   fi
-  if [ -n "$dom" ]; then
-    lock_add entra "Entra ID / domain join" DETECTED \
-      "Carries the DNS domain suffix $dom. That is an indicator of past domain membership, not proof of a current join." \
-      'offline registry SYSTEM\...\Tcpip\Parameters' low
+
+  local sub rc
+  # Key name as an argument, never inside the format string - see check_mdm.
+  sub=$(printf 'cd %s\nls\n' "$ji" | hivexsh "$WIN_SYSTEM" 2>/dev/null)
+  rc=$?
+  # Two ways this used to report an Entra-joined machine as CLEAR, which is the
+  # worst answer this file can give:
+  #
+  # 1. It kept only subkeys matching ^[0-9a-f]{8}- . The subkey under JoinInfo
+  #    is reported in the wild as a GUID and as a 40-character certificate
+  #    thumbprint; a thumbprint matched nothing, so the run fell through to
+  #    PASS. The shape was never the evidence - lock_hive_haskey above has
+  #    ALREADY proved the key exists. Any listing at all is the signal,
+  #    whatever the subkey happens to be called.
+  #
+  # 2. hivexsh's failures were indistinguishable from an empty listing: a dirty
+  #    or truncated hive exits non-zero with nothing on stdout, and that also
+  #    read as "no subkeys" and PASSed. Per this file's governing rule a read
+  #    that did not happen is UNKNOWN, never PASS.
+  if [ "$rc" -ne 0 ]; then
+    lock_add entra "Microsoft Entra ID join" UNKNOWN \
+      "The CloudDomainJoin key is present but could not be listed, so an Entra ID join can neither be confirmed nor ruled out. A hive left dirty by fast start-up or hibernation reads this way." \
+      'offline registry SYSTEM\...\CloudDomainJoin (listing failed)' low
     return
   fi
-  lock_add entra "Entra ID / domain join" PASS "No Entra ID join or AD domain membership found" 'offline registry SYSTEM hive' medium
+  if ! printf '%s' "$sub" | grep -q '[^[:space:]]'; then
+    # The key only exists on a device that was joined, so an empty listing is
+    # odd rather than reassuring. Say so instead of calling the device clear.
+    lock_add entra "Microsoft Entra ID join" UNKNOWN \
+      "The CloudDomainJoin key exists but names no joined identity. That key is not present on a device that was never joined, so this cannot be read as clear." \
+      'offline registry SYSTEM\...\CloudDomainJoin (key present, no entries)' low
+    return
+  fi
+
+  # WHICH ORGANISATION. A join proved but not named leaves the operator with
+  # nothing to act on: deregistration has to be chased with the tenant, and you
+  # cannot chase a tenant you cannot name. So read INSIDE JoinInfo.
+  local id
+  id=$(printf '%s\n' "$sub" | grep '[^[:space:]]' | head -1 | tr -d ' \t\r')
+  local tid="" tname="" idp="" devid="" mdmurl="" org=""
+  if [ -n "$id" ]; then
+    local jk="$ji"'\'"$id"
+    tid=$(_lock_sz "$(lock_hive_get "$WIN_SYSTEM" "$jk" TenantId 2>/dev/null)")
+    tname=$(_lock_sz "$(lock_hive_get "$WIN_SYSTEM" "$jk" TenantDisplayName 2>/dev/null)")
+    idp=$(_lock_sz "$(lock_hive_get "$WIN_SYSTEM" "$jk" IdpDomain 2>/dev/null)")
+    devid=$(_lock_sz "$(lock_hive_get "$WIN_SYSTEM" "$jk" DeviceId 2>/dev/null)")
+    # UserEmail is in this same key and is NOT read. See the privacy note above.
+  fi
+
+  # Corroboration only, and secondary. TenantInfo\<TenantId> carries the
+  # tenant's MDM enrolment endpoints, which is a second, independent place the
+  # same tenant is written down. It is MEDIUM confidence and unverified against
+  # real hardware, so it strengthens a verdict that is already made — it never
+  # makes one, and its absence means nothing.
+  if [ -n "$tid" ]; then
+    mdmurl=$(_lock_sz "$(lock_hive_get "$WIN_SYSTEM" "$cdj"'\TenantInfo\'"$tid" MdmEnrollmentUrl 2>/dev/null)")
+  fi
+
+  org="$tname"
+  [ -z "$org" ] && org="$idp"
+
+  local detail="Joined to Microsoft Entra ID (Azure AD)"
+  if [ -n "$org" ] || [ -n "$tid" ]; then
+    detail="$detail${org:+ - organisation $org}${tid:+ (tenant id $tid)}"
+  else
+    detail="$detail, but JoinInfo named no tenant that could be read, so the owning organisation is not identified here"
+  fi
+  detail="$detail${devid:+. Device id $devid, which is what an administrator needs in order to deregister it}"
+  # NO APOSTROPHES INSIDE ${var:+...}. Bash parses a single quote inside a
+  # parameter expansion as opening a quoted section even when the whole
+  # expansion is already inside double quotes, and "the tenant's MDM endpoint"
+  # here swallowed the rest of the function: bash -n reported the syntax error
+  # ninety lines further down, in a string that was perfectly well formed.
+  detail="$detail${mdmurl:+. An MDM enrolment endpoint for that tenant is recorded alongside it ($mdmurl), which corroborates the join}"
+  detail="$detail. Only that tenant can release the device, and nothing readable offline can ever show that it has: an Entra join found here can be confirmed but never downgraded. Registry transaction logs are not replayed offline, so a join or unjoin made just before a fast-start-up or hibernation shutdown may not be visible in this hive."
+
+  lock_add entra "Microsoft Entra ID join" LOCKED "$detail" \
+    "offline registry SYSTEM\\$WIN_CTRLSET\\Control\\CloudDomainJoin\\JoinInfo${mdmurl:+ + TenantInfo}" high
+}
+
+# --- Active Directory domain join ---------------------------------------------
+#
+# WHERE THE PROOF IS. Domain membership, unlike an Entra join, is written down
+# on the machine by the LSA — in the SECURITY hive, which is why this file now
+# opens it. Everything else below is a consequence of having been joined
+# (policy, site, DNS suffix) and survives an unjoin, so it can show that a
+# machine HAS been in a domain without showing that it still is.
+#
+# EVERY NEGATIVE HERE IS A TRAP, and each one was checked on a clean Windows 11
+# that has never seen a domain controller. Testing for the presence of a key
+# instead of the content of a value gives a false positive on every machine
+# ever made:
+#
+#   Group Policy\History        EXISTS, with DSPath = LocalGPO. The
+#                               discriminator is a DSPath beginning LDAP://,
+#                               never "History has a subkey".
+#   State\Machine\
+#     Distinguished-Name        EXISTS as an EMPTY REG_SZ. Must be non-empty.
+#   Netlogon\Parameters         EXISTS (DisablePasswordChange and friends). Key
+#                               presence proves nothing; DynamicSiteName is the
+#                               value that is absent until a DC is reached.
+#   Tcpip\Parameters\Domain     EXISTS as an empty REG_SZ, so an empty read is
+#                               not a detection.
+#   Winlogon\CachedLogonsCount  is REG_SZ "10" on EVERY Windows. No evidential
+#                               value whatsoever — deliberately not used.
+#   SAM                         is NOT evidence: a domain-joined machine's SAM
+#                               is structurally identical to a workgroup one.
+#   ActiveComputerName          is a VOLATILE key. It is not in the hive file at
+#                               all and cannot be read offline; ComputerName is
+#                               the one that persists.
+check_domain() {
+  # Needs hivexsh: the SECURITY evidence is key PRESENCE, which only hivexsh can
+  # establish, and hivexget cannot reach a default (unnamed) value either.
+  lock_win_blocked domainJoin "Active Directory domain join" hivexsh && return
+
+  lock_resolve_controlset
+
+  local proof="" strong="" weak="" unread="" name="" dn="" corroborated=0
+
+  # hivexget reads every VALUE below. Without it the value-based evidence simply
+  # does not happen, and a check that did not happen is not a check that came
+  # back negative.
+  lock_has hivexget || unread="$unread
+registry values (hivexget is not installed)"
+
+  # ---- SECURITY: the primary domain record --------------------------------
+  # Probe a key that exists on every Windows BEFORE reading anything else. Once
+  # `Policy` is known to be walkable, a later "key not found" means the key
+  # really is absent instead of meaning the hive could not be opened — which is
+  # the difference between "not in a domain" and "we did not look", and this
+  # file never collapses those two into one answer.
+  local sid_key=0 sid_val=""
+  if [ -n "$WIN_SECURITY" ] && lock_hive_haskey "$WIN_SECURITY" 'Policy'; then
+    # PolPrDmS is the primary domain SID. A workgroup machine has no primary
+    # domain, so this is the best offline discriminator there is.
+    if lock_hive_haskey "$WIN_SECURITY" 'Policy\PolPrDmS'; then
+      sid_key=1
+      sid_val=$(lock_hive_get_default "$WIN_SECURITY" 'Policy\PolPrDmS')
+      proof="a primary domain SID is recorded (SECURITY Policy\\PolPrDmS)"
+    fi
+
+    # PolPrDmN and PolDnDDN NAME the domain. They are read for the name and for
+    # nothing else, and on purpose: the NetBIOS-name key is reported as existing
+    # on standalone machines holding an empty value, and this file has been
+    # bitten before by treating "the key is there" as "the thing is true". The
+    # SID above decides; these two only say what to call it.
+    local v
+    v=$(lock_hive_get_default "$WIN_SECURITY" 'Policy\PolPrDmN') && name=$(_lock_lsa_name "$v")
+    v=$(lock_hive_get_default "$WIN_SECURITY" 'Policy\PolDnDDN') && {
+      v=$(_lock_lsa_name "$v"); [ -n "$v" ] && name="$v"
+    }
+
+    # Policy\Secrets\$MACHINE.ACC is the computer account's secret. Its
+    # existence proves a computer account was established in a domain.
+    #
+    # UNCERTAIN, AND WORDED AS SUCH: it has not been established whether Windows
+    # removes this secret when a machine is unjoined. Until that is known it is
+    # evidence of HAVING BEEN joined, not of being joined now, so it corroborates
+    # and never concludes. CurrVal beneath it is encrypted credential material
+    # and is not read, decrypted or touched.
+    if lock_hive_haskey "$WIN_SECURITY" 'Policy\Secrets\$MACHINE.ACC'; then
+      strong="$strong
+a computer-account secret exists (SECURITY Policy\\Secrets\\\$MACHINE.ACC), so this machine held a computer account in a domain"
+    fi
+
+    # Cached domain logons. Presence and size only — see _lock_nl_bytes.
+    local nl
+    nl=$(_lock_cached_logons)
+    case "$nl" in
+      ''|0|*[!0-9]*) : ;;
+      *) strong="$strong
+$nl cached domain logon slot(s) hold credential material (SECURITY Cache\\NL\$1..NL\$10), so domain accounts have signed in here" ;;
+    esac
+  else
+    # THE EXPENSIVE DIRECTION. Without SECURITY the primary domain record was
+    # never read, so a quiet SOFTWARE and SYSTEM cannot add up to "not joined".
+    unread="$unread
+the SECURITY hive, which is where the primary domain record lives"
+  fi
+
+  # ---- SOFTWARE: Group Policy ---------------------------------------------
+  if [ -n "$WIN_SOFTWARE" ] && [ -r "$WIN_SOFTWARE" ]; then
+    local gp='Microsoft\Windows\CurrentVersion\Group Policy'
+    local guids g dsp
+    guids=$(printf 'cd %s\nls\n' "$gp"'\History' | hivexsh "$WIN_SOFTWARE" 2>/dev/null |
+            grep '[^[:space:]]' | head -40)
+    for g in $guids; do
+      dsp=$(_lock_sz "$(lock_hive_get "$WIN_SOFTWARE" "$gp"'\History\'"$g"'\0' DSPath 2>/dev/null)")
+      # LocalGPO here is the standalone machine's own policy and means nothing.
+      case "$dsp" in
+        LDAP://*|ldap://*)
+          strong="$strong
+a domain group policy was applied from $dsp (SOFTWARE Group Policy History DSPath)"
+          [ -n "$dn" ] || dn="${dsp#[Ll][Dd][Aa][Pp]://}"
+          break ;;
+      esac
+    done
+
+    local dnv
+    dnv=$(_lock_sz "$(lock_hive_get "$WIN_SOFTWARE" "$gp"'\State\Machine' Distinguished-Name 2>/dev/null)")
+    if [ -n "$dnv" ]; then
+      strong="$strong
+the machine has a directory distinguished name, $dnv (SOFTWARE Group Policy State\\Machine)"
+      [ -n "$dn" ] || dn="$dnv"
+    fi
+  else
+    unread="$unread
+the SOFTWARE hive"
+  fi
+
+  # ---- SYSTEM: Netlogon and TCP/IP ----------------------------------------
+  if [ -n "$WIN_SYSTEM" ] && [ -r "$WIN_SYSTEM" ]; then
+    local site
+    site=$(_lock_sz "$(lock_hive_get "$WIN_SYSTEM" "$WIN_CTRLSET"'\Services\Netlogon\Parameters' DynamicSiteName 2>/dev/null)")
+    [ -n "$site" ] && strong="$strong
+the machine has been told its Active Directory site, $site (SYSTEM Netlogon DynamicSiteName), which is only written after reaching a domain controller"
+
+    # Tcpip\Parameters\Domain is the DNS domain SUFFIX, which a machine can
+    # carry from DHCP without ever having been domain-JOINED. Reported as an
+    # indicator, never on its own as a lock — and it exists as an empty REG_SZ
+    # on clean machines, so only a non-empty read means anything.
+    local tdom ndom
+    tdom=$(_lock_sz "$(lock_hive_get "$WIN_SYSTEM" "$WIN_CTRLSET"'\Services\Tcpip\Parameters' Domain 2>/dev/null)")
+    ndom=$(_lock_sz "$(lock_hive_get "$WIN_SYSTEM" "$WIN_CTRLSET"'\Services\Tcpip\Parameters' 'NV Domain' 2>/dev/null)")
+    [ -z "$tdom" ] && tdom="$ndom"
+    if [ -n "$tdom" ]; then
+      weak="carries the DNS domain suffix $tdom (SYSTEM Tcpip\\Parameters)"
+      [ -n "$name" ] || name="$tdom"
+    fi
+  else
+    unread="$unread
+the SYSTEM hive"
+  fi
+
+  [ -n "$name" ] || name=$(_lock_dn_domain "$dn")
+  local named=""
+  [ -n "$name" ] && named=" - domain $name"
+
+  local strongtxt; strongtxt=$(_lock_join "$strong")
+  local unreadtxt; unreadtxt=$(_lock_join "$unread")
+  [ -n "$strongtxt" ] && corroborated=1
+
+  # The one sentence that has to be on every answer this check gives: hivex does
+  # not replay SYSTEM.LOG1/LOG2, so a hive left dirty by fast start-up or
+  # hibernation can be missing its last transactions.
+  local caveat="Registry transaction logs are not replayed offline, so a join or unjoin made just before a fast-start-up or hibernation shutdown may not be visible in these hives."
+
+  # ---- verdict -------------------------------------------------------------
+  # A live primary-domain record WITH something to corroborate it. This is a
+  # machine that is in a domain now.
+  if [ "$sid_key" = "1" ] && [ "$corroborated" = "1" ]; then
+    lock_add domainJoin "Active Directory domain join" LOCKED \
+      "Joined to an Active Directory domain$named. Evidence: $proof; $strongtxt. The domain's administrators control the computer account; rejoining or reusing the machine elsewhere means removing it from that directory. $caveat" \
+      "offline registry SECURITY Policy + SOFTWARE/SYSTEM corroboration" high
+    return
+  fi
+
+  # The SID record alone. Reported, but not as a lock: it has not been possible
+  # to establish here whether that key is genuinely absent on every workgroup
+  # machine, and one unverified key presence is not enough to call a device
+  # unsellable on its own.
+  if [ "$sid_key" = "1" ]; then
+    lock_add domainJoin "Active Directory domain join" DETECTED \
+      "A primary domain record is present$named ($proof${sid_val:+, value readable}), but nothing else on this machine corroborates a current domain join - no domain group policy, no directory name, no site and no cached domain logons. Treat as a machine that has been in a domain. $caveat" \
+      "offline registry SECURITY Policy\\PolPrDmS (uncorroborated)" medium
+    return
+  fi
+
+  # No live record, but the machine plainly carries the marks of having been in
+  # a domain. Those marks survive an unjoin, so this is history, not membership.
+  if [ "$corroborated" = "1" ]; then
+    local why="absent, which is what an unjoined machine looks like."
+    [ -n "$unreadtxt" ] && why="not readable ($unreadtxt), so current membership could not be established either way."
+    lock_add domainJoin "Active Directory domain join" DETECTED \
+      "This machine has been joined to an Active Directory domain$named: $strongtxt. The LSA primary domain record that would show a CURRENT join was $why $caveat" \
+      "offline registry SOFTWARE/SYSTEM domain traces" medium
+    return
+  fi
+
+  # Only the DNS suffix. An indicator, not proof, and never a lock on its own.
+  if [ -n "$weak" ]; then
+    lock_add domainJoin "Active Directory domain join" DETECTED \
+      "No domain membership record was found, but the machine $weak. A DNS suffix can be handed out by DHCP to a machine that was never joined, so this is an indicator of past domain membership, not proof of a join. $caveat" \
+      "offline registry SYSTEM\\$WIN_CTRLSET\\Services\\Tcpip\\Parameters" low
+    return
+  fi
+
+  # Something we needed was unreadable and we found nothing. That is not a
+  # negative result, it is an absent one.
+  if [ -n "$unreadtxt" ]; then
+    lock_add domainJoin "Active Directory domain join" UNKNOWN \
+      "Domain membership could not be established: $unreadtxt could not be read. No domain traces were found in what could be read, but the record that would settle it was not among it, so this must not be read as clear. $caveat" \
+      "offline registry (required hives unreadable)" low
+    return
+  fi
+
+  # Everything was read and nothing was found.
+  #
+  # NOTE THE WORDING, AND NOTE HOW IT DIFFERS FROM check_entra's. This is the
+  # strongest negative this file is able to produce, because domain state really
+  # is written on the machine: the LSA primary domain record, the computer
+  # account secret, the applied policy, the site and the cached logons are all
+  # local, and all of them are quiet. It still is not proof, and the reason is
+  # the transaction logs rather than anything in the cloud.
+  lock_add domainJoin "Active Directory domain join" PASS \
+    "No Active Directory domain membership found. The LSA primary domain record is absent, no computer-account secret exists, no domain group policy has been applied, no directory distinguished name is set, no site has been assigned and no domain logons are cached. Domain membership is recorded on the machine itself, so finding none of it is close to a real negative - unlike an Entra or Autopilot answer, which lives in the cloud. $caveat" \
+    "offline registry SECURITY Policy + SOFTWARE Group Policy + SYSTEM Netlogon" medium
 }
 
 # --- BitLocker ---------------------------------------------------------------
@@ -892,6 +1314,7 @@ LOCK_DETECTORS="
 check_autopilot
 check_mdm
 check_entra
+check_domain
 check_bios_password
 check_secure_boot
 check_setup_mode

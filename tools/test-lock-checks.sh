@@ -239,15 +239,21 @@ check_bios_password
 check "unreadable attribute -> UNKNOWN"  UNKNOWN "$(row_status biosPassword)"
 
 echo
-echo "== SOFTWARE hive readable but SYSTEM hive missing: not a 'no domain join' =="
+echo "== SOFTWARE hive readable but SYSTEM/SECURITY hives missing: not a 'no join' =="
 LOCK_ROWS=""
 _saved_locate=$(declare -f lock_locate_hives)
-lock_locate_hives() { WIN_SOFTWARE="$FIX/sw"; WIN_SYSTEM=""; return 0; }
+lock_locate_hives() { WIN_SOFTWARE="$FIX/sw"; WIN_SYSTEM=""; WIN_SECURITY=""; return 0; }
 mkdir -p "$FIX"; echo x > "$FIX/sw"
 _saved_has=$(declare -f lock_has)
 lock_has() { return 0; }
 check_entra
-check "missing SYSTEM hive -> UNKNOWN"   UNKNOWN "$(row_status entra)"
+check "missing SYSTEM hive -> entra UNKNOWN"   UNKNOWN "$(row_status entra)"
+# The same run must not let the DOMAIN half of the old combined check quietly
+# report a clean machine. The SECURITY hive holds the primary domain record, so
+# without it there is no negative to report - only an absent answer.
+LOCK_ROWS=""
+check_domain
+check "missing SECURITY hive -> domain UNKNOWN" UNKNOWN "$(row_status domainJoin)"
 
 echo
 echo "== an Entra-joined machine must never read as CLEAR =="
@@ -571,6 +577,377 @@ case "$(row_detail mdm)" in
   *jane.doe*) bad "never records the previous user" "no local part" "$(row_detail mdm)" ;;
   *) ok "never records the previous user" ;;
 esac
+
+
+# ---------------------------------------------------------------------------
+# ENTRA ID AND ACTIVE DIRECTORY, split into two checks.
+#
+# They used to be one row keyed "entra", which forced one verdict, one
+# confidence and one sentence onto two findings that are not alike. An offline
+# "Entra joined" can be confirmed but never withdrawn - only the tenant can say
+# it has released the device. An offline "no AD evidence" is close to a real
+# negative, because domain membership is written on the machine itself. One row
+# could not say both things, so it said neither.
+#
+# A FAKE OFFLINE REGISTRY. The positive paths below cannot be exercised on the
+# bench: nobody is going to domain-join a machine to test a test. So the hive
+# readers are stubbed from a table, and each fixture reads like the machine it
+# describes instead of like a pile of stubs. What this CANNOT prove is that the
+# real hivex returns what the table says it does - see the note on
+# lock_hive_get_default in lock-checks.sh.
+
+_saved_locate3=$(declare -f lock_locate_hives)
+_saved_has3=$(declare -f lock_has)
+_saved_haskey3=$(declare -f lock_hive_haskey)
+_saved_get3=$(declare -f lock_hive_get)
+_saved_getdef3=$(declare -f lock_hive_get_default)
+_saved_nl3=$(declare -f _lock_cached_logons)
+
+mkdir -p "$FIX"; echo x > "$FIX/sw"; echo x > "$FIX/sys"; echo x > "$FIX/sec"
+
+FAKE_KEYS=""; FAKE_VALS=""; FAKE_DEFS=""; FAKE_LS=""; FAKE_NL=0
+
+# Which hive a path refers to, so fixtures can talk about SECURITY rather than
+# about "$FIX/sec".
+_hname() {
+  case "$1" in
+    */sec) printf SECURITY ;; */sw) printf SOFTWARE ;; */sys) printf SYSTEM ;;
+    *) printf NONE ;;
+  esac
+}
+fake_reset() { FAKE_KEYS=""; FAKE_VALS=""; FAKE_DEFS=""; FAKE_LS=""; FAKE_NL=0; LOCK_ROWS=""
+                WIN_SOFTWARE="$FIX/sw"; WIN_SYSTEM="$FIX/sys"; WIN_SECURITY="$FIX/sec"; }
+fake_key()  { FAKE_KEYS="$FAKE_KEYS
+$1|$2"; }
+fake_val()  { FAKE_VALS="$FAKE_VALS
+$1|$2|$3|$4"; }
+fake_def()  { FAKE_DEFS="$FAKE_DEFS
+$1|$2|$3"; }
+fake_ls()   { FAKE_LS="$1"; }
+
+lock_locate_hives() { return 0; }
+lock_has() { return 0; }
+lock_hive_haskey() { printf '%s\n' "$FAKE_KEYS" | grep -Fxq "$(_hname "$1")|$2"; }
+lock_hive_get() {
+  local line
+  line=$(printf '%s\n' "$FAKE_VALS" | grep -F "$(_hname "$1")|$2|$3|" | head -1)
+  [ -n "$line" ] || return 1
+  printf '%s' "${line#*|*|*|}"
+}
+lock_hive_get_default() {
+  local line
+  line=$(printf '%s\n' "$FAKE_DEFS" | grep -F "$(_hname "$1")|$2|" | head -1)
+  [ -n "$line" ] || return 1
+  printf '%s' "${line#*|*|}"
+}
+_lock_cached_logons() { printf '%s' "$FAKE_NL"; }
+# Both checks list subkeys by piping a cd/ls script into hivexsh.
+hivexsh() { cat >/dev/null; [ -n "$FAKE_LS" ] || return 0; printf '%s\n' "$FAKE_LS"; }
+
+CDJ='ControlSet001\Control\CloudDomainJoin'
+JI="$CDJ"'\JoinInfo'
+GP='Microsoft\Windows\CurrentVersion\Group Policy'
+
+echo
+echo "== the combined check is now two rows, not one =="
+case "$LOCK_DETECTORS" in
+  *check_domain*) ok "check_domain is registered in LOCK_DETECTORS" ;;
+  *) bad "check_domain is registered in LOCK_DETECTORS" "listed" "$LOCK_DETECTORS" ;;
+esac
+fake_reset; check_entra; check_domain
+check "the Entra row keeps the key 'entra'" 1 "$(printf '%s' "$LOCK_ROWS" | grep -c '^entra|')"
+check "the AD row has its own key 'domainJoin'" 1 "$(printf '%s' "$LOCK_ROWS" | grep -c '^domainJoin|')"
+check "Entra row is labelled for Entra only" "Microsoft Entra ID join" \
+  "$(printf '%s' "$LOCK_ROWS" | grep '^entra|' | cut -d'|' -f2)"
+check "AD row is labelled for AD only" "Active Directory domain join" \
+  "$(printf '%s' "$LOCK_ROWS" | grep '^domainJoin|' | cut -d'|' -f2)"
+
+echo
+echo "== Entra: the tenant is named, and the former employee never is =="
+fake_reset
+fake_key SYSTEM "$JI"
+fake_ls 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678'
+fake_val SYSTEM "$JI"'\a1b2c3d4e5f60718293a4b5c6d7e8f9012345678' TenantId '6babcaad-1111-2222-3333-444455556666'
+fake_val SYSTEM "$JI"'\a1b2c3d4e5f60718293a4b5c6d7e8f9012345678' TenantDisplayName 'Contoso Ltd'
+fake_val SYSTEM "$JI"'\a1b2c3d4e5f60718293a4b5c6d7e8f9012345678' IdpDomain 'contoso.onmicrosoft.com'
+fake_val SYSTEM "$JI"'\a1b2c3d4e5f60718293a4b5c6d7e8f9012345678' DeviceId 'd7f4e2a0-9c31-4b55-8e0a-1122334455aa'
+# Sitting right next to the fields above in the real key, and never read.
+fake_val SYSTEM "$JI"'\a1b2c3d4e5f60718293a4b5c6d7e8f9012345678' UserEmail 'jane.doe@contoso.com'
+fake_val SYSTEM "$CDJ"'\TenantInfo\6babcaad-1111-2222-3333-444455556666' MdmEnrollmentUrl 'https://enrollment.manage.microsoft.com/enrollmentserver/discovery.svc'
+check_entra
+check "an Entra join -> LOCKED" LOCKED "$(row_status entra)"
+case "$(row_detail entra)" in
+  *"Contoso Ltd"*) ok "names WHICH organisation owns the device" ;;
+  *) bad "names WHICH organisation owns the device" "Contoso Ltd" "$(row_detail entra)" ;;
+esac
+case "$(row_detail entra)" in
+  *6babcaad-1111-2222-3333-444455556666*) ok "records the tenant id, which is the proof" ;;
+  *) bad "records the tenant id, which is the proof" "the tenant id" "$(row_detail entra)" ;;
+esac
+case "$(row_detail entra)" in
+  *d7f4e2a0-9c31-4b55-8e0a-1122334455aa*) ok "records the device id an admin needs to deregister" ;;
+  *) bad "records the device id an admin needs to deregister" "the device id" "$(row_detail entra)" ;;
+esac
+case "$(row_detail entra)" in
+  *enrollment.manage.microsoft.com*) ok "TenantInfo corroborates the join" ;;
+  *) bad "TenantInfo corroborates the join" "the MDM enrolment url" "$(row_detail entra)" ;;
+esac
+# PRIVACY. This audit is exported and emailed; a former employee's address is
+# nobody's business here. Assert against the WHOLE record set, not one field.
+case "$LOCK_ROWS" in
+  *jane.doe*|*UserEmail*) bad "UserEmail never reaches any row" "no trace of it" "$LOCK_ROWS" ;;
+  *) ok "UserEmail never reaches any row" ;;
+esac
+case "$(row_detail entra)" in
+  *"never be downgraded"*|*"never downgraded"*|*"can be confirmed but never downgraded"*)
+    ok "says an offline Entra join can never be downgraded" ;;
+  *) bad "says an offline Entra join can never be downgraded" "the tenant-only caveat" "$(row_detail entra)" ;;
+esac
+
+echo
+echo "== Entra: a join proved but not named is still a lock =="
+fake_reset
+fake_key SYSTEM "$JI"
+fake_ls '{d7f4e2a0-9c31-4b55-8e0a-1122334455aa}'
+check_entra
+check "JoinInfo with unreadable tenant -> still LOCKED" LOCKED "$(row_status entra)"
+
+echo
+echo "== Entra: no JoinInfo key is 'not joined', which is not 'released' =="
+fake_reset
+check_entra
+check "no JoinInfo -> PASS" PASS "$(row_status entra)"
+case "$(row_detail entra)" in
+  *"not the same as released"*) ok "will not call an absent join a release" ;;
+  *) bad "will not call an absent join a release" "the released caveat" "$(row_detail entra)" ;;
+esac
+case "$(row_detail entra)" in
+  *"transaction logs"*) ok "warns that unflushed hives can hide a recent join" ;;
+  *) bad "warns that unflushed hives can hide a recent join" "the transaction-log caveat" "$(row_detail entra)" ;;
+esac
+
+
+# ---------------------------------------------------------------------------
+# ACTIVE DIRECTORY.
+#
+# Every negative below is a TRAP verified on a clean, never-joined Windows 11:
+# the key is THERE on every machine, and only the CONTENT of a value tells the
+# two apart. A check written against key presence reports a domain join on
+# every device that has ever been switched on.
+
+echo
+echo "== AD: a domain-joined machine, proved from the SECURITY hive =="
+fake_reset
+fake_key SECURITY 'Policy'
+fake_key SECURITY 'Policy\PolPrDmS'
+fake_key SECURITY 'Policy\Secrets\$MACHINE.ACC'
+fake_def SECURITY 'Policy\PolPrDmN' 'CONTOSO'
+fake_def SECURITY 'Policy\PolDnDDN' 'contoso.local'
+FAKE_NL=3
+fake_val SYSTEM 'ControlSet001\Services\Netlogon\Parameters' DynamicSiteName 'Default-First-Site-Name'
+check_domain
+check "domain join proved from SECURITY -> LOCKED" LOCKED "$(row_status domainJoin)"
+case "$(row_detail domainJoin)" in
+  *contoso.local*) ok "names the domain" ;;
+  *) bad "names the domain" "contoso.local" "$(row_detail domainJoin)" ;;
+esac
+case "$(row_detail domainJoin)" in
+  *PolPrDmS*) ok "cites the primary domain SID as the proof" ;;
+  *) bad "cites the primary domain SID as the proof" "PolPrDmS" "$(row_detail domainJoin)" ;;
+esac
+case "$(row_detail domainJoin)" in
+  *"cached domain logon"*) ok "counts cached domain logons" ;;
+  *) bad "counts cached domain logons" "the cached logons" "$(row_detail domainJoin)" ;;
+esac
+case "$(row_detail domainJoin)" in
+  *"transaction logs"*) ok "AD row carries the unflushed-hive caveat too" ;;
+  *) bad "AD row carries the unflushed-hive caveat too" "the caveat" "$(row_detail domainJoin)" ;;
+esac
+check "a domain join flips the device verdict" LOCKED "$(lock_status)"
+
+echo
+echo "== AD: a clean machine reads as a real negative, not as silence =="
+fake_reset
+fake_key SECURITY 'Policy'
+# Every trap, all at once, exactly as a never-joined Windows 11 presents them.
+fake_ls '{35378EAC-683F-11D2-A89A-00C04FBBCFA2}'
+fake_val SOFTWARE "$GP"'\History\{35378EAC-683F-11D2-A89A-00C04FBBCFA2}\0' DSPath 'LocalGPO'
+fake_val SOFTWARE "$GP"'\State\Machine' Distinguished-Name ''
+fake_val SYSTEM 'ControlSet001\Services\Netlogon\Parameters' DisablePasswordChange '0'
+fake_val SYSTEM 'ControlSet001\Services\Tcpip\Parameters' Domain ''
+check_domain
+check "a clean machine -> PASS" PASS "$(row_status domainJoin)"
+case "$(row_detail domainJoin)" in
+  *"close to a real negative"*) ok "words the AD negative as the stronger one" ;;
+  *) bad "words the AD negative as the stronger one" "the local-state reasoning" "$(row_detail domainJoin)" ;;
+esac
+
+echo
+echo "== AD traps: the key is there on EVERY machine; only the value decides =="
+
+fake_reset; fake_key SECURITY 'Policy'
+fake_ls '{35378EAC-683F-11D2-A89A-00C04FBBCFA2}'
+fake_val SOFTWARE "$GP"'\History\{35378EAC-683F-11D2-A89A-00C04FBBCFA2}\0' DSPath 'LocalGPO'
+check_domain
+check "DSPath=LocalGPO is NOT a domain join" PASS "$(row_status domainJoin)"
+
+fake_reset; fake_key SECURITY 'Policy'
+fake_ls '{35378EAC-683F-11D2-A89A-00C04FBBCFA2}'
+fake_val SOFTWARE "$GP"'\History\{35378EAC-683F-11D2-A89A-00C04FBBCFA2}\0' DSPath 'LDAP://cn={31B2F340-016D-11D2-945F-00C04FB984F9},cn=policies,cn=system,DC=contoso,DC=com'
+check_domain
+check "DSPath=LDAP:// IS evidence" DETECTED "$(row_status domainJoin)"
+case "$(row_detail domainJoin)" in
+  *contoso.com*) ok "reads the domain out of the LDAP distinguished name" ;;
+  *) bad "reads the domain out of the LDAP distinguished name" "contoso.com" "$(row_detail domainJoin)" ;;
+esac
+
+fake_reset; fake_key SECURITY 'Policy'
+fake_val SOFTWARE "$GP"'\State\Machine' Distinguished-Name '   '
+check_domain
+check "an empty Distinguished-Name is NOT a domain join" PASS "$(row_status domainJoin)"
+
+fake_reset; fake_key SECURITY 'Policy'
+fake_val SOFTWARE "$GP"'\State\Machine' Distinguished-Name 'CN=PC-01,OU=Workstations,DC=fabrikam,DC=com'
+check_domain
+check "a populated Distinguished-Name IS evidence" DETECTED "$(row_status domainJoin)"
+
+fake_reset; fake_key SECURITY 'Policy'
+# Netlogon\Parameters exists on every Windows. DynamicSiteName is the value that
+# is absent until the machine has actually reached a domain controller.
+fake_key SYSTEM 'ControlSet001\Services\Netlogon\Parameters'
+fake_val SYSTEM 'ControlSet001\Services\Netlogon\Parameters' DisablePasswordChange '0'
+check_domain
+check "Netlogon\\Parameters without DynamicSiteName is NOT a join" PASS "$(row_status domainJoin)"
+
+fake_reset; fake_key SECURITY 'Policy'
+fake_val SYSTEM 'ControlSet001\Services\Netlogon\Parameters' DynamicSiteName 'London-Site'
+check_domain
+check "DynamicSiteName IS evidence" DETECTED "$(row_status domainJoin)"
+
+fake_reset; fake_key SECURITY 'Policy'
+fake_val SYSTEM 'ControlSet001\Services\Tcpip\Parameters' Domain 'corp.example.com'
+check_domain
+check "a DNS suffix alone is an indicator, not a join" DETECTED "$(row_status domainJoin)"
+check "and it is low confidence" low "$(printf '%s' "$LOCK_ROWS" | grep '^domainJoin|' | cut -d'|' -f6)"
+case "$(row_detail domainJoin)" in
+  *"not proof"*) ok "says the DNS suffix is not proof" ;;
+  *) bad "says the DNS suffix is not proof" "the indicator wording" "$(row_detail domainJoin)" ;;
+esac
+
+echo
+echo "== AD: SECURITY unreadable must never become a clean bill of health =="
+fake_reset
+# The probe key cannot be walked, so nothing under Policy was ever read. The
+# SOFTWARE and SYSTEM hives are quiet - and a quiet SOFTWARE is not an answer
+# about a record that lives in SECURITY.
+check_domain
+check "unwalkable SECURITY -> UNKNOWN" UNKNOWN "$(row_status domainJoin)"
+case "$(row_detail domainJoin)" in
+  *"must not be read as clear"*) ok "says plainly that this is not a negative" ;;
+  *) bad "says plainly that this is not a negative" "the not-clear wording" "$(row_detail domainJoin)" ;;
+esac
+check "and the device is UNVERIFIED, not CLEAR" UNVERIFIED "$(lock_status)"
+
+fake_reset; WIN_SECURITY=""
+fake_val SYSTEM 'ControlSet001\Services\Netlogon\Parameters' DynamicSiteName 'London-Site'
+check_domain
+check "no SECURITY hive but real traces -> DETECTED, not LOCKED" DETECTED "$(row_status domainJoin)"
+
+echo
+echo "== AD: one uncorroborated key presence is not enough to call a device locked =="
+fake_reset
+fake_key SECURITY 'Policy'
+fake_key SECURITY 'Policy\PolPrDmS'
+check_domain
+check "PolPrDmS alone -> DETECTED, not LOCKED" DETECTED "$(row_status domainJoin)"
+
+echo
+echo "== AD: a computer account secret is proof of HAVING been joined =="
+fake_reset
+fake_key SECURITY 'Policy'
+fake_key SECURITY 'Policy\Secrets\$MACHINE.ACC'
+check_domain
+check '$MACHINE.ACC alone -> DETECTED' DETECTED "$(row_status domainJoin)"
+case "$(row_detail domainJoin)" in
+  *"has been joined"*) ok "worded as having been joined, not as being joined" ;;
+  *) bad "worded as having been joined, not as being joined" "past tense" "$(row_detail domainJoin)" ;;
+esac
+
+
+# ---------------------------------------------------------------------------
+echo
+echo "== the control set is resolved, not assumed =="
+# SYSTEM\Select\Current names the live control set. It is 1 on nearly every
+# machine and 2 after a Last Known Good boot, and reading a stale set returns
+# nothing from every lookup - which is how "found nothing" would have become
+# PASS on a managed machine.
+fake_reset
+fake_val SYSTEM 'Select' Current '2'
+fake_key SYSTEM 'ControlSet002'
+fake_key SECURITY 'Policy'
+fake_val SYSTEM 'ControlSet002\Services\Netlogon\Parameters' DynamicSiteName 'Leeds-Site'
+check_domain
+check "Select\\Current=2 sends the reads to ControlSet002" DETECTED "$(row_status domainJoin)"
+case "$(row_detail domainJoin)" in
+  *Leeds-Site*) ok "read the value out of the live control set" ;;
+  *) bad "read the value out of the live control set" "Leeds-Site" "$(row_detail domainJoin)" ;;
+esac
+
+fake_reset
+# Select\Current names a set that is not in the hive. Fall back to the set this
+# file has always used rather than sending every read into nothing.
+fake_val SYSTEM 'Select' Current '7'
+fake_key SECURITY 'Policy'
+fake_val SYSTEM 'ControlSet001\Services\Netlogon\Parameters' DynamicSiteName 'Default-First-Site-Name'
+check_domain
+check "a control set that is not there falls back to 001" DETECTED "$(row_status domainJoin)"
+
+eval "$_saved_nl3"; eval "$_saved_getdef3"; eval "$_saved_get3"
+eval "$_saved_haskey3"; eval "$_saved_has3"; eval "$_saved_locate3"
+unset -f hivexsh
+
+
+# ---------------------------------------------------------------------------
+echo
+echo "== reading the LSA blobs: NUL bytes and header junk =="
+# The primary-domain values are binary - a short header, then the name in
+# UTF-16LE, so every other byte is 00. Bash command substitution throws NUL
+# bytes away WITHOUT SAYING SO, so the strip has to happen inside the pipeline
+# or the name comes back mangled and nobody finds out until a real machine.
+WIN_SECURITY="$FIX/sec"
+hivexsh() { cat >/dev/null; printf 'C\000O\000N\000T\000O\000S\000O\000'; }
+got=$(lock_hive_get_default "$FIX/sec" 'Policy\PolPrDmN')
+check "NULs are stripped inside the pipeline" "CONTOSO" "$got"
+unset -f hivexsh
+
+# The NULs are already gone by the time _lock_lsa_name sees the blob (the reader
+# above strips them inside the pipeline), so this fixture is the header junk
+# that survives that strip.
+check "a name is pulled out of the header junk" "contoso.local" \
+  "$(_lock_lsa_name "$(printf '\001\030\002contoso.local')")"
+check "an unreadable blob names nothing rather than guessing" "" \
+  "$(_lock_lsa_name "$(printf '\001\002\003')")"
+check "DC= components become a domain name" "contoso.com" \
+  "$(_lock_dn_domain 'cn={31B2F340-016D-11D2-945F-00C04FB984F9},cn=policies,cn=system,DC=contoso,DC=com')"
+
+# A cached-logon slot is counted on the content it holds, never decrypted. An
+# unused slot is zero-filled, so the NUL strip in _lock_nl_bytes empties it; a
+# real cached credential is a couple of hundred bytes of ciphertext.
+_saved_has4=$(declare -f lock_has)
+lock_has() { return 0; }                # pretend hivexget is installed
+_lock_nl_bytes() { case "$1" in 'NL$1'|'NL$2') printf '176' ;; *) printf '0' ;; esac; }
+check "only slots holding real material are counted" 2 "$(_lock_cached_logons)"
+_lock_nl_bytes() { printf '0'; }        # every slot is padding
+check "empty slots are not counted"     0 "$(_lock_cached_logons)"
+unset -f _lock_nl_bytes
+eval "$_saved_has4"
+# Without hivexget there is no count to make, and a count that did not happen
+# must not read as "no cached logons" - it reports nothing and says so by
+# failing, which leaves check_domain's other evidence to speak.
+_lock_nl_bytes() { printf '176'; }
+check "no hivexget -> the count does not happen" 1 \
+  "$(_lock_cached_logons >/dev/null; echo $?)"
+unset -f _lock_nl_bytes
 
 echo
 printf '%d passed, %d failed\n' "$PASSED" "$FAILED"
