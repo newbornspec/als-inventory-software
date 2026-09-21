@@ -275,10 +275,10 @@ describe('hardware test wording', () => {
         action: 'None if this model has no microphone.',
         notes: '',
       },
+      // A station that never read the bus files NO port count - see the guard
+      // in usbSummary. The row is the reason alone, which is all it knows.
       usb: {
         status: 'ATTENTION',
-        portsSeen: 0,
-        devices: [],
         reason: "this station cannot read the machine's USB ports",
         notes: '',
       },
@@ -291,8 +291,11 @@ describe('hardware test wording', () => {
     );
     const usb = row(couldNotRun, 'USB ports');
     expect(usb.statusLabel).toBe('Needs attention');
+    // NOT "0 ports responded — ...". A count states that the bus was read and
+    // nothing answered; this bus was never read, and a zero sitting in front of
+    // the reason would condemn sockets nobody has tested.
     expect(usb.summary).toBe(
-      "0 ports responded — this station cannot read the machine's USB ports",
+      "this station cannot read the machine's USB ports",
     );
     // Nothing plugged in is a count of nought, not a fault: the row says so in
     // words and the verdict is still whatever the technician gave it.

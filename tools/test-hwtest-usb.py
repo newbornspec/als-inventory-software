@@ -580,10 +580,25 @@ process.stdout.write(JSON.stringify(out));
           and "cannot read" in (cr.get("reason") or "")
           and (cr.get("action") or "").strip(), cr)
     check("...and it leaves no poll running behind it", cr.get("timersLeft") == 0, cr)
+    # A count would say the bus WAS read and nothing on it answered. It was
+    # never read. The asset page and the report cell print the count right
+    # before the reason, so a filed nought reads as nought working sockets on a
+    # machine whose sockets nobody has touched - an absence of evidence written
+    # down as evidence of a fault, which contract C6 forbids.
+    check("...and it records NO port count, because it never read the bus",
+          cr.get("portsSeen") is None and cr.get("devices") is None
+          and cr.get("confirmedBy") is None, cr)
+    check("...and no count reaches the station either",
+          isinstance(cr.get("saved"), dict)
+          and cr["saved"].get("status") == "ATTENTION"
+          and "portsSeen" not in cr["saved"] and "devices" not in cr["saved"],
+          cr.get("saved"))
     rf = o.get("refused") or {}
     check("a refusal that carries only a message still reads as could-not-run with an action",
           rf.get("status") == "ATTENTION" and "own screen" in (rf.get("reason") or "")
           and (rf.get("action") or "").strip(), rf)
+    check("...and it too counts nothing it did not measure",
+          rf.get("portsSeen") is None and rf.get("devices") is None, rf)
 
     hic = o.get("hiccup") or {}
     check("a poll that fails half way through does NOT end the test or record a verdict",

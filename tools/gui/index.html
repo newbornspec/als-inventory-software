@@ -4686,6 +4686,18 @@ USB.fields = function(){
     confirmedBy: 'technician', notes: USB.notesText()};
 };
 
+// What a result carries when the station could NOT run the test at all, and it
+// is deliberately almost nothing. No portsSeen: "0 ports responded" is a COUNT,
+// and a count says the bus was read and nothing on it answered. The bus was
+// never read. Worse, the count is printed immediately before the reason on the
+// asset page and in the report cell, so a machine whose sockets may be perfectly
+// good would be read as a machine with nought working ports - contract C6's
+// absence of evidence recorded as evidence of a fault, which is the one thing
+// this module must never do. No device list for the same reason, and no
+// confirmedBy either: nobody confirmed anything here. The reason and the action
+// are all the station actually knows, so they are all it says.
+USB.cannotRunFields = function(){ return {notes: ''}; };
+
 // Record exactly one verdict, tear the timer down, and let runHwTest finish.
 // The technician's click is the ONLY thing that records - the count is evidence,
 // not a verdict, and a count of zero is never a failure.
@@ -4712,7 +4724,7 @@ HWT_RUNNERS.usb = async function(){
     if(!d){
       hwCannotRun('usb', 'the station could not build the USB ports test panel',
         'Reload the page and run the USB ports test again.',
-        {portsSeen: 0, devices: [], confirmedBy: 'technician', notes: ''});
+        USB.cannotRunFields());
       return;
     }
     // Ask once before building anything: a station that cannot read USB at all
@@ -4721,8 +4733,7 @@ HWT_RUNNERS.usb = async function(){
     var first = await USB.ask();
     if(!first || first.ok !== true){
       var c = USB.cannotRunFor(first);
-      hwCannotRun('usb', c.reason, c.action,
-        {portsSeen: 0, devices: [], confirmedBy: 'technician', notes: ''});
+      hwCannotRun('usb', c.reason, c.action, USB.cannotRunFields());
       return;
     }
     d.innerHTML =
@@ -4758,7 +4769,7 @@ HWT_RUNNERS.usb = async function(){
       hwCannotRun('usb',
         'the station could not run the USB ports test (' + ((e && e.message) || e || 'no detail') + ')',
         'Run the USB ports test again; if it keeps happening, check the ports by hand and tell a supervisor.',
-        {portsSeen: 0, devices: [], confirmedBy: 'technician', notes: ''});
+        USB.cannotRunFields());
   }finally{
     USB.teardown();
     USB.onHide = null; USB.resolve = null;
