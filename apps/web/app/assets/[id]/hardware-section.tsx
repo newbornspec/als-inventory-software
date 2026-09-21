@@ -276,9 +276,23 @@ function spec(parameter: string, value: ReactNode): TableRow {
 // grouping, and squashing six columns into 360px makes every cell unreadable.
 function ProfileTable({ groups }: { groups: Group[] }) {
   return (
-    <div className="mt-4 overflow-x-auto rounded-lg border border-neutral-200">
+    // The box scrolls sideways on a phone, so it has to be reachable by
+    // keyboard: nothing inside this table is focusable (no link, no button, and
+    // the icons are aria-hidden), and a browser will not hand a scroll container
+    // the focus ring on its own. Without tabIndex a keyboard or switch user
+    // could never reach the Status, Details and Tested on columns — the pass and
+    // fail verdicts this page exists to show (WCAG 2.1.1). role + a name stop it
+    // announcing as an unlabelled scroller; the name is the caption, so the
+    // wording is written once. The section renders once per asset page, so a
+    // fixed id cannot collide.
+    <div
+      tabIndex={0}
+      role="region"
+      aria-labelledby="hardware-profile-table-caption"
+      className="mt-4 overflow-x-auto rounded-lg border border-neutral-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-neutral-700"
+    >
       <table className="w-full min-w-[56rem] border-collapse text-left text-sm">
-        <caption className="sr-only">
+        <caption id="hardware-profile-table-caption" className="sr-only">
           The device&apos;s captured hardware profile and technician test results, grouped by
           category. A dash means the value was not captured.
         </caption>
@@ -511,19 +525,36 @@ function processorRows(cpu: Obj): TableRow[] {
   ];
 }
 
+// "Slots used" is an occupancy claim, and the capture counts its two halves
+// separately: the slots on the board, and the slots whose Size line parses as a
+// fitted module. Either can come back empty, so a board with four slots and no
+// readable module sizes really does arrive as { slots: 4 }. Printing that as
+// "4 slots" under this heading would tell a reader pricing the upgrade headroom
+// that all four are full — the most optimistic reading of a figure nobody
+// measured. The slot count is still worth knowing, so it moves out of the claim
+// and into the note beside the dash.
+function slotsUsedRow(modules: number | null, slots: number | null): TableRow {
+  if (modules != null && slots != null) return spec('Slots used', `${modules} of ${slots}`);
+  if (modules != null) return spec('Slots used', String(modules));
+  return {
+    parameter: 'Slots used',
+    value: DASH,
+    details:
+      slots != null
+        ? `${slots} memory slots on the board — the capture did not record how many hold a module.`
+        : undefined,
+  };
+}
+
 function memoryRows(memory: Obj): TableRow[] {
   const modules = typeof memory.modules === 'number' ? memory.modules : null;
   const slots = typeof memory.slots === 'number' ? memory.slots : null;
-  let fitted = DASH;
-  if (modules != null && slots != null) fitted = `${modules} of ${slots}`;
-  else if (modules != null) fitted = String(modules);
-  else if (slots != null) fitted = `${slots} slots`;
 
   return [
     spec('Type', text(memory.type)),
     spec('Total size', withUnit(memory.totalGb, 'GB')),
     spec('Speed', text(memory.speed)),
-    spec('Slots used', fitted),
+    slotsUsedRow(modules, slots),
     // SMBIOS type 17 carries a form factor, but the capture does not read it.
     spec('Form factor', DASH),
   ];
@@ -1072,12 +1103,22 @@ function humanize(key: string): string {
   return spaced.charAt(0).toUpperCase() + spaced.slice(1);
 }
 
+// The walker's values go through the SAME gate as every designed row: text().
+// It is the one place that knows a stored "unknown" is the station's placeholder
+// for "we did not find out", not an answer — and the capture really does store
+// it (a pre-C5 drive's smartStatus, display.touchscreen). Formatting a leftover
+// with String() instead let that word onto the screen through the back door,
+// beside a Health status cell carefully worded as "Not scanned yet". One gate,
+// so no future key can leak it either.
 function formatValue(v: unknown): string {
-  if (v == null || v === '') return DASH;
-  if (typeof v === 'boolean') return v ? 'Yes' : 'No';
-  if (Array.isArray(v)) return v.map(formatValue).join(', ');
-  if (typeof v === 'object') return JSON.stringify(v);
-  return String(v);
+  if (Array.isArray(v)) {
+    // A list drops its empty and "unknown" entries rather than printing a dash
+    // in the middle of a sentence; a list of nothing but those is nothing.
+    const parts = v.map(formatValue).filter((p) => p !== DASH);
+    return parts.length > 0 ? parts.join(', ') : DASH;
+  }
+  if (isObj(v)) return JSON.stringify(v);
+  return text(v);
 }
 
 // Every profile key the groups above already show, so the fallback lists what is
@@ -1149,10 +1190,15 @@ interface WalkRow {
   value: string;
 }
 
+// "Other captured details" lists what was captured, so a key whose value comes
+// back as the dash is dropped entirely rather than listed as a leftover with
+// nothing in it. formatValue decides that — null, "", and "unknown" all arrive
+// here as DASH.
 function leftoverRows(obj: Obj, shown: string[]): WalkRow[] {
   return Object.entries(obj)
-    .filter(([k, v]) => !shown.includes(k) && v != null && v !== '')
-    .map(([k, v]) => ({ label: humanize(k), value: formatValue(v) }));
+    .filter(([k]) => !shown.includes(k))
+    .map(([k, v]) => ({ label: humanize(k), value: formatValue(v) }))
+    .filter((r) => r.value !== DASH);
 }
 
 // Anything in the profile that no group above claimed: a leftover key inside a
@@ -1163,6 +1209,13 @@ function otherCapturedRows(profile: Obj): WalkRow[] {
   const rows: WalkRow[] = [];
   const push = (group: string, source: WalkRow[]) => {
     source.forEach((r) => rows.push({ ...r, label: `${group} — ${r.label}` }));
+  };
+  // A bare value that is not inside an object still goes through formatValue and
+  // is still dropped when it formats to a dash, so the two paths into this list
+  // cannot disagree about what counts as captured.
+  const pushValue = (label: string, value: unknown) => {
+    const formatted = formatValue(value);
+    if (formatted !== DASH) rows.push({ label, value: formatted });
   };
 
   for (const [category, shown] of Object.entries(GROUP_KEYS)) {
@@ -1191,12 +1244,12 @@ function otherCapturedRows(profile: Obj): WalkRow[] {
     if (Array.isArray(value)) {
       value.forEach((el, i) => {
         if (isObj(el)) push(`${label} ${i + 1}`, leftoverRows(el, []));
-        else rows.push({ label: `${label} ${i + 1}`, value: formatValue(el) });
+        else pushValue(`${label} ${i + 1}`, el);
       });
     } else if (isObj(value)) {
       push(label, leftoverRows(value, []));
-    } else if (value != null && value !== '') {
-      rows.push({ label, value: formatValue(value) });
+    } else {
+      pushValue(label, value);
     }
   }
   return rows;
