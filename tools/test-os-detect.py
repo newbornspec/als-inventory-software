@@ -612,12 +612,22 @@ for f in ("osArchitecture", "osProductId", "osInstalledOn"):
     check("hardware-profile.type.ts declares system.%s" % f, "%s?: string;" % f in api)
 
 card = read(WEB_CARD)
+# What matters is that the row LABELLED x is fed by field y — not which helper
+# builds the row. Pinning the exact object literal made this suite fail the day
+# the page was re-laid-out as one table (the rows moved from
+# `{ label: 'Architecture', value: text(...) }` to `spec('Architecture', text(...))`)
+# even though every value was still read from the right place. Accept either
+# shape, and keep asserting the thing that would actually be a bug: a label
+# wired to the wrong field, or to nothing.
 for label, field in [("Architecture", "osArchitecture"),
                      ("Installation date", "osInstalledOn"),
                      ("Product ID", "osProductId")]:
+    # dateText() is as valid as text() here: Installation date is a date.
+    pair = re.compile(
+        r"(\{\s*label:\s*'%s',\s*value:\s*(?:text|dateText)\(system\.%s\)|"
+        r"spec\(\s*'%s',\s*(?:text|dateText)\(system\.%s\))" % (label, field, label, field))
     check("the Operating System card reads %s from system.%s" % (label, field),
-          "{ label: '%s', value: text(system.%s) }" % (label, field) in card,
-          label)
+          pair.search(card) is not None, label)
 check("OS name / Version / Build still read their own fields",
       all("text(system.%s)" % f in card for f in ("os", "osVersion", "osBuild")))
 check("Base speed reads cpu.baseClock", "text(cpu.baseClock)" in card)
@@ -625,7 +635,11 @@ check("Refresh rate reads display.refreshRate", "text(display.refreshRate)" in c
 check("Touchscreen reads display.touchscreen", "text(display.touchscreen)" in card)
 check("Video memory reads the GPU's vram", "text(g.vram)" in card)
 check("the card no longer hard-codes a dash for the OS rows it can now fill",
-      not re.search(r"\{ label: '(Architecture|Installation date|Product ID)', value: DASH \}", card))
+      # Both row shapes, or this guard goes quietly vacuous the moment the page
+      # is rewritten - which is exactly how a filled row silently becomes a dash
+      # again with every test still green.
+      not re.search(r"\{ label: '(Architecture|Installation date|Product ID)', value: DASH \}", card)
+      and not re.search(r"spec\(\s*'(Architecture|Installation date|Product ID)',\s*DASH\s*\)", card))
 check("the page still refuses to print the word Unknown",
       "never the word \u201cUnknown\u201d" in card or "/^unknown$/i" in card)
 

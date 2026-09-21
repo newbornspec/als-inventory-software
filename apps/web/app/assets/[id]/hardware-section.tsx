@@ -956,6 +956,10 @@ function displayRows(display: Obj, view: HardwareTestView, hwt: Obj, runDate: st
     },
     spec('Resolution', text(display.resolution)),
     spec('Refresh rate', text(display.refreshRate)),
+    // Belongs with the panel it describes. Without this row the captured value
+    // falls through to "Other captured details", where a buyer looking at the
+    // Display group would never think to look for it.
+    spec('Touchscreen', text(display.touchscreen)),
     // The panel's EDID gives size and resolution; it is not decoded far enough
     // to name the panel technology or its maker.
     spec('Panel type', DASH),
