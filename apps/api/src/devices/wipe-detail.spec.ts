@@ -186,6 +186,56 @@ describe('normaliseWipeDetail', () => {
       normaliseWipeDetail({ wipeLimitations: [] }, NOW).detail.wipeLimitations,
     ).toEqual([]);
   });
+
+  // Every entry dropped here is a qualification the station put on the wipe,
+  // and the certificate prints an empty list as "None reported" - a statement
+  // that there was nothing to qualify, made out of values we threw away.
+  describe('limitations that could not be read', () => {
+    it('never turns entries it discarded into "no limitations"', () => {
+      const { detail } = normaliseWipeDetail(
+        { wipeLimitations: [{ text: 'HPA present' }, 42, null] },
+        NOW,
+      );
+      expect(detail.wipeLimitations).not.toEqual([]);
+      expect(detail.wipeLimitations).toHaveLength(1);
+      expect(detail.wipeLimitations?.[0]).toContain('could not be read');
+      expect(detail.wipeLimitations?.[0]).toContain('3 limitations');
+    });
+
+    it('keeps the ones it could read alongside the count it could not', () => {
+      const { detail, notes } = normaliseWipeDetail(
+        { wipeLimitations: ['Over-provisioned area not addressable', 7] },
+        NOW,
+      );
+      expect(detail.wipeLimitations).toEqual([
+        'Over-provisioned area not addressable',
+        '1 limitation recorded by the station could not be read and is not listed here',
+      ]);
+      expect(notes).toEqual([
+        '1 of 2 wipeLimitations entries were not text',
+      ]);
+    });
+
+    it('says so rather than silently cutting the list at the cap', () => {
+      const many = Array.from({ length: 60 }, (_, i) => `limitation ${i}`);
+      const { detail } = normaliseWipeDetail({ wipeLimitations: many }, NOW);
+      expect(detail.wipeLimitations).toHaveLength(50);
+      expect(detail.wipeLimitations?.[49]).toBe(
+        '10 further limitations recorded by the station are not listed here',
+      );
+      // The cap is still a cap: the note is inside it, not on top of it.
+      expect(detail.wipeLimitations?.length).toBeLessThanOrEqual(50);
+    });
+
+    it('leaves a clean list exactly as it was', () => {
+      const { detail, notes } = normaliseWipeDetail(
+        { wipeLimitations: ['  HPA present  ', 'DCO present'] },
+        NOW,
+      );
+      expect(detail.wipeLimitations).toEqual(['HPA present', 'DCO present']);
+      expect(notes).toEqual([]);
+    });
+  });
 });
 
 describe('wipeDetailNote', () => {

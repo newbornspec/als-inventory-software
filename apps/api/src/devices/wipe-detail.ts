@@ -212,10 +212,39 @@ export function normaliseWipeDetail(
     } else {
       // [] is kept as []: "the engine reported no limitations" is not the
       // same statement as "this stick predates limitations" (NULL).
-      wipeLimitations = input.wipeLimitations
-        .filter((l): l is string => typeof l === 'string' && l.trim() !== '')
-        .slice(0, MAX_LIMITATIONS)
-        .map((l) => l.trim().slice(0, MAX_LIMITATION_LENGTH));
+      const sent = input.wipeLimitations;
+      const usable = sent.filter(
+        (l): l is string => typeof l === 'string' && l.trim() !== '',
+      );
+      // THE ONE THAT MATTERS: every entry dropped here is a qualification the
+      // station put on this wipe, and dropping them all silently turns the
+      // certificate's Limitations line into "None reported" - a statement that
+      // there was nothing to qualify, assembled out of values we threw away.
+      // An entry we could not read is itself a limitation, so it is recorded
+      // as one; the certificate then reads qualified, which is the honest
+      // outcome when we do not know what the station was trying to say.
+      const unreadable = sent.length - usable.length;
+      const capped = Math.max(usable.length - MAX_LIMITATIONS, 0);
+      const extra: string[] = [];
+      if (unreadable > 0) {
+        extra.push(
+          `${unreadable} limitation${unreadable === 1 ? '' : 's'} recorded by the station could not be read and ${unreadable === 1 ? 'is' : 'are'} not listed here`,
+        );
+      }
+      if (capped > 0) {
+        extra.push(
+          `${capped} further limitation${capped === 1 ? '' : 's'} recorded by the station ${capped === 1 ? 'is' : 'are'} not listed here`,
+        );
+      }
+      wipeLimitations = usable
+        .slice(0, MAX_LIMITATIONS - extra.length)
+        .map((l) => l.trim().slice(0, MAX_LIMITATION_LENGTH))
+        .concat(extra);
+      if (unreadable > 0) {
+        notes.push(
+          `${unreadable} of ${sent.length} wipeLimitations entries were not text`,
+        );
+      }
     }
   }
 
