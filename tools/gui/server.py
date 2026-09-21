@@ -519,24 +519,72 @@ def queue_durable():
     keep. Derived from what is actually on disk, so it cannot drift."""
     if not queue_on_stick():
         return False
-    return not _read_jsonl(QUEUE_FALLBACK)
+    # An unreadable RAM copy is not an empty one. `not _read_jsonl(...)` said
+    # True for both, so the one function whose whole job is to refuse to
+    # promise durability on the strength of a path promised it on the strength
+    # of a failed read - and the screen told the operator it was safe to power
+    # off. Both copies have to be READ, not merely found wanting.
+    stranded, ok = _read_jsonl_checked(QUEUE_FALLBACK)
+    if not ok:
+        return False
+    if stranded:
+        return False
+    return _read_jsonl_checked(queue_path())[1]
+
+
+def _read_jsonl_checked(path):
+    """(records, ok). ok is False when the file is THERE and we could not read
+    all of it.
+
+    The distinction is the whole point. A file that does not exist is genuinely
+    an empty queue - the normal state of a fresh stick. A file that exists and
+    will not read, or holds one truncated line, means we do not know what is in
+    it. Collapsing both to [] is how a transient read error on a failing stick
+    came to mean "nothing is waiting", which then told the operator it was safe
+    to reboot and - because queue_add is a read-modify-write - rewrote the file
+    with only the newest record, destroying the audits that were already in it.
+
+    A damaged line returns the records read so far WITH ok False: partial is
+    worth having on screen, and is never safe to write back."""
+    try:
+        with open(path, "r", errors="replace") as fh:
+            raw = fh.read()
+    except FileNotFoundError:
+        return [], True
+    except OSError:
+        return [], False
+    items = []
+    for line in raw.splitlines():
+        if not line.strip():
+            continue
+        try:
+            items.append(json.loads(line))
+        except ValueError:
+            return items, False
+    return items, True
 
 
 def _read_jsonl(path):
-    try:
-        with open(path, "r", errors="replace") as fh:
-            return [json.loads(l) for l in fh if l.strip()]
-    except (OSError, ValueError):
-        return []
+    """Records only, for callers that are merely displaying them. Anything that
+    WRITES the file back must use _read_jsonl_checked and refuse on ok False."""
+    return _read_jsonl_checked(path)[0]
 
 
-def _queue_load_unlocked():
-    items = _read_jsonl(queue_path())
+def _queue_load_checked_unlocked():
+    """(records, ok) across both copies. ok is False if EITHER would not read,
+    because a queue we cannot fully see must never be written back."""
+    items, ok = _read_jsonl_checked(queue_path())
     if queue_on_stick():
         # Anything stranded in RAM by an earlier boot, or by a write the stick
         # refused, still counts as waiting.
-        items += _read_jsonl(QUEUE_FALLBACK)
-    return items
+        more, more_ok = _read_jsonl_checked(QUEUE_FALLBACK)
+        items += more
+        ok = ok and more_ok
+    return items, ok
+
+
+def _queue_load_unlocked():
+    return _queue_load_checked_unlocked()[0]
 
 
 def _queue_write_unlocked(items):
@@ -594,8 +642,31 @@ def queue_write(items):
 def queue_add(payload):
     # Read-modify-write rather than append: there is no appending through the
     # remount path, and the queue only ever holds a handful of records.
+    #
+    # Which makes a failed READ destructive. _read_jsonl used to answer [] for
+    # an unreadable file as well as an empty one, so one I/O error on a failing
+    # stick - or a single truncated line - made this atomically replace the
+    # queue with ONLY the new record, permanently destroying every audit that
+    # had not uploaded yet. The write is the dangerous half, so it is the half
+    # that has to refuse.
     with QUEUE_LOCK:
-        _queue_write_unlocked(_queue_load_unlocked() + [payload])
+        items, ok = _queue_load_checked_unlocked()
+        if not ok:
+            # Append to RAM instead of rewriting a file we cannot see all of.
+            # The record is kept, nothing is overwritten, and queue_durable()
+            # will now say the stick cannot be trusted to hold it - which is
+            # the truth, and what the operator needs before powering off.
+            stranded, _ = _read_jsonl_checked(QUEUE_FALLBACK)
+            try:
+                with open(QUEUE_FALLBACK, "w") as fh:
+                    for it in stranded + [payload]:
+                        fh.write(json.dumps(it) + "\n")
+            except OSError:
+                print("queue: could not keep the record anywhere")
+            print("queue: the queue file could not be read in full - "
+                  "the new record was kept in RAM and nothing was overwritten")
+            return
+        _queue_write_unlocked(items + [payload])
 
 
 def queue_count():
@@ -735,12 +806,21 @@ def pending_path():
     return os.path.join(base, "wipe-pending.jsonl") if base else PENDING_FALLBACK
 
 
-def _pending_load_unlocked():
+def _pending_load_checked_unlocked():
+    """(markers, ok). These mark wipes that were in progress, so an unreadable
+    file means "a wipe may have been interrupted and I cannot tell", never "no
+    wipe was interrupted"."""
     path = pending_path()
-    items = _read_jsonl(path)
+    items, ok = _read_jsonl_checked(path)
     if path != PENDING_FALLBACK:
-        items += _read_jsonl(PENDING_FALLBACK)
-    return [it for it in items if isinstance(it, dict) and it.get("id")]
+        more, more_ok = _read_jsonl_checked(PENDING_FALLBACK)
+        items += more
+        ok = ok and more_ok
+    return [it for it in items if isinstance(it, dict) and it.get("id")], ok
+
+
+def _pending_load_unlocked():
+    return _pending_load_checked_unlocked()[0]
 
 
 def _pending_update(fn):
@@ -748,8 +828,14 @@ def _pending_update(fn):
     that cannot be written must not stop a wipe or lose its record."""
     try:
         with PENDING_LOCK:
-            _durable_jsonl_write(pending_path(), PENDING_FALLBACK,
-                                 fn(_pending_load_unlocked()))
+            items, ok = _pending_load_checked_unlocked()
+            if not ok:
+                # Read-modify-write again: rewriting from a partial read would
+                # drop the marker for a wipe that IS still in progress, and the
+                # station would then never file its failed record.
+                print("wipe markers: could not read them in full - left alone")
+                return
+            _durable_jsonl_write(pending_path(), PENDING_FALLBACK, fn(items))
     except Exception:  # noqa: BLE001
         pass
 
@@ -790,7 +876,15 @@ def recover_pending_wipes():
     any new wipe can start, since /api/wipe/start refuses without a profile.
     Removes only the markers it filed, all the same. Returns how many."""
     with PENDING_LOCK:
-        items = _pending_load_unlocked()
+        items, ok = _pending_load_checked_unlocked()
+    if not ok:
+        # "I could not read the markers" is not "no wipe was interrupted". Say
+        # so on the console rather than returning a quiet 0, because the whole
+        # point of this pass is to catch a drive left half-overwritten by a
+        # crash or a power cut - the case where the marker file is most likely
+        # to be damaged in the first place.
+        print("wipe markers: could not be read in full - an interrupted wipe "
+              "may not have been recovered; check the queue by hand")
     filed = []
     for it in items:
         try:
@@ -1244,7 +1338,16 @@ def _queue_flush():
     # was running (upload_audit failing in another thread) was not in `items`,
     # and writing `items minus sent` back would have deleted it silently.
     with QUEUE_LOCK:
-        current = _queue_load_unlocked()
+        current, ok = _queue_load_checked_unlocked()
+        if not ok:
+            # Same read-modify-write hazard as queue_add. Writing back a list
+            # derived from a queue we could not fully read would delete the
+            # records we failed to see. They have already been uploaded, so
+            # leaving them queued costs one duplicate upload attempt next time
+            # round; deleting them costs the audit.
+            print("queue: could not read the queue in full after uploading - "
+                  "left it alone rather than rewriting it from a partial read")
+            return
         for it in done:
             try:
                 current.remove(it)

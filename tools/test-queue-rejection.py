@@ -324,6 +324,44 @@ try:
         check("login HTTP %d: once sign-in works the next flush sends it at once" % code,
               len(BODIES) == 1 and srv.queue_load() == [], (len(BODIES), srv.queue_load()))
 
+    print("a queue that will not read is never overwritten")
+    # queue_add is a read-modify-write, so a failed READ was destructive: an
+    # unreadable file answered [] exactly like an empty one, and the queue was
+    # atomically replaced with only the newest record. One I/O error on a
+    # failing stick, or one truncated line, destroyed every audit waiting to
+    # upload.
+    srv.queue_write([])
+    keep = [{"id": "keep-1", "kind": "wipe"}, {"id": "keep-2", "kind": "wipe"}]
+    with open(srv.QUEUE_FALLBACK, "w", encoding="utf-8") as fh:
+        for it in keep:
+            fh.write(json.dumps(it) + "\n")
+        fh.write('{"id": "keep-3", "kind": tru')      # torn write, as a power cut leaves it
+    before = open(srv.QUEUE_FALLBACK, encoding="utf-8").read()
+
+    items, ok = srv._read_jsonl_checked(srv.QUEUE_FALLBACK)
+    check("a truncated line is reported as not-fully-read", ok is False, (items, ok))
+    check("and the intact records are still returned", len(items) == 2, items)
+
+    srv.queue_add({"id": "new-1", "kind": "wipe"})
+    after = open(srv.QUEUE_FALLBACK, encoding="utf-8").read()
+    check("the two queued audits survive queue_add", "keep-1" in after and "keep-2" in after,
+          after)
+    check("the new record is kept too", "new-1" in after, after)
+    check("nothing was replaced by the new record alone", len(after) > len(before) - 40, after)
+
+    # The one function whose job is to refuse to promise durability must not
+    # promise it on the strength of a read that failed.
+    check("queue_durable() is False while the queue cannot be read",
+          srv.queue_durable() is False, srv.queue_durable())
+
+    # A file that is simply ABSENT is genuinely an empty queue - the normal
+    # state of a fresh stick - and must not be confused with an unreadable one.
+    os.remove(srv.QUEUE_FALLBACK)
+    check("a missing file reads as empty AND fully read",
+          srv._read_jsonl_checked(srv.QUEUE_FALLBACK) == ([], True),
+          srv._read_jsonl_checked(srv.QUEUE_FALLBACK))
+    srv.queue_write([])
+
     print("the page shows it")
     with open(os.path.join(HERE, "gui", "index.html"), encoding="utf-8") as fh:
         page = fh.read()
