@@ -250,6 +250,43 @@ check_entra
 check "missing SYSTEM hive -> UNKNOWN"   UNKNOWN "$(row_status entra)"
 
 echo
+echo "== an Entra-joined machine must never read as CLEAR =="
+# The three ways check_entra used to answer PASS on a device that is bound to
+# somebody's tenant. Each is a "we did not establish this" dressed up as "we
+# established there is nothing" - the worst direction this file can be wrong in.
+_saved_locate2=$(declare -f lock_locate_hives)
+_saved_has2=$(declare -f lock_has)
+_saved_haskey=$(declare -f lock_hive_haskey)
+_saved_get=$(declare -f lock_hive_get)
+mkdir -p "$FIX"; echo x > "$FIX/sys"
+lock_locate_hives() { WIN_SOFTWARE="$FIX/sw"; WIN_SYSTEM="$FIX/sys"; return 0; }
+lock_has() { return 0; }
+# JoinInfo is PRESENT in every case below - it does not exist at all on a
+# machine that was never joined, so its presence is the whole point.
+lock_hive_haskey() { return 0; }
+lock_hive_get() { printf ''; }          # no DNS domain suffix, so nothing else can save it
+
+# 1. The regression that started this: the subkey is a certificate thumbprint,
+#    not a GUID. The old code kept only ^[0-9a-f]{8}- and so saw nothing.
+hivexsh() { printf 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678\n'; return 0; }
+LOCK_ROWS=""; check_entra
+check "non-GUID JoinInfo subkey -> LOCKED"  LOCKED "$(row_status entra)"
+
+# 2. hivexsh fails (dirty or truncated hive). stderr was dropped, so an error
+#    was indistinguishable from "no subkeys" and read as clear.
+hivexsh() { return 2; }
+LOCK_ROWS=""; check_entra
+check "JoinInfo listing fails -> UNKNOWN"   UNKNOWN "$(row_status entra)"
+
+# 3. The key is there but lists nothing. Odd, not reassuring.
+hivexsh() { printf '\n'; return 0; }
+LOCK_ROWS=""; check_entra
+check "JoinInfo present but empty -> UNKNOWN" UNKNOWN "$(row_status entra)"
+
+unset -f hivexsh
+eval "$_saved_haskey"; eval "$_saved_get"; eval "$_saved_has2"; eval "$_saved_locate2"
+
+echo
 echo "== hivexget present but hivexsh missing: not a 'not enrolled' =="
 LOCK_ROWS=""
 lock_has() { case "$1" in hivexsh) return 1;; *) return 0;; esac; }

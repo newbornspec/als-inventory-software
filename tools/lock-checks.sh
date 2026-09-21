@@ -793,13 +793,44 @@ check_entra() {
   local joined=""
   # CloudDomainJoin\JoinInfo holds one subkey per Entra-joined identity.
   if lock_hive_haskey "$WIN_SYSTEM" 'ControlSet001\Control\CloudDomainJoin\JoinInfo'; then
-    local sub
+    local sub rc
     # Key name as an argument, never inside the format string - see check_mdm.
     # This particular path survives, but only by luck: \C and \J are not printf
     # escapes. A segment starting with a b e f n r t v u x or a digit would be
     # mangled the same way \Enrollments was, and \c would truncate the command.
-    sub=$(printf 'cd %s\nls\n' 'ControlSet001\Control\CloudDomainJoin\JoinInfo' | hivexsh "$WIN_SYSTEM" 2>/dev/null | grep -Ei '^[0-9a-f]{8}-' | head -1)
-    [ -n "$sub" ] && joined="Entra ID (Azure AD) joined"
+    sub=$(printf 'cd %s\nls\n' 'ControlSet001\Control\CloudDomainJoin\JoinInfo' | hivexsh "$WIN_SYSTEM" 2>/dev/null)
+    rc=$?
+    # Two ways this used to report an Entra-joined machine as CLEAR, which is
+    # the worst answer this file can give:
+    #
+    # 1. It kept only subkeys matching ^[0-9a-f]{8}- . The subkey under JoinInfo
+    #    is reported in the wild as a GUID and as a 40-character certificate
+    #    thumbprint; a thumbprint matched nothing, so `joined` stayed empty and
+    #    the run fell through to PASS. The shape was never the evidence -
+    #    lock_hive_haskey above has ALREADY proved the key exists, and JoinInfo
+    #    is absent entirely on a machine that was never joined. So any listing
+    #    at all is the signal, whatever the subkey happens to be called.
+    #
+    # 2. hivexsh's failures were indistinguishable from an empty listing: a
+    #    dirty or truncated hive exits non-zero with nothing on stdout, and that
+    #    also read as "no subkeys" and PASSed. Per this file's governing rule a
+    #    read that did not happen is UNKNOWN, never PASS.
+    if [ "$rc" -ne 0 ]; then
+      lock_add entra "Entra ID / domain join" UNKNOWN \
+        "The CloudDomainJoin key is present but could not be listed, so an Entra ID join can neither be confirmed nor ruled out. A hive left dirty by fast start-up or hibernation reads this way." \
+        'offline registry SYSTEM\...\CloudDomainJoin (listing failed)' low
+      return
+    fi
+    if printf '%s' "$sub" | grep -q '[^[:space:]]'; then
+      joined="Entra ID (Azure AD) joined"
+    else
+      # The key only exists on a device that was joined, so an empty listing is
+      # odd rather than reassuring. Say so instead of calling the device clear.
+      lock_add entra "Entra ID / domain join" UNKNOWN \
+        "The CloudDomainJoin key exists but names no joined identity. That key is not present on a device that was never joined, so this cannot be read as clear." \
+        'offline registry SYSTEM\...\CloudDomainJoin (key present, no entries)' low
+      return
+    fi
   fi
 
   # NOTE: Tcpip\Parameters\Domain is the DNS domain suffix, which a machine can
