@@ -77,6 +77,31 @@ export interface HardwareProfile {
     osArchitecture?: string; // "64-bit" | "32-bit" | "64-bit (ARM)" | "32-bit (ARM)"
     osProductId?: string; // the installation's Windows product id
     osInstalledOn?: string; // ISO date, from the registry's install epoch
+    // The Windows LICENCE, as far as a powered-off disk can honestly answer.
+    //
+    // There is deliberately no "activated" field, because that question is not
+    // answerable offline: activation is EVALUATED at runtime out of sealed,
+    // machine-bound stores, a KMS machine whose activation expired 200 days ago
+    // looks identical on disk to one that renewed this morning, and a
+    // digital-licence (HWID) machine keeps its entitlement in Microsoft's cloud
+    // against a hardware hash — so an activated Windows 11 Home laptop can carry
+    // nothing on disk that says so. The channel (Retail / OEM:DM / Volume:MAK /
+    // Volume:GVLK) is a runtime WMI property for the same reason.
+    //
+    // `licence` is therefore a plain-English sentence, not a verdict: what the
+    // firmware proves, followed by what cannot be determined from here. It is
+    // never the word "Unknown", so anything rendering it can print it verbatim.
+    licence?: string;
+    // The OEM licence embedded in FIRMWARE, by the ACPI table that carries it:
+    // 'OA 3.0' (MSDM) | 'OA 2.x' (SLIC) | 'none'. Absent — not 'none' — when the
+    // station could not list the firmware's tables at all. The product key MSDM
+    // embeds is a credential and is never captured; only the table's presence is.
+    oemLicence?: string;
+    // True when the installation has a KMS host configured, which is strong
+    // evidence of the volume channel. Only ever true or absent, never false:
+    // KMS is normally discovered by DNS SRV record and writes nothing to the
+    // registry, so its absence proves nothing at all.
+    volumeLicensing?: boolean;
     biosVersion?: string;
     biosReleaseDate?: string;
     bootMode?: string; // UEFI | Legacy

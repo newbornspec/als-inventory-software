@@ -25,6 +25,17 @@ is exercised on a machine that has none of them:
 5. A LINUX INSTALL, taken from an already-mounted root's /etc/os-release - and
    never from the station's own "/", which is the one mistake that would report
    our Ubuntu as the customer's operating system.
+6. THE WINDOWS LICENCE, which is the one the owner asked to be a green
+   "Activated" tick and which can never honestly be one: activation is evaluated
+   at runtime out of sealed stores, an expired KMS activation looks identical on
+   disk to a live one, and a digital-licence machine's entitlement is in
+   Microsoft's cloud. What IS provable is asserted here - the ACPI MSDM (OA 3.0)
+   or SLIC (OA 2.x) table, and a configured KMS host - together with the three
+   rules that keep it honest: the word "Activated" is never claimed, a firmware
+   table that could not be listed never reads as "no licence", and the
+   29-character OEM product key MSDM embeds is a CREDENTIAL that must never
+   reach a field, a log or a source line. The fixture table carries one, at the
+   offset a real table carries it, precisely so that rule can be proved.
 
 Plus the two rules that make this safe to point at a customer's disk, asserted
 against the source itself: the disk is mounted READ-ONLY and only by
@@ -148,12 +159,22 @@ awk -F '\\t' '
 ' "$ALS_FAKE_HIVE"
 """, executable=True)
 
-FIELDS = ["os", "osVersion", "osBuild", "osArchitecture", "osProductId", "osInstalledOn"]
+# Every field the block fills in, and the shell variable it comes out of. One
+# list rather than two, so the names and the variables cannot drift apart.
+FIELD_VARS = [
+    ("os", "OS_NAME"), ("osVersion", "OS_VERSION"), ("osBuild", "OS_BUILD"),
+    ("osArchitecture", "OS_ARCH"), ("osProductId", "OS_PRODUCT_ID"),
+    ("osInstalledOn", "OS_INSTALLED_ON"),
+    # The licence line and the two facts it is composed from.
+    ("licence", "OS_LICENCE"), ("oemLicence", "OS_OEM_LICENCE"),
+    ("volumeLicensing", "OS_VOLUME_LICENSING"),
+]
+FIELDS = [f for f, _ in FIELD_VARS]
 
 
 def run_case(setup, hive_rows=None, source_locks=True, hivexget=True):
     """Run als_read_installed_os with `setup` deciding what the machine looks
-    like, and return the six fields as a dict."""
+    like, and return every field it fills in as a dict."""
     hive_file = os.path.join(TMP, "hive-rows.tsv")
     w(hive_file, "".join("\t".join(r) + "\n" for r in (hive_rows or [])))
 
@@ -173,8 +194,7 @@ def run_case(setup, hive_rows=None, source_locks=True, hivexget=True):
     parts.append(OS_BLOCK)
     parts.append(setup)
     parts.append("als_read_installed_os")
-    for f, var in zip(FIELDS, ["OS_NAME", "OS_VERSION", "OS_BUILD", "OS_ARCH",
-                               "OS_PRODUCT_ID", "OS_INSTALLED_ON"]):
+    for f, var in FIELD_VARS:
         parts.append("printf '%%s=%%s\\n' %s \"$%s\"" % (f, var))
 
     script = w(os.path.join(TMP, "case.sh"), "\n".join(parts) + "\n")
@@ -220,6 +240,8 @@ HIVES_FOUND = ('lock_locate_hives() { WIN_SOFTWARE="%s"; WIN_SYSTEM="%s"; return
                % (SOFT.replace("\\", "/"), SYSH.replace("\\", "/")))
 CV = r"Microsoft\Windows NT\CurrentVersion"
 ENV_KEY = r"ControlSet001\Control\Session Manager\Environment"
+# Where the licensing service keeps its volume-activation settings.
+SPP = CV + r"\SoftwareProtectionPlatform"
 
 
 def win(**kw):
@@ -493,7 +515,165 @@ check("lock-checks.sh missing: says to re-sync the stick",
       "Re-sync the stick" in r["os"], r)
 
 
-print("5. the house rule: never the word Unknown")
+print("5. the Windows licence: what a powered-off disk can honestly say")
+
+# The owner asked this row for "Windows Activation: Activated". No offline tool
+# can answer that - activation is EVALUATED at runtime out of sealed,
+# machine-bound stores, an expired KMS activation is indistinguishable on disk
+# from a live one, and a digital-licence machine's entitlement lives in
+# Microsoft's cloud against a hardware hash. So the row reports the two things
+# the machine really does prove and says plainly what it cannot, and these cases
+# pin every branch of that wording.
+
+# A real MSDM table carries a WORKING 29-character OEM product key in ASCII at
+# offset 56 (36-byte ACPI header, then five DWORDs). The fixture carries one in
+# exactly that place: it is the whole point of the case, because the rule being
+# proved is that the key never reaches a field. It is a credential, and these
+# records are exported and emailed.
+MSDM_KEY = "BBBBB-BBBBB-BBBBB-BBBBB-BBBBB"
+MSDM_BLOB = "MSDM" + "\0" * 52 + MSDM_KEY + "\0"
+
+
+def acpi_root(name, tables=None):
+    """A stand-in for the STATION's own /sys. LOCK_SYSROOT is lock-checks.sh's
+    test hook (check_absolute finds WPBT through it) and is empty on a real run.
+    tables=None means the directory does not exist at all - the boot could not
+    list the firmware's tables, which is a different answer from "none"."""
+    root = os.path.join(TMP, "sysroot-" + name)
+    if tables is None:
+        os.makedirs(root)
+    else:
+        d = os.path.join(root, "sys", "firmware", "acpi", "tables")
+        os.makedirs(d)
+        for t, body in tables.items():
+            w(os.path.join(d, t), body)
+    return 'LOCK_SYSROOT="%s"\n' % root.replace("\\", "/")
+
+
+# Every machine has a DSDT, so the table directory is never empty on real
+# hardware - "no OEM licence" has to be decided by MSDM/SLIC being absent from a
+# directory that plainly worked, not by the directory being bare.
+ACPI_MSDM = acpi_root("msdm", {"DSDT": "DSDT", "FACP": "FACP", "MSDM": MSDM_BLOB})
+ACPI_SLIC = acpi_root("slic", {"DSDT": "DSDT", "SLIC": "SLIC" + "\0" * 20})
+ACPI_NONE = acpi_root("none", {"DSDT": "DSDT", "FACP": "FACP"})
+ACPI_UNREADABLE = acpi_root("no-tables")
+
+LIC_WIN = win(ProductName="Windows 10 Pro", EditionID="Professional", CurrentBuild="19045")
+KMS_ROW = ("SOFTWARE", SPP, "KeyManagementServiceName", "kms.contoso.local")
+
+r = record(run_case(ACPI_MSDM + HIVES_FOUND, LIC_WIN))
+check("MSDM present: the firmware licence is reported, as OA 3.0",
+      r["licence"].startswith("OEM licence embedded in firmware (OA 3.0)."), r)
+check("MSDM present: and the row says activation itself cannot be determined",
+      "Activation state cannot be determined from a powered-off disk" in r["licence"], r)
+check("MSDM present: oemLicence records which table proved it",
+      r["oemLicence"] == "OA 3.0", r)
+check("MSDM present: volume licensing is not claimed without a KMS host",
+      r["volumeLicensing"] == "", r)
+check("MSDM present: the OS rows are untouched by the licence read",
+      r["os"] == "Windows 10 Pro" and r["osBuild"] == "19045", r)
+
+r = record(run_case(ACPI_SLIC + HIVES_FOUND, LIC_WIN))
+check("SLIC only: reported as the older OA 2.x firmware licence",
+      r["licence"].startswith("OEM licence embedded in firmware (OA 2.x)."), r)
+check("SLIC only: oemLicence is OA 2.x", r["oemLicence"] == "OA 2.x", r)
+
+r = record(run_case(ACPI_NONE + HIVES_FOUND, LIC_WIN))
+check("no MSDM and no SLIC: says there is no OEM licence in the firmware",
+      r["licence"].startswith("No OEM licence is embedded in this machine's firmware."), r)
+check("no MSDM and no SLIC: names what could still license it",
+      "installed product key" in r["licence"]
+      and "digital licence held by Microsoft" in r["licence"], r)
+check("no MSDM and no SLIC: and says neither of those can be verified offline",
+      "neither of which can be verified offline" in r["licence"], r)
+check("no MSDM and no SLIC: activation is still not claimed either way",
+      "Activation state cannot be determined from a powered-off disk" in r["licence"], r)
+check("no MSDM and no SLIC: oemLicence is the CHECKED answer, 'none'",
+      r["oemLicence"] == "none", r)
+
+# A KMS host configured in the installation's own registry. Its ABSENCE proves
+# nothing - KMS is normally discovered by DNS SRV record and writes nothing here
+# - which is why the field above is empty rather than false in every other case.
+r = record(run_case(ACPI_MSDM + HIVES_FOUND, LIC_WIN + [KMS_ROW]))
+check("a KMS host configured: the volume-licensing wording is added",
+      "A KMS host is configured on this installation, which indicates volume licensing."
+      in r["licence"], r)
+check("a KMS host configured: recorded as a fact on its own",
+      r["volumeLicensing"] == "true", r)
+check("a KMS host configured: the firmware licence is still reported too",
+      r["licence"].startswith("OEM licence embedded in firmware (OA 3.0)."), r)
+# The previous owner's internal hostname is not ours to publish, and hivexget
+# prints a REG_BINARY value raw. Only the FACT is kept - the same line check_mdm
+# draws when it keeps the enrolment's UPN domain and drops the local part.
+check("a KMS host configured: the host NAME never reaches a field",
+      not any("contoso" in v.lower() for v in fields_of(r)), r)
+
+r = record(run_case(ACPI_NONE + HIVES_FOUND, LIC_WIN + [KMS_ROW]))
+check("volume licensing is reported even with no OEM firmware licence",
+      "indicates volume licensing" in r["licence"] and r["volumeLicensing"] == "true", r)
+
+# The tables could not be listed at all. This must never read as "no licence":
+# the machine may well have one, we simply did not get to look.
+r = record(run_case(ACPI_UNREADABLE + HIVES_FOUND, LIC_WIN))
+check("no ACPI table directory: says the tables could not be listed",
+      r["licence"].startswith("The firmware's ACPI tables could not be listed"), r)
+check("no ACPI table directory: never reads as 'no OEM licence'",
+      "No OEM licence" not in r["licence"], r)
+check("no ACPI table directory: oemLicence is left empty, not guessed at 'none'",
+      r["oemLicence"] == "", r)
+check("no ACPI table directory: still says activation cannot be determined",
+      "cannot be determined" in r["licence"], r)
+
+# A WIPED machine. The firmware licence is the valuable finding here - it is in
+# the board, not on the disk, so a reinstall of the matching edition will use it
+# - and it must not be lost just because there is no Windows left to read.
+r = record(run_case(ACPI_MSDM + NO_WINDOWS + WIPED))
+check("a wiped machine still reports the licence its BOARD carries",
+      r["licence"].startswith("OEM licence embedded in firmware (OA 3.0)."), r)
+check("a wiped machine says there was no installation to examine",
+      "No installed Windows was read on this machine" in r["licence"], r)
+check("a wiped machine's OS row is unchanged by any of this",
+      r["os"] == "No operating system installed", r)
+check("a wiped machine claims no volume licensing from a hive it never read",
+      r["volumeLicensing"] == "", r)
+
+r = record(run_case(ACPI_NONE + NO_WINDOWS + WIPED))
+check("a wiped machine with no firmware licence says both things plainly",
+      r["licence"] == ("No OEM licence is embedded in this machine's firmware. "
+                       "No installed Windows was read on this machine, so an "
+                       "installed licence could not be examined."), r)
+check("a wiped machine is not lectured about an activation it cannot have",
+      "Activation state" not in r["licence"], r)
+
+# BitLocker: Windows is there and sealed, so there is no installed licence to
+# look at either - and the firmware fact still stands.
+r = record(run_case(ACPI_MSDM + BITLOCKER))
+check("BitLocker: the firmware licence is still reported",
+      r["licence"].startswith("OEM licence embedded in firmware (OA 3.0)."), r)
+check("BitLocker: and no claim is made about the sealed installation",
+      "No installed Windows was read on this machine" in r["licence"], r)
+
+# THE BREACH THAT MUST NOT HAPPEN. The fixture table was present for most of the
+# cases above, with a key exactly where a real one sits. Nothing may carry it.
+check("the MSDM product key never reaches any captured field",
+      not any(MSDM_KEY in v for v in ALL_OUTPUT), MSDM_KEY)
+KEY_SHAPE = re.compile(r"[A-Z0-9]{5}(?:-[A-Z0-9]{5}){4}")
+bad = [v for v in ALL_OUTPUT if KEY_SHAPE.search(v)]
+check("nothing key-shaped (five groups of five) appears in any captured field",
+      not bad, bad)
+check("no product key is written into the engine's source either",
+      not KEY_SHAPE.search(engine_src))
+
+# Every branch, including the ones the earlier sections drove: the row exists to
+# say what cannot be established, so a sentence that never says so is a bug.
+LIC_I = FIELDS.index("licence")
+licences = [v for i, v in enumerate(ALL_OUTPUT) if i % len(FIELDS) == LIC_I]
+bad = [v for v in licences if "cannot" not in v and "could not" not in v]
+check("every licence sentence, in every branch, says what is NOT knowable",
+      licences and not bad, bad)
+
+
+print("6. the house rules: never 'Unknown', never 'Activated'")
 
 
 def code_lines(text):
@@ -523,8 +703,17 @@ check('every outcome names an operating system or says why it cannot',
 bad = [s for s in sentences(OS_BLOCK) if re.search(r"\bunknown\b", s, re.I)]
 check("no string the OS block can print contains 'Unknown'", not bad, bad)
 
+# And the licence rule, which is the same rule one step further on: "Activated"
+# is a claim no offline tool can make, so it may not appear in an outcome or in
+# any sentence the block is able to print. ("Activation state cannot be
+# determined" is the opposite of a claim, and is why the word is matched exactly.)
+bad = [v for v in ALL_OUTPUT if re.search(r"\bactivated\b", v, re.I)]
+check("no captured value anywhere claims 'Activated'", not bad, bad)
+bad = [s for s in sentences(OS_BLOCK) if re.search(r"\bactivated\b", s, re.I)]
+check("no string the OS block can print claims 'Activated'", not bad, bad)
 
-print("6. the safety rules, asserted against the source")
+
+print("7. the safety rules, asserted against the source")
 
 os_code = code_lines(OS_BLOCK)
 
@@ -565,14 +754,47 @@ untimed = [l for l in code_lines(OS_BLOCK.replace("/etc/os-release", "OSRELEASEP
            if "OSRELEASEPATH" in l and "als_os_to" not in l]
 check("the /etc/os-release read of the disk runs under the timeout", not untimed, untimed)
 
+# THE PRODUCT KEY. MSDM embeds a working 29-character OEM key at offset 56, and
+# the only safe way to report the table is never to open it: the file is mode
+# 0400 but the DIRECTORY lists without privilege, so presence is provable from
+# the filename alone. Comments are dropped first, quoted strings are NOT - the
+# path is inside the quotes and that is exactly what is being checked.
+lic_lines = [l.strip() for l in OS_BLOCK.splitlines()
+             if not l.strip().startswith("#") and re.search(r"MSDM|SLIC", l)]
+check("the firmware licence is decided by MSDM and SLIC, and by nothing else",
+      len(lic_lines) == 2, lic_lines)
+check("each table is tested for by FILENAME, never opened",
+      lic_lines and all("[ -e " in l for l in lic_lines), lic_lines)
+bad = [l for l in lic_lines
+       if re.search(r"(?<![\w-])(cat|dd|od|xxd|strings|head|tail|grep|hivexget|awk|sed)\s", l)]
+check("no reader is ever pointed at the MSDM or SLIC table", not bad, bad)
+acpi_lines = [l.strip() for l in OS_BLOCK.splitlines()
+              if not l.strip().startswith("#") and "acpi/tables" in l]
+check("the ACPI table directory is only ever located and tested for",
+      acpi_lines and all(l.startswith("local tables=") or " -d " in l or " -e " in l
+                         for l in acpi_lines), acpi_lines)
 
-print("7. the engine writes the new fields, in the right order")
+# NOT A LOCK CHECK. lock_status promotes any UNKNOWN row to a whole-device
+# UNVERIFIED verdict, and this check's normal, correct answer is "cannot be
+# determined" - filing it as a detector would make the CLEAR verdict unreachable
+# on every machine ever audited. Licensing prices a machine; it does not block
+# its resale, so it belongs to the Operating System card alone.
+check("the licence is never filed as a lock row",
+      not any("lock_add" in l for l in os_code), os_code)
+
+
+print("8. the engine writes the new fields, in the right order")
 
 check("system carries the OS name", 'o_s os "$OS_NAME"' in engine_src)
 for f, var in [("osVersion", "OS_VERSION"), ("osBuild", "OS_BUILD"),
                ("osArchitecture", "OS_ARCH"), ("osProductId", "OS_PRODUCT_ID"),
                ("osInstalledOn", "OS_INSTALLED_ON")]:
     check("system carries %s" % f, 'o_s %s "$%s"' % (f, var) in engine_src)
+check("system carries the licence sentence", 'o_s licence "$OS_LICENCE"' in engine_src)
+check("system carries the OEM firmware licence", 'o_s oemLicence "$OS_OEM_LICENCE"' in engine_src)
+# o_raw, so it lands as a real JSON boolean rather than the string "true".
+check("system carries volume licensing as a boolean",
+      'o_raw volumeLicensing "$OS_VOLUME_LICENSING"' in engine_src)
 check("cpu carries the base clock", 'o_s baseClock "$CPU_BASE"' in engine_src)
 check("display carries the refresh rate", 'o_s refreshRate "$DISP_HZ"' in engine_src)
 check("display carries the touchscreen answer", 'o_s touchscreen "$DISP_TOUCH"' in engine_src)
@@ -596,6 +818,18 @@ check("the lock report still runs, unchanged, from the same block",
       "LOCKS_STATUS=$(lock_status)" in engine_src and "BIOS_LOCKED=$(lock_bios_locked)" in engine_src)
 check("the OS is still answered when lock-checks.sh is missing entirely",
       engine_src.count("als_read_installed_os\n") >= 2, engine_src.count("als_read_installed_os\n"))
+# The licence belongs to the Operating System card, so it is emitted on the same
+# object the OS fields are - not as a lock row, and not as a section of its own.
+i_sysbegin = engine_src.index('o_s biosVersion "$BIOS_VER"')
+i_licence = engine_src.index('o_s licence "$OS_LICENCE"')
+check("the licence is emitted on `system`, beside the OS fields it belongs with",
+      i_sysbegin < i_licence < i_system, (i_sysbegin, i_licence, i_system))
+# It reads the hive, so it has to run inside the same window the OS fields do -
+# after the volume is mounted, before run_lock_checks unmounts it. One call site
+# for both is what guarantees that.
+check("the licence is read through the same call that reads the OS",
+      re.search(r"als_read_installed_os\(\) \{\s*\n\s*als_os_read_windows\s*\n\s*als_os_licence\s*\n\}",
+                engine_src) is not None)
 
 # The base clock must not come from lscpu's idle floor (400 MHz on most
 # laptops), only from the frequency the chip prints in its own model name.
@@ -605,11 +839,16 @@ check("the base clock is read out of the CPU's own model name",
       'CPU_BASE=$(printf \'%s\' "$CPU_MODEL"' in engine_src)
 
 
-print("8. the API type and the asset page")
+print("9. the API type and the asset page")
 
 api = read(API_TYPE)
-for f in ("osArchitecture", "osProductId", "osInstalledOn"):
+for f in ("osArchitecture", "osProductId", "osInstalledOn", "licence", "oemLicence"):
     check("hardware-profile.type.ts declares system.%s" % f, "%s?: string;" % f in api)
+check("hardware-profile.type.ts declares system.volumeLicensing as a boolean",
+      "volumeLicensing?: boolean;" in api)
+# There is no such field and there must never be one: nothing offline can fill it.
+check("the type declares no `activated` field",
+      not re.search(r"\bactivated\s*\??\s*:", api, re.I), api[:0])
 
 card = read(WEB_CARD)
 # What matters is that the row LABELLED x is fed by field y — not which helper
@@ -621,7 +860,8 @@ card = read(WEB_CARD)
 # wired to the wrong field, or to nothing.
 for label, field in [("Architecture", "osArchitecture"),
                      ("Installation date", "osInstalledOn"),
-                     ("Product ID", "osProductId")]:
+                     ("Product ID", "osProductId"),
+                     ("Licence", "licence")]:
     # dateText() is as valid as text() here: Installation date is a date.
     pair = re.compile(
         r"(\{\s*label:\s*'%s',\s*value:\s*(?:text|dateText)\(system\.%s\)|"
@@ -642,8 +882,19 @@ check("the card no longer hard-codes a dash for the OS rows it can now fill",
       and not re.search(r"spec\(\s*'(Architecture|Installation date|Product ID)',\s*DASH\s*\)", card))
 check("the page still refuses to print the word Unknown",
       "never the word \u201cUnknown\u201d" in card or "/^unknown$/i" in card)
+# The row is "Licence", never "Activation", and it never renders a verdict word.
+check("the card has no Activation row and claims nothing is Activated",
+      not re.search(r"'Activation'|'Activated'|>\s*Activated", card))
+# The three licence keys are claimed by the OS group, so the generic "Other
+# captured details" walker does not print the same facts a second time - once as
+# the sentence, and again as "System & firmware - Oem licence: OA 3.0".
+m = re.search(r"GROUP_KEYS[^=]*=\s*\{.*?\n\s*system:\s*\[(.*?)\]", card, re.S)
+sys_keys = m.group(1) if m else ""
+for k in ("licence", "oemLicence", "volumeLicensing"):
+    check("the OS group claims system.%s, so it is not repeated as a leftover" % k,
+          "'%s'" % k in sys_keys, sys_keys)
 
-print("9. the small fields that ship with it")
+print("10. the small fields that ship with it")
 
 # The EDID and input-device parsers, sliced out and run the same way: both are
 # awk programs inside the engine, and neither has any other way to be proved.

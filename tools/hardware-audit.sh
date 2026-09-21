@@ -3509,8 +3509,13 @@ als_os_without_windows() {
 OS_CV='Microsoft\Windows NT\CurrentVersion'
 
 OS_NAME=""; OS_VERSION=""; OS_BUILD=""; OS_ARCH=""; OS_PRODUCT_ID=""; OS_INSTALLED_ON=""
+# The licence line, filled in by als_os_licence below (see the long note there).
+OS_LICENCE=""; OS_OEM_LICENCE=""; OS_VOLUME_LICENSING=""
 
-als_read_installed_os() {
+# The six fields above. Called through als_read_installed_os, which adds the
+# licence line afterwards — split in two so every early return here still gets
+# one, including the ones that never reach the disk at all.
+als_os_read_windows() {
   OS_NAME=""; OS_VERSION=""; OS_BUILD=""; OS_ARCH=""; OS_PRODUCT_ID=""; OS_INSTALLED_ON=""
 
   # lock-checks.sh is not on this stick, so the mount-and-read machinery does
@@ -3619,6 +3624,142 @@ als_read_installed_os() {
     OS_NAME="$OS_NAME $ed"
   return 0
 }
+
+# THE WINDOWS LICENCE.
+#
+# The card was asked for "Windows Activation: Activated". That claim cannot
+# honestly be made from here, and this block is built so that it never is.
+#
+# Activation is not a stored flag that a powered-off disk could be read for. It
+# is EVALUATED at runtime by the licensing service out of sealed, machine-bound
+# stores (System32\spp\store\2.0\*.dat and the ClipSVC token store) that are
+# undocumented and cryptographically protected. Three consequences, each of
+# which would have made a green tick a lie:
+#   * a KMS machine that last activated 200 days ago looks exactly like one that
+#     activated this morning — the activation it is running on has expired and
+#     nothing on the disk says so;
+#   * a digital-licence (HWID) machine keeps its entitlement in MICROSOFT'S
+#     cloud, matched against a hardware hash, so a perfectly activated Windows
+#     11 Home laptop can carry NOTHING on disk that says it is licensed;
+#   * the channel string (Retail / OEM:DM / Volume:MAK / Volume:GVLK) is a
+#     runtime WMI property computed by that same service, not a registry value.
+#     MAK and Retail are indistinguishable offline, and a re-imaged OEM machine
+#     running a MAK is routine, so even a firmware key does not tell us which
+#     licence the installed Windows is actually using.
+# DigitalProductId is not decoded, and ProductId's middle group is not mapped to
+# a channel: there is no published mapping for Windows 8/10/11 and inventing one
+# produces confident wrong answers instead of honest ones.
+#
+# What a powered-off machine DOES prove, and all this reports:
+#   1. an OEM licence embedded in FIRMWARE — the ACPI MSDM table (OA 3.0), or
+#      SLIC (OA 2.x) on older machines, which carries an OEM public key and a
+#      marker rather than a key. This one is free: the station is Linux and it
+#      is booted ON the machine, so /sys/firmware/acpi/tables is the AUDITED
+#      machine's own firmware, listed live, while its Windows is a dead disk.
+#   2. a KMS host configured in the installation's own registry, which is strong
+#      evidence of the volume channel. Its ABSENCE proves nothing whatsoever:
+#      KMS discovery is normally by DNS SRV record and writes nothing here,
+#      which is why nothing below ever records a "no".
+#
+# *** THE PRODUCT KEY IS NEVER READ. ***
+# MSDM embeds a working 29-character OEM product key in plain ASCII at offset 56
+# (36-byte ACPI header, then five DWORDs). It is a CREDENTIAL that activates
+# Windows, and these audit records are exported and emailed. Presence of the
+# table is the whole answer, and presence is provable from the FILENAME alone —
+# the table files are mode 0400 but the directory lists without privilege — so
+# the code below only ever asks whether the path EXISTS. It never opens it, at
+# any privilege level, which is also why it cannot fail when it is unreadable.
+# lock-checks.sh's check_mdm sets the same precedent from the other side: it
+# keeps the enrolment's UPN domain and drops the local part. The KMS host NAME
+# is dropped for the same reason — it is the previous owner's internal
+# infrastructure, and hivexget prints a REG_BINARY value raw, which must never
+# reach the emitted JSON. Only the FACT that one is configured is kept.
+#
+# And this is NOT a lock check. lock_status promotes any UNKNOWN row to a
+# whole-device UNVERIFIED verdict, and this check's normal, correct answer is
+# "cannot be determined" — filing it there would make CLEAR unreachable on every
+# machine ever audited. Licensing prices a machine; it does not block resale.
+
+# The key the licensing service keeps its volume-activation settings under.
+OS_SPP="$OS_CV"'\SoftwareProtectionPlatform'
+
+# One sentence, one place — the same rule OS_ENCRYPTED_MSG follows.
+OS_LIC_OEM3="OEM licence embedded in firmware (OA 3.0)."
+OS_LIC_OEM2="OEM licence embedded in firmware (OA 2.x)."
+OS_LIC_NO_OEM="No OEM licence is embedded in this machine's firmware."
+OS_LIC_RUNTIME="Activation state cannot be determined from a powered-off disk — Windows evaluates it at runtime."
+OS_LIC_NO_OEM_TAIL="Any licence is tied to an installed product key or to a digital licence held by Microsoft, neither of which can be verified offline."
+OS_LIC_KMS="A KMS host is configured on this installation, which indicates volume licensing."
+OS_LIC_NOT_CHECKED="The firmware's ACPI tables could not be listed from this boot, so an embedded OEM licence could not be checked."
+OS_LIC_NO_WINDOWS="No installed Windows was read on this machine, so an installed licence could not be examined."
+
+# Which OEM firmware licence this machine carries, as one token:
+#   OA 3.0   an MSDM table is present
+#   OA 2.x   a SLIC table is present
+#   none     the tables were listed and carry neither
+#   (empty)  there was no table directory to list, so there is no answer
+#
+# PRESENCE ONLY, by filename — see the note above. LOCK_SYSROOT is
+# lock-checks.sh's own test hook and is empty on a real run, exactly as
+# check_absolute uses it to find WPBT. No timeout is needed here the way the
+# hive reads need one: this is the station's own firmware in its own sysfs, not
+# a possibly-failing customer disk.
+als_os_oem_licence() {
+  local tables="${LOCK_SYSROOT:-}/sys/firmware/acpi/tables"
+  [ -d "$tables" ] || return 0
+  if   [ -e "$tables/MSDM" ]; then printf 'OA 3.0'
+  elif [ -e "$tables/SLIC" ]; then printf 'OA 2.x'
+  else printf 'none'
+  fi
+}
+
+# The licence line itself: a firmware fact, then the honest limit on it.
+als_os_licence() {
+  OS_LICENCE=""; OS_OEM_LICENCE=""; OS_VOLUME_LICENSING=""
+  local firmware rest
+
+  OS_OEM_LICENCE=$(als_os_oem_licence)
+  case "$OS_OEM_LICENCE" in
+    'OA 3.0') firmware="$OS_LIC_OEM3" ;;
+    'OA 2.x') firmware="$OS_LIC_OEM2" ;;
+    none)     firmware="$OS_LIC_NO_OEM" ;;
+    *)        firmware="$OS_LIC_NOT_CHECKED" ;;
+  esac
+
+  # WIN_SOFTWARE is set only by lock_locate_hives, and only when the hive is
+  # readable — so it is exactly "there is an installed Windows here that we
+  # opened". Without it there is no installation to say anything about, and the
+  # firmware fact stands on its own (a wiped machine with an MSDM table is a
+  # real and valuable finding: the licence is in the board, not on the disk).
+  if [ -z "${WIN_SOFTWARE:-}" ]; then
+    OS_LICENCE="$firmware $OS_LIC_NO_WINDOWS"
+    return 0
+  fi
+
+  # Strong evidence of the volume channel. Recorded as a fact, never as a name,
+  # and never as a "no" — see above.
+  if [ -n "$(als_os_hive "$WIN_SOFTWARE" "$OS_SPP" KeyManagementServiceName)" ]; then
+    OS_VOLUME_LICENSING=true
+  fi
+
+  # The limit on the firmware fact comes first and is said on EVERY readable
+  # machine, because it is the whole reason this row is not a green tick.
+  rest="$OS_LIC_RUNTIME"
+  # With no firmware licence, name the two things that could still license the
+  # machine rather than leaving "no OEM licence" to be read as "no licence".
+  [ "$OS_OEM_LICENCE" = "none" ] && rest="$rest $OS_LIC_NO_OEM_TAIL"
+  [ -n "$OS_VOLUME_LICENSING" ] && rest="$rest $OS_LIC_KMS"
+  OS_LICENCE="$firmware $rest"
+  return 0
+}
+
+# The installed OS and its licence. The licence is read while the volume is
+# still mounted — the same window the six fields above are read in, which is why
+# both call sites run this BEFORE run_lock_checks unmounts it.
+als_read_installed_os() {
+  als_os_read_windows
+  als_os_licence
+}
 # --- OS-DETECT-END ----------------------------------------------------------
 
 # --- device locks & management status ---------------------------------------
@@ -3693,6 +3834,15 @@ o_s secureBoot "$SECURE_BOOT"; o_s tpmVersion "$TPM_VER"
 o_s os "$OS_NAME"; o_s osVersion "$OS_VERSION"; o_s osBuild "$OS_BUILD"
 o_s osArchitecture "$OS_ARCH"; o_s osProductId "$OS_PRODUCT_ID"
 o_s osInstalledOn "$OS_INSTALLED_ON"
+# The licence, worded by als_os_licence. It belongs to the Operating System card
+# and to nothing else: it is deliberately NOT a lock check, because "cannot be
+# determined" is its normal answer and lock_status would turn that into a
+# whole-device UNVERIFIED verdict on every machine. oemLicence is absent when the
+# firmware tables could not be listed at all, and volumeLicensing is only ever
+# true — a machine with no KMS host in its registry is not evidence of anything,
+# since KMS is normally discovered by DNS. No product key is ever captured.
+o_s licence "$OS_LICENCE"; o_s oemLicence "$OS_OEM_LICENCE"
+o_raw volumeLicensing "$OS_VOLUME_LICENSING"
 SYSTEM=$(o_end)
 
 o_begin

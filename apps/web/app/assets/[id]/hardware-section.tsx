@@ -508,6 +508,15 @@ function operatingSystemRows(system: Obj): TableRow[] {
     spec('Architecture', text(system.osArchitecture)),
     spec('Installation date', dateText(system.osInstalledOn)),
     spec('Product ID', text(system.osProductId)),
+    // NOT "Activation", and never a tick. Activation is evaluated at runtime out
+    // of sealed, machine-bound stores; a KMS machine whose activation lapsed
+    // months ago looks identical on a powered-off disk to one that renewed this
+    // morning, and a digital-licence machine's entitlement lives in Microsoft's
+    // cloud, so an activated laptop can carry nothing on disk that says so. What
+    // the station CAN prove — an OEM licence embedded in firmware, and a KMS host
+    // configured in the installation's registry — is what `licence` says, in a
+    // sentence that also says what it cannot. Printed verbatim, like `os` above.
+    spec('Licence', text(system.licence)),
   ];
 }
 
@@ -1139,6 +1148,10 @@ const GROUP_KEYS: Record<string, string[]> = {
     'biosVendor', 'biosManufacturer', 'biosVersion', 'biosReleaseDate', 'bootMode',
     'secureBoot', 'tpmVersion', 'os', 'osVersion', 'osBuild', 'osArchitecture',
     'osInstalledOn', 'osProductId',
+    // The Licence row prints the sentence, and that sentence already carries
+    // both facts behind it — so the two fields it was composed from are claimed
+    // here rather than repeated below as "Oem licence: OA 3.0".
+    'licence', 'oemLicence', 'volumeLicensing',
   ],
   cpu: ['model', 'cores', 'threads', 'baseClock', 'maxClock'],
   memory: ['type', 'totalGb', 'speed', 'modules', 'slots'],
