@@ -87,6 +87,9 @@ lock_has() { command -v "$1" >/dev/null 2>&1; }
 # reports UNKNOWN when it is empty.
 WIN_MNT=""
 WIN_MOUNTED_BY_US=""
+# Why there is no mount, when there is none. Empty when no Windows volume was
+# found at all, which is the only case that is a fact about the DISK.
+WIN_MOUNT_WHY=""
 # Set when a Windows volume was found but is encrypted — the difference between
 # "no Windows here" and "Windows here that we cannot read".
 WIN_ENCRYPTED=""
@@ -104,7 +107,18 @@ lock_is_bitlocker() {
 
 lock_mount_windows() {
   [ -n "$WIN_MNT" ] && return 0
-  lock_has lsblk || return 1
+  # Why we have no mount, for the caller's sentence. All three failures below
+  # used to arrive as the same "No readable Windows installation found on the
+  # internal disks" - which is a statement about the DISK, and two of them are
+  # statements about the station. The verdict was already UNKNOWN in each case,
+  # so nothing was certified wrongly; what went wrong is that the operator was
+  # sent to look at a blank disk when the machine in front of them had an
+  # intact Windows on it that simply would not open.
+  WIN_MOUNT_WHY=""
+  if ! lock_has lsblk; then
+    WIN_MOUNT_WHY="lsblk is not on this live image, so the machine's volumes could not even be listed"
+    return 1
+  fi
 
   # Already mounted somewhere? Use that rather than mounting twice.
   local existing
@@ -122,12 +136,16 @@ lock_mount_windows() {
   # here" about a machine whose Windows is sitting there intact and merely
   # unreadable. Nothing is mounted for such a device — the loop records it and
   # moves on — so widening the filter only ever ADDS the encrypted answer.
-  local dev
+  local dev unmountable=""
   for dev in $(lsblk -pnro NAME,FSTYPE 2>/dev/null | awk '$2=="ntfs"||$2=="ntfs3"||$2~/[Bb]it[Ll]ocker/{print $1}'); do
     # Encrypted: skip it and remember why, so the caller can say so instead of
     # reporting a clean registry it never actually read.
     if lock_is_bitlocker "$dev"; then WIN_ENCRYPTED=1; continue; fi
-    mkdir -p /mnt/als-win 2>/dev/null || return 1
+    unmountable="${unmountable:+$unmountable, }$dev"
+    mkdir -p /mnt/als-win 2>/dev/null || {
+      WIN_MOUNT_WHY="a Windows (NTFS) volume is present on $dev but no mount point could be made on this station"
+      return 1
+    }
     # READ-ONLY, always. This tool never writes to the machine's own disk.
     if mount -o ro,noexec,nodev "$dev" /mnt/als-win 2>/dev/null ||
        mount -t ntfs-3g -o ro,noexec,nodev "$dev" /mnt/als-win 2>/dev/null; then
@@ -139,6 +157,14 @@ lock_mount_windows() {
       umount /mnt/als-win 2>/dev/null
     fi
   done
+  # A volume was there and would not open. The usual reason is a Windows left
+  # hibernated or shut down with fast startup on - ntfs-3g refuses a volume
+  # with an unclean journal rather than risk the data - and the second is an
+  # image with no ntfs-3g at all. Both are fixable at the bench, and neither is
+  # "this disk has no Windows on it".
+  if [ -n "$unmountable" ]; then
+    WIN_MOUNT_WHY="a Windows (NTFS) volume is present on $unmountable but could not be opened — check that ntfs-3g is on the stick and that Windows was shut down rather than hibernated (fast startup), then re-run the audit"
+  fi
   return 1
 }
 
@@ -695,6 +721,10 @@ lock_win_blocked() {
   if ! lock_locate_hives; then
     if [ -n "$WIN_ENCRYPTED" ]; then
       lock_add "$key" "$label" UNKNOWN "A BitLocker-encrypted Windows volume is present but cannot be read without the recovery key" "offline registry (volume encrypted)" low
+    elif [ -n "$WIN_MOUNT_WHY" ]; then
+      # Something WAS found, or the station could not look. Either way this is
+      # not "the disk has no Windows on it", and the sentence says which.
+      lock_add "$key" "$label" UNKNOWN "The Windows registry could not be read: $WIN_MOUNT_WHY" "offline registry (volume not readable)" low
     else
       lock_add "$key" "$label" UNKNOWN "No readable Windows installation found on the internal disks" "offline registry (no Windows partition)" low
     fi
@@ -1443,8 +1473,9 @@ check_bitlocker
 
 run_lock_checks() {
   LOCK_ROWS=""
-  local d
+  local d before
   for d in $LOCK_DETECTORS; do
+    before="$LOCK_ROWS"
     # A detector that crashes must not take the audit down with it, and must
     # not silently vanish either — it becomes an UNKNOWN row.
     if ! "$d" 2>/dev/null; then
@@ -1452,6 +1483,16 @@ run_lock_checks() {
         *"${d#check_}"*) : ;;
         *) lock_add "${d#check_}" "${d#check_}" UNKNOWN "Detector failed to run" "$d" low ;;
       esac
+    fi
+    # And one that returned SUCCESS without filing anything has still answered
+    # nothing. Every row is an answer; a detector that leaves none is a check
+    # that did not happen, and the verdict below reads a record with nothing in
+    # it as "no lock detected". An early `return 0` down any branch of any
+    # detector is all it takes, so the absence is caught here rather than
+    # trusted not to occur.
+    if [ "$LOCK_ROWS" = "$before" ]; then
+      lock_add "${d#check_}" "${d#check_}" UNKNOWN \
+        "The check ran but filed no result, so nothing can be concluded from it" "$d" low
     fi
   done
   lock_unmount_windows
@@ -1472,6 +1513,12 @@ lock_status() {
   printf '%s\n' "$sts" | grep -qx 'LOCKED'            && { echo LOCKED; return; }
   printf '%s\n' "$sts" | grep -qxE 'DETECTED|WARNING' && { echo WARNING; return; }
   printf '%s\n' "$sts" | grep -qx 'UNKNOWN'           && { echo UNVERIFIED; return; }
+  # CLEAR is the only word here that makes a claim about the MACHINE - that
+  # every check ran and every one came back negative - so it is the only one
+  # that has to be earned. A record with no rows in it is not a machine that
+  # passed thirteen checks; it is a machine none of them filed an answer for,
+  # and it reached the certificate as "No lock detected".
+  [ -n "$LOCK_ROWS" ] || { echo UNVERIFIED; return; }
   echo CLEAR
 }
 

@@ -1089,5 +1089,105 @@ check "no hivexget -> the count does not happen" 1 \
 unset -f _lock_nl_bytes
 
 echo
+echo "== a Windows that would not open is not a disk with no Windows on it =="
+# All three of these failures arrived as the same sentence: "No readable
+# Windows installation found on the internal disks". The verdict was UNKNOWN in
+# each case, so nothing was certified wrongly - but two of the three are facts
+# about the STATION, and the operator was sent to look at a blank disk when the
+# machine in front of them had an intact Windows on it that would not mount.
+# The commonest by far is a Windows left hibernated or shut down with fast
+# startup on: ntfs-3g refuses an unclean volume rather than risk the data.
+_saved_mount=$(declare -f lock_mount_windows)
+_saved_has5=$(declare -f lock_has)
+_saved_root="${LOCK_IS_ROOT:-0}"
+# Two gates stand in front of the branch under test - not root, and no hivexget
+# - and each files a row of its own. Both are opened here so a pass cannot come
+# from the wrong sentence.
+LOCK_IS_ROOT=1
+lock_has() { return 0; }
+lock_mount_windows() { return 1; }
+
+_win_why_case() {
+  LOCK_ROWS=""; WIN_MNT=""; WIN_SOFTWARE=""; WIN_ENCRYPTED=""; WIN_MOUNT_WHY="$1"
+  lock_win_blocked probe "Probe" >/dev/null
+  printf '%s' "$LOCK_ROWS" | cut -d'|' -f4
+}
+
+# The harness itself, proved before it is trusted: with both gates open and no
+# reason recorded, the row must be the "no Windows partition" one.
+check "the mount-reason harness reaches the branch under test" 1 \
+  "$(_win_why_case "" | grep -c 'No readable Windows installation found')"
+
+D=$(_win_why_case "a Windows (NTFS) volume is present on /dev/sda2 but could not be opened — check that ntfs-3g is on the stick and that Windows was shut down rather than hibernated (fast startup), then re-run the audit")
+check "a volume that would not mount is never 'no Windows found'" "" \
+  "$(printf '%s' "$D" | grep -o 'No readable Windows installation found')"
+check "it names the volume that was there" 1 \
+  "$(printf '%s' "$D" | grep -c '/dev/sda2')"
+check "it names hibernation, the usual cause" 1 \
+  "$(printf '%s' "$D" | grep -c 'hibernated')"
+
+D=$(_win_why_case "lsblk is not on this live image, so the machine's volumes could not even be listed")
+check "a station that could not list the volumes says so, not 'no Windows'" "" \
+  "$(printf '%s' "$D" | grep -o 'No readable Windows installation found')"
+check "and it blames the live image, not the disk" 1 \
+  "$(printf '%s' "$D" | grep -c 'live image')"
+
+# The one case that IS a fact about the disk keeps its own words.
+D=$(_win_why_case "")
+check "a disk with genuinely no Windows still says so" 1 \
+  "$(printf '%s' "$D" | grep -c 'No readable Windows installation found')"
+
+# Encryption still outranks the rest: it is the most specific answer available.
+LOCK_ROWS=""; WIN_MNT=""; WIN_SOFTWARE=""; WIN_ENCRYPTED=1
+WIN_MOUNT_WHY="a Windows (NTFS) volume is present on /dev/sda2 but could not be opened"
+lock_win_blocked probe "Probe" >/dev/null
+check "a BitLocker volume is still reported as encrypted" 1 \
+  "$(printf '%s' "$LOCK_ROWS" | cut -d'|' -f4 | grep -c 'BitLocker')"
+eval "$_saved_mount"
+eval "$_saved_has5"
+LOCK_IS_ROOT="$_saved_root"
+WIN_ENCRYPTED=""; WIN_MOUNT_WHY=""
+
+echo
+echo "== a record with nothing in it is not a machine that passed =="
+# lock_status' own comment says CLEAR means every check ran and every one came
+# back negative. It never checked that any had: with no rows at all, the three
+# greps found nothing to object to and it fell through to CLEAR, which reaches
+# the certificate as "No lock detected" - the most reassuring sentence on the
+# document, produced by looking at nothing.
+LOCK_ROWS=""
+check "no rows at all is UNVERIFIED, never CLEAR" UNVERIFIED "$(lock_status)"
+# And one row that passed is still a real answer.
+lock_add tpm "TPM" PASS "No TPM exposed" "/sys/class/tpm" medium
+check "a real PASS row is still CLEAR"             CLEAR      "$(lock_status)"
+
+echo "== a detector that files no row is a check that did not happen =="
+# Every detector either finds something or files a negative. One that returns
+# success having filed nothing has answered no question at all, and the row it
+# never wrote cannot be told apart from a clean result - so run_lock_checks
+# files the UNKNOWN on its behalf. An early `return 0` down any branch of any
+# detector is all this takes, which is why it is caught rather than trusted.
+_saved_detectors="$LOCK_DETECTORS"
+check_silent()  { return 0; }
+check_speaks()  { lock_add speaks "Speaks" PASS "looked, found nothing" "test" high; return 0; }
+LOCK_DETECTORS="check_speaks check_silent"
+lock_unmount_windows() { :; }
+run_lock_checks
+check "the silent detector left an UNKNOWN row"   UNKNOWN "$(row_status silent)"
+check "the one that spoke kept its own answer"    PASS    "$(row_status speaks)"
+check "and the device is UNVERIFIED, not CLEAR"   UNVERIFIED "$(lock_status)"
+check "the UNKNOWN says the check filed no result" 1 \
+  "$(printf '%s' "$LOCK_ROWS" | grep -c 'filed no result')"
+
+# A detector that FAILS and files nothing still gets exactly one row, not two.
+check_broken() { return 3; }
+LOCK_DETECTORS="check_broken"
+run_lock_checks
+check "a crashing detector still makes exactly one row" 1 \
+  "$(printf '%s' "$LOCK_ROWS" | grep -c '.')"
+check "and it is an UNKNOWN"                      UNKNOWN "$(row_status broken)"
+LOCK_DETECTORS="$_saved_detectors"
+
+echo
 printf '%d passed, %d failed\n' "$PASSED" "$FAILED"
 [ "$FAILED" -eq 0 ]
