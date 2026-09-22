@@ -1066,6 +1066,23 @@ check "a name is pulled out of the header junk" "contoso.local" \
   "$(_lock_lsa_name "$(printf '\001\030\002contoso.local')")"
 check "an unreadable blob names nothing rather than guessing" "" \
   "$(_lock_lsa_name "$(printf '\001\002\003')")"
+# THE ONE THAT REACHED A CUSTOMER'S RECORD: hivex prints a REG_BINARY as
+# "hex:04,00,63,00,..." and the extractor stripped everything that was not a
+# letter, leaving the candidate "hex". A real machine's audit said, in as many
+# words, "domain hex". Not a failed read reported as an absence - a value
+# nobody decoded, reported as a fact about the customer's machine.
+check "a REG_BINARY name is DECODED, not read as the word hex" "CONTOSO" \
+  "$(_lock_lsa_name 'hex:04,00,00,00,43,00,4f,00,4e,00,54,00,4f,00,53,00,4f,00')"
+check "a dotted name survives the UTF-16 decode" "corp.contoso.com" \
+  "$(_lock_lsa_name 'hex:63,00,6f,00,72,00,70,00,2e,00,63,00,6f,00,6e,00,74,00,6f,00,73,00,6f,00,2e,00,63,00,6f,00,6d,00')"
+check "a binary blob with no text in it names nothing" "" \
+  "$(_lock_lsa_name 'hex:01,02,03,04')"
+check "the word hex is never a domain name on its own" "" \
+  "$(_lock_lsa_name 'hex:')"
+check "a truncated byte is dropped, not turned into a character" "AB" \
+  "$(_lock_lsa_name 'hex:41,00,42,00,4')"
+check "plain ASCII in a hex blob still reads" "WORKGROUP" \
+  "$(_lock_lsa_name 'hex:57,4f,52,4b,47,52,4f,55,50')"
 check "DC= components become a domain name" "contoso.com" \
   "$(_lock_dn_domain 'cn={31B2F340-016D-11D2-945F-00C04FB984F9},cn=policies,cn=system,DC=contoso,DC=com')"
 

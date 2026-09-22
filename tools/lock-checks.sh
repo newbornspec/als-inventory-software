@@ -995,9 +995,40 @@ _lock_join() {
 # header bytes are not, so print the longest thing that actually LOOKS like a
 # name rather than printing the blob. A blob that yields nothing means "could
 # not name it" — it never means "not joined", and no verdict turns on it.
+# hivex prints a REG_BINARY as "hex:04,00,63,00,..." - the word hex, a colon,
+# then the bytes. The name extractor below strips everything that is not a
+# letter or a digit, which turned that prefix into the candidate "hex", and a
+# machine's domain was reported to the operator, on the audit record, as
+# "domain hex". Not a failed read reported as an absence: a value we never
+# decoded, reported as a fact.
+#
+# So the bytes are decoded first. NULs are dropped as they go, which is what
+# turns the UTF-16LE that LSA stores names in into plain text - and is also
+# required, because no shell variable can carry a NUL.
+_lock_hex_decode() {
+  case "$1" in
+    hex:*) ;;
+    *) printf '%s' "$1"; return 0 ;;
+  esac
+  # The trailing newline is load-bearing: tr turns the commas into newlines and
+  # leaves the LAST byte without one, and `read` returns non-zero on a final
+  # line with no terminator - so the loop dropped it. CONTOSO came back as
+  # CONTOS. Caught by a test that spelled the expected name out in full.
+  printf '%s\n' "${1#hex:}" | LC_ALL=C tr ',' '\n' | while IFS= read -r b; do
+    b=$(printf '%s' "$b" | LC_ALL=C tr -dc '0-9a-fA-F')
+    # Exactly two hex digits is a byte. hivex prints nothing else, so a field
+    # of any other length is a blob we are reading wrongly, and half a byte
+    # must never become a character.
+    [ "${#b}" -eq 2 ] || continue
+    n=$((0x$b))
+    [ "$n" -gt 0 ] && printf "\\$(printf '%03o' "$n")"
+  done
+}
+
 _lock_lsa_name() {
-  printf '%s' "$1" | LC_ALL=C tr -c 'A-Za-z0-9.-' '\n' |
+  printf '%s' "$(_lock_hex_decode "$1")" | LC_ALL=C tr -c 'A-Za-z0-9.-' '\n' |
     LC_ALL=C grep -E '^[A-Za-z0-9][A-Za-z0-9.-]{0,62}[A-Za-z0-9]$' |
+    LC_ALL=C grep -Evi '^hex$' |
     awk '{ if (length($0) > length(b)) b=$0 } END { if (b != "") print b }'
 }
 
