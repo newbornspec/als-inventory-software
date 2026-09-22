@@ -201,7 +201,14 @@ PARENT="minimal.standard.live.squashfs"
 # the layer, not an upgrade: mmc-utils is in none of the 1821 packages of the
 # Ubuntu 24.04.2 desktop casper filesystem.manifest (checked 2026-09-19), and
 # it depends on nothing but libc.
-PACKAGES="${ALS_PACKAGES:-nvme-cli smartmontools mmc-utils partclone pigz libhivex-bin tpm2-tools clonezilla}"
+# libevtx-utils gives evtxexport, which reads a Windows event log offline. The
+# Autopilot check uses it for
+# Microsoft-Windows-ModernDeployment-Diagnostics-Provider%4Autopilot.evtx, the
+# log the OOBE flow writes every ZTD attempt and result into - the only
+# artefact on the disk that carries the HISTORY rather than the last answer.
+# The check degrades to a note when it is absent, so a stick built before this
+# was added keeps working.
+PACKAGES="${ALS_PACKAGES:-nvme-cli smartmontools mmc-utils partclone pigz libhivex-bin tpm2-tools libevtx-utils clonezilla}"
 
 say()  { printf '%s\n' "$*"; }
 die()  { printf '\n  !!  %s\n\n' "$*" >&2; exit 1; }

@@ -753,11 +753,22 @@ lock_win_blocked() {
 # punctuation. An empty domain reads as ...Domain\":\"\",\"CloudAssignedTenantUpn...
 # and a looser match would happily skip the comma and return the NEXT key's
 # name as the tenant.
+# One named field out of an Autopilot JSON blob, or nothing.
+#
+# The separator class has to include WHITESPACE, and that is not a detail: the
+# class used to be quote/colon/backslash only, so it matched
+# {"CloudAssignedTenantDomain":"contoso.com"} and missed
+# {"CloudAssignedTenantDomain": "contoso.com"} - which is how Microsoft
+# actually writes these files, and how any pretty-printed JSON is written. A
+# registered machine whose profile had a space after the colon yielded no
+# tenant, and the verdict below then reported it as unverifiable. Found when
+# the file reader was added and its fixtures - written the way real ones look -
+# came back empty.
 _ap_field() {
   printf '%s' "$2" \
-    | grep -o "$1[\\\":]*[A-Za-z0-9][A-Za-z0-9._:@-]*" \
+    | grep -o "$1[\\\":[:space:]]*[A-Za-z0-9][A-Za-z0-9._:@-]*" \
     | head -1 \
-    | sed "s/^$1[\\\":]*//"
+    | sed "s/^$1[\\\":[:space:]]*//"
 }
 
 # hivexget renders a DWORD as a decimal, but be liberal about what we accept.
@@ -770,18 +781,192 @@ _ap_true() {
 
 # The verdict, split out from the registry reads so it can be tested against
 # real-world values without a Windows hive to hand.
+# --- the Autopilot artefacts that are FILES -----------------------------------
+#
+# The check used to read two registry keys and nothing else, on a volume it had
+# already mounted read-only for the hives. Everything below was sitting on that
+# same volume, unopened - including the profile the device downloaded from
+# Microsoft's own ZTD service, which NAMES the owning tenant:
+#
+#   Windows\ServiceState\wmansvc\AutopilotDDSZTDFile.json   the downloaded profile
+#   Windows\ServiceState\Autopilot\*.json                   same, 1903 and later
+#   Windows\Provisioning\Autopilot\AutopilotConfigurationFile.json
+#                                                           offline registration
+#
+# A machine registered by the "existing devices" route may have NOTHING in the
+# registry cache and its whole identity in that last file, so reading the
+# registry alone reported such a device as unverifiable when the tenant was
+# written on the disk in plain JSON.
+#
+# Case: the leaf directories are spelt inconsistently even in Microsoft's own
+# documentation (Autopilot / AutoPilot, ServiceState / servicestate), and
+# ntfs-3g presents names as they are stored. So the two parent directories are
+# resolved case-insensitively with one shallow listing each, rather than
+# guessing. Anchored on $WIN_MNT/Windows, which lock_locate_hives has already
+# proved exists with that spelling.
+AP_FILE_TENANT=""     # tenant domain, or empty
+AP_FILE_TID=""        # tenant id, or empty
+AP_FILE_SRC=""        # the file it came from, for the method line
+AP_FILE_UNREADABLE="" # a file that is THERE and would not open
+
+# One artefact's worth of JSON, capped. A file on a customer's disk is
+# untrusted input: it is read with a byte limit, never executed, and only three
+# named fields are ever taken out of it.
+_ap_file_dirs() {
+  local base d
+  for base in ServiceState Provisioning; do
+    d=$(find "$WIN_MNT/Windows" -maxdepth 1 -type d -iname "$base" 2>/dev/null | head -1)
+    [ -n "$d" ] && printf '%s\n' "$d"
+  done
+}
+
+_ap_read_files() {
+  AP_FILE_TENANT=""; AP_FILE_TID=""; AP_FILE_SRC=""; AP_FILE_UNREADABLE=""
+  [ -n "$WIN_MNT" ] || return 1
+  local d f body dom tid
+  for d in $(_ap_file_dirs); do
+    # maxdepth 2: ServiceState/wmansvc/x.json and Provisioning/Autopilot/x.json
+    # both sit exactly two levels down. Both directories are tiny.
+    # Read through a redirect, not `for f in $(find ...)`: this is a filename
+    # from a CUSTOMER'S disk, and one containing a space would split into two
+    # paths that do not exist and be filed as "present but unreadable" - an
+    # invented fault. A redirect rather than a pipe because a pipe would run
+    # the loop in a subshell and none of the AP_FILE_* values would survive it.
+    while IFS= read -r f; do
+      [ -n "$f" ] || continue
+      if [ ! -r "$f" ]; then
+        AP_FILE_UNREADABLE="${AP_FILE_UNREADABLE:-${f#$WIN_MNT}}"
+        continue
+      fi
+      body=$(LC_ALL=C head -c 65536 "$f" 2>/dev/null | LC_ALL=C tr -d '\000') || {
+        AP_FILE_UNREADABLE="${AP_FILE_UNREADABLE:-${f#$WIN_MNT}}"; continue; }
+      # Only a file that carries Autopilot's own field names is one of ours.
+      # Matching on the CONTENT rather than the filename means a renamed or
+      # relocated profile is still found, and an unrelated .json is not read
+      # into the record as one.
+      case "$body" in
+        *CloudAssigned*|*ZtdCorrelationId*) ;;
+        *) continue ;;
+      esac
+      # ONLY these three fields, ever. The profile can also carry device names
+      # and assigned-user information, and a previous user's identity has no
+      # business on a resale audit - the organisation that owns the device is
+      # the whole of what we need and the whole of what we take.
+      dom=$(_ap_field CloudAssignedTenantDomain "$body")
+      tid=$(_ap_field CloudAssignedTenantId "$body")
+      [ -z "$AP_FILE_TENANT" ] && [ -n "$dom" ] && {
+        AP_FILE_TENANT="$dom"; AP_FILE_SRC="${f#$WIN_MNT}"; }
+      [ -z "$AP_FILE_TID" ] && [ -n "$tid" ] && {
+        AP_FILE_TID="$tid"; [ -n "$AP_FILE_SRC" ] || AP_FILE_SRC="${f#$WIN_MNT}"; }
+    done < <(find "$d" -maxdepth 2 -type f -iname '*.json' 2>/dev/null)
+  done
+  [ -n "$AP_FILE_TENANT" ] || [ -n "$AP_FILE_TID" ]
+}
+
+# --- the Autopilot EVENT LOG -------------------------------------------------
+#
+# The registry holds the LAST answer; the event log holds every answer. OOBE
+# writes each ZTD attempt and its result into
+#   Windows\System32\winevt\Logs\
+#     Microsoft-Windows-ModernDeployment-Diagnostics-Provider%4Autopilot.evtx
+# and that is the difference between "Microsoft said no on 4 August" and "asked
+# eleven times between March and August and was told 807 every time" - or
+# spotting the one attempt that DID return a profile before somebody reset the
+# machine.
+#
+# Read with evtxexport (libevtx-utils), which is in the layer's package list.
+# A stick built before that was added simply has no evtxexport, and this
+# degrades to a note rather than a wrong answer: an absent reader is not an
+# absent registration.
+#
+#   807 ZtdDeviceIsNotRegistered   the service said this device is not enrolled
+#   908 HardwareMismatchDetected   enrolled, but the hash no longer matches
+AP_EVT_TENANT=""   # a tenant named anywhere in the log
+AP_EVT_807=0       # times the service answered "not registered"
+AP_EVT_908=0       # times it answered "hardware mismatch"
+AP_EVT_WHY=""      # why there is no answer from the log, when there is none
+
+_ap_evt_file() {
+  local logs
+  logs=$(find "$WIN_MNT/Windows/System32" -maxdepth 1 -type d -iname winevt 2>/dev/null | head -1)
+  [ -n "$logs" ] || return 1
+  find "$logs" -maxdepth 2 -type f -iname '*ModernDeployment*Autopilot*.evtx' 2>/dev/null | head -1
+}
+
+_ap_read_evt() {
+  AP_EVT_TENANT=""; AP_EVT_807=0; AP_EVT_908=0; AP_EVT_WHY=""
+  [ -n "$WIN_MNT" ] || return 1
+  local f out
+  f=$(_ap_evt_file) || f=""
+  if [ -z "$f" ]; then
+    # No log is not "no attempts": a wiped or freshly imaged machine has none.
+    AP_EVT_WHY="no Autopilot event log on this machine"
+    return 1
+  fi
+  if ! lock_has evtxexport; then
+    AP_EVT_WHY="this build cannot read Windows event logs (evtxexport is missing) - re-sync and rebuild the stick to use them"
+    return 1
+  fi
+  # Capped, and never trusted: this is a binary file off a customer's disk.
+  out=$(als_evtx_dump "$f") || {
+    AP_EVT_WHY="the Autopilot event log is present but could not be read"
+    return 1
+  }
+  [ -n "$out" ] || {
+    AP_EVT_WHY="the Autopilot event log is present but held no readable records"
+    return 1
+  }
+  AP_EVT_807=$(printf '%s' "$out" | LC_ALL=C grep -c 'ZtdDeviceIsNotRegistered' 2>/dev/null)
+  AP_EVT_908=$(printf '%s' "$out" | LC_ALL=C grep -c 'HardwareMismatchDetected' 2>/dev/null)
+  # Only the tenant, as everywhere else here: the log also carries correlation
+  # ids and, on some builds, the assigned user. The organisation is the whole
+  # of what a resale audit needs.
+  AP_EVT_TENANT=$(_ap_field CloudAssignedTenantDomain "$out")
+  [ -n "$AP_EVT_TENANT" ] || AP_EVT_TENANT=$(_ap_field TenantDomain "$out")
+  return 0
+}
+
+# Split out so a test can stand in for the reader without a real .evtx, and so
+# the timeout and the byte cap live in exactly one place.
+als_evtx_dump() {
+  timeout "${ALS_EVTX_TIMEOUT:-25}" evtxexport -f text "$1" 2>/dev/null | LC_ALL=C head -c 2000000
+}
+
 _autopilot_verdict() {
-  local dom="$1" tid="$2" json="$3" avail="$4" jdom when
+  local dom="$1" tid="$2" json="$3" avail="$4" jdom when src
 
   jdom=$(_ap_field CloudAssignedTenantDomain "$json")
   [ -z "$dom" ] && dom="$jdom"
   when=$(_ap_field AutopilotCreationDate "$json")
 
+  # The registry is asked first, then the files. Either naming a tenant is the
+  # same finding; the method line says which one actually said it, so a reader
+  # can go back to the evidence.
+  src='offline registry SOFTWARE\Microsoft\Provisioning'
+  if [ -z "$dom" ] && [ -z "$tid" ] && { [ -n "$AP_FILE_TENANT" ] || [ -n "$AP_FILE_TID" ]; }; then
+    dom="$AP_FILE_TENANT"; tid="$AP_FILE_TID"
+    src="offline file ${AP_FILE_SRC:-on the Windows volume}"
+  fi
+  # A tenant named in the event log is a tenant. This is the one that catches a
+  # machine whose profile files were cleaned up but whose OOBE history was not.
+  if [ -z "$dom" ] && [ -z "$tid" ] && [ -n "$AP_EVT_TENANT" ]; then
+    dom="$AP_EVT_TENANT"
+    src='offline event log (ModernDeployment-Diagnostics-Provider/Autopilot)'
+  fi
+  # A hardware mismatch means the service knows this device and the hash has
+  # moved - a mainboard swap, usually. It is an enrolment, not a clean machine.
+  if [ -z "$dom" ] && [ -z "$tid" ] && [ "${AP_EVT_908:-0}" -gt 0 ] 2>/dev/null; then
+    lock_add autopilot "Windows Autopilot" LOCKED \
+      "The Autopilot service recognised this device and refused it on a hardware mismatch (HardwareMismatchDetected, $AP_EVT_908 time(s) in this machine's own OOBE log). That is a registration whose hardware hash has since changed - typically a mainboard replacement. The registering organisation must deregister it." \
+      'offline event log (ModernDeployment-Diagnostics-Provider/Autopilot)' high
+    return
+  fi
+
   # A named tenant is the unambiguous case: this device belongs to somebody.
   if [ -n "$dom" ] || [ -n "$tid" ]; then
     lock_add autopilot "Windows Autopilot" LOCKED \
       "Registered to an organisation${dom:+ - tenant $dom}${tid:+ (id $tid)}. Removal requires the owning organisation to deregister the device." \
-      'offline registry SOFTWARE\Microsoft\Provisioning' high
+      "$src" high
     return
   fi
 
@@ -793,14 +978,27 @@ _autopilot_verdict() {
     return
   fi
 
+  # A profile file was ON the disk and would not open. That is not evidence of
+  # absence in either direction, and it outranks the cached "no profile" below:
+  # the file that could not be read is the one that would have named the tenant.
+  if [ -n "$AP_FILE_UNREADABLE" ]; then
+    lock_add autopilot "Windows Autopilot" UNKNOWN \
+      "An Autopilot profile file is present on this machine ($AP_FILE_UNREADABLE) and could not be read, so the tenant it names could not be recovered. Nothing can be concluded either way. Re-run the audit; if it repeats, the volume may be damaged." \
+      "offline file (present, unreadable)" low
+    return
+  fi
+
   # ProfileAvailable present and zero. This is the one genuinely positive
   # answer available offline: Windows asked Microsoft's Autopilot service about
   # this hardware hash and was told there is no profile for it. It is evidence,
   # not proof - hence medium confidence and an explicit statement of what it
   # does not cover.
   if [ -n "$avail" ]; then
+    local hist=""
+    [ "${AP_EVT_807:-0}" -gt 0 ] 2>/dev/null && \
+      hist=" This machine's own OOBE log records the same answer $AP_EVT_807 time(s)."
     lock_add autopilot "Windows Autopilot" UNKNOWN \
-      "The Autopilot service was contacted${when:+ on $when} and returned no profile, and no tenant is assigned locally - which is what an unregistered device looks like. It is not proof: a blank profile is also cached when the organisation has not assigned one yet, and registration lives in Microsoft's cloud against the hardware hash and survives a wipe. Confirm with a network-connected OOBE, or ask the seller for proof of deregistration." \
+      "The Autopilot service was contacted${when:+ on $when} and returned no profile, and no tenant is assigned locally - which is what an unregistered device looks like.${hist} It is not proof: a blank profile is also cached when the organisation has not assigned one yet, and registration lives in Microsoft's cloud against the hardware hash and survives a wipe. Confirm with a network-connected OOBE, or ask the seller for proof of deregistration." \
       'offline registry AutopilotPolicyCache ProfileAvailable=0 (no tenant)' high
     return
   fi
@@ -818,8 +1016,8 @@ _autopilot_verdict() {
   fi
 
   lock_add autopilot "Windows Autopilot" UNKNOWN \
-    "No local Autopilot traces. This does NOT mean the device is unregistered: registration is held in Microsoft's cloud against the hardware hash and survives a wipe. Confirm with a network-connected OOBE, or ask the seller for proof of deregistration." \
-    'offline registry (no traces) - cloud state not checkable from here' high
+    "No local Autopilot traces, in the registry or in the profile files on disk. This does NOT mean the device is unregistered: registration is held in Microsoft's cloud against the hardware hash and survives a wipe. Confirm with a network-connected OOBE, or ask the seller for proof of deregistration." \
+    'offline registry + profile files (no traces) - cloud state not checkable from here' high
 }
 
 check_autopilot() {
@@ -854,6 +1052,13 @@ check_autopilot() {
   tid=$(lock_hive_get "$WIN_SOFTWARE" "$ap" CloudAssignedTenantId 2>/dev/null)
   json=$(lock_hive_get "$WIN_SOFTWARE" "$pc" PolicyJsonCache 2>/dev/null)
   avail=$(lock_hive_get "$WIN_SOFTWARE" "$pc" ProfileAvailable 2>/dev/null)
+
+  # The files on the same mounted volume. Never fatal: a machine whose profile
+  # JSON cannot be opened still gets the registry's answer, and the fact that
+  # something was there and unreadable is carried into the verdict rather than
+  # passing as an absence.
+  _ap_read_files
+  _ap_read_evt
 
   _autopilot_verdict "$dom" "$tid" "$json" "$avail"
 }

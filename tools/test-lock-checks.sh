@@ -1206,5 +1206,248 @@ check "and it is an UNKNOWN"                      UNKNOWN "$(row_status broken)"
 LOCK_DETECTORS="$_saved_detectors"
 
 echo
+echo "== _ap_field must read JSON as it is actually written =="
+# The separator class was quote/colon/backslash only, so it matched a compact
+# blob and missed a pretty-printed one - which is how Microsoft writes these
+# files. A registered machine whose profile had a space after the colon yielded
+# no tenant, and the verdict reported it as unverifiable. This bit the REGISTRY
+# path too (PolicyJsonCache), not just the files, so it is pinned on its own.
+check "compact JSON"            "contoso.com" "$(_ap_field CloudAssignedTenantDomain '{"CloudAssignedTenantDomain":"contoso.com"}')"
+check "a space after the colon" "contoso.com" "$(_ap_field CloudAssignedTenantDomain '{"CloudAssignedTenantDomain": "contoso.com"}')"
+check "indented and wrapped"    "contoso.com" "$(_ap_field CloudAssignedTenantDomain '{
+    "CloudAssignedTenantDomain":   "contoso.com",
+    "Other": 1 }')"
+check "a tab after the colon"   "contoso.com" "$(printf '%s' '{"CloudAssignedTenantDomain":	"contoso.com"}' | { read -r l; _ap_field CloudAssignedTenantDomain "$l"; })"
+check "an empty value names nothing" "" "$(_ap_field CloudAssignedTenantDomain '{"CloudAssignedTenantDomain": ""}')"
+check "a missing field names nothing" "" "$(_ap_field CloudAssignedTenantDomain '{"Something": "else"}')"
+
+echo
+echo "== the Autopilot profile FILES, on the volume already mounted =="
+# The check read two registry keys on a volume it had already mounted, and
+# ignored the profile Microsoft's own ZTD service had written to disk. A device
+# registered by the "existing devices" route keeps its whole identity in
+# Provisioning\Autopilot\AutopilotConfigurationFile.json and may have nothing
+# in the registry at all - so a machine whose owning tenant was written on the
+# disk in plain JSON was reported as unverifiable.
+APROOT="$FIX/apfiles"
+ap_reset() {
+  rm -rf "$APROOT"; mkdir -p "$APROOT/Windows/ServiceState/wmansvc" \
+    "$APROOT/Windows/Provisioning/Autopilot"
+  WIN_MNT="$APROOT"
+  AP_FILE_TENANT=""; AP_FILE_TID=""; AP_FILE_SRC=""; AP_FILE_UNREADABLE=""
+}
+# The shape a real downloaded profile has, trimmed to what matters here.
+ap_profile() {   # ap_profile <path> <tenant> <tid>
+  cat >"$1" <<APJSON
+{ "CloudAssignedTenantDomain": "$2",
+  "CloudAssignedTenantId": "$3",
+  "CloudAssignedDeviceName": "LAPTOP-0001",
+  "CloudAssignedAutopilotUpdateTimeout": 1800000,
+  "ZtdCorrelationId": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" }
+APJSON
+}
+
+ap_reset
+ap_profile "$APROOT/Windows/ServiceState/wmansvc/AutopilotDDSZTDFile.json" "contoso.onmicrosoft.com" "11111111-2222-3333-4444-555555555555"
+_ap_read_files
+check "the downloaded ZTD profile names its tenant" "contoso.onmicrosoft.com" "$AP_FILE_TENANT"
+check "...and its tenant id"      "11111111-2222-3333-4444-555555555555" "$AP_FILE_TID"
+check "...and says which file said so" 1 "$(printf '%s' "$AP_FILE_SRC" | grep -c 'AutopilotDDSZTDFile')"
+LOCK_ROWS=""; _autopilot_verdict "" "" "" ""
+check "a profile on disk makes the device LOCKED" LOCKED "$(row_status autopilot)"
+check "...and the row names the organisation" 1 \
+  "$(printf '%s' "$LOCK_ROWS" | cut -d'|' -f4 | grep -c 'contoso.onmicrosoft.com')"
+check "...and the device verdict follows" LOCKED "$(lock_status)"
+
+# THE ROUTE THAT LEFT NOTHING IN THE REGISTRY: offline "existing devices".
+ap_reset
+ap_profile "$APROOT/Windows/Provisioning/Autopilot/AutopilotConfigurationFile.json" "fabrikam.com" "99999999-8888-7777-6666-555555555555"
+_ap_read_files
+check "an offline registration file names its tenant too" "fabrikam.com" "$AP_FILE_TENANT"
+LOCK_ROWS=""; _autopilot_verdict "" "" "" ""
+check "...and that is LOCKED, not unverifiable" LOCKED "$(row_status autopilot)"
+
+# Case: Microsoft's own docs spell these directories both ways, and ntfs-3g
+# shows names as they are stored.
+ap_reset
+mv "$APROOT/Windows/ServiceState" "$APROOT/Windows/servicestate"
+mkdir -p "$APROOT/Windows/servicestate/Autopilot"
+ap_profile "$APROOT/Windows/servicestate/Autopilot/profile.json" "northwind.local" ""
+_ap_read_files
+check "a lower-case ServiceState is still found" "northwind.local" "$AP_FILE_TENANT"
+
+# A tenant id with no domain is still an owner.
+ap_reset
+printf '%s' '{"CloudAssignedTenantId":"12345678-90ab-cdef-1234-567890abcdef"}' \
+  >"$APROOT/Windows/ServiceState/wmansvc/AutopilotDDSZTDFile.json"
+_ap_read_files
+LOCK_ROWS=""; _autopilot_verdict "" "" "" ""
+check "a tenant id with no domain is still LOCKED" LOCKED "$(row_status autopilot)"
+
+# A PREVIOUS USER'S IDENTITY IS NOT OURS TO RECORD. The profile can carry an
+# assigned user; the organisation is the whole of what a resale audit needs.
+ap_reset
+cat >"$APROOT/Windows/ServiceState/wmansvc/AutopilotDDSZTDFile.json" <<'APUSER'
+{ "CloudAssignedTenantDomain": "contoso.com",
+  "CloudAssignedUser": "jane.doe@contoso.com",
+  "CloudAssignedDeviceName": "JANES-LAPTOP" }
+APUSER
+_ap_read_files
+LOCK_ROWS=""; _autopilot_verdict "" "" "" ""
+check "the tenant is taken" "contoso.com" "$AP_FILE_TENANT"
+check "a previous user's address never reaches the record" 0 \
+  "$(printf '%s' "$LOCK_ROWS" | grep -c 'jane.doe')"
+check "...nor their device name" 0 "$(printf '%s' "$LOCK_ROWS" | grep -c 'JANES-LAPTOP')"
+
+# A filename from a CUSTOMER'S disk, with a space in it. Word-splitting on the
+# find output turned one such path into two that did not exist, and the file
+# was filed as "present but unreadable" - a fault invented out of a space.
+ap_reset
+ap_profile "$APROOT/Windows/ServiceState/wmansvc/Autopilot profile.json" "spaced.example" ""
+_ap_read_files
+check "a filename with a space is read, not called unreadable" "spaced.example" "$AP_FILE_TENANT"
+check "...and nothing is reported as unreadable" "" "$AP_FILE_UNREADABLE"
+
+# A json that is not Autopilot's is not read into the record as one.
+ap_reset
+printf '%s' '{"setting":"value","other":"thing"}' \
+  >"$APROOT/Windows/ServiceState/wmansvc/unrelated.json"
+_ap_read_files
+check "an unrelated .json is not mistaken for a profile" "" "$AP_FILE_TENANT"
+
+# A FILE THAT IS THERE AND WILL NOT OPEN is not an absence.
+ap_reset
+ap_profile "$APROOT/Windows/ServiceState/wmansvc/AutopilotDDSZTDFile.json" "contoso.com" ""
+chmod 000 "$APROOT/Windows/ServiceState/wmansvc/AutopilotDDSZTDFile.json" 2>/dev/null
+if [ -r "$APROOT/Windows/ServiceState/wmansvc/AutopilotDDSZTDFile.json" ]; then
+  echo "  SKIP  unreadable-file case (running as root, or a filesystem with no modes)"
+else
+  _ap_read_files
+  check "an unreadable profile is recorded as unreadable" 1 \
+    "$(printf '%s' "$AP_FILE_UNREADABLE" | grep -c 'AutopilotDDSZTDFile')"
+  LOCK_ROWS=""; _autopilot_verdict "" "" "" "0"
+  check "...and is UNKNOWN, never the cached 'no profile' answer" UNKNOWN "$(row_status autopilot)"
+  check "...and says the file could not be read" 1 \
+    "$(printf '%s' "$LOCK_ROWS" | cut -d'|' -f4 | grep -c 'could not be read')"
+fi
+chmod 644 "$APROOT/Windows/ServiceState/wmansvc/AutopilotDDSZTDFile.json" 2>/dev/null
+
+# No files at all: the registry answer stands, and the wording now covers both.
+ap_reset
+_ap_read_files
+LOCK_ROWS=""; _autopilot_verdict "" "" "" ""
+check "no files and no registry is still UNKNOWN" UNKNOWN "$(row_status autopilot)"
+check "...and says the FILES were looked at too" 1 \
+  "$(printf '%s' "$LOCK_ROWS" | cut -d'|' -f4 | grep -c 'profile files on disk')"
+check "...and still refuses to call it unregistered" 1 \
+  "$(printf '%s' "$LOCK_ROWS" | cut -d'|' -f4 | grep -c 'does NOT mean the device is unregistered')"
+
+# The registry still wins when it has the answer: a file search must not be
+# able to overwrite a tenant the hive already named.
+ap_reset
+ap_profile "$APROOT/Windows/ServiceState/wmansvc/AutopilotDDSZTDFile.json" "wrong.example" ""
+_ap_read_files
+LOCK_ROWS=""; _autopilot_verdict "registry.example" "" "" ""
+check "a tenant named in the REGISTRY is the one reported" 1 \
+  "$(printf '%s' "$LOCK_ROWS" | cut -d'|' -f4 | grep -c 'registry.example')"
+check "...and the file's value does not appear" 0 \
+  "$(printf '%s' "$LOCK_ROWS" | grep -c 'wrong.example')"
+
+WIN_MNT=""; AP_FILE_TENANT=""; AP_FILE_TID=""; AP_FILE_SRC=""; AP_FILE_UNREADABLE=""
+
+echo
+echo "== the Autopilot EVENT LOG: every answer, not just the last one =="
+# The registry keeps the last answer. The OOBE log keeps them all, which is the
+# difference between "Microsoft said no once, in August" and "asked eleven
+# times and was told 807 every time" - and it is the only artefact that catches
+# a machine whose profile files were cleaned up but whose history was not.
+_saved_has6=$(declare -f lock_has)
+_saved_dump=$(declare -f als_evtx_dump)
+
+evt_reset() {
+  rm -rf "$APROOT"; mkdir -p "$APROOT/Windows/System32/winevt/Logs" \
+    "$APROOT/Windows/ServiceState/wmansvc" "$APROOT/Windows/Provisioning/Autopilot"
+  WIN_MNT="$APROOT"
+  : >"$APROOT/Windows/System32/winevt/Logs/Microsoft-Windows-ModernDeployment-Diagnostics-Provider%4Autopilot.evtx"
+  AP_FILE_TENANT=""; AP_FILE_TID=""; AP_FILE_SRC=""; AP_FILE_UNREADABLE=""
+  lock_has() { case "$1" in evtxexport) return 0 ;; esac; return 0; }
+}
+
+# The log of a machine the service has never heard of.
+evt_reset
+als_evtx_dump() { printf '%s\n' \
+  'Event: ZtdDeviceIsNotRegistered 807' \
+  'Event: ZtdDeviceIsNotRegistered 807' \
+  'Event: ZtdDeviceIsNotRegistered 807'; }
+_ap_read_evt
+check "every 'not registered' answer is counted" 3 "$AP_EVT_807"
+check "and no tenant is invented from them" "" "$AP_EVT_TENANT"
+LOCK_ROWS=""; _ap_read_files; _autopilot_verdict "" "" "" "0"
+check "the cached 'no profile' answer is still UNKNOWN" UNKNOWN "$(row_status autopilot)"
+check "...and now carries the history" 1 \
+  "$(printf '%s' "$LOCK_ROWS" | cut -d'|' -f4 | grep -c 'same answer 3 time')"
+
+# THE ONE THIS EXISTS FOR: the log names the tenant, the files do not.
+evt_reset
+als_evtx_dump() { printf '%s\n' 'Profile received: "CloudAssignedTenantDomain": "contoso.com"'; }
+_ap_read_evt
+check "a tenant named in the log is found" "contoso.com" "$AP_EVT_TENANT"
+LOCK_ROWS=""; _ap_read_files; _autopilot_verdict "" "" "" "0"
+check "...and the device is LOCKED on it" LOCKED "$(row_status autopilot)"
+check "...and the row says the log said so" 1 \
+  "$(printf '%s' "$LOCK_ROWS" | cut -d'|' -f5 | grep -c 'event log')"
+
+# A hardware mismatch is an ENROLMENT, not a clean machine: the service knows
+# the device and the hash has moved. Usually a mainboard swap.
+evt_reset
+als_evtx_dump() { printf '%s\n' 'Error: HardwareMismatchDetected 908'; }
+_ap_read_evt
+check "a hardware mismatch is counted" 1 "$AP_EVT_908"
+LOCK_ROWS=""; _ap_read_files; _autopilot_verdict "" "" "" "0"
+check "...and reads as LOCKED, not as a clean machine" LOCKED "$(row_status autopilot)"
+check "...and explains the mainboard case" 1 \
+  "$(printf '%s' "$LOCK_ROWS" | cut -d'|' -f4 | grep -c 'mainboard')"
+
+# NO READER IS NOT NO REGISTRATION. A stick built before libevtx-utils was
+# added has no evtxexport, and that must read as "could not look".
+evt_reset
+lock_has() { case "$1" in evtxexport) return 1 ;; esac; return 0; }
+_ap_read_evt
+check "no evtxexport: nothing is concluded from the log" "" "$AP_EVT_TENANT"
+check "...and it says the BUILD cannot read them" 1 \
+  "$(printf '%s' "$AP_EVT_WHY" | grep -c 'evtxexport is missing')"
+check "...and no answer is counted" 0 "$AP_EVT_807"
+
+# A log that is there and will not read is not an absence either.
+evt_reset
+als_evtx_dump() { return 1; }
+_ap_read_evt
+check "an unreadable log says so" 1 "$(printf '%s' "$AP_EVT_WHY" | grep -c 'could not be read')"
+check "...and counts nothing" "00" "$AP_EVT_807$AP_EVT_908"
+
+# No log at all - a wiped or freshly imaged machine. Not "no attempts".
+evt_reset
+rm -f "$APROOT/Windows/System32/winevt/Logs/"*.evtx
+_ap_read_evt
+check "no log present is reported as no log, not as a clean answer" 1 \
+  "$(printf '%s' "$AP_EVT_WHY" | grep -c 'no Autopilot event log')"
+
+# The files still win over the log when both name a tenant - the file is the
+# profile itself, the log is a record of one.
+evt_reset
+ap_profile "$APROOT/Windows/ServiceState/wmansvc/AutopilotDDSZTDFile.json" "fromfile.example" ""
+als_evtx_dump() { printf '%s\n' '"CloudAssignedTenantDomain": "fromlog.example"'; }
+_ap_read_files; _ap_read_evt
+LOCK_ROWS=""; _autopilot_verdict "" "" "" ""
+check "the profile FILE is preferred over the log" 1 \
+  "$(printf '%s' "$LOCK_ROWS" | grep -c 'fromfile.example')"
+check "...and the log's value does not also appear" 0 \
+  "$(printf '%s' "$LOCK_ROWS" | grep -c 'fromlog.example')"
+
+eval "$_saved_has6"
+eval "$_saved_dump" 2>/dev/null || unset -f als_evtx_dump
+WIN_MNT=""; AP_EVT_TENANT=""; AP_EVT_807=0; AP_EVT_908=0; AP_EVT_WHY=""
+
+echo
 printf '%d passed, %d failed\n' "$PASSED" "$FAILED"
 [ "$FAILED" -eq 0 ]
