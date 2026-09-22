@@ -36,6 +36,7 @@ import io
 import os
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -296,6 +297,73 @@ check("the duty is NOT in the baked layer session (that would force a rebuild)",
 check("...and the layer session says where it went instead",
       "als-autostart.sh" in ses and "rebuild" in ses, "")
 
+print("6b. the laptop's own browser keys (the ThinkPad star key)")
+
+# Reported from the bench on a ThinkPad T14: F12 carries a star - Lenovo's
+# "favourites" key - and with Fn-Lock off it does not send F12 at all. It sends
+# XF86Favorites, and Firefox opened the bookmarks sidebar straight over the
+# audit while a capture was live. The page guard never saw it: Firefox routes
+# these as APP COMMANDS, not key events, so preventDefault has nothing to
+# cancel. They have to be taken off the keycode before the browser gets them.
+check("the kiosk clears the laptop's browser keys as well",
+      "disable_app_keys" in boot and boot.count("disable_app_keys") == 2, "")
+check("...including the star key that was reported",
+      "XF86Favorites" in boot, "")
+check("...and the ones that would navigate the kiosk away",
+      all(k in boot for k in ("XF86HomePage", "XF86Back", "XF86Reload")), "")
+check("...and the ones that would suspend a machine mid-wipe",
+      "XF86Sleep" in boot and "XF86PowerOff" in boot, "")
+check("it is guarded on xmodmap and on a display, like its neighbour",
+      re.search(r"disable_app_keys\(\)[\s\S]{0,400}command -v xmodmap", boot) is not None
+      and re.search(r"disable_app_keys\(\)[\s\S]{0,700}DISPLAY", boot) is not None, "")
+check("...and says in the log when it could not do it",
+      "are still live" in boot, "")
+
+# THE SELECTION RULE, driven for real: the awk program is lifted out of the
+# shell source and run against a keymap laid out as xmodmap -pke prints one, so
+# this tests the shipped code rather than a copy of it.
+awk_src = re.search(r"codes=\$\(printf '%s\\n' \"\$map\" \| awk -v dead=\"\$KIOSK_DEAD_KEYSYMS\" '\n(.*?)'\)",
+                    boot, re.S)
+check("the keycode selector can be lifted out of the script", awk_src is not None, "")
+dead = re.search(r'KIOSK_DEAD_KEYSYMS="([^"]+)"', boot)
+check("the dead-keysym list can be lifted out too", dead is not None, "")
+
+if awk_src and dead and shutil.which("awk"):
+    KEYMAP = "\n".join([
+        "keycode 164 = XF86Favorites NoSymbol XF86Favorites",   # the star key
+        "keycode 180 = XF86HomePage NoSymbol XF86HomePage",
+        "keycode 166 = XF86Back NoSymbol XF86Back",
+        "keycode 150 = XF86Sleep NoSymbol XF86Sleep",
+        "keycode  88 = F12 NoSymbol F12",                       # F12 proper
+        "keycode  38 = a A a A ae AE ae",                       # a letter
+        "keycode 172 = XF86AudioPlay XF86AudioPause XF86AudioPlay",
+        "keycode 235 = XF86Display NoSymbol XF86Display",
+        "keycode 200 = XF86Favorites F12 XF86Favorites",        # carries BOTH
+    ]) + "\n"
+    kmap = os.path.join(TMP, "kmap.txt")
+    io.open(kmap, "w", newline="\n").write(KEYMAP)
+    prog = os.path.join(TMP, "sel.awk")
+    io.open(prog, "w", newline="\n").write(awk_src.group(1))
+    r = subprocess.run(["awk", "-v", "dead=" + dead.group(1), "-f", prog, kmap],
+                       capture_output=True, text=True, timeout=60)
+    got = sorted(r.stdout.split())
+    check("the star key's keycode is selected for clearing", "164" in got, (got, r.stderr[:200]))
+    check("...as are home, back and sleep",
+          all(k in got for k in ("180", "166", "150")), got)
+    # THE ONE THAT PROTECTS THE TEST ITSELF: clearing the star key must not cost
+    # the technician the real F12, which arrives on its own keycode with Fn-Lock
+    # on and must stay pressable.
+    check("the real F12 keycode is NOT cleared", "88" not in got, got)
+    check("an ordinary letter is not cleared", "38" not in got, got)
+    check("a key carrying a normal symbol TOO is left alone", "200" not in got, got)
+    check("keys we cannot help with are not touched for show",
+          "172" not in got and "235" not in got, got)
+    check("exactly the four dead keycodes and no others",
+          got == ["150", "164", "166", "180"], got)
+elif not shutil.which("awk"):
+    print("  SKIP the keycode selector (no awk on this box)")
+
+
 print("7. the page arms and releases it with the board")
 
 page = read(PAGE)
@@ -311,6 +379,11 @@ check("the instructions say which keys the laptop itself handles",
       "handled by the laptop itself" in page, "")
 check("...and what to do if one of them dims the screen",
       "brightness-up" in page and "Nothing is lost" in page, "")
+# From the same bench report: the ThinkPad's whole F row read as "not seen",
+# because with Fn-Lock off those keys send volume and brightness, not F1..F12.
+# Twelve keys the technician cannot test unless they are told how.
+check("the instructions say what to do when the whole F row stays unlit",
+      "F ROW STAYS UNLIT" in page and "FnLock" in page, "")
 
 shutil.rmtree(TMP, ignore_errors=True)
 print("\n%d passed, %d failed" % (PASS[0], len(FAIL)))

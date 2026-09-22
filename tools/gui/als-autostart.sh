@@ -366,6 +366,59 @@ write_chromium_prefs() {  # write_chromium_prefs <user-data-dir>
         > "$1/Default/Preferences"
 }
 
+# The media/action keys a laptop puts on its F row, which the BROWSER acts on
+# without ever offering the page a cancellable keypress.
+#
+# Reported from the bench on a ThinkPad T14: F12 carries a star, Lenovo's
+# "favourites" key. With Fn-Lock off it does not send F12 at all - it sends
+# XF86Favorites, and Firefox opens the bookmarks sidebar over the audit. The
+# page's key guard never sees it: Firefox routes these as APP COMMANDS, not as
+# key events, so preventDefault has nothing to cancel. The same row carries
+# XF86HomePage (navigates the kiosk away), XF86Reload, XF86Back, and on some
+# models XF86Sleep, which would suspend a machine in the middle of a wipe.
+#
+# The only place to stop them is before the browser: take the keysym off the
+# keycode for this X session. xmodmap is used rather than a keymap file because
+# it works from what THIS machine actually reports, so no model list is needed.
+#
+# A keycode is only cleared when EVERY keysym on it is one of these. A key that
+# also carries a normal symbol is left alone - and this is why clearing
+# XF86Favorites does not cost the technician the F12 key: with Fn-Lock on, F12
+# arrives on a different keycode, which is untouched and still testable.
+KIOSK_DEAD_KEYSYMS="XF86Favorites XF86HomePage XF86Search XF86Back XF86Forward
+XF86Reload XF86Refresh XF86Stop XF86Mail XF86Calculator XF86Explorer
+XF86MyComputer XF86WWW XF86Open XF86New XF86Close XF86Save XF86Print
+XF86Sleep XF86Suspend XF86Standby XF86ScreenSaver XF86LogOff XF86PowerOff
+XF86WakeUp XF86Documents XF86Music XF86Pictures XF86Video XF86Terminal"
+
+disable_app_keys() {
+    command -v xmodmap >/dev/null 2>&1 || {
+        log "xmodmap not present - the laptop's browser keys (favourites, home) are still live"
+        return 0; }
+    [ -n "${DISPLAY:-}" ] || { log "no DISPLAY yet - browser keys left as the image set it"; return 0; }
+    map=$(xmodmap -pke 2>/dev/null) || {
+        log "xmodmap could not read the keymap - browser keys are still live"; return 0; }
+    # One awk pass over the whole table rather than one per keysym: print the
+    # keycode of every line whose symbols are ALL in the dead list (ignoring
+    # NoSymbol), and which has at least one.
+    codes=$(printf '%s\n' "$map" | awk -v dead="$KIOSK_DEAD_KEYSYMS" '
+      BEGIN { n = split(dead, a, /[ \t\n]+/); for (i = 1; i <= n; i++) if (a[i] != "") D[a[i]] = 1 }
+      $1 == "keycode" && $3 == "=" {
+        hits = 0; others = 0
+        for (i = 4; i <= NF; i++) {
+          if ($i == "NoSymbol") continue
+          if ($i in D) hits++; else others++
+        }
+        if (hits > 0 && others == 0) print $2
+      }')
+    [ -n "$codes" ] || { log "no browser/media keysyms bound on this keyboard - nothing to clear"; return 0; }
+    cleared=0
+    for kc in $codes; do
+        xmodmap -e "keycode $kc = NoSymbol" 2>/dev/null && cleared=$((cleared + 1))
+    done
+    log "cleared $cleared laptop browser/media key(s) so they cannot act on the kiosk"
+}
+
 # The keys the X SERVER acts on, before any application is offered them.
 #
 # Reported from the bench: during the hardware test's keyboard check - where the
@@ -462,6 +515,7 @@ if [ "$MODE" = "kiosk" ]; then
         log "kiosk: $BROWSER $ARGS $URL"
         stop_screen_blanking
         disable_server_keys
+        disable_app_keys
         # No "Starting full screen" popup. It was the ONE note this script
         # raised on a successful kiosk boot, and it was wrong twice over: the
         # kiosk session has no notification service, so note() fell back to a
