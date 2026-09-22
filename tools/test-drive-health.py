@@ -698,8 +698,35 @@ check("a RAID controller that shows its volume, AHCI and NVMe are not reported",
 # not invent a number. Only remapped_nvme gives a count the kernel vouches for.
 check("a RAID-class controller with no disk under it does not invent a drive count",
       "count" not in by.get(A("0000:00:0e.0"), {"count": 1}), by.get(A("0000:00:0e.0")))
+# A PCI directory that cannot be listed is NOT "no hidden drives". This
+# function's empty list is a positive statement - every controller was examined
+# and none of them is hiding a disk - and an unlistable directory used to make
+# that same statement without examining one. It reports itself instead, as a
+# row beside the drives, because a panel that looks like a fully enumerated
+# machine is the one thing this must not produce on a machine it never read.
 out, _, _ = run_helper(["hidden", os.path.join(TMP, "no-such-root")])
-check("no sysfs: an empty list, not an error", out.strip() == "[]", out)
+hid = json.loads(out)
+check("no sysfs: never the empty list that means 'none hidden'", hid != [], out)
+check("no sysfs: one row saying the scan did not run",
+      len(hid) == 1 and hid[0].get("scan") == "failed", hid)
+check("no sysfs: the row is not measurable, and says why",
+      hid[0]["health"]["measured"] is False
+      and "could not run" in hid[0]["health"]["reason"], hid)
+check("no sysfs: the row tells the operator what to do",
+      "Rescan" in hid[0]["health"]["action"], hid)
+check("no sysfs: it does not claim a controller or a count",
+      "controller" not in hid[0] and "count" not in hid[0], hid)
+# The engine has to write that same row itself when python3 is missing
+# altogether - there is then nothing to run the function above - so the
+# sentence exists twice, once as a Python constant and once as a shell literal.
+# Pinned against each other here, because a drift would leave the shell path
+# emitting a row the panel words differently from the real one.
+_eng = open(os.path.join(HERE, "hardware-audit.sh"), encoding="utf-8").read()
+for _part in (hid[0]["health"]["reason"], hid[0]["health"]["action"]):
+    check("the engine's own fallback row carries the same words (%s...)" % _part[:24],
+          _part in _eng, _part)
+check("the engine's fallback is the same shape the panel keys on",
+      '"scan":"failed"' in _eng, "")
 # ALS_SYS_ROOT is a test-only variable: on the station the engine passes an
 # EMPTY root, which must mean the real /sys. It used to mean "./sys", relative
 # to whatever directory the kiosk happened to start the engine in, so on a
@@ -781,6 +808,16 @@ if len(lines) == 6:
           and lines[5]["title"].startswith(u"Not measurable — behind a RAID"), lines[5])
 check("ident: the Storage line no longer carries a second, probed health note",
       "Health" not in dev["hw"]["storage"], dev["hw"]["storage"])
+
+# The panel's words for it, so a failed scan is never rendered as the
+# RAID-controller row (which sends the operator into the BIOS for a drive
+# nobody has established exists).
+_fail_line = srv.drive_health_lines({"storage": [], "hiddenStorage": hid})
+check("the panel row says the scan did not run",
+      len(_fail_line) == 1 and _fail_line[0]["drive"] == "Hidden-drive scan did not run",
+      _fail_line)
+check("the panel row is not the RAID-mode row",
+      "RAID mode" not in _fail_line[0]["drive"], _fail_line)
 
 # The optical row, which is the same question as drive health asked about a
 # drive that may not be there: a scan that did not run must not answer it.

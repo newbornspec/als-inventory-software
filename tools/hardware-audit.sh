@@ -2376,6 +2376,11 @@ R_TIMEOUT = ("the drive did not answer the health request in 30 s",
 R_EMMC_TOOL = ("this build cannot read eMMC health", "update the stick")
 R_NO_SMARTCTL = ("this build cannot read drive health (smartctl is missing)",
                  "update the stick")
+# The scan for drives the CONTROLLER hides. Its answer is normally an empty
+# list, which says "there are no hidden drives" - so a scan that could not run
+# must never produce that same empty list. It reports itself instead.
+R_HIDDEN_SCAN = ("the scan for drives hidden by the storage controller could not run",
+                 "re-sync the stick and press Rescan; until then, check the BIOS storage mode by hand")
 # Not in the contract's table, and still never "unknown": smartctl ran as root
 # and could not open the device (it vanished, or the controller refused it),
 # or it printed nothing usable at all.
@@ -2874,7 +2879,15 @@ def hidden(root):
     try:
         names = sorted(os.listdir(base))
     except OSError:
-        names = []
+        # Not "no hidden drives". This function's empty list is a POSITIVE
+        # statement - the controllers were examined and none of them is hiding
+        # anything - and an unlistable PCI directory produced exactly that
+        # statement without examining a single controller. It reports itself
+        # instead, as a row the operator sees next to the drives.
+        out(json.dumps([{"scan": "failed",
+                         "health": not_measured(R_HIDDEN_SCAN, None)}],
+                       ensure_ascii=True, separators=(",", ":")))
+        return
     disk = re.compile(r"^(sd[a-z]+|nvme\d+n\d+|mmcblk\d+|vd[a-z]+|hd[a-z]+)$")
     for n in names:
         p = os.path.join(base, n)
@@ -3073,13 +3086,26 @@ STORAGE="[${STOR_ELEMS#,}]"
 # hold its machine's certificate forever. They go in hiddenStorage instead,
 # each with the contract's not-measurable reason and the fix (switch the BIOS
 # to AHCI, then Rescan - after which they are ordinary drives).
-HIDDEN_STORAGE="[]"
+#
+# [] means "the controllers were examined and none is hiding a drive", so it is
+# an answer and not a default. A missing python3, a crash, or output we cannot
+# parse all used to land on that same [] - the reassuring one - so they land on
+# a row that says the scan did not run instead.
+HIDDEN_SCAN_FAILED='[{"scan":"failed","health":{"measured":false,"reason":"the scan for drives hidden by the storage controller could not run","action":"re-sync the stick and press Rescan; until then, check the BIOS storage mode by hand"}}]'
+HIDDEN_STORAGE="$HIDDEN_SCAN_FAILED"
 if command -v python3 >/dev/null 2>&1; then
   HIDDEN_STORAGE=$(python3 -c "$(als_health_py)" hidden "${ALS_SYS_ROOT:-}" 2>/dev/null)
-  case "$HIDDEN_STORAGE" in "["*"]") ;; *) HIDDEN_STORAGE="[]" ;; esac
+  case "$HIDDEN_STORAGE" in "["*"]") ;; *) HIDDEN_STORAGE="$HIDDEN_SCAN_FAILED" ;; esac
 fi
-[ "$HIDDEN_STORAGE" != "[]" ] && SMART_SUMMARY="${SMART_SUMMARY}storage controller in RAID mode: Not measurable — behind a RAID/Intel RST controller — set the storage mode to AHCI in the BIOS, then press Rescan
-"
+case "$HIDDEN_STORAGE" in
+  "[]") ;;
+  *'"scan":"failed"'*)
+    SMART_SUMMARY="${SMART_SUMMARY}hidden-drive scan: did not run — the scan for drives hidden by the storage controller could not run — re-sync the stick and press Rescan; until then, check the BIOS storage mode by hand
+" ;;
+  *)
+    SMART_SUMMARY="${SMART_SUMMARY}storage controller in RAID mode: Not measurable — behind a RAID/Intel RST controller — set the storage mode to AHCI in the BIOS, then press Rescan
+" ;;
+esac
 
 # --- graphics ---
 # A dedicated card's REAL video memory, as its own driver publishes it in bytes

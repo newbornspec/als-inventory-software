@@ -3255,6 +3255,14 @@ def drive_health_lines(p):
         # nothing visible under it may be hiding disks or may simply be empty,
         # so that row says what is known - the controller's mode - rather than
         # sending the operator into the BIOS for a drive that may not exist.
+        # The scan itself did not run. Its ordinary answer is an empty list -
+        # "the controllers were examined and none is hiding a drive" - so a
+        # scan that could not run has to say so rather than leave the operator
+        # with a panel that looks like a fully enumerated machine.
+        if x.get("scan") == "failed":
+            lines.append(dict(health_view(x.get("health")),
+                              drive="Hidden-drive scan did not run"))
+            continue
         n = x.get("count")
         n = n if isinstance(n, int) and not isinstance(n, bool) and n > 0 else None
         lines.append(dict(health_view(x.get("health")),
