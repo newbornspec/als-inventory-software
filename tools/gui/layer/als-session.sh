@@ -82,38 +82,11 @@ command -v python3 >/dev/null 2>&1 || fallback "python3 is not available in the 
 # gap should read as deliberate black rather than as a broken screen.
 command -v xsetroot >/dev/null 2>&1 && xsetroot -solid black 2>/dev/null
 
-# --- the keys the X SERVER acts on, before any application is offered them ---
-# Reported from the bench: during the hardware test's keyboard check - where the
-# technician is told to press every key on the machine - a Lenovo dropped out of
-# the kiosk to a black screen.
-#
-# Ctrl+Alt+F1..F12 is a virtual-terminal switch. The X server handles it itself:
-# it never reaches Firefox, so the page's key guard cannot cancel it, and the
-# kiosk is simply gone, leaving a console the operator reads as a dead machine.
-# Ctrl+Alt+Backspace (zap) ends the session outright the same way.
-#
-# srvrkeys:none is the XKB option for exactly this - xkeyboard-config describes
-# it as "Special keys (Ctrl+Alt+<key>) handled in a server" - and it is checked
-# by name against base.lst rather than remembered.
-#
-# The empty -option first is not decoration: it CLEARS the options this machine
-# already had, which is the only way to be sure terminate:ctrl_alt_bksp (zap) is
-# not one of them. There is no "terminate:none" to ask for; terminate is the
-# group, ctrl_alt_bksp is the only member, and clearing beats naming.
-#
-# Session-scoped, so it applies ONLY when the kiosk is on - contract 1 above -
-# and best-effort: setxkbmap is not on the proven-present list, so a machine
-# without it logs a line and carries on. This is not a failure path; nothing
-# here can end in a black screen, which is the whole point of it.
-if command -v setxkbmap >/dev/null 2>&1; then
-    if setxkbmap -option '' -option srvrkeys:none 2>>"$LOG"; then
-        echo "VT-switch (Ctrl+Alt+F1..F12) and zap keys disabled for this session" >>"$LOG"
-    else
-        echo "setxkbmap refused the kiosk key options - VT switching is still live" >>"$LOG"
-    fi
-else
-    echo "setxkbmap not present - VT switching (Ctrl+Alt+F1..F12) is still live" >>"$LOG"
-fi
+# The keys the X server acts on itself - Ctrl+Alt+F1..F12 (virtual-terminal
+# switch) and Ctrl+Alt+Backspace (zap) - are taken away in gui/als-autostart.sh
+# ON THE STICK, not here, and deliberately: this file is baked into the
+# squashfs, so a change to it costs a mksquashfs rebuild and a reboot, while
+# that one arrives with a file copy. Same rule as the screen-blanking duty.
 
 # --- the application --------------------------------------------------------
 # als-autostart is the same launcher the desktop session uses, and it already

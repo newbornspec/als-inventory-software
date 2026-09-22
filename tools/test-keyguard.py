@@ -42,6 +42,7 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SESSION = os.path.join(HERE, "gui", "layer", "als-session.sh")
+AUTOSTART = os.path.join(HERE, "gui", "als-autostart.sh")
 PAGE = os.path.join(HERE, "gui", "index.html")
 
 spec = importlib.util.spec_from_file_location("als_server_kg", os.path.join(HERE, "gui", "server.py"))
@@ -260,28 +261,40 @@ for forbidden in ("/dev/", '"block"', "/sys/block", "subprocess", "os.remove",
                   "os.unlink", "shutil", "mount"):
     check("the guard never reaches for %s" % forbidden, forbidden not in block, forbidden)
 
-print("6. the X server's own keys (the kiosk session, needs a layer rebuild)")
+print("6. the X server's own keys (shipped in the SYNCED autostart, no rebuild)")
 
-ses = read(SESSION)
-check("the kiosk session disables the VT-switch keys (Ctrl+Alt+F1..F12)",
-      "srvrkeys:none" in ses, "")
+boot = read(AUTOSTART)
+check("the kiosk disables the VT-switch keys (Ctrl+Alt+F1..F12)",
+      "srvrkeys:none" in boot, "")
 # There is no "terminate:none" to ask for - terminate is the option GROUP and
 # ctrl_alt_bksp its only member - so zap is cleared by wiping the machine's
-# existing options first. An empty -option before srvrkeys:none is what does it,
-# and it has to come first or it would wipe the one we just set.
-opts = re.findall(r"setxkbmap((?:\s+-option\s+(?:''|[\w:]+))+)", ses)
+# existing options first. The empty -option has to come FIRST or it would wipe
+# the one just set.
+opts = re.findall(r"setxkbmap((?:\s+-option\s+(?:''|[\w:]+))+)", boot)
 check("...and the zap key (Ctrl+Alt+Backspace), by clearing the inherited options",
       opts and opts[0].split().index("''") < opts[0].split().index("srvrkeys:none"),
       opts)
 check("it is guarded, so a machine without setxkbmap still boots",
-      "command -v setxkbmap" in ses, "")
-check("...and says in the log when it could not do it",
-      re.search(r"setxkbmap not present", ses) is not None, "")
-# Contract 1 of that file: with the kiosk off, the session behaves exactly as
-# Ubuntu does. So the key options must sit BELOW the off switch.
-off = ses.index('if [ "$KIOSK" != "on" ]')
-check("the key options only apply when the kiosk is actually on",
-      ses.index("srvrkeys:none") > off, "")
+      "command -v setxkbmap" in boot, "")
+check("...and one without a display does not try",
+      re.search(r"disable_server_keys\(\)[\s\S]{0,600}DISPLAY", boot) is not None, "")
+check("...and it says in the log when it could not do it",
+      "VT switching is still live" in boot, "")
+# Only the kiosk. This script also runs in an ordinary desktop session, where
+# the operator may well want a console.
+check("it is called from the kiosk branch, not on every boot",
+      boot.count("disable_server_keys") == 2
+      and boot.index("kiosk: $BROWSER") < boot.rindex("disable_server_keys"),
+      boot.count("disable_server_keys"))
+
+# THE SHIPPING RULE, the same one the screen-blanking duty follows: this has to
+# live on the stick, not in the baked layer, or delivering it would cost a
+# mksquashfs rebuild and a reboot instead of a file copy.
+ses = read(SESSION)
+check("the duty is NOT in the baked layer session (that would force a rebuild)",
+      "srvrkeys" not in ses or "setxkbmap" not in ses, "")
+check("...and the layer session says where it went instead",
+      "als-autostart.sh" in ses and "rebuild" in ses, "")
 
 print("7. the page arms and releases it with the board")
 

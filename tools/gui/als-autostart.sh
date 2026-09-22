@@ -366,6 +366,39 @@ write_chromium_prefs() {  # write_chromium_prefs <user-data-dir>
         > "$1/Default/Preferences"
 }
 
+# The keys the X SERVER acts on, before any application is offered them.
+#
+# Reported from the bench: during the hardware test's keyboard check - where the
+# technician is told to press every key on the machine - a Lenovo dropped out of
+# the kiosk and the screen went black. Ctrl+Alt+F1..F12 is a virtual-terminal
+# switch, handled by the X server itself: it never reaches the browser, so the
+# page's own key guard cannot cancel it, and the session is still running
+# perfectly on a VT nobody is looking at. Ctrl+Alt+Backspace (zap) ends the
+# session outright the same way.
+#
+# srvrkeys:none is xkeyboard-config's own option for this - base.lst describes
+# it as "Special keys (Ctrl+Alt+<key>) handled in a server". The empty -option
+# in front of it CLEARS whatever options the machine already had, which is the
+# only way to be sure terminate:ctrl_alt_bksp is not among them: there is no
+# terminate:none to ask for, terminate is the group and that is its only member.
+#
+# Called from the KIOSK branch only. In a normal desktop session the operator
+# may well want a console, and this script runs there too.
+#
+# Same shipping rule as stop_screen_blanking above, and for the same reason: it
+# lives in this file, on the stick, NOT in the baked layer session - so it
+# arrives with a file copy instead of a mksquashfs rebuild and a reboot.
+disable_server_keys() {
+    command -v setxkbmap >/dev/null 2>&1 || {
+        log "setxkbmap not present - VT switching (Ctrl+Alt+F1..F12) is still live"; return 0; }
+    [ -n "${DISPLAY:-}" ] || { log "no DISPLAY yet - VT switching left as the image set it"; return 0; }
+    if setxkbmap -option '' -option srvrkeys:none 2>/dev/null; then
+        log "VT-switch (Ctrl+Alt+F1..F12) and zap keys disabled for this session"
+    else
+        log "setxkbmap refused the kiosk key options - VT switching is still live"
+    fi
+}
+
 # Stop X blanking the screen, for the hardware test's dead-pixel check (contract
 # C6, screen test). A solid colour held with no keypresses is EXACTLY when X's
 # screensaver and DPMS fire, so a technician inspecting a full-screen white
@@ -428,6 +461,7 @@ if [ "$MODE" = "kiosk" ]; then
         esac
         log "kiosk: $BROWSER $ARGS $URL"
         stop_screen_blanking
+        disable_server_keys
         # No "Starting full screen" popup. It was the ONE note this script
         # raised on a successful kiosk boot, and it was wrong twice over: the
         # kiosk session has no notification service, so note() fell back to a
