@@ -3425,6 +3425,13 @@ const KBD={
     if(KBD.guarding)return;
     KBD.guarding=true;
     document.addEventListener('keydown',KBD.onKeyDown,true);
+    // And the half of the F row this listener will never be offered: on a laptop
+    // brightness, display output and aeroplane mode are acted on by the machine
+    // itself before any browser sees the key. The station watches that state
+    // while the board is up and puts it back - see /api/keyguard. Fire and
+    // forget: a station that cannot arm it still runs the test, it just cannot
+    // undo a key the technician presses, and the instructions say what to do.
+    try{ jpost('/api/keyguard',{on:true}); }catch(e){}
   },
   // Always safe to call: removing a listener that is not attached is a no-op, so
   // this both drops the guard and clears anything a previous run left. It MUST
@@ -3432,6 +3439,7 @@ const KBD={
   // row everywhere else in the kiosk.
   guardOff:function(){
     try{ document.removeEventListener('keydown',KBD.onKeyDown,true); }catch(e){}
+    if(KBD.guarding){ try{ jpost('/api/keyguard',{on:false}); }catch(e){} }
     KBD.guarding=false;
   },
   startCapture:function(){

@@ -3271,6 +3271,150 @@ def drive_health_lines(p):
     return lines
 
 
+# --------------------------------------------- the hardware test's key guard --
+# On a laptop the F row belongs to the machine, not to the browser: brightness,
+# display output, aeroplane mode. The embedded controller or the kernel acts on
+# those keys before any browser is offered them, so the page's own key guard -
+# which cancels Escape and the F row as BROWSER actions - cannot reach them. A
+# technician working through "press every key" on a Lenovo pressed one and the
+# screen went black.
+#
+# So the two pieces of state such a key can leave the station in are watched
+# here and put back: a panel backlight driven to (or near) zero, and a radio
+# soft-blocked while the station still has audits to upload. Both are volatile -
+# nothing is written to the machine's DISK, which is the rule this tool is built
+# on, and a power cycle clears either by itself.
+#
+# It is armed only while a hardware test says it is running, and it disarms
+# itself after KEYGUARD_MAX_S even if the page never asks it to, so a browser
+# that goes away cannot leave a root thread writing to the machine forever.
+KEYGUARD_MAX_S = 45 * 60
+KEYGUARD_POLL_S = 0.5
+KEYGUARD = {"on": False, "until": 0.0, "lock": threading.Lock(),
+            "backlight": {}, "rfkill": set(), "acted": []}
+
+
+def _kg_read_int(path):
+    """An int out of a sysfs file, or None. None is never a number: every caller
+    below must be able to tell 'the backlight says zero' from 'we could not read
+    the backlight', or this watchdog becomes its own false absence."""
+    try:
+        with open(path) as fh:
+            return int((fh.read() or "").strip())
+    except (OSError, ValueError):
+        return None
+
+
+def _kg_write_int(path, value):
+    try:
+        with open(path, "w") as fh:
+            fh.write("%d" % value)
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def _kg_backlights():
+    """{device path: max_brightness} for every panel backlight we can read."""
+    out = {}
+    base = os.path.join(SYS_ROOT, "class", "backlight")
+    try:
+        names = sorted(os.listdir(base))
+    except OSError:
+        return out
+    for n in names:
+        p = os.path.join(base, n)
+        mx = _kg_read_int(os.path.join(p, "max_brightness"))
+        if mx and mx > 0:
+            out[p] = mx
+    return out
+
+
+def _kg_rfkills():
+    """{device path: kind} for every rfkill switch that is NOT soft-blocked now.
+    Only these are ever unblocked later: a radio the operator turned off before
+    the test is theirs, and putting it back on would be this tool making a
+    decision nobody asked it to make."""
+    out = {}
+    base = os.path.join(SYS_ROOT, "class", "rfkill")
+    try:
+        names = sorted(os.listdir(base))
+    except OSError:
+        return out
+    for n in names:
+        p = os.path.join(base, n)
+        if _kg_read_int(os.path.join(p, "soft")) == 0:
+            out[p] = n
+    return out
+
+
+def _kg_watch():
+    while True:
+        with KEYGUARD["lock"]:
+            on = KEYGUARD["on"] and time.time() < KEYGUARD["until"]
+            if not on:
+                KEYGUARD["on"] = False
+                return
+            lights = dict(KEYGUARD["backlight"])
+            radios = set(KEYGUARD["rfkill"])
+        for path, start in lights.items():
+            mx = _kg_read_int(os.path.join(path, "max_brightness")) or 0
+            now = _kg_read_int(os.path.join(path, "brightness"))
+            # None = could not read. Not "the screen is dark": writing a
+            # brightness because a read failed would be inventing a fault.
+            if now is None or mx <= 0:
+                continue
+            floor = max(1, int(mx * 0.12))
+            if now < floor:
+                # Back to where the technician found it, never brighter.
+                target = max(floor, min(start, mx))
+                if _kg_write_int(os.path.join(path, "brightness"), target):
+                    _kg_note("screen brightness was driven to %d and has been put back to %d"
+                             % (now, target))
+        for path in radios:
+            if _kg_read_int(os.path.join(path, "soft")) == 1:
+                if _kg_write_int(os.path.join(path, "soft"), 0):
+                    _kg_note("a radio was switched off by a key and has been switched back on")
+        time.sleep(KEYGUARD_POLL_S)
+
+
+def _kg_note(msg):
+    """What the guard actually did, for the page to show the technician. Kept
+    short and capped: this is a status line, not a log."""
+    with KEYGUARD["lock"]:
+        if msg not in KEYGUARD["acted"]:
+            KEYGUARD["acted"].append(msg)
+            del KEYGUARD["acted"][:-4]
+
+
+def keyguard_arm():
+    """Start watching. Returns what is being watched, so the page can say what
+    is covered rather than implying everything is."""
+    with KEYGUARD["lock"]:
+        KEYGUARD["backlight"] = {}
+        for p, _mx in _kg_backlights().items():
+            cur = _kg_read_int(os.path.join(p, "brightness"))
+            if cur is not None:
+                KEYGUARD["backlight"][p] = cur
+        KEYGUARD["rfkill"] = set(_kg_rfkills())
+        KEYGUARD["acted"] = []
+        KEYGUARD["until"] = time.time() + KEYGUARD_MAX_S
+        already = KEYGUARD["on"]
+        KEYGUARD["on"] = True
+        watching = {"backlights": len(KEYGUARD["backlight"]),
+                    "radios": len(KEYGUARD["rfkill"])}
+    if not already:
+        threading.Thread(target=_kg_watch, daemon=True).start()
+    return watching
+
+
+def keyguard_disarm():
+    with KEYGUARD["lock"]:
+        KEYGUARD["on"] = False
+        acted = list(KEYGUARD["acted"])
+    return acted
+
+
 OPTICAL_CACHE = []   # single-item cache; hardware cannot change mid-session
 
 
@@ -5290,6 +5434,16 @@ class Handler(BaseHTTPRequestHandler):
                 STATE["token"] = None       # re-login now that TLS can succeed
                 threading.Thread(target=refresh, daemon=True).start()
             return self._send(200, {"ok": ok, "message": msg})
+
+        if u.path == "/api/keyguard":
+            # Armed while the keyboard test's board is on screen. It touches
+            # nothing on the machine's disk - only the volatile backlight and
+            # rfkill state a key on the machine's own F row can change - and it
+            # times itself out, so a browser that goes away cannot leave it
+            # running.
+            if body.get("on"):
+                return self._send(200, {"armed": True, "watching": keyguard_arm()})
+            return self._send(200, {"armed": False, "acted": keyguard_disarm()})
 
         if u.path == "/api/rescan":
             DRIVES_CACHE["ts"] = 0.0        # a rescan must re-read the hardware
