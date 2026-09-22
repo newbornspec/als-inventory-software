@@ -286,8 +286,36 @@ out.capturingAfterStop = run(`KBD.capturing`);
 out.goodDisabledAfterStop = run(`document.getElementById('kbdGood').disabled`);
 out.notesDisabledAfterStop = run(`document.getElementById('kbdNotes').disabled`);
 out.keydownAfterStop = kd();
-// The notes field takes text now the handler is gone (the owner's bug), and it is
-// carried into the result.
+out.guardingAfterStop = run(`KBD.guarding`);
+// THE LENOVO: on the stopped board the guard is still on, so Escape and the F row
+// are still cancelled - that is the window the technician pressed Escape in and
+// left the kiosk. A press here must be swallowed and must NOT be counted: the
+// capture is over and a key pressed now is not evidence about the keyboard.
+run(`PD.length = 0; SP.length = 0;`);
+out.seenBeforeStopPress = run(`KBD.seen.size`);
+press(['Escape', 'F11', 'F4']);
+out.pdAfterStop = run(`PD.slice()`);
+out.spAfterStop = run(`SP.slice()`);
+out.seenAfterStopPress = run(`KBD.seen.size`);
+// ...while a plain key is let through on the stopped board, so Tab still reaches
+// the notes field and the verdict buttons and the panel stays navigable.
+run(`PD.length = 0;`);
+press(['Tab', 'KeyZ', 'ArrowDown']);
+out.pdPlainAfterStop = run(`PD.slice()`);
+// A modifier chord is the other way out of a kiosk (Ctrl+W closes the window,
+// Ctrl+R reloads it away), so it is cancelled on the stopped board too.
+run(`PD.length = 0;`);
+run(`document.dispatch('keydown',{code:'KeyW',key:'w',ctrlKey:true,
+  preventDefault:function(){PD.push('Ctrl+W');},stopPropagation:function(){SP.push('Ctrl+W');}});`);
+out.pdChordAfterStop = run(`PD.slice()`);
+// The notes field still takes text with the guard up - the handler stands down
+// for any text field, which is what kept the owner's "keys vanish" bug fixed.
+run(`document.getElementById('kbdNotes').focus ? document.getElementById('kbdNotes').focus() : 0;`);
+run(`PD.length = 0;`);
+run(`document.dispatch('keydown',{code:'KeyH',key:'h',
+  target:document.getElementById('kbdNotes'),
+  preventDefault:function(){PD.push('notes');},stopPropagation:function(){SP.push('notes');}});`);
+out.pdInNotes = run(`PD.slice()`);
 run(`document.getElementById('kbdNotes').value = 'all keys felt fine';`);
 run(`document.getElementById('kbdGood').click();`);
 await p;
@@ -448,8 +476,32 @@ process.stdout.write(JSON.stringify(out));
           o.get("capturingAfterStop") is False and o.get("goodDisabledAfterStop") is False
           and o.get("notesDisabledAfterStop") is False,
           (o.get("capturingAfterStop"), o.get("goodDisabledAfterStop"), o.get("notesDisabledAfterStop")))
-    check("...and hands the keydown handler back on Stop (so the notes field takes text)",
-          o.get("keydownAfterStop") == 0, o.get("keydownAfterStop"))
+    # THE LENOVO. The guard used to be attached only while capturing, so between
+    # Stop and the verdict - the board still on screen, the technician still at
+    # the keyboard - Escape and the F row went straight to the browser. On a
+    # Lenovo that took the kiosk off the screen and left it black. The listener
+    # now stays for as long as the board does.
+    check("the guard is still attached on the stopped board (exactly one handler)",
+          o.get("keydownAfterStop") == 1 and o.get("guardingAfterStop") is True,
+          (o.get("keydownAfterStop"), o.get("guardingAfterStop")))
+    stop_pd = set(o.get("pdAfterStop") or [])
+    check("Escape and the F row are still cancelled after Stop",
+          {"Escape", "F11", "F4"}.issubset(stop_pd),
+          sorted({"Escape", "F11", "F4"} - stop_pd))
+    check("...and stopped as well, before anything downstream can act",
+          {"Escape", "F11", "F4"}.issubset(set(o.get("spAfterStop") or [])),
+          o.get("spAfterStop"))
+    check("a key pressed after Stop is swallowed but NOT counted as tested",
+          o.get("seenAfterStopPress") == o.get("seenBeforeStopPress"),
+          (o.get("seenBeforeStopPress"), o.get("seenAfterStopPress")))
+    check("Ctrl+W is cancelled on the stopped board (it would close the kiosk)",
+          o.get("pdChordAfterStop") == ["Ctrl+W"], o.get("pdChordAfterStop"))
+    # The guard is narrow on the stopped board on purpose: swallowing Tab there
+    # would leave the notes field and the verdicts unreachable from the keyboard.
+    check("plain keys are let through after Stop, so the panel stays navigable",
+          o.get("pdPlainAfterStop") == [], o.get("pdPlainAfterStop"))
+    check("a keystroke aimed at the notes field is never cancelled (the owner's bug)",
+          o.get("pdInNotes") == [], o.get("pdInNotes"))
 
     gd = o.get("good") or {}
     check("'Keyboard is good' stores PASSED", gd.get("status") == "PASSED", gd)

@@ -3241,7 +3241,8 @@ const KBD={
   built:null,       // the built layout {sections,keys} for the current device+standard
   seen:null,        // a Set of every event.code seen this run
   keyEls:{},        // code -> the on-screen key element, for lighting it up
-  capturing:false,  // true while the document keydown handler is attached
+  capturing:false,  // true while keys are being counted
+  guarding:false,   // true while the document keydown listener is attached
   resolve:null,     // resolves the runner's promise once one result is recorded
 
   keys:function(){ return (KBD.built&&KBD.built.keys)||[]; },
@@ -3345,7 +3346,7 @@ const KBD={
   // act, THEN lights the key. Guarded on KBD.capturing so that even if it somehow
   // outlived a sweep it would do nothing.
   onKeyDown:function(e){
-    if(!KBD.capturing)return;
+    if(!KBD.capturing&&!KBD.guarding)return;
     // The grab is on the whole document, so it also sees keys meant for anything
     // the operator opened by mouse WHILE the sweep is live: the Settings gear and
     // the restart button sit in the always-visible header and are not locked during
@@ -3357,9 +3358,43 @@ const KBD={
     // fields (its keys are buttons), so a genuine sweep is never affected.
     const t=e&&e.target, tag=t&&t.tagName;
     if(tag==='INPUT'||tag==='TEXTAREA'||tag==='SELECT'||(t&&t.isContentEditable))return;
+    // Between Continue and the verdict the board is on screen but capture may be
+    // stopped, and THAT is the window a technician pressed Escape in on a Lenovo
+    // and left the kiosk. While only guarding we still cancel the keys that can
+    // disturb the session - Escape, the whole F row, and anything held with
+    // Ctrl/Alt/Meta (Ctrl+W closes the kiosk window, Ctrl+R reloads it away) -
+    // but let plain typing and navigation through, so Tab still reaches the notes
+    // field and the verdict buttons. While capturing, every key is cancelled as
+    // before: the technician is pressing them all on purpose.
+    if(!KBD.capturing&&!KBD.dangerous(e))return;
     if(e){ if(e.preventDefault)e.preventDefault(); if(e.stopPropagation)e.stopPropagation(); }
+    // Only a live capture counts a key. A press that merely got swallowed on the
+    // stopped board is not evidence about the keyboard, and lighting it would put
+    // a key the technician never meant to test into the record.
+    if(!KBD.capturing)return;
     const code=e&&e.code; if(!code)return;
     KBD.markSeen(code);
+  },
+
+  // The keys that can take the kiosk down or off this page. Escape leaves a
+  // full-screen surface, the F row carries the browser's own shortcuts (Find,
+  // reload, caret browsing, full-screen toggle), and a modifier held down turns
+  // an ordinary letter into Close Window or Reload.
+  // Both key AND code: they agree for Escape and the F row on an ordinary
+  // keyboard, but a remapped or non-Latin layout can change key while code stays
+  // physical, and the physical key is the one that reaches the browser's
+  // shortcut table. Either naming it is enough to swallow it.
+  dangerous:function(e){
+    if(!e)return false;
+    if(e.ctrlKey||e.metaKey||e.altKey)return true;
+    if(e.keyCode===27)return true;
+    const fn=/^F([1-9]|1[0-9]|2[0-4])$/;
+    for(const k of [e.key,e.code]){
+      if(typeof k!=='string')continue;
+      if(k==='Escape'||k==='Esc')return true;
+      if(fn.test(k))return true;
+    }
+    return false;
   },
 
   // Enable/disable the verdicts and notes and set the wording, from KBD.capturing
@@ -3374,26 +3409,42 @@ const KBD={
     });
     const t=$('kbdToggle'); if(t) t.textContent=cap?'Stop capturing keys':'Capture more keys';
     const instr=$('kbdInstr'); if(instr) instr.textContent=cap
-      ? 'Capturing keys: press every key on this machine’s keyboard — each one lights up here as you press it. Keys the browser cannot see are listed below; they are not failures. Click “Stop capturing keys” with the mouse when you are done (every key is captured while this is on, so the mouse is the way out).'
+      ? 'Capturing keys: press every key on this machine’s keyboard — each one lights up here as you press it. Keys the browser cannot see are listed below; they are not failures. A few keys are handled by the laptop itself before any software sees them — screen brightness, the display-output key, aeroplane mode, volume — so they will not light up, and one of them may dim the screen or switch the display: press it again, or the brightness-up key, to bring it back. Nothing is lost if that happens. Click “Stop capturing keys” with the mouse when you are done (every key is captured while this is on, so the mouse is the way out).'
       : 'Capture stopped. Check the keys not seen yet, click any you have confirmed by hand, add a note if needed, then record your verdict — or click “Capture more keys” to test more.';
     const board=$('kbdBoard'); if(board) board.classList.toggle('kbd-live',cap);
   },
 
+  // Arm the guard: ONE document keydown listener, capture phase, so it sees each
+  // key before the browser acts on it. It goes on when the board appears and
+  // comes off when the panel is done with (guardOff), because the danger is not
+  // confined to a live capture - a technician on the stopped board pressed
+  // Escape on a Lenovo and left the kiosk. Idempotent: addEventListener with the
+  // same function and phase twice registers once, and the flag keeps the count
+  // honest for the tests that assert exactly one.
+  guardOn:function(){
+    if(KBD.guarding)return;
+    KBD.guarding=true;
+    document.addEventListener('keydown',KBD.onKeyDown,true);
+  },
+  // Always safe to call: removing a listener that is not attached is a no-op, so
+  // this both drops the guard and clears anything a previous run left. It MUST
+  // run before the panel goes away, or the guard would swallow Escape and the F
+  // row everywhere else in the kiosk.
+  guardOff:function(){
+    try{ document.removeEventListener('keydown',KBD.onKeyDown,true); }catch(e){}
+    KBD.guarding=false;
+  },
   startCapture:function(){
     if(KBD.capturing)return;
     KBD.capturing=true;
-    // Attach the keydown listener ONLY now, in the capture phase, so it sees each
-    // key before the browser acts on it. It comes off again the instant capture
-    // stops (stopCapture), so it never lingers to swallow keys elsewhere.
-    document.addEventListener('keydown',KBD.onKeyDown,true);
+    KBD.guardOn();
     KBD.syncControls();
   },
-  // Always safe to call: removing a listener that is not attached is a no-op, so
-  // this both stops a live capture and clears anything a previous run left. The
-  // listener MUST be gone the moment capture stops, or it would swallow keys in
-  // the notes field, the sign-in box and the rest of the kiosk.
+  // Stop counting keys. The guard STAYS on: the board is still on screen, the
+  // technician is still at the keyboard, and the keys that can end the session
+  // are exactly as dangerous now as they were a second ago. The notes field
+  // still takes text, because the handler stands down for any text field.
   stopCapture:function(){
-    try{ document.removeEventListener('keydown',KBD.onKeyDown,true); }catch(e){}
     KBD.capturing=false;
     KBD.syncControls();
   },
@@ -3461,6 +3512,10 @@ const KBD={
   // is removed), keep the keys already seen, and let the technician pick again.
   backToChooser:function(){
     KBD.stopCapture();
+    // The board is leaving the screen, so the guard goes with it: on the chooser
+    // the technician is not pressing every key, and swallowing Escape and the F
+    // row there would be a grab with nothing to justify it.
+    KBD.guardOff();
     KBD.showChooser();
   },
 
@@ -3471,6 +3526,7 @@ const KBD={
   // the runner's promise resolving.
   finish:function(record){
     KBD.stopCapture();
+    KBD.guardOff();
     const r=KBD.resolve; KBD.resolve=null;
     record();
     try{ const d=$('hwtDetail_keyboard'); if(d) d.innerHTML=''; }catch(e){}
@@ -3497,7 +3553,7 @@ const KBD={
    and Continue is pressed, so the keydown handler is attached only once the board
    is on screen. */
 HWT_RUNNERS.keyboard=async function(){
-  KBD.stopCapture();          // drop any handler a previous run might have left
+  KBD.stopCapture(); KBD.guardOff();   // drop any handler a previous run left
   KBD.device=''; KBD.pending=''; KBD.iso=true;
   KBD.built=null; KBD.seen=new Set(); KBD.keyEls={}; KBD.resolve=null;
   const d=$('hwtDetail_keyboard');
