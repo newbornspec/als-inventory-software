@@ -14,7 +14,11 @@ import { AVAILABLE, GONE as GONE_STATUSES } from './stock-status';
 import { nextUnitId } from './unit-id';
 import { Batch, BatchStatus } from '../batches/batch.entity';
 import { AssetEventType, AssetHistory } from './asset-history.entity';
-import { AssetAudit, DataWipeStatus } from './asset-audit.entity';
+import {
+  AssetAudit,
+  AutopilotOobeCheck,
+  DataWipeStatus,
+} from './asset-audit.entity';
 import { assertMayClaimWiped } from './manual-wipe';
 import { isNotAnErase } from './wipe-method';
 import { PermissionsService } from '../auth/permissions.service';
@@ -22,6 +26,8 @@ import { CreateAssetDto } from './dto/create-asset.dto';
 import { UpdateAssetDto } from './dto/update-asset.dto';
 import { QueryAssetsDto } from './dto/query-assets.dto';
 import { CreateAssetAuditDto } from './dto/create-asset-audit.dto';
+import { RecordAutopilotOobeDto } from './dto/record-autopilot-oobe.dto';
+import { lockStatusWithOobe } from '../devices/wipe-detail';
 import { sanitizeUser } from '../users/sanitize-user';
 import { screenSizeFor, standardiseRamGb } from '../common/spec-normalise';
 import { ActivityService } from '../activity/activity.service';
@@ -499,6 +505,76 @@ export class AssetsService {
 
   // Mark as Sold: terminal status, out of every active view, locked for
   // non-admins. The batch/lot links stay for provenance and the return path.
+
+  // Record what a technician saw on the machine's first Windows screen after
+  // imaging - the only Autopilot answer in this system that is not inference.
+  //
+  // It lands on the MOST RECENT audit for the asset, because that is the audit
+  // whose lock findings it corroborates or overturns, and because a machine
+  // re-audited later gets a fresh observation rather than inheriting an old
+  // one. No audit means nowhere to put it, and that is an error rather than a
+  // silent no-op: the operator has just looked at a screen and is entitled to
+  // know their answer was not filed.
+  async recordAutopilotOobe(
+    assetId: string,
+    dto: RecordAutopilotOobeDto,
+    user: RequestUser,
+  ): Promise<AssetAudit> {
+    await this.findOne(assetId, user); // 404s if not visible to this user
+    const [audit] = await this.audits.find({
+      where: { assetId },
+      order: { createdAt: 'DESC' },
+      take: 1,
+    });
+    if (!audit) {
+      throw new NotFoundException(
+        'This device has no audit to attach the OOBE check to. Audit it first.',
+      );
+    }
+    // An organisation nobody wrote down is most of the observation thrown
+    // away: the name is what gets the device released, and it is on screen in
+    // front of them as they answer.
+    const organisation = (dto.organisation ?? '').trim();
+    if (dto.result === 'organisation' && !organisation) {
+      throw new BadRequestException(
+        'Record the organisation the screen named - it is what a deregistration request needs.',
+      );
+    }
+    const check: AutopilotOobeCheck = {
+      result: dto.result,
+      organisation: dto.result === 'organisation' ? organisation : null,
+      reason: dto.result === 'blocked' ? (dto.reason ?? '').trim() || null : null,
+      photographed: dto.photographed === true,
+      note: (dto.note ?? '').trim() || null,
+      checkedAt: new Date().toISOString(),
+      checkedByUserId: user.userId ?? null,
+      checkedByName: user.email ?? null,
+    };
+    await this.audits.update(audit.id, {
+      autopilotOobe: check,
+      // The roll-up is re-derived rather than patched: an OOBE that named an
+      // organisation outranks every offline check, and nothing else about the
+      // stored lock evidence has changed.
+      lockStatus: lockStatusWithOobe(audit.lockStatus, check),
+    });
+    await this.logEvent(
+      assetId,
+      AssetEventType.STATUS_CHANGED,
+      user.userId,
+      dto.result === 'organisation'
+        ? `First-boot OOBE named an organisation: ${organisation}. The device is Autopilot-registered and cannot be resold until it is deregistered.`
+        : dto.result === 'generic'
+          ? 'First-boot OOBE showed the generic Microsoft setup - no Autopilot profile was served to this device on this date.'
+          : `First-boot OOBE check could not be made${check.reason ? `: ${check.reason}` : ''}.`,
+    );
+    const [fresh] = await this.audits.find({
+      where: { assetId },
+      order: { createdAt: 'DESC' },
+      take: 1,
+    });
+    return fresh ?? audit;
+  }
+
   async sell(id: string, user: RequestUser, salePrice?: number): Promise<Asset> {
     const before = await this.findOne(id, user);
     if (before.stockStatus === AssetStockStatus.SOLD) {

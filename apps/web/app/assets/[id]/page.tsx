@@ -22,6 +22,7 @@ import {
 import { PhotosSection } from './photos-section';
 import { HardwareSection } from './hardware-section';
 import { DeviceLocksSection, type DeviceLocks } from './device-locks-section';
+import { AutopilotOobeCheck, type OobeCheck } from './autopilot-oobe-check';
 
 interface AssetHistoryEntry {
   id: string;
@@ -396,6 +397,17 @@ export default async function AssetDetailPage({
               be resold at all outranks how much RAM it has. */}
           <DeviceLocksSection
             locks={(asset.hardwareProfile as { locks?: DeviceLocks } | null)?.locks}
+          />
+          {/* The one Autopilot answer that is not inference. Sits directly
+              under the offline lock checks because it corroborates or
+              overturns them: an organisation on that screen means the device
+              is registered, whatever the checks above found. Recorded by hand
+              because the station is not running when it happens - the machine
+              has rebooted into Windows by then. */}
+          <AutopilotOobeCheck
+            assetId={asset.id}
+            check={(latestAudit as { autopilotOobe?: OobeCheck } | null)?.autopilotOobe}
+            canRecord={mayAudit && !isSold}
           />
           {/* Status and the capture date are the warehouse record's own facts,
               not the machine's — the captured profile cannot supply them, so the

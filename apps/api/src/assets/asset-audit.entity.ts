@@ -42,6 +42,32 @@ export interface FunctionalTestResults {
 // pre-resale, post-repair), and ITAD compliance requires keeping the full
 // trail, not just the latest snapshot. Asset.conditionGrade/auditStatus are
 // denormalized from the most recent row here for fast list filtering.
+// What a technician saw on the machine's first Windows screen after imaging.
+//
+//   organisation  OOBE named an organisation: the device IS Autopilot-registered
+//                 and cannot be freely resold until that organisation, or
+//                 Microsoft support on proof of ownership, deregisters it.
+//   generic       Microsoft's own setup screen. The strongest negative that can
+//                 be obtained: the service was asked, about this hardware hash,
+//                 on this date, and served no profile.
+//   blocked       the check could not be made - no network at OOBE, the machine
+//                 would not boot, imaging was skipped. NOT a negative.
+export interface AutopilotOobeCheck {
+  result: 'organisation' | 'generic' | 'blocked';
+  // The organisation OOBE named, when it named one. This is the single most
+  // useful fact on the whole record for getting a device released.
+  organisation?: string | null;
+  // Why the check could not be made, for 'blocked'.
+  reason?: string | null;
+  // Whether the technician kept a photograph of the screen. Microsoft's
+  // deregistration process asks for one by name, so the record tracks it.
+  photographed?: boolean;
+  note?: string | null;
+  checkedAt: string;
+  checkedByUserId?: string | null;
+  checkedByName?: string | null;
+}
+
 @Entity('asset_audits')
 export class AssetAudit {
   @PrimaryGeneratedColumn('uuid')
@@ -249,6 +275,18 @@ export class AssetAudit {
   // server from hardware_profile - see lockStatusOf in devices/wipe-detail.ts.
   @Column({ name: 'lock_status', type: 'varchar', length: 16, nullable: true })
   lockStatus: string | null;
+
+  // The first-boot OOBE check: the one Autopilot answer that is not a guess.
+  //
+  // A registered device reaches OOBE, asks Microsoft's ZTD service and is shown
+  // the OWNING ORGANISATION'S branded sign-in. Nobody else can query that -
+  // registration lives in the cloud against the hardware hash - so this is the
+  // only observation in the system that settles it.
+  //
+  // NULL means nobody has looked, which is not the same as 'generic'. See the
+  // migration for why there is no backfill.
+  @Column({ name: 'autopilot_oobe', type: 'jsonb', nullable: true })
+  autopilotOobe: AutopilotOobeCheck | null;
 
   // Human-readable limitations of this wipe. [] = the engine reported none;
   // NULL = not reported (older stick).

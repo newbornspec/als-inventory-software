@@ -23,6 +23,7 @@ import { CreateAssetDto } from './dto/create-asset.dto';
 import { UpdateAssetDto } from './dto/update-asset.dto';
 import { QueryAssetsDto } from './dto/query-assets.dto';
 import { CreateAssetAuditDto } from './dto/create-asset-audit.dto';
+import { RecordAutopilotOobeDto } from './dto/record-autopilot-oobe.dto';
 
 @Controller('assets')
 @UseGuards(JwtAuthGuard, PermissionsGuard)
@@ -179,6 +180,18 @@ export class AssetsController {
   }
 
   // Returning a sold item to inventory requires return_sold, per the Sold workflow.
+  // The first-boot OOBE check. Same permission as running an audit: this is
+  // the last step of processing a machine, made by the person holding it.
+  @RequirePermissions('perform_goods_in_audit')
+  @Post(':id/autopilot-oobe')
+  recordAutopilotOobe(
+    @Param('id') id: string,
+    @Body() dto: RecordAutopilotOobeDto,
+    @Req() req: any,
+  ) {
+    return this.assets.recordAutopilotOobe(id, dto, req.user);
+  }
+
   @RequirePermissions('return_sold')
   @Post(':id/return')
   returnFromSold(

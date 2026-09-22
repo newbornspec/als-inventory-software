@@ -323,3 +323,27 @@ export function lockStatusOf(
   const s = raw.trim().toUpperCase();
   return (LOCK_STATUSES as readonly string[]).includes(s) ? s : null;
 }
+
+// The device-lock roll-up, with the one observation that outranks every offline
+// check folded in.
+//
+// lockStatusOf reads the hardware profile, which is everything the station
+// could see from OUTSIDE a running Windows. The OOBE check is what the machine
+// itself was told by Microsoft, out loud, on its own screen - so when a
+// technician recorded that OOBE named an organisation, the device is LOCKED and
+// no amount of clean offline evidence changes that.
+//
+// The reverse does NOT hold, deliberately. A generic OOBE means the service
+// served no profile to that hardware hash on that day; it does not promote a
+// device to CLEAR, because the offline checks may have found a domain join, a
+// firmware password or an Absolute agent that OOBE knows nothing about, and
+// because a registration added tomorrow would not have shown yesterday.
+export function lockStatusWithOobe(
+  fromProfile: string | null,
+  oobe: { result?: unknown } | null | undefined,
+): string | null {
+  const seen = isObject(oobe) ? oobe.result : undefined;
+  if (seen === 'organisation') return 'LOCKED';
+  return fromProfile;
+}
+
