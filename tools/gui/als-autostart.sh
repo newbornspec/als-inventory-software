@@ -419,6 +419,59 @@ disable_app_keys() {
     log "cleared $cleared laptop browser/media key(s) so they cannot act on the kiosk"
 }
 
+# The Windows event-log reader, installed from the stick instead of baked into
+# the squashfs layer.
+#
+# The Autopilot check reads
+# Microsoft-Windows-ModernDeployment-Diagnostics-Provider%4Autopilot.evtx - the
+# log OOBE writes every ZTD attempt and result into - and that needs evtxexport
+# from libevtx-utils, which is not on the stock Ubuntu image.
+#
+# It COULD go in the layer (make-als-layer.sh lists it too, so a rebuilt stick
+# gets it that way). It is here as well because a layer rebuild costs a
+# mksquashfs run and a reboot on the audit machine, and three .deb files on a
+# FAT32 partition cost a file copy - the same reason als-autostart.sh exists at
+# all. Whichever arrives first wins; this is a no-op when the tool is present.
+#
+# Offline: dpkg -i, never apt, because the bench has no guaranteed network and
+# a package install that needs one is a package install that fails on the day
+# it matters. libc6 and libgcc-s1 are the only other dependencies and are on
+# every Ubuntu image already.
+#
+# Never fatal. A station that cannot install it still audits; the Autopilot
+# check then says the build cannot read event logs, which is not the same as
+# saying the machine carries no traces.
+install_evtx_reader() {
+    if command -v evtxexport >/dev/null 2>&1; then
+        log "evtxexport already present - event log reading available"
+        return 0
+    fi
+    d="$MEDIA/debs"
+    if [ ! -d "$d" ]; then
+        log "no debs/ on the stick - Autopilot event-log reading unavailable"
+        return 0
+    fi
+    set -- "$d"/*.deb
+    if [ ! -e "$1" ]; then
+        log "debs/ on the stick is empty - Autopilot event-log reading unavailable"
+        return 0
+    fi
+    # Root: the same passwordless sudo the backend uses to mount and to erase.
+    if [ "$(id -u)" = "0" ]; then
+        dpkg -i "$@" >/dev/null 2>&1
+    elif command -v sudo >/dev/null 2>&1; then
+        sudo -n dpkg -i "$@" >/dev/null 2>&1
+    else
+        log "no root available to install the event-log reader"
+        return 0
+    fi
+    if command -v evtxexport >/dev/null 2>&1; then
+        log "installed the event-log reader (evtxexport) from the stick"
+    else
+        log "could not install the event-log reader from the stick - the Autopilot check will say so"
+    fi
+}
+
 # The keys the X SERVER acts on, before any application is offered them.
 #
 # Reported from the bench: during the hardware test's keyboard check - where the
@@ -516,6 +569,7 @@ if [ "$MODE" = "kiosk" ]; then
         stop_screen_blanking
         disable_server_keys
         disable_app_keys
+        install_evtx_reader
         # No "Starting full screen" popup. It was the ONE note this script
         # raised on a successful kiosk boot, and it was wrong twice over: the
         # kiosk session has no notification service, so note() fell back to a
@@ -534,6 +588,8 @@ fi
 log "opening a normal (non-kiosk) browser window at $URL"
 note "ALS Audit Station is ready" "Opening $URL in a normal window."
 stop_screen_blanking
+# Not a kiosk-only duty: the audit engine reads event logs in either session.
+install_evtx_reader
 # firefox-esr by name when the layer carries it. xdg-open picks the desktop's
 # DEFAULT browser, which on this image is firefox_firefox.desktop - the snap's
 # entry, which does not exist once snapd is masked - and dpkg -x never ran

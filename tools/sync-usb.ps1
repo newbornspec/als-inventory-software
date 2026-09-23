@@ -81,6 +81,12 @@ $files = [ordered]@{
 # regenerated archive can never silently replace a known-good one.
 $trees = [ordered]@{
     'boot\dist\theme' = 'boot\theme'
+    # The Windows event-log reader (libevtx-utils and its two dependencies),
+    # installed at boot by als-autostart.sh's install_evtx_reader. It rides on
+    # the stick rather than in the squashfs layer so it arrives with a file
+    # copy instead of a mksquashfs rebuild and a reboot on the audit machine -
+    # the same reason gui/als-autostart.sh itself lives out here.
+    'debs' = 'debs'
 }
 
 # Set by Sync-Stick instead of returned. In PowerShell a function's Write-Output

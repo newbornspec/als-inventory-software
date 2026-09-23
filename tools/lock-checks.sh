@@ -929,7 +929,17 @@ _ap_read_evt() {
 # Split out so a test can stand in for the reader without a real .evtx, and so
 # the timeout and the byte cap live in exactly one place.
 als_evtx_dump() {
-  timeout "${ALS_EVTX_TIMEOUT:-25}" evtxexport -f text "$1" 2>/dev/null | LC_ALL=C head -c 2000000
+  local out rc
+  # PIPESTATUS, not the pipeline's own status. A pipeline reports the LAST
+  # command, which is head, and head succeeds on an empty stream - so a failed
+  # evtxexport returned 0 and the caller reported "present but held no readable
+  # records" instead of "could not be read". Both are honest non-answers, but
+  # they send an operator to different places. head still does the capping, so
+  # a huge log is never held whole in memory.
+  out=$(timeout "${ALS_EVTX_TIMEOUT:-25}" evtxexport -f text "$1" 2>/dev/null         | LC_ALL=C head -c 2000000; exit "${PIPESTATUS[0]}")
+  rc=$?
+  [ "$rc" -eq 0 ] || return 1
+  printf '%s' "$out"
 }
 
 _autopilot_verdict() {
