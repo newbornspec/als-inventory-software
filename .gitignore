@@ -19,3 +19,6 @@ importact.txt
 *credentials*.txt
 env-*.txt
 *.env.backup
+
+# Word/Excel lock files, created when a doc is open
+~$*
