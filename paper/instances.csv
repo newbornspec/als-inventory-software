@@ -1,0 +1,33 @@
+id,group_commit,fix_date,sub_instance,component,layer,probe,failure_value,negative_value,reported_as,user_visible,reached_certificate,intro_commit,intro_date,latency_days,found_by,test_existed,why_test_missed
+1,b36e3ab,2026-09-23,1,hidden-drive scan,station-capture,list /sys/bus/pci/devices,empty list,empty list,"No hidden drives",yes,no,9cfb422,2026-09-19,4,sweep,yes,fixture supplied a readable sysfs
+2,3092fd5,2026-09-22,1,lock_status roll-up,station-locks,read LOCK_ROWS,empty string,empty string,"No lock detected",yes,yes,a61f70b,2026-09-02,20,sweep,yes,no fixture with zero rows
+3,3092fd5,2026-09-22,2,run_lock_checks,station-locks,detector files a row,no row,no row,check silently absent,yes,yes,a61f70b,2026-09-02,20,sweep,yes,fixtures always filed a row
+4,3092fd5,2026-09-22,3,lock_mount_windows,station-locks,mount NTFS volume,mount fails,no volume found,"No readable Windows installation found",yes,no,a61f70b,2026-09-02,20,sweep,no,no hibernated-volume fixture
+5,5bc49d4,2026-09-21,1,trackpad summary,api-format,gesture booleans,field absent,false,"Movement and buttons work",yes,no,294c3e6,2026-09-20,1,sweep,yes,fixture always set all four
+6,66d72bc,2026-09-21,1,wipe limitations,api-ingest,parse limitations array,entries filtered out,empty array,"Limitations: None reported",yes,yes,5c0f1a8,2026-09-19,2,sweep,yes,fixture sent well-formed strings
+7,5ab21f1,2026-09-21,1,OS disk verdict,station-capture,read filesystems,no fs identified,no fs present,"No operating system installed",yes,no,67cbbc7,2026-09-20,1,sweep,yes,no locked-SED fixture
+8,5ab21f1,2026-09-21,2,TPM detection,station-capture,read /sys/class/tpm,device absent,no TPM fitted,"No TPM detected",yes,no,6903bb0,2026-07-13,70,sweep,no,no fixture at all
+9,5ab21f1,2026-09-21,3,device type,station-capture,battery health percent,unreadable,no battery,recorded as Desktop,yes,no,6903bb0,2026-07-13,70,sweep,no,no fixture at all
+10,5ab21f1,2026-09-21,4,optical drive,station-kiosk,lsblk TYPE rom,command fails,no rom device,"Not present" (and cached),yes,no,582e32f,2026-07-26,57,sweep,no,no fixture at all
+11,5ab21f1,2026-09-21,5,system clock check,station-kiosk,fetch reference time,fetch fails,clock is correct,green tick,yes,no,af1a63e,2026-07-27,56,sweep,no,no fixture at all
+12,5ab21f1,2026-09-21,6,hardware panel,station-kiosk,any profile field,field empty,component absent,"Not detected",yes,no,582e32f,2026-07-26,57,sweep,no,no fixture at all
+13,5ab21f1,2026-09-21,7,namespace coverage,station-engine,enumerate NVMe namespaces,computed then discarded,full coverage,no limitation on certificate,yes,yes,19f1519,2026-07-15,68,sweep,yes,fixture had one namespace
+14,d197ebe,2026-09-21,1,certificate gate,api-rollup,expected-drive set,empty set,all drives wiped,"wiped" certificate issued,yes,yes,5f7da58,2026-09-19,2,sweep,yes,fixture always carried drives
+15,7037985,2026-09-21,1,offline queue,station-kiosk,read queue JSONL,parse fails,queue empty,queue rewritten; records destroyed,no,no,8a4fc74,2026-08-09,43,sweep,yes,fixture supplied valid JSONL
+16,d958b21,2026-09-21,1,MDM enrolment,station-locks,list enrolment keys,listing fails,not enrolled,"Not enrolled",yes,yes,a61f70b,2026-09-02,19,sweep,yes,fixture supplied a readable hive
+17,d958b21,2026-09-21,2,UEFI setup mode,station-locks,read SetupMode var,legacy boot,normal mode,no row filed at all,yes,yes,a61f70b,2026-09-02,19,sweep,yes,no legacy-boot fixture
+18,d958b21,2026-09-21,3,BitLocker scan,station-locks,scan volumes,partial scan,no encrypted volumes,"No BitLocker volumes",yes,yes,a61f70b,2026-09-02,19,sweep,yes,fixture scanned completely
+19,d958b21,2026-09-21,4,BIOS password,station-locks,read is_enabled,unrecognised value,no password,"No BIOS password set",yes,yes,a61f70b,2026-09-02,19,sweep,yes,fixture used 0/1 only
+20,d958b21,2026-09-21,5,TPM ownership,station-locks,tpm2_getcap,field absent,no owner auth,"no owner authorisation set",yes,yes,a61f70b,2026-09-02,19,sweep,yes,fixture included the field
+21,768e9c3,2026-09-21,1,Autopilot traces,station-locks,four hive reads,hive unopenable,no traces,"No local Autopilot traces",yes,yes,91d30dc,2026-09-02,19,hardware,yes,fixture supplied a readable hive
+22,45526b2,2026-09-21,1,Entra ID join,station-locks,match tenant GUID,filter drops valid GUID,not joined,PASS / CLEAR,yes,yes,a61f70b,2026-09-02,19,hardware,yes,fixture GUID matched the filter
+23,fe44ab7,2026-09-21,1,USB port test,station-hwtest,read USB bus,read fails,no ports responded,"0 ports responded",yes,no,3c6e823,2026-09-20,1,hardware,yes,fixture supplied a readable bus
+24,be8d27d,2026-09-20,1,hidden drives,station-capture,relative sysfs path,reads nothing,no hidden drives,"No hidden drives" + invented count,yes,no,9cfb422,2026-09-19,1,review,no,no fixture at all
+25,e688db2,2026-09-20,1,OS detection,station-capture,filter fs type ntfs,BitLocker not matched,no Windows present,"No operating system installed",yes,no,67cbbc7,2026-09-20,0,hardware,yes,no BitLocker fixture
+26,086ea3d,2026-09-20,1,hardware profile,web-display,several profile fields,field empty,not fitted,asserted as measured,yes,no,ad20115,2026-07-13,69,review,no,no fixture at all
+27,533a61a,2026-09-02,1,Autopilot detector,station-locks,hivex read,read fails,no traces,negative asserted,yes,yes,a61f70b,2026-09-02,0,review,no,no fixture at all
+28,533a61a,2026-09-02,2,MDM detector,station-locks,hivex read,read fails,not enrolled,negative asserted,yes,yes,a61f70b,2026-09-02,0,review,no,no fixture at all
+29,533a61a,2026-09-02,3,Entra detector,station-locks,hivex read,read fails,not joined,negative asserted,yes,yes,a61f70b,2026-09-02,0,review,no,no fixture at all
+30,533a61a,2026-09-02,4,domain detector,station-locks,hivex read,read fails,not joined,negative asserted,yes,yes,a61f70b,2026-09-02,0,review,no,no fixture at all
+31,533a61a,2026-09-02,5,BitLocker detector,station-locks,hivex read,read fails,not encrypted,negative asserted,yes,yes,a61f70b,2026-09-02,0,review,no,no fixture at all
+32,533a61a,2026-09-02,6,Absolute detector,station-locks,hivex read,read fails,not present,negative asserted,yes,yes,a61f70b,2026-09-02,0,review,no,no fixture at all
