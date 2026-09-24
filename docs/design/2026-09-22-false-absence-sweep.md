@@ -37,6 +37,11 @@ The output of this system is an erasure certificate a buyer relies on. Every
 one of the twenty-three defects failed in the direction that costs money and
 breaks the law. Not one produced a false alarm.
 
+*Recount, 24 September 2026: the paper counts this same catalogue per
+call site rather than per defect, giving **32 call sites across 15 fix
+commits**. The figures are not in conflict; the counting rule is in
+`paper/method.md` §4.3 and the rows are in `paper/instances.csv`.*
+
 ## The evidence table
 
 Newest first. "Found by" is how the defect actually surfaced, not how it could

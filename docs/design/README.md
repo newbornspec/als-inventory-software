@@ -4,7 +4,7 @@ One dated document per piece of work, kept in this repository. The purpose is a
 paper trail an engineer — or a technical paper — can be written from later,
 without having to reconstruct the reasoning from commit messages and memory.
 
-**Coverage: 9 July – 23 September 2026, 526 commits, 38 records.**
+**Coverage: 9 July – 24 September 2026, 534 commits, 40 records.**
 
 ## The convention
 
@@ -49,6 +49,8 @@ Newest first.
 
 | Date | Record | What it covers |
 | --- | --- | --- |
+| 09-24 | [technical-paper-draft](2026-09-24-technical-paper-draft.md) | The complete paper draft, its dataset, and the three figures that were wrong when checked |
+| 09-23 | [technical-paper-plan](2026-09-23-technical-paper-plan.md) | Which of the three threads carries a paper, and what evidence each one has |
 | 09-23 | [autopilot-oobe-check](2026-09-23-autopilot-oobe-check.md) | The first-boot OOBE check: the only Autopilot answer that is not inference |
 | 09-23 | [event-log-reader-on-stick](2026-09-23-event-log-reader-on-stick.md) | Shipping a package by file copy instead of a squashfs rebuild |
 | 09-22 | [autopilot-offline-evidence](2026-09-22-autopilot-offline-evidence.md) | Reading the Autopilot artefacts already on the mounted volume |
@@ -107,9 +109,10 @@ any of them:
 PowerSync hanging silently, runs through the USB stick being mistaken for the
 machine's drive, the screen size never being read, TRIM certified as a wipe,
 and a BitLocker machine reported as having no operating system — and is finally
-named, measured and closed in the false-absence sweep. **Twenty-three catalogued
-instances. Not one produced a false alarm; every single one failed towards the
-reassuring answer.**
+named, measured and closed in the false-absence sweep. **Thirty-two catalogued
+call sites across fifteen fix commits. Not one produced a false alarm; every
+single one failed towards the reassuring answer.** The dataset is
+`paper/instances.csv`; the paper written from it is `paper/PAPER.md`.
 
 **2. Building the wrong thing, and deleting it.** Warranty tracking, the sales
 module, the repairs log — three working features removed within six weeks
