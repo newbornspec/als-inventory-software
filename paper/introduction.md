@@ -56,18 +56,12 @@ false absence is quiet, and gets printed on a certificate.
 Eighteen of the defects we catalogue occurred on code paths that already had
 tests. None of those tests caught them.
 
-This is not negligence, and we want to be precise about why. A test fixture is
-written from the path the author is thinking about, which is the path where the
-probe works. To catch a false absence, a fixture must construct a state the
-author has no reason to imagine: **a broken probe examining a dirty subject.**
-The probe fails *and* the machine is genuinely locked, or genuinely encrypted,
-or genuinely full. Where the two are independently plausible but jointly
-unrepresented, the defect is invisible to the suite and to anyone reviewing the
-code that the suite covers.
-
-Four times during this work, adding a failure check broke an existing test. In
-every case the fixture — not the check — was wrong: it modelled a command that
-could not fail. One of them said so in its own name.
+This is not negligence. A fixture is written from the path its author is
+thinking about, which is the path where the probe works. Catching this class
+requires a fixture in which **the probe fails and the subject is dirty** — two
+independently plausible conditions, jointly unrepresented. §5.3 gives the
+breakdown, and the four occasions on which adding a failure check broke a test
+whose fixture modelled a command that could not fail.
 
 ## 1.3 Contributions
 

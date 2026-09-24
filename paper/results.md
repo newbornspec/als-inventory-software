@@ -122,10 +122,7 @@ Twenty-three of 32 (72%) are in two files, and **28 of 32 are in the station**
 in the server or web application, which mostly *display* what the station
 reported.
 
-The class concentrates where code touches state it does not control. That is
-the paper's thesis restated as a distribution, and it is the most directly
-actionable result here: if a codebase has a component that probes the outside
-world, that is where to look first.
+The class concentrates where code touches state it does not control.
 
 ---
 
