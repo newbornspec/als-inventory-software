@@ -4,8 +4,8 @@ Written to the IEEE Software limit of 150 words. Count verified below.
 
 ---
 
-Software that reports on external state — devices, filesystems, remote
-services — contains a defect class in which a probe's failure is
+Software that reports on external state — devices, filesystems, services —
+contains a defect class in which a probe's failure is
 indistinguishable from a genuine negative result, and is reported as one. We
 catalogue 32 such defects across 15 fix commits in an industrial platform that
 erases and certifies second-hand computers for resale. Every one failed towards
