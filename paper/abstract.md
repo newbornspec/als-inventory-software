@@ -14,7 +14,7 @@ hidden. None produced a false alarm. Eighteen occurred on code paths that
 already had tests, none of which caught them, because a fixture is written from
 the successful path and so never constructs a broken probe examining a dirty
 subject. The class was named in a commit message and fixed six times in one
-day; nineteen days later a systematic search found twenty-two more, most in the
+day; nineteen days later a systematic search found twenty-six more, most in the
 files that commit had itself edited. Naming a defect class does not prevent its
 recurrence.
 
