@@ -46,7 +46,7 @@ recurrence.
 - The recurrence claim is the contribution and should not be softened. It is an
   observation about one codebase's own timeline, so it survives the n=1
   limitation that weakens every other figure here.
-- Open: does "Every one failed towards the reassuring answer" need a footnote
-  pointing at the one excluded counter-example (`c74df68`)? It is honest to
-  mention it; it may also invite a reviewer to argue the exclusion. Decide at
-  submission, not now.
+- **Resolved in §5.1.** The excluded counter-example (`c74df68`) and the
+  argument that the direction is structural rather than selective are both
+  stated in the results. The abstract needs no footnote: the reviewer's
+  question is answered where they will look for it.
