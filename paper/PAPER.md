@@ -675,3 +675,484 @@ cannot be tied to a build. And the sync **flushes the write cache**, because
 Windows reports a copy to removable media as complete before the data has left
 the buffer — pull the stick immediately and you get a truncated file that
 verifies as *present*.
+
+## 7. Layer 4: deep inspection
+
+Reading a machine's hardware is the easy half. The commercially and legally
+interesting questions are about its *state*: is it locked to somebody else's
+organisation, is it encrypted, is there a BIOS password, how much life is left
+in the drive, what operating system is installed. All of these must be answered
+about a machine whose operating system is never started.
+
+### 7.1 The constraint, stated as a capability
+
+The station boots Linux, mounts the Windows volume **read-only**, and parses
+its registry hives offline. Everything follows from that one sentence.
+
+| Impossible | Available instead |
+| --- | --- |
+| Live management-status queries | The registry keys those tools read |
+| PowerShell, WMI, any live API | The hive files, parsed directly |
+| Asking the machine's OS anything | The artefacts its OS left behind |
+
+This is not a limitation to engineer around; it is the shape of the problem.
+And it has one genuine advantage over the live equivalent: parsing a hive file
+directly **ignores the access-control list** that would block the same query on
+a running system, so the SECURITY hive — normally unreadable even to an
+administrator without extra work — is simply a file.
+
+### 7.2 What a powered-off Windows will tell you
+
+Four management states matter to a resale business, because each one can make a
+machine unsellable or unusable to its buyer:
+
+| State | Where it is read from |
+| --- | --- |
+| **Entra ID (Azure AD) join** | The cloud-domain-join key: tenant identifier, tenant display name, device identifier |
+| **Active Directory domain join** | The SECURITY hive: the primary domain SID, the domain names, corroborated by the machine account and cached logons |
+| **MDM enrolment** | The enrolment keys, keeping the organisation's domain only |
+| **Licence and activation** | The firmware-embedded licence marker, recorded as *present*, never transcribed |
+
+Two rules govern all four, and both are about restraint rather than capability.
+
+**Personal identity is never read.** The cloud-domain-join key contains a user's
+email address. It is a former employee's identity, it has no bearing on whether
+the machine can be resold, and it is never read. Only the **organisation's
+domain** is recorded. The same precedent applies to MDM enrolment, where only
+the domain part of the enrolling account is kept.
+
+**A product key is recorded as present, never transcribed.** The system needs to
+say a licence exists. It does not need to hold the key, and holding it would
+make the audit record a thing worth stealing.
+
+### 7.3 Three mechanical traps, and the one that got through
+
+Reading hives offline is fiddly in ways that are worth recording, because each
+of these cost a debugging session and none is documented anywhere convenient:
+
+1. **The values live in the key's default, unnamed value**, which the
+   convenient command-line getter cannot fetch at all — it needs the
+   interactive shell's value-listing command.
+2. **They are binary UTF-16LE**, and the shell drops NUL bytes silently, so the
+   string arrives mangled unless the NULs are stripped deliberately.
+3. **A binary value is printed in a `hex:04,00,...` form.** The name extractor
+   took the first token and reported the machine's domain as the literal string
+   **"hex"**.
+
+The third one shipped, and appeared on a real audit. It is worth dwelling on
+because it runs *opposite* to everything else in this paper: it is a false
+**presence** — a machine asserted to be domain-joined to an organisation called
+"hex" when it was not domain-joined at all. It was noticed within a day,
+precisely because a false alarm is the kind of error somebody chases. §12
+returns to it as the exception that demonstrates the direction of the other 32
+defects is structural rather than selective.
+
+### 7.4 Locks, and the promotion rule
+
+The station runs a set of independent detectors — encryption, BIOS password,
+firmware lock, management enrolment, hidden partitions — and each returns one
+of three values, never two: **present**, **absent**, or **could not be
+established**.
+
+The device-level verdict is then computed by a rule that is the operational
+heart of the thesis:
+
+> **Any detector returning "could not be established" promotes the whole device
+> to UNVERIFIED.**
+
+Not *unlocked with a caveat*. Not *probably fine*. A device on which one of
+five checks could not run is a device whose lock status is unknown, and it says
+so. This is deliberately conservative and deliberately expensive: it produces
+more machines needing a second look, which is the correct trade when the
+alternative is selling somebody a laptop that turns out to belong to a bank.
+
+The rule exists in code rather than in a convention, and it is enforced at the
+point where the detectors are collected: a detector that returns success while
+having filed no finding at all is itself recorded as an unknown, rather than
+being treated as a silent pass.
+
+### 7.5 Drive health: never "Unknown"
+
+A buyer's first question about a second-hand machine is *how much life is left
+in the drive*. SMART answers it, but not in a form anyone can act on: raw
+vendor-specific counters, with different fields on SATA, NVMe, eMMC and SAS.
+
+The requirement, set by the business, was uncompromising:
+
+> **Drive health is a percentage, in named bands, and it is never "Unknown".**
+
+Where health genuinely cannot be measured, the row states **what could not be
+measured and what to do about it** — for example, that the drive sits behind a
+RAID controller, together with the instruction to switch the storage mode in
+firmware and rescan. That is an answer. "Unknown" is not; it is a blank
+pretending to be one.
+
+Three implementation decisions made it hold:
+
+- **One formula, in one place**, with a presentation layer per application, so
+  a drive reading 74% on the bench is not "Caution" in the kiosk and "Fair" in
+  a report. Identical wording across three surfaces was treated as a
+  requirement, not a nicety.
+- **Show what was measured, not a fresh guess.** The kiosk was re-probing
+  drives without privilege and getting *worse* answers than the capture already
+  held. Displaying the captured measurement fixed it.
+- **Do not grade a drive down for a warm afternoon or a bad cable.**
+  Temperature and interface CRC errors were dragging grades down; neither is a
+  wear indicator.
+
+### 7.6 Reading the installed operating system
+
+The station reports which Windows is installed by reading it from the machine's
+own registry — never by inferring it, and never by reporting the station's own
+Ubuntu.
+
+One case governs the design. A **BitLocker-encrypted machine** presents a
+volume that cannot be read. The naive implementation looks for Windows, fails
+to find it, and reports *no operating system installed* — which is both wrong
+and commercially significant, since it makes a working encrypted laptop look
+like a bare-metal box. An encrypted volume must read as *encrypted, therefore
+not readable*, which is a different sentence from *empty*.
+
+This is the same defect shape as everything else in this section, which is why
+the layer that produces the most valuable findings also produced the majority
+of the defects catalogued in §12.
+
+## 8. Layer 5: erasure and certification
+
+This is the layer the business exists to produce. Everything else in the system
+is, in the end, apparatus for making one document true: a certificate saying
+that the data on a specific drive in a specific machine is gone.
+
+### 8.1 A ladder, not a technique
+
+Drives differ, so the engine holds a ladder of methods and descends it:
+
+| Method | Applies to |
+| --- | --- |
+| Cryptographic erase | Self-encrypting drives — discard the key |
+| Firmware secure erase / sanitize | SATA and NVMe, at the controller |
+| Block erase | NVMe |
+| Overwrite | The fallback when nothing above is available or accepted |
+
+A method may be refused by the drive. When that happens the operator is told
+**which method actually ran and why the faster one was declined**, and that
+statement reaches the certificate. This is the earliest appearance of the rule
+that now governs the whole document:
+
+> **The certificate says what was actually done, not what was asked for.**
+
+Every erase is followed by a **read-back**: the drive is read to confirm the
+data is gone, rather than trusting the command's exit status.
+
+### 8.2 Seven things that were wrong, and one of them was already on paper
+
+The engine shipped in July was structurally sound and made claims it could not
+support. A remediation programme in September — a 42-step plan across four
+tracks, roughly 100 commits, the largest single body of work in the project —
+fixed seven distinct failures. They are worth listing individually, because
+each is a different way for a true-looking document to be false:
+
+**1. TRIM was being certified as an erasure.** Issuing a TRIM marks blocks
+unused; the data may remain readable. This one had already produced wrong
+certificates, so the fix was not only to stop doing it but to **de-certify
+records already issued** from earlier sticks. A defect that has reached a
+customer is not fixed by preventing the next one.
+
+**2. An unreadable drive "verified".** The read-back pass treated a drive it
+could not read as having passed — the exact shape of §12's defect class, in the
+most consequential place it could occur. Read-back now happens after *every*
+erase, and "controller-confirmed" was dropped as a category entirely: the
+controller reporting success is not evidence that it succeeded.
+
+**3. The verdict was per machine, not per drive.** A machine with two drives,
+one of which failed to wipe, was being called wiped. Each drive is now decided
+on its own evidence, the machine's status follows from the per-drive verdicts,
+and a certificate is **refused** when a sibling drive's wipe failed.
+
+**4. Drives were identified by path or serial alone.** Paths move between
+boots; serials are sometimes blank or duplicated. The engine now identifies a
+drive by the combination of what it reports about itself, records each drive's
+own identity and timings, and **refuses to act on the wrong drive**. The
+failure mode being prevented is erasing a disk that was not the subject.
+
+**5. NVMe namespaces were mishandled.** An NVMe drive can present several
+namespaces. The engine first refused the second one, then learned to wipe every
+namespace in turn, sanitize the correct controller first, and never issue a
+partial format.
+
+**6. Hidden areas were never checked.** SATA drives can carry host-protected
+or device-configuration areas — regions hidden from the operating system that
+an erase does not reach. These are now checked before wiping, by reading the
+kernel's view of the drive's size, and **without making any permanent
+configuration change to the customer's hardware**.
+
+**7. The sanitize result was parsed as English.** The status was matched
+against text strings that vary between tool versions. It is now read as
+numbers.
+
+The structure built in July — ladder, fallback reason, read-back, certificate —
+was sound enough that all of this was a hardening rather than a rewrite. That
+is worth recording in a paper about getting things wrong: the original design
+was right and its *claims* were overconfident, and those are separable
+failures.
+
+### 8.3 Making the document tamper-evident
+
+An erasure certificate is a PDF, and a PDF can be edited. Nothing stopped
+somebody altering a serial number, a date, or a verdict on a document the
+business had issued, and nothing let a buyer confirm that the copy in their
+hand was the one that was issued.
+
+Certificates are therefore **stored, signed and chained**: each entry is linked
+to the one before it, so altering any entry breaks the chain from that point
+forward. The ledger is tamper-evident rather than merely tamper-resistant —
+it does not prevent an edit, it makes an edit detectable.
+
+A buyer can check a certificate through a **public endpoint reached by a QR
+code on the document**, which reports whether the certificate is genuine and
+what it says. It is **off by default**: a public endpoint on a system holding
+customer data should be an explicit decision, not something a deployment
+inherits.
+
+### 8.4 What making it public cost
+
+Three separate pieces of work exist only because that endpoint is
+unauthenticated, and they generalise to any public verification surface:
+
+- **Bound the cost of a single check.** An unauthenticated endpoint that does
+  real work is a denial-of-service surface.
+- **Spend the budget only on certificates that exist.** A request for a
+  non-existent certificate must be cheap, or the budget is consumed by
+  enumeration attempts.
+- **Never render a link that claims more than it can deliver.** The internal
+  asset page could hang while checking the ledger and — worse — could display a
+  verification link for a certificate that was not actually verifiable. A link
+  labelled *verified* that leads nowhere is a false claim in exactly the sense
+  this paper is about.
+
+### 8.5 Keys
+
+The signing key never leaves the server. Verification uses the public key; the
+private key has never appeared in a log, an error message, or a conversation
+about the system, and the discipline of not exposing it was treated as a
+standing rule rather than a one-off precaution.
+
+Keys are rotated, and a certificate signed with a retired key must still
+verify. When a retired key cannot be read, the failure **names the entry at
+fault** rather than failing the whole ledger — otherwise one unreadable key
+turns every historical certificate into an unverifiable one.
+
+### 8.6 What the certificate refuses to say
+
+Three refusals define the document as much as its contents:
+
+| It will not say | Because |
+| --- | --- |
+| That an unreadable drive was verified | Failing to read is not a pass (§12) |
+| That a machine is wiped when one of its drives is not | The verdict is per drive (§8.2) |
+| That the fastest method ran when it was refused | The document reports what happened (§8.1) |
+
+Two questions remain open and belong to the business rather than to
+engineering: whether a machine whose drive is hidden behind a RAID controller
+should be certifiable at all, and whether a lock discovered *after* issue
+should reach a certificate already in a buyer's hands. Both are recorded in
+§16 rather than silently defaulted.
+
+## 9. Layer 6: functional testing, and the human as an instrument
+
+Every layer so far describes what a machine *is*. None of them establishes
+whether it **works**. A laptop with a dead speaker, a stuck key, a broken
+camera or an unresponsive trackpad reads as perfect on a specification sheet,
+and is then sold as perfect.
+
+### 9.1 The principle
+
+The station's interface is a web page. A web page cannot measure whether a
+speaker produced sound, or whether a camera image is in focus. The governing
+rule for this layer was therefore set as a prohibition:
+
+> **Do not pretend the browser can diagnose hardware it cannot measure.**
+
+What the page *can* do is drive the hardware and **ask a technician what
+happened**. Every result in this module is a human's answer, and is recorded as
+one — the stored finding carries the fact that it was confirmed by a
+technician, not measured by software.
+
+This is an unusual thing to build deliberately. It is also the honest design:
+the alternative is a probe that emits a confident verdict about something it
+did not observe, which is the defect this entire paper is about, dressed as a
+feature.
+
+### 9.2 Could-not-run is not failed
+
+The companion rule matters as much:
+
+> **A test that could not run is ATTENTION, never FAILED.**
+
+Marking a component failed because the station could not test it would condemn
+working hardware — a machine downgraded, or scrapped, because a driver was
+missing on the live image. The three-valued vocabulary from §7.4 applies here
+with the polarity reversed: in lock detection, an unestablished result must not
+read as *safe*; in functional testing, an unestablished result must not read as
+*broken*.
+
+Both rules are the same rule. **The third value has to exist, and it must not
+collapse into whichever of the other two is convenient.**
+
+### 9.3 The seven tests
+
+| Test | What the station does | What the technician answers |
+| --- | --- | --- |
+| Speaker | Unmutes, plays a tone on each side | Did you hear it, both sides? |
+| Keyboard | On-screen layout, lights each key as pressed | Good, or has an issue |
+| Camera | Live preview | Is the image good? |
+| Screen | Full-screen colour fields | How many dead pixels? |
+| Trackpad | Tracks movement, buttons and scroll | Good, or has an issue |
+| Microphone | Records and plays back | Could you hear yourself? |
+| USB ports | Counts the ports that responded | — |
+
+The USB row is the one without a human answer, and is consequently the one that
+produced a false absence: zero ports responding was reported as *zero working
+ports* rather than as a test that did not run. It appears in §12's catalogue,
+found on real hardware by a technician who knew the laptop's ports worked.
+
+### 9.4 The keyboard test, which took five attempts
+
+The keyboard test is the most instructive thing in this layer, because every
+attempt failed for a different reason and none of the reasons were about
+keyboards:
+
+1. **A pressed key activated the focused control.** Space and Enter fired the
+   verdict buttons, so testing the keyboard answered the question the test was
+   asking.
+2. **Browser shortcuts fired.** Detection moved earlier in the event sequence
+   so the page could claim the key before anything else acted on it.
+3. **Function keys triggered browser features.** On one machine a function key
+   opened a bookmark panel over the interface.
+4. **A virtual-terminal switch blanked the screen**, which no page-level code
+   can prevent (§6.3).
+5. **Machine-level keys acted before any software saw them** — brightness and
+   display-output keys on a Lenovo laptop blacked out the interface entirely.
+
+The first three were fixable in the page. The fourth needed the X server
+reconfigured. The fifth could only be addressed by removing the offending
+keysyms altogether, because the firmware acts first.
+
+The sequence is a small case study in a general problem: **a test that asks a
+human to exercise arbitrary hardware is a test that invites the hardware to
+interfere with the test.** The fix is not cleverness in the page; it is
+knowing which layer owns each input and defending at the right one.
+
+### 9.5 Why this layer ships by file copy
+
+The entire module reaches the stations by stick sync, with no layer rebuild
+(§6.6), because it is interface and probe code rather than packages. That was
+a deliberate constraint on the design, not a happy accident: a functional-test
+module that required rebuilding a filesystem image would have been revised
+perhaps twice instead of the five times the keyboard test actually needed.
+
+## 10. Layer 7: the back office
+
+The web application is where the evidence produced at the bench becomes a
+business: receiving and reconciliation, the inventory hierarchy, pallets,
+sales status, reporting, certificates, and user administration. Thirty pages.
+
+It is the least novel layer in the system and it produced two findings worth
+reporting anyway — one about where authorisation actually lives, and one about
+a page that contradicted itself.
+
+### 10.1 Permissions, inverted
+
+Permissions had grown case by case since the ownership work in July. Each
+endpoint decided for itself, which meant **the default was open**: a route
+added without a guard was reachable by anyone signed in, and nobody could state
+what a given role could do without reading every controller.
+
+The rebuild inverted the default. **A route with no declared permission is
+refused.** Forgetting to guard a new endpoint now produces a visible refusal in
+testing rather than an invisible hole in production. The failure mode moved
+from silent to loud, which is the same move the rest of this paper keeps
+making.
+
+Two consequences were made explicit rather than left to convention:
+
+> **The UI hides what the API refuses, and the API is what enforces.**
+> Hiding a button is a courtesy, never a boundary.
+
+Every gated control in the application is gated on **the same permission the
+API checks**, and navigation is built from what the signed-in user may actually
+do — including landing rules that send each person to a page they can use, and
+deep links that are honoured rather than bounced.
+
+The second consequence was overdue. Every audit station's USB stick had been
+authenticating **as an administrator**. A lost stick was a full compromise of
+the system. Stations now hold a least-privilege account that can file audits
+and nothing else (R6).
+
+### 10.2 Deleting a user is not an option
+
+The audit trail names the people in it, so deleting a user would destroy the
+record of who did what. Users are therefore **disabled, never deleted** (§4.5).
+
+That decision creates an obligation that is easy to miss: a disabled account
+holding a valid token is **still signed in**. Bearer tokens are not revocable
+by themselves — the server has already said yes, and nothing about disabling a
+row reaches the token in somebody's browser. Making "disabled" mean anything
+required an explicit revocation path and the client handling rejection
+properly, so that a disabled account is ended rather than merely marked.
+
+This is the authorisation equivalent of the paper's thesis: a state change that
+is recorded but not enforced is a claim the system cannot support.
+
+### 10.3 A dashboard that disagreed with itself
+
+The operational dashboard is computed as **one SQL roll-up** rather than many
+queries assembled in JavaScript. The performance gain was secondary; the real
+reason is consistency. Figures computed in separate queries at slightly
+different moments disagree with each other, and *a dashboard whose numbers
+contradict each other is worse than no dashboard.*
+
+The defect worth recording is subtler than a wrong number. The headline "In
+stock" figure **totalled five statuses**; clicking it navigated to a filtered
+list asking for **one**. Neither the number nor the list was wrong on its own.
+The defect was that two parts of one page answered different questions while
+appearing to answer the same one — and it only surfaces when somebody actually
+clicks.
+
+The same shape had already appeared once, in a reports filter. It is worth
+naming as its own small class: **a summary and its drill-down must be computed
+from the same predicate, or the page lies at the moment a user trusts it
+most.**
+
+### 10.4 Reporting
+
+The reporting section was rebuilt from a set of tables into eleven analytical
+slices — sales, batches, pallets, warehouse, users, consumables, suppliers,
+activity — with filters and spreadsheet and PDF export. It is the least
+architecturally interesting part of the system and among the most used, which
+is a common and under-reported combination.
+
+One rule carried over from the rest of the system: reports respect ownership
+scoping (§4.4, E3), and a printed report **says who generated it**. A document
+that leaves the building carries its provenance.
+
+### 10.5 Consistency as a defect detector
+
+Two pieces of cross-cutting work belong here because of what they *found*
+rather than what they changed.
+
+A **visual system pass** brought thirty-one pages into one design language. In
+doing so it exposed ten functional defects. Pages that had been written
+independently had diverged in ways nobody noticed until they were placed side
+by side — controls that did nothing, states that were unreachable, labels that
+meant different things on different screens.
+
+A **WCAG 2.2 AA accessibility pass** did something similar. Its most
+instructive moment is a correction: a lighter field border was introduced for
+visual reasons, **failed contrast**, and had to be adjusted — the trade-off
+being written down rather than quietly reverted.
+
+Both passes are the same technique: forcing a system to be consistent is a way
+of discovering where it is wrong. Inconsistency is cheap to tolerate one page
+at a time and expensive in aggregate, and the aggregate is invisible until
+something makes you look at all of it at once.
