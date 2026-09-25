@@ -300,3 +300,378 @@ Code and schema move together or not at all.
 The station being the largest single component is not an accident of style. It
 is where the system touches hardware it does not control, and §12 shows it is
 also where 28 of 32 catalogued defects of the most dangerous class were found.
+
+## 4. Layer 1: the inventory model
+
+The first design mistake available in this domain is to believe that a
+warehouse contains one kind of thing. It contains three, and they need three
+different models.
+
+| Tier | Example | Identity | Counted by |
+| --- | --- | --- | --- |
+| **Serialised asset** | A laptop | Its own serial number | One row per physical device |
+| **Pallet line** | Forty identical 24-inch monitors | The variant, not the unit | Quantity per variant |
+| **Consumable** | Caddies, cables, screws | The stock line | A running balance |
+
+Forcing monitors into the asset table means inventing serial numbers for
+devices nobody will ever look up individually. Forcing cables in means forty
+rows for one box. Both were considered and rejected early, and the three-tier
+split has survived every subsequent redesign.
+
+The system is honest about what this costs: a pallet line **cannot tell you
+which physical monitor is which**, and that is recorded as the correct model
+for the business rather than a limitation awaiting a fix.
+
+### 4.1 The hierarchy, and the one deliberate exception
+
+Stock arrives as a **purchase lot** — a pallet or van-load bought from a
+supplier — which contains devices, each of which has hardware. The interface
+follows that shape: **Lot → Asset → Hardware**, with a breadcrumb trail and
+Total / Audited / Pending counts on each lot card, so the state of a lot is
+legible without opening it.
+
+One screen deliberately does not follow the hierarchy. The global assets page
+was kept as a **search**, because *what is in this lot* and *where is this
+serial number* are different questions and forcing the second through the first
+makes it slow and annoying. Consistency was traded for fitness, knowingly.
+
+### 4.2 Expected against actual
+
+A supplier describes a lot in a spreadsheet before it arrives. A lot therefore
+exists, with expected quantities and a supplier, before a single device is
+touched — and receiving becomes **reconciliation** rather than data entry.
+
+The manifest importer parses CSV and XLSX **in the browser**, not on the
+server. The files are small and the formats are inconsistent, and the operator
+needs to see what the system understood before any of it is committed.
+
+The reconciliation has a rule worth stating, because it is an instance of the
+paper's thesis applied to a business process: **a false "extra" is an
+accusation**. If the system reports that a device arrived which was not on the
+manifest, it is implicitly saying somebody added it. That claim has to be
+correct, so the matching is conservative and unmatched items are presented as
+unmatched rather than as discrepancies.
+
+### 4.3 Stock as a derived balance
+
+Consumables are modelled as `StockLine` plus `StockMovement`. The quantity on
+hand is **derived from the movements**, never a number a person edits. Every
+change carries a reason. The result is that "we have eleven caddies" is a
+statement with a history behind it rather than an assertion somebody typed, and
+the low-stock alert that replaced a removed feature (§13) answers a question
+the warehouse actually asks.
+
+The pallet model has an equivalent invariant, arrived at after two rebuilds:
+**a merge moves lines, it never copies them.** Merging pallet B into pallet A
+must leave the total count unchanged. Copying would double stock; moving cannot.
+Stated that way the rule is obvious, which is exactly why it needs to be
+written down — the implementation that copies looks correct in every test that
+does not add up the totals afterwards.
+
+### 4.4 Ownership, and the lesson that generalises
+
+With several managers buying and processing stock, the system had to answer
+*whose stock is this, and who did this?* Ownership was added to batches and
+then enforced in six passes:
+
+| Pass | Scope |
+| --- | --- |
+| E1 | Batch reads |
+| E2 | Asset reads, via their batch's owner |
+| E3 | Dashboard, reports and certificates |
+| E4 | Write guards, and admin reassignment |
+| **E5** | **The PowerSync upload path *and* the sync rules** |
+| E6 | The activity log |
+
+**E5 is the one worth extracting.** Scoping the HTTP API is not sufficient when
+clients synchronise a local database directly. Without scoping the sync
+*rules* as well, a manager's phone would download rows it could not have
+fetched over HTTP — the guard on the front door held while the side door stayed
+open. Any system combining a permissions layer with a sync engine has two
+separate enforcement surfaces, and securing one reads exactly like securing
+both.
+
+Two scoping decisions were made explicitly and recorded rather than
+discovered later: **scoping applies to managers only** (technicians are floor
+staff who scan into any lot, and scoping them breaks the job), and
+**technician-created lots belong to an unowned pool** visible to all managers,
+without which a technician's work would have become invisible to everyone.
+
+### 4.5 Append-only history
+
+The activity log is system-wide and append-only, and asset history is kept
+rather than overwritten. This is the data-model expression of the invariant in
+§3.3: *evidence flows inward, and the record is never edited to agree with it.*
+When a second audit contradicts the first, both survive, and the question
+"what did we believe, and when?" stays answerable.
+
+It also constrains a feature the business asked for later. Deleting a user
+would destroy the audit trail that names them, so users are **disabled, never
+deleted** — a rule that then required its own work on session invalidation,
+because a disabled account with a valid token is still signed in (§10.3).
+
+## 5. Layer 2: offline-first capture
+
+R1 says capture must work with no connection. That single requirement produces
+the component with the worst failure mode in the entire system, because **a
+queue that loses work looks exactly like a queue with nothing to do.**
+
+### 5.1 The architecture
+
+The client holds a local SQLite database. PowerSync streams rows down according
+to sync rules and carries writes back up. The technician's phone is therefore a
+full participant rather than a thin client: scanning works in a loading bay
+with no signal, and reconciles when signal returns.
+
+The web application, by contrast, was **deliberately not made offline-capable**.
+Only the scanning and capture paths are offline-first; reporting and
+administration assume a connection. Offline reporting would have meant
+replicating business rules into the client for no operational gain.
+
+### 5.2 Four faults in the first week, three of them silent
+
+PowerSync did not work out of the box, and each failure is load-bearing enough
+that it is still shaping the codebase:
+
+| Fault | How it presented |
+| --- | --- |
+| Worker assets never copied into the build | Sync **hung silently** — indistinguishable from nothing to sync |
+| JWTs signed with the wrong `kid` | Auth failed for a reason documented nowhere obvious |
+| Multi-word columns dropped on upload | Data looked saved on the device and **arrived incomplete** |
+| One deleted batch reference | Wedged the **entire** upload queue behind it, indefinitely |
+
+Three of the four announced nothing. The fourth announced nothing useful: an
+unresolvable foreign key stopped every queued write behind it, forever, and the
+device carried on accepting work.
+
+That last one produced a rule that recurs throughout the project and is
+restated in §17: **a record the server refuses must become visible, not be
+retried forever in silence.** A queue that retries indefinitely is not
+resilient; it is a way of hiding a permanent failure behind a temporary-looking
+one.
+
+### 5.3 Scanning: the decision, and what a warehouse did to it
+
+Every device enters the system through its serial or service tag. Typing them
+is slow and wrong; the labels are small, worn, and often carry no barcode at
+all.
+
+A commercial scanning SDK was evaluated and **rejected in favour of free
+platform capabilities**: the browser's native `BarcodeDetector`, plus
+full-resolution camera OCR for text-only labels. The reasoning was that a paid
+SDK is a per-device licence on hardware the business keeps buying, for a job
+the platform can already do. The accepted trade-off is that `BarcodeDetector`
+support varies by browser and OCR on a worn label is worse than a dedicated
+engine's.
+
+The first version worked in an office and badly in a warehouse. Three
+corrections, each generalisable:
+
+**Know what you are looking for.** A Dell label carries the service tag, the
+express service code, FCC identifiers, regulatory model numbers and
+certification marks. Naive OCR returns whichever string it read most
+confidently — frequently a regulatory number. The fix was to encode what a
+vendor's tag actually looks like, rather than trusting confidence.
+
+**A still photograph beats a video stream.** An aiming box was added to help
+the operator, then removed. Cropping discarded the pixels OCR needed, and a
+live video frame is lower resolution than a still. Full-frame detection plus a
+full-resolution still photo outperformed the thing that looked more helpful.
+
+**Show the operator what the software is doing.** The torch toggle failed on
+some devices and nothing indicated which detection engine was running, so a
+failure to scan was indistinguishable from a failure to aim. On-screen engine
+status fixed more perceived bugs than any detection change.
+
+One further correction is a data-model point: the same device scanned from a
+barcode and read by OCR produced **different strings**. A single normaliser,
+applied to both paths, is what makes the two agree.
+
+### 5.4 The queue that had to survive a power cut
+
+The audit station kept queued records **in memory**. A technician who audited
+six machines with no network and then powered the bench down lost all six, and
+nothing said so. On a bench where machines are powered off as a matter of
+course, that was a question of when rather than whether.
+
+The queue moved onto the USB stick — the one component guaranteed to still
+exist after a power cut.
+
+A month later the same component produced the most serious defect in the whole
+catalogue. A queue file that existed but **could not be fully parsed** was
+treated as empty, and then rewritten — destroying the records it had failed to
+read. It is the only instance in §12's dataset that reached nobody, because it
+produced no wrong sentence: it produced no sentence at all.
+
+> **Making storage durable and making it safe to read are two different jobs.**
+> The first was done deliberately and the second was assumed.
+
+### 5.5 Two instrumentation faults with the same shape
+
+**Ping is not the internet.** The station's connectivity check tested one
+address by ICMP. A site that filters ping — as this one does — produced a red
+failure on a station that was uploading perfectly well. The check now tries
+several addresses over both protocols, shows the routing table, and, decisively,
+judges the station by **whether it can reach the ALS API**, not by whether it
+can reach the internet in the abstract.
+
+**A silent success looks like a hang.** An OS restore writes several gigabytes
+with no output. The operator sees a still screen and cannot distinguish a
+working restore from a dead one. The system knew it was fine and was not saying
+so.
+
+Both are the same defect as the queue, pointed the other way: the first
+reported a failure that had not happened, the second failed to report a success
+that had. In each case the code held the information and discarded it before it
+reached a person.
+
+## 6. Layer 3: the audit station
+
+The audit station is a bootable USB stick. A technician plugs it into a machine
+that arrived that morning, boots it, and gets one full-screen interface that
+examines the machine, erases it, and uploads what it found.
+
+Booting the customer's own Windows was never an option. Many arrive locked or
+encrypted; booting changes the machine, which is evidence (R3); and a great
+deal of what needs to be read — the registry, the hidden partitions, the raw
+drive — is easier and safer to reach when Windows is not running. **The
+machine's operating system is never started.**
+
+### 6.1 The base, and the constraint that chose it
+
+The station runs Ubuntu 24.04. That choice was made for **Secure Boot**: a
+significant share of incoming machines will not boot an unsigned image without
+a firmware change the technician should not be making on a customer's hardware.
+
+The live session, though, is amnesiac. Every `apt install` is discarded at
+reboot — and without `nvme-cli` an NVMe drive cannot be secure-erased, which is
+most of what comes through the door. So the station carries a **casper overlay
+layer**: an additional squashfs stacked on the stock image, holding the extra
+packages and the kiosk.
+
+How casper selects layers had to be read **out of the stick's own initrd**,
+because most of what is written about it online is wrong for 24.04. Selection
+is driven by one variable:
+
+```
+LAYERFS_PATH=minimal.standard.live.squashfs
+```
+
+casper builds the stack by repeatedly stripping the last dot-component, and the
+**longest name ends up highest priority**. A layer named
+`minimal.standard.live.als.squashfs` therefore extends the chain and sits on
+top.
+
+The trap, which the build script now refuses to be talked out of: the chain
+only walks *up*, by stripping. Name the layer `als.squashfs` and the chain is
+just "als" — casper mounts a few hundred kilobytes **as the entire root**,
+finds no `/sbin/init`, and panics. **The name must extend a chain whose every
+ancestor already exists.**
+
+### 6.2 Seven attempts to make a browser fill a screen
+
+The station is an appliance: one interface, full screen, no desktop, no browser
+chrome, no way to end up somewhere else. The hardware it runs on is whatever
+came through the door — any manufacturer, any graphics chip, any panel,
+sometimes no working display driver. There is no fixed target to develop
+against.
+
+| Approach | Why it failed |
+| --- | --- |
+| Firefox kiosk mode | Hides the toolbar, opens at ~90%, never fills |
+| Cage (Wayland kiosk compositor) | Correct when present — not on the image |
+| Auto-install Cage at boot | Needs a network; the bench often has none |
+| X fallback with a window manager | Another dependency not on the image |
+| Window resize via an external tool | Deterministic, still an install |
+| **python + libX11 via ctypes** | **Worked.** No packages, any display |
+
+The lesson, paid for over seven attempts and fifteen commits:
+
+> **On a live-boot appliance, a dependency you have to install is a dependency
+> you do not have.**
+
+Every approach needing a package worked on the development machine and failed
+on the bench. What shipped talks to libX11 through ctypes and resizes whatever
+top-level window appears, using only what the stock image already carries.
+
+Progress became possible only after a **Display readout** was added to the
+status bar showing the resolution *and which of the five launch paths had
+actually run*. Until then every failure looked identical: a window that was not
+full screen. Most of the subsequent progress is attributable to being able to
+see which mechanism had fired — the same instrumentation principle as §5.5.
+
+### 6.3 Who owns a keypress
+
+An appliance has to survive its operator. During functional keyboard testing a
+technician pressed keys on a Lenovo laptop and the entire interface disappeared
+to a black screen. Investigating produced a model that turned out to be
+generally useful:
+
+| Layer | Owns | Can software refuse it? |
+| --- | --- | --- |
+| The page | Ordinary keys, Escape, function keys | **Yes** — the event can be cancelled |
+| The X server | Virtual-terminal switching | **No** — intercepted below the client |
+| The machine | Brightness, display output, vendor app-commands | **No** — firmware or the keyboard controller acts first |
+
+Only the first layer offers a veto. The second required disabling server key
+bindings at the X level; the third required clearing the offending keysyms
+outright, because the machine acts before any software is consulted. A test
+that asks a technician to press every key must therefore be defended at all
+three layers — and the parts that cannot be defended have to be designed
+around rather than trapped.
+
+### 6.4 The station's hardware is not the machine's
+
+The very first version of the audit tool enumerated block devices and took the
+first one as the machine's drive. The first device was **the USB stick it had
+booted from**. Every audit recorded the stick's model and capacity as the
+machine's storage.
+
+That defect is the ancestor of a rule now enforced in several independent
+places: never report the station's Ubuntu as the machine's operating system;
+never wipe the boot device whatever it reports itself as; skip removable and
+USB devices in the storage scan. R4 exists because this confusion is easy to
+write and invisible in a result that otherwise looks complete.
+
+### 6.5 Accountability at the bench
+
+Certificates are legal documents, so the station requires an **operator
+sign-in**: the person who performed a wipe is recorded against it, not merely
+the station that ran it. The station authenticates with a restricted account,
+never an administrator (R6), and the kiosk service was hardened so the
+interface cannot be escaped into a shell.
+
+### 6.6 How code reaches a warehouse
+
+There is no deployment pipeline to a USB stick on a bench. Getting a change
+onto the stations is a physical act, and its cost differs by an order of
+magnitude depending on which file changed:
+
+| Change | What it takes |
+| --- | --- |
+| Interface, probes, autostart script | **Stick sync.** Copy files, checksum each, done |
+| Anything inside the overlay layer | **Layer rebuild** plus a reboot on the audit machine |
+
+This boundary is a real design input, and one decision shows why. The Autopilot
+work needed an event-log reader that is not on the stock image, so it was added
+to the layer build — gating the whole feature behind a rebuild. The rebuild
+could not be run off the target machine, and the reason is more interesting
+than the absence of build tools on Windows: the build has a safety gate that
+simulates installing the packages against the **host's** package database, to
+catch a package that would be an *upgrade* of something already on the live
+image. In a container, that database is the container's. The gate would report
+"none of these is an upgrade" not because it is true but because it **cannot
+see** — passing vacuously, silently disabling the check that exists to prevent
+exactly that failure.
+
+The alternative shipped instead: the live session is writable and the stick is
+already synced, so the packages ride on the stick and are installed at boot.
+They stay in the layer list as well; whichever arrives first wins, because the
+installer returns early if the tool is already present.
+
+Two further details of the sync path are worth recording, because both hid real
+faults. The stick carries a **version stamp**, without which a bug report
+cannot be tied to a build. And the sync **flushes the write cache**, because
+Windows reports a copy to removable media as complete before the data has left
+the buffer — pull the stick immediately and you get a truncated file that
+verifies as *present*.
