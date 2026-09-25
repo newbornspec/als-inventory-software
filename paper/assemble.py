@@ -80,8 +80,10 @@ def main():
     print('-' * 49)
     print('%-34s %6d %7d' % ('TOTAL', prose_total, table_total))
     print()
-    print('%d of 19 sections written.' % len(files))
-    print('Target: 12,000-15,000 words. Written so far: %d.' % prose_total)
+    numbered = [f for f in files if not f.startswith('00-')]
+    print('%d of 19 numbered sections written, plus the abstract.'
+          % len(numbered))
+    print('Prose: %d words in %d tables/figures.' % (prose_total, table_total))
 
 
 if __name__ == '__main__':

@@ -7,6 +7,39 @@
 
 ---
 
+## Abstract
+
+An IT asset disposition business resells second-hand computers and issues two
+documents about each one: a specification, and a certificate stating that the
+previous owner's data has been destroyed. Both are claims about a machine the
+business does not control, made once by a technician, about hardware that is
+then sold. Nothing in normal operation reveals when such a claim is wrong.
+
+We report the design and construction of a complete production system for this
+job — 535 commits and roughly 101,000 lines over 78 days by one engineer —
+comprising an offline-first inventory platform, a bootable audit appliance that
+inspects and erases a customer's machine without starting its operating system,
+an inspection layer that reads a powered-off Windows from its registry hives,
+signed and chained erasure certificates, and a functional-test module that
+records a technician's judgement as the measurement it is. We describe each
+layer, what was rejected in building it, and what remains unproven.
+
+Three findings generalise. First, claims about external state fall into four
+**knowability tiers** — measured, recovered from an artefact, perishable, or
+withheld by a third party — and the tier determines whether code, a process
+change, or nothing will produce an answer; the commercially most valuable
+question in this domain sits in the fourth tier, and we report how it was
+answered by observation instead of deduction. Second, we catalogue 32 call sites
+exhibiting a defect we name the **false absence**: a failed observation reported
+as a confirmed negative. All 32 failed towards the reassuring answer; 18 sat on
+code paths with existing tests, which caught none. Third, and least comfortable:
+naming that class in a commit, documenting it in the affected code and defending
+it with tests did not prevent the same author writing eight fresh instances
+within three weeks.
+
+We also report three deliberate feature removals, and argue that the useful
+measure of a system under development is how much of it is load-bearing.
+
 ## 1. Introduction
 
 When an organisation replaces its computers, the old ones do not stop existing.
@@ -1527,3 +1560,562 @@ This is left as it is rather than presented as finished. A reader inspecting
 the repository will find them, and a paper that claimed three clean removals
 while the residue sits in `apps/api/src` would be making exactly the kind of
 tidy, unsupported claim this project spent three months learning not to make.
+
+## 14. Engineering practice
+
+Three practices in this project are worth reporting because each exists to
+defend against a failure the previous sections keep describing: something that
+is wrong while appearing to be fine.
+
+### 14.1 Design records
+
+Every coherent piece of work ends with a dated record in the repository — 40 of
+them, covering 9 July to 24 September. Not one per commit: one per change, with
+its commits listed inside it.
+
+The headings are **fixed**, because the value of the documents is that they can
+be read against each other:
+
+*Status* (shipped / partial / blocked, with commit hashes) · *The problem* ·
+*Why it matters* · *What was built* · **What was deliberately NOT built** ·
+*How it was proved* · *Open questions*.
+
+The fifth heading is the one that justifies the practice. A commit message says
+what changed; a diff says how. Neither recovers the alternative that looked
+equally good at the time and was rejected, and that is the information a person
+returning to the code six months later actually needs.
+
+Three rules govern them, and the first is the point of the whole exercise:
+
+1. **Honesty over tidiness.** A record saying "this was never tested on
+   hardware" is worth more than one implying it was.
+2. **No record is written before the work is done.** These are records, not
+   plans.
+3. **Name the failure modes** — especially the ones that survived review.
+
+This paper is written from those records. That is the strongest practical
+argument for keeping them: a project documented only in commit messages cannot
+be written up afterwards without reconstructing the reasoning from memory,
+which is precisely the source this project has repeatedly found unreliable.
+
+### 14.2 Testing something that erases drives
+
+The audit station is shell and Python running against real hardware, and the
+thing it does most consequentially is destroy data. Testing it presents an
+obvious hazard.
+
+The rule is absolute and enforced in the harnesses themselves: **a wipe test
+points at a temporary regular file, never a device node.** The harness refuses
+outright if its scratch directory is under `/dev`, and the stubbed tools refuse
+any invocation that names a device. A safety rule that exists only in the
+author's intention is one bad path expansion away from wiping a development
+machine.
+
+The suites are bash and Python standard library **by rule** — no package
+installs, no database — for the same reason as §6.2's kiosk lesson: a
+dependency you have to install is one that will eventually not be there.
+
+### 14.3 CI, and a list that stops covering things
+
+Until the continuous-integration job existed, the station's tests ran only when
+somebody remembered to run them by hand on a Linux machine. A change to the
+engine that erases customer drives could merge with every one of them red.
+
+One detail of that job is worth extracting as a general principle. The tests
+are discovered by a **glob, not a list**:
+
+> Every test file matching the pattern runs. A new test is covered the moment
+> it is committed — because a hand-maintained list is exactly the thing that
+> silently stops covering the newest test.
+
+That is the paper's defect class applied to the build system. A list that has
+fallen behind reports the same green as a list that is complete.
+
+The job deliberately covers what the hosting platforms' own builds cannot: the
+API typecheck, the full migration chain **from scratch against a real
+Postgres**, the seed, the newest migration's down-and-up, and a boot smoke test
+— because dependency-injection failures only surface at runtime, and a
+typecheck passes happily with a missing provider.
+
+### 14.4 Two migration hazards
+
+The first was described in §3.4: TypeORM selects every mapped column, so
+shipping an entity before its migration takes the table down. Closed by running
+migrations as a pre-deploy command on the newly built image, while the previous
+version still serves traffic.
+
+The second is subtler and was caught by CI rather than in production. **A
+migration can work perfectly on the long-lived production database and destroy
+every fresh one**, because the whole chain runs in a single transaction: a
+statement that is harmless when applied to a table full of data can fail — or
+cascade — when applied to the chain building that table from nothing. Nobody
+runs the full chain from scratch in normal work. The only defence is a job that
+does it on every push.
+
+The third, from §13.2, is the mirror image: on removal, drop the code first and
+the table second, because they deploy separately.
+
+All three are instances of one rule, which is worth stating once:
+
+> **Code and schema must never be in a state where one expects something the
+> other does not have — in either direction, at any point in the deploy.**
+
+### 14.5 Where the practice is weak
+
+Two gaps are real and are not presented as anything else.
+
+**The web application has no automated tests.** Ninety-six test files cover the
+API and the station; the user interface is covered by the build, by manual use,
+and by the consistency passes of §10.5. Several of the defects those passes
+found would have been caught by tests that do not exist.
+
+**The station's tests are harnesses, not hardware.** They stub the destructive
+tools and verify the logic around them. That is the right trade — the
+alternative is a lab of sacrificial drives — but it means the suites cannot
+catch a defect that lives in the gap between what a tool does in a stub and
+what it does on a real controller. Four of the defects in §12 were found by a
+technician on real hardware, and no test harness would have found them.
+
+## 15. Results
+
+This section reports what exists, what runs, and what has been proven — and is
+deliberate about the difference between those three.
+
+### 15.1 What was built
+
+| | |
+| --- | --- |
+| Period | 9 July – 24 September 2026 (78 days) |
+| Commits | 535 |
+| Code | ~101,000 lines |
+| Domain entities | 23, across 62 schema migrations |
+| Web pages | 30 |
+| API controllers | 23 |
+| Automated test files | 96 (46 API, 50 audit station) |
+| Design records | 40 |
+| Engineers | 1 |
+
+Capability, by layer:
+
+| Layer | Delivered |
+| --- | --- |
+| Inventory | Three stock tiers, lot hierarchy, manifest reconciliation, pallets with a merge invariant, ownership scoping in six enforcement passes, append-only activity |
+| Capture | Offline-first scanning (barcode and OCR) with a durable on-stick queue |
+| Station | Bootable Secure Boot appliance, overlay layer, kiosk session, operator sign-in, sync by stick with version stamping |
+| Inspection | Hardware profile, offline registry parsing, four management-state checks, per-drive health as a percentage, installed-OS capture |
+| Erasure | Method ladder with fallback reporting, per-drive verdicts, hidden-area checks, read-back after every erase |
+| Certification | Signed, chained, tamper-evident certificates with optional public verification |
+| Functional test | Seven technician-confirmed tests with three-valued verdicts |
+| Back office | Eleven reporting slices, one-query operational dashboard, fail-closed permissions, WCAG 2.2 AA pass |
+
+### 15.2 What runs
+
+The API, database and sync service run on one hosting platform; the web
+application on another; the audit station runs from USB sticks in the
+warehouse. All three are in production use by the business the system was built
+for.
+
+**We report no production telemetry, because none was collected.** There are no
+figures here for machines processed, certificates issued, or time saved per
+device. That instrumentation was never built — the business needed the system
+to work before it needed the system measured — and inventing plausible numbers
+after the fact is exactly the failure this paper spends thirteen sections
+arguing against.
+
+A reader evaluating whether to adopt any of this should know that the strongest
+operational claim we can make is that it is in daily use and has not been
+replaced.
+
+### 15.3 What is proven, and how
+
+The distinction that matters most is between what has been exercised on real
+hardware and what has only been reasoned about or tested in a harness.
+
+| Proven by | What |
+| --- | --- |
+| **Real hardware, repeatedly** | Booting and full-screen operation across varied machines; hardware capture; drive health; the keyboard, speaker, camera and screen tests; offline registry reads on encrypted and domain-joined machines |
+| **Real hardware, once or twice** | The overlay layer boot chain; the Autopilot artefact reads; the OOBE observation |
+| **Harness only** | The wipe ladder's branch logic, the lock detectors' three-valued returns, the migration chain, the certificate signing and chaining |
+| **Reasoned, not run** | The pre-installation-environment hash capture (§11.3, blocked) |
+
+Four of the 32 defects in §12 were found by a technician on real hardware and
+would not have been found by any harness. That ratio is the most useful
+calibration in this paper: **harnesses catch the logic, hardware catches the
+assumptions.**
+
+### 15.4 The defect result
+
+Restated here as a result rather than as an argument:
+
+| | |
+| --- | --- |
+| False-absence call sites catalogued | **32**, across 15 fix commits |
+| Failing towards the reassuring answer | **32 / 32** |
+| Sitting on code paths that already had tests | 18, of which caught by those tests: **0** |
+| Written **after** the class was named, documented and tested | **8**, within 18 days |
+
+### 15.5 The negative results
+
+Three things were attempted and did not work, and are reported as results
+because the field under-reports them:
+
+**Seven approaches to full-screen kiosk display failed** before one succeeded,
+and six of the seven failed for the same reason: they needed a package that was
+not on the image (§6.2).
+
+**A layer rebuild could not be performed off the target machine**, not for the
+obvious reason but because its safety gate would have passed *vacuously* in a
+container — reporting no conflict because it could not see, rather than because
+there was none (§6.6).
+
+**Autopilot registration cannot be determined offline.** After substantial
+research this is reported as a boundary rather than a to-do (§11.2). The
+system answers the question three other ways, one of which is definitive, and
+none of which is the way the business originally asked for.
+
+## 16. Limitations and threats to validity
+
+### 16.1 One site, one business, one engineer
+
+Everything here comes from a single ITAD business, a single codebase, and a
+single developer. The architecture is shaped by this business's actual
+processes — bulk trade sales rather than an order book, grading rather than
+repair — and §13 argues that fitting those processes closely was a virtue. The
+same argument means the design may not transfer to an ITAD operation that works
+differently.
+
+The single-engineer fact cuts two ways in §12. It **strengthens** the
+recurrence finding — the author who wrote the defects was the author who named
+the class, so there is no question of the lesson failing to reach somebody. It
+**weakens** any generalisation to teams, where the mechanisms of transmission
+and forgetting are different and probably worse.
+
+### 16.2 The defect catalogue classifies its own author's work
+
+The 32 instances in §12 were identified, classified and counted by the person
+who wrote them. There is **no second rater**, and no inter-rater agreement to
+report. The inclusion criteria were fixed before the analysis and are published
+so the judgement can be inspected, but a reader who suspects the boundary was
+drawn to favour the result cannot presently be answered with anything except
+the dataset itself.
+
+Re-rating ten randomly selected instances with an independent rater would
+address this, and is the single highest-value addition the work could receive.
+
+Two narrower threats to the same catalogue:
+
+- **It is a census, not a sample.** It reports every instance found in one
+  codebase. The rates in §12 describe this system, and nothing licenses
+  extrapolating them to software in general.
+- **Provenance is imperfect.** The introducing commit was recovered by
+  searching for a string the fix removed. Where that string post-dated the
+  defect, the commit creating the enclosing function was used instead; four
+  entries rest on that weaker method and are marked as such in the dataset.
+- **Detection latency is an upper bound on time-to-detection, not a measure of
+  exposure.** Station code does not reach a machine until the next USB sync, so
+  a defect's presence in the repository is not the same as its presence on a
+  bench.
+
+### 16.3 What was never measured
+
+**No production telemetry exists** (§15.2). There is no measured throughput, no
+error rate in the field, and no before-and-after comparison against the manual
+process the system replaced. Claims about the system's operational value rest
+on it being in continued daily use, which is weak evidence and is presented as
+such.
+
+**The deletion argument is an argument.** §13.3 claims the three removals are
+why the system stayed buildable. Nothing measures that. The counterfactual —
+the same team carrying three unused modules through the September work — does
+not exist and cannot be constructed.
+
+**The remedy in §12.5 is unevaluated.** The observation window closes with the
+sweep. Whether the sweep, the third-value tests and the corrected fixtures
+actually reduce the rate of new instances is unknown, and on the evidence of
+§12.4 the expectation should be modest.
+
+### 16.4 Gaps in the system itself
+
+| Gap | Status |
+| --- | --- |
+| The web application has no automated tests | Real; several defects found by manual passes would have been caught |
+| Station tests are harnesses, never real drives | Deliberate trade; means hardware-level assumptions go untested (§15.3) |
+| Hardware-hash capture before wipe (K3) | **Blocked** — needs a pre-installation environment and a bench session |
+| Per-user data isolation beyond manager scoping | Deferred |
+| Sales, customer and invoice tables | Residue of a removed module (§13.4) |
+
+### 16.5 Two decisions that are the owner's, not ours
+
+Both are recorded here rather than silently defaulted, because each determines
+what a document the business issues is allowed to say:
+
+1. **Should a machine whose drive is hidden behind a RAID controller be
+   certifiable at all?** The system can report that it could not see the drive.
+   Whether that machine may then be sold with a certificate is a commercial and
+   legal judgement.
+2. **Should a lock discovered after issue reach a certificate already in a
+   buyer's hands?** The first-boot observation of §11.3 can establish a
+   registration *after* the machine has been certified and sold. There is
+   currently no mechanism for amending an issued certificate, and whether there
+   should be is not an engineering question.
+
+### 16.6 Scope of the knowability framework
+
+§11's four tiers were derived from one vendor's device-management ecosystem.
+K1, K2 and K3 are mechanical and should transfer. **K4 is the interesting tier
+and has exactly one worked example.** Whether other classes of withheld state
+behave the same way — in particular whether they can always be converted to an
+observable event the way Autopilot's first boot can — is untested, and the
+framework should be read as a proposal rather than a validated taxonomy.
+
+## 17. Lessons for building evidence-producing systems
+
+The thesis, restated as the constraint it actually is:
+
+> **Every output of this system is a claim about a machine the system does not
+> control. Its entire value is how honestly it separates what it has
+> established from what it has merely assumed.**
+
+What follows is what that cost to learn, in the order a team would need it.
+
+### 17.1 Before writing a probe
+
+**Classify the claim by knowability tier (§11).** Is it measured, recovered
+from an artefact, perishable, or withheld? The tier determines which kind of
+effort will work: code, a parser, a process change, or none. Writing a cleverer
+probe for a perishable fact is wasted work; writing one for a withheld fact
+produces a guess with the appearance of a measurement.
+
+**Ask whether the failure value equals the negative value.** If the probe
+returns empty, zero, false or absent both when it looked and found nothing *and*
+when it could not look, any assertion built on it is unearned. This single
+question, applied at the keyboard, is the cheapest defence available and it
+found 20 of the 32 defects in §12.
+
+### 17.2 While designing the vocabulary
+
+**Three values, in three places.** *Present*, *absent* and **not established** —
+and the third has to be sayable in **the type**, **the stored field**, and **the
+sentence a person reads**. Implementing the first two and not the third produces
+a system that knows it could not check and prints *not detected* anyway. We did
+exactly that more than once.
+
+**Decide which way the third value leans, per domain.** In lock detection, an
+unestablished result must not read as *safe*, so it promotes the device to
+unverified (§7.4). In functional testing, an unestablished result must not read
+as *broken*, so it is attention rather than failure (§9.2). These look like
+opposite rules and are the same rule: **the third value must not collapse into
+whichever of the other two is convenient.**
+
+**Never cache a failure.** An answer may be memoised; an inability to answer may
+not. One dead call settled a hardware question for an entire session because the
+failure was cached alongside the successes.
+
+### 17.3 While writing tests
+
+**A fixture that supplies a working probe tests nothing about failure.**
+Eighteen of the 32 defects sat on tested code paths and the tests caught none.
+Catching this class needs a fixture where **the probe fails and the subject is
+adverse** — two independently unlikely conditions that no author constructs
+without deciding to.
+
+**When an honesty check breaks a test, fix the fixture.** This happened four
+times, and every time the fixture modelled a command that could not fail. A
+test that must be weakened to accommodate an honesty check was asserting the
+bug.
+
+**Discover tests with a glob, not a list** (§14.3). A hand-maintained list that
+has fallen behind reports the same green as a complete one.
+
+### 17.4 While shipping
+
+**A dependency you have to install is a dependency you do not have** (§6.2).
+Seven approaches to one problem, six of them failing for this reason. On any
+appliance, live-boot image, or constrained target, the packages already present
+are the only ones that exist.
+
+**Code and schema must never disagree in either direction** (§14.4). Migrate
+before the code that needs the column; drop the code before the table it uses.
+Both failures look like an outage and neither looks like a schema problem.
+
+**Instrument what the software is doing, not only what it found.** The kiosk
+work became tractable only when the status bar showed *which of five launch
+paths had run*. Before that, every failure looked identical. The same applies to
+a network check that says which address it reached and a restore that shows it
+is alive.
+
+**A summary and its drill-down must be computed from the same predicate**
+(§10.3). Otherwise the page contradicts itself at the moment a user trusts it
+most — and only when somebody clicks.
+
+### 17.5 About the organisation, not the code
+
+**Naming a defect class is not a control.** This is the finding we least
+expected and most want others to have. A commit that named the class, explained
+it in the affected functions and added tests covering a third of its own diff
+did not stop the same author writing eight fresh instances within three weeks
+(§12.4).
+
+The reason is that the fix was applied to call sites rather than to a shape.
+**A lesson that lives in prose must be recalled; a lesson that lives in a type
+cannot be forgotten.** So:
+
+| Instead of | Do |
+| --- | --- |
+| Documenting the rule | Making the wrong thing hard to express — a type, a helper, a return shape |
+| Trusting it will be noticed | Running an explicit, repeatable search for the shape |
+| Fixing the instances you found | Reading every site in the component that probes |
+
+**Look where code touches state it does not control.** 28 of 32 instances were
+in the component that boots a customer's machine; 23 were in two files. A team
+adopting nothing else can act on that: find the component that probes, read
+every site where a read result becomes a reported finding, and apply §17.1's
+second question.
+
+**Removal is a feature.** Three shipped modules were deleted because they
+modelled a business that did not exist (§13). The useful measure of a system
+under active development is not how much it contains but how much of what it
+contains is load-bearing — and deletions need a safe pattern, because the
+dangerous part is the schema, not the code.
+
+### 17.6 The one we would tell someone first
+
+Of everything above, the finding with the widest application is the smallest:
+
+> **In a system that looks for problems, a probe that fails returns the value
+> that means "no problem". So every failure resolves towards the reassuring
+> answer, silently, and gets certified.**
+
+Thirty-two instances. Not one false alarm. The asymmetry is not a property of
+this codebase; it is a property of what empty, zero and false mean in a system
+whose job is to find things wrong.
+
+## 18. Related work
+
+This work sits at the intersection of four literatures, and is not squarely
+inside any of them. That is the honest description of a systems paper about an
+industrial problem: the components are well studied, the combination is not.
+
+### 18.1 Media sanitisation and asset disposition
+
+The technical basis for erasure is standardised. NIST's media-sanitization
+guidance establishes the distinction between clearing, purging and destroying
+media, and per-medium expectations for each — the framework §8's method ladder
+implements. Industry certification schemes for asset disposition specify process
+and audit requirements for refurbishers.
+
+What that literature does not address, and what §8 reports, is the **software
+engineering** of producing a certificate that is true: the per-drive verdict,
+the read-back that must not treat an unreadable drive as verified, the hidden
+areas an erase does not reach, and the case where a certificate already issued
+turns out to be wrong. Standards specify what must be achieved. They do not
+specify how a program that cannot read a drive should describe what it did.
+
+### 18.2 Offline-first and local-first systems
+
+The architecture of §5 — local database, background reconciliation, eventual
+convergence — is the local-first pattern, and the literature on it is concerned
+mainly with data convergence and user data ownership. Our contribution to that
+discussion is narrow and operational: in a system where the client's writes are
+**evidence**, the queue's failure modes matter more than its merge semantics,
+and three of the four faults we hit in the first week were failures to *report*
+rather than failures to converge.
+
+### 18.3 Dependability and error handling
+
+The fault / error / failure taxonomy gives the vocabulary for silent failure and
+for a **fail-silent** component, which stops rather than emitting a wrong
+result. The class in §12 is the complement: the component neither stops nor
+signals, and emits a result that is wrong in a consistent direction.
+
+Empirical studies of error handling in distributed systems establish that
+error-handling code is disproportionately defective and under-tested. §12 is
+narrower and orthogonal: we characterise what the erroneous handler *produces*,
+and show that in a reporting system its output has a direction — always towards
+the reassuring answer.
+
+Two adjacent traditions are worth naming because both already solved a version
+of this problem. **Instrumentation and control practice** distinguishes "no
+signal" from "signal reads zero" and invests in validity flags to keep them
+apart; that discipline has not transferred to general-purpose software that
+probes an environment. And **type systems and database theory** have long
+separated *absent* from *unknown*. §12 treats that distinction as the remedy
+rather than the subject, and contributes evidence that knowing about it is not
+sufficient to apply it.
+
+### 18.4 Alarm design, inverted
+
+Work on alarm fatigue in clinical monitoring documents the cost of false
+positives, and the design responses to them. The class described here is the
+mirror image: a failure mode that generates **no alarms at all**, and is
+therefore invisible to every process built to respond to them. We are not aware
+of a literature on the inverse problem — systems whose failures are silent
+because their failure value is indistinguishable from good news — and would
+welcome being told one exists.
+
+### 18.5 What we did not find
+
+We searched for a prior naming of the defect class in §12 and did not find one,
+but that search is not exhaustive and its result is provisional. **If a prior
+naming exists, this paper's framing changes**: the contribution narrows from
+naming and measuring to measuring alone, and §12.4's recurrence result becomes
+the sole novel finding. We would rather state that conditionally than discover
+it in review.
+
+We also found no prior treatment of what §11 calls knowability tiers as an
+explicit engineering framework, though the underlying distinctions are
+commonplace in practice. §16.6 states plainly that the tier which makes the
+framework interesting rests on a single worked example.
+
+## 19. Conclusion
+
+An ITAD business sells second-hand computers and issues documents saying what
+they are and that the data on them is gone. Those documents are claims about
+machines nobody in the business controls, made once, briefly, by a technician,
+about hardware that is then sold. Nothing in the normal operation of such a
+business tells you when one of them is wrong.
+
+We built the whole system for that job in 78 days: an offline-first inventory
+platform, a bootable audit appliance that examines and erases a customer's
+machine without ever starting its operating system, an inspection layer that
+reads a powered-off Windows out of its own registry, an erasure engine whose
+certificates are signed and chained, and a functional-test module that treats a
+technician's answer as the measurement it is. Part II describes each layer and
+what was rejected in building it.
+
+Three findings generalise beyond the business.
+
+**Claims have knowability tiers, and the tier decides what effort will work.**
+Measured, recovered from an artefact, perishable, or withheld by a third party.
+Code answers the first two. The third needs a process change upstream of
+whatever destroys the fact. The fourth needs to be reported as unanswered — and
+the most valuable question this system could answer, whether a machine is
+registered to somebody else's provisioning tenant, turned out to sit there. We
+built three partial answers, one of them definitive, by abandoning deduction and
+observing the moment the machine itself finds out.
+
+**In a system that looks for problems, every failed probe fails towards the
+reassuring answer.** Empty, zero, false and absent are the values that mean *no
+problem*. We catalogued 32 call sites where a failed observation was reported as
+a confirmed negative, and all 32 pointed the same way. Eighteen sat on code
+paths that already had tests, and those tests caught none of them, because a
+fixture is written from the author's model of the path working.
+
+**Naming the defect class was not enough.** A commit named it, documented it in
+the affected functions, and defended the fix with tests worth a third of its own
+diff. Eight fresh instances were written within the next three weeks, by the
+same author, in the same files. The lesson had been recorded and was not
+recalled — because a rule that lives in prose must be remembered, and the moment
+it is needed is the moment attention is on making something work. The remedy is
+not more emphasis. It is to move the rule into a type, into fixtures that can
+fail, and into a search that is run rather than hoped for.
+
+What we cannot report is whether that worked. The observation window closes with
+the sweep, and a codebase swept once is not a codebase that stays swept. We
+report the response rather than a cure, for the same reason the rest of this
+paper distinguishes what was established from what was assumed — which is the
+only discipline that made any of it trustworthy.
+
+The system is in daily use. Its most valuable property is not any single
+capability described here. It is that when it cannot establish something, it
+says so.
