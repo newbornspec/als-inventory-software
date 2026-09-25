@@ -1156,3 +1156,374 @@ Both passes are the same technique: forcing a system to be consistent is a way
 of discovering where it is wrong. Inconsistency is cheap to tolerate one page
 at a time and expensive in aggregate, and the aggregate is invisible until
 something makes you look at all of it at once.
+
+## 11. The knowability framework
+
+Building the inspection layer forced a question that turned out to be more
+general than the system: **what can a computer that is not running be made to
+tell you about itself, and what can it not?**
+
+The answer is not a single line between possible and impossible. It is four
+levels, and the distinction between them is operational — it determines whether
+a claim can be measured, inferred, recovered only at a moment that has already
+passed, or not obtained at all.
+
+### 11.1 Four tiers
+
+| Tier | The claim is… | Example from this system | Costs |
+| --- | --- | --- | --- |
+| **K1** | **Measured.** The hardware reports it on request | Processor, memory, SMART attributes, TPM presence | A probe |
+| **K2** | **Recovered.** The absent OS left an artefact behind | Domain join, encryption state, installed Windows, event logs | A parser, and knowing where to look |
+| **K3** | **Perishable.** Obtainable only before an earlier step destroyed it | The device hardware hash, available before the wipe | Process change, not code |
+| **K4** | **Withheld.** The answer lives with a third party, behind their authentication | Autopilot registration | Not obtainable. Full stop |
+
+K1 and K2 are engineering. K3 is a **process** problem wearing an engineering
+costume — no amount of code recovers something that has been overwritten, and
+the fix is always to capture it earlier. K4 is neither: it is a boundary, and
+the only correct engineering response is to report the question as unanswered.
+
+The practical value of the framework is that it tells you **which kind of
+effort will work**. Time spent writing a cleverer probe for a K3 fact is wasted;
+time spent on a K4 fact is worse than wasted, because any answer it produces is
+a guess wearing the costume of a measurement.
+
+### 11.2 The worked example
+
+Microsoft Autopilot is a provisioning service. A device registered to an
+organisation will, at its first boot after a reset, contact Microsoft, discover
+it is claimed, and enrol itself into that organisation — potentially in
+somebody else's hands.
+
+For a refurbisher this is the worst commercial failure available: a machine is
+bought, audited, wiped, refurbished, sold, and at the buyer's first boot it is
+claimed by an organisation nobody knew about. The money is already spent.
+
+So the question *is this machine Autopilot-registered?* is the single most
+valuable thing the system could answer. It is also K4.
+
+**The registration is a row in Microsoft's cloud**, keyed to the device's
+hardware hash. It is not on the disk. Wiping does not touch it. Reinstalling
+Windows does not touch it. The device learns about it only by asking, at first
+boot, over a network — a sequence that ends in an authenticated request for the
+device's provisioning profile, returning either a profile or a
+not-registered error.
+
+There is no public interface into that final step for anyone except the tenant
+that owns the device. The engineer who built Autopilot at Microsoft has
+documented the flow publicly and described the ability to check a device's
+status as something that **"would be nice to be able to check"** — that is,
+as a thing that would be useful rather than a thing that exists.
+
+When the person best placed to know describes a capability as desirable rather
+than available, that is as close to a definitive answer as this kind of
+question gets.
+
+### 11.3 What was built instead
+
+Rather than guess, the system was given three of the four tiers and told to be
+explicit about which one produced each answer:
+
+| | What it does | Answers a wiped disk? |
+| --- | --- | --- |
+| **Tier 1 — offline artefacts** | Reads the Autopilot traces still present on the mounted volume: the enrolment profile, the diagnostic entries, the event log the OS wrote | **No.** Only if the disk still holds them |
+| **Tier 2 — capture at intake** | Record the hardware hash *before* wiping, so the machine can be checked against a tenant later | **No** — it makes the later check possible |
+| **Tier 3 — observe first boot** | Record what the machine's own first-boot setup screen actually said | **Yes, definitively** |
+| **Tier 4 — reimplement the query** | Perform the device's authenticated request independently | Yes, until Microsoft changes it |
+
+**Tier 3 is the only one that yields certainty**, and it does so by abandoning
+the attempt to deduce the answer and instead observing the event where the
+machine itself finds out. The machine will tell you it is claimed at the moment
+it discovers it, and a technician can record what appeared on screen. It is not
+elegant. It is evidence.
+
+**Tier 2 is blocked, and the reason is instructive.** The hardware hash is the
+only identifier Microsoft will act on, and the station currently wipes it away
+without recording it. It cannot be read from Linux: it comes from a Windows
+management interface that requires Windows to be running. The established route
+without the installed OS is a pre-installation environment, which means adding
+a Windows PE image to the stick, the vendor toolkit, and a real machine to
+prove it on. **It is blocked rather than skipped**, because writing it blind
+would produce something nobody could verify — and an unverified hash capture is
+worse than none, since it would be trusted.
+
+One honesty point belongs in the record if Tier 2 is ever built: a hash
+captured in a pre-installation environment is **not byte-identical** to one
+captured from the full operating system, because several components are
+missing. It is close enough for the tooling people use daily, and the record
+must say which kind it holds.
+
+**Tier 4 was recommended against**, and the recommendation is a judgement
+rather than a technical impossibility. Reimplementing an undocumented
+authentication sequence would probably work, for a while. But the output of
+this system is a legal document, and a certificate whose most valuable claim
+rests on an undocumented protocol that a third party may change without notice
+is a liability dressed as a feature. The failure mode is not that it stops
+working — it is that it keeps *appearing* to work while returning something
+that no longer means what it used to.
+
+### 11.4 The general form
+
+Strip out the vendor and the framework applies to any system that reports on
+state it does not own:
+
+1. **Classify every claim by tier before implementing the probe.** The tier
+   determines whether code, process change, or nothing will produce the answer.
+2. **A K3 fact needs a process change, not a better probe.** If a fact is
+   destroyed by a step in your own pipeline, the fix is upstream of that step.
+3. **A K4 fact must be reported as unanswered.** Not "no evidence found",
+   which a reader will take as "not registered" — but an explicit statement
+   that this question has no offline answer, with the reason.
+4. **The tier must reach the record.** It is not enough to know internally that
+   a finding was inferred rather than measured; the person reading the document
+   has to be able to tell.
+
+Point 3 is where this framework and §12's defect class meet. A K4 question
+answered with the *absence* of evidence is a false absence with extra steps —
+and it is the most dangerous kind, because the probe genuinely ran, genuinely
+found nothing, and genuinely could never have found anything.
+
+## 12. Evidence integrity: the false absence
+
+Every layer in Part II has, at some point, reported something it had not
+established. This section names that defect, measures it across the whole
+project, and reports an uncomfortable result about what naming it achieved.
+
+### 12.1 The class
+
+A **false absence** is a failed observation reported as a confirmed negative.
+It requires four conditions, all of which must hold:
+
+1. A probe reads state the program does not control — a device, a filesystem, a
+   registry hive, a remote service.
+2. The probe can fail **without raising**. It returns a value.
+3. At the point of use, that failure value is **indistinguishable from a
+   genuine negative**: empty string, empty list, zero, false, missing key.
+4. The value is **reported as a finding**, unqualified, to a person or onto a
+   record.
+
+Condition 3 is the operational test, and a developer can apply it at the
+keyboard: **does this probe's failure value equal its negative value?** If it
+does, any assertion built on it is unearned.
+
+The class has a direction, and the direction is not incidental. Failure
+produces empty, zero, false, absent — and in a system that examines things for
+problems, those are exactly the values that mean *no problem*. A probe that
+fails resolves, every time, towards the reassuring answer.
+
+The converse defect is self-correcting. A probe whose failure produced a
+spurious *lock* would be chased down within a day, because a false alarm costs
+somebody an hour and they complain. This is not hypothetical: §7.3 describes
+one, a binary registry value that made machines appear domain-joined to an
+organisation called "hex". It was caught almost immediately. A false absence
+costs nothing visible, and gets certified.
+
+### 12.2 What was catalogued
+
+**32 call sites across 15 fix commits**, over 82 days and 526 commits. The
+dataset, with the inclusion criteria written before the analysis, is published
+in `paper/evidence/`.
+
+| Finding | |
+| --- | --- |
+| Failed **towards the reassuring answer** | **32 / 32** |
+| Reached a person, on screen or in a document | 31 / 32 |
+| Could affect the erasure certificate | 18 / 32 |
+| In the audit station rather than the server or web app | 28 / 32 |
+
+The reported sentences were: *no lock detected*, *no operating system
+installed*, *no TPM detected*, *not enrolled*, *not joined*, *no hidden
+drives*, *no encrypted volumes*, *no BIOS password*, *limitations: none
+reported*, *0 ports responded*, *not present*, *movement and buttons work*.
+Every one asserts that something which would have been a problem is absent.
+
+The single instance that reached nobody is the one that destroyed data: the
+unreadable queue file of §5.4, treated as empty and then rewritten. It produced
+no wrong sentence because it produced no sentence at all.
+
+Twenty-three of the 32 are in two files, and 28 are in the station — the
+component that boots a customer's machine and examines it. **The class
+concentrates where code touches state it does not control**, which is the
+sharpest practical guidance this catalogue offers.
+
+### 12.3 Why the tests did not catch them
+
+Eighteen of the 32 sat on code paths that **already had tests**. Those tests
+caught **none** of them. Examining each fixture gives two categories, which are
+the same blindness from opposite ends:
+
+| | Count | The fixture… |
+| --- | --- | --- |
+| Working probe supplied | 14 | …gave the probe something it could read |
+| Adverse state never constructed | 4 | …never built the subject that matters |
+
+Neither is negligence. A fixture is written from the author's mental model of
+the path, and that model is of the path *working*. Catching this class needs a
+fixture in which **the probe fails and the subject is dirty** — two
+independently unlikely conditions, jointly unrepresented.
+
+During this work, four existing tests broke when a failure check was added. In
+every case **the fixture was wrong, not the check**: each stubbed a command
+that could not fail. One test's own name asserted the defect.
+
+### 12.4 The recurrence finding
+
+On 2 September a commit landed titled **"Never let a failed probe read as a
+negative."** It repaired six lock detectors, **named** the class in its own
+title, **documented** the reasoning in the affected functions, and **defended**
+the fix with 75 new lines of tests — a third of the diff. By any ordinary
+standard the lesson had been learned and recorded.
+
+Nineteen days later, a systematic search of the same codebase found twenty-six
+further instances. That figure conflates two claims of unequal strength, so
+they are separated:
+
+| | Instances | What it means |
+| --- | --- | --- |
+| Fixed **by** the naming commit | 6 | The instances that prompted the naming |
+| Introduced **before** it, found later | 18 | Naming failed to **find** these |
+| Introduced **after** it | **8** | Naming failed to **prevent** these |
+
+The eighteen are a failure of *search*, not understanding — ten of them were
+introduced earlier the same day by the commit that created the detectors, which
+was verified by ancestry rather than assumed. Nobody claims a targeted fix is
+an audit.
+
+**The eight introduced afterwards are the finding.** Every one was written
+seventeen to eighteen days after the class was named, by the same author, in
+the same codebase, with the naming commit in the history and its tests passing.
+Four of the eight are in the two files that commit had itself edited.
+
+Three explanations, in increasing order of discomfort:
+
+- **The fix was applied to call sites, not to a shape.** It introduced no type,
+  no helper, no construct that would make the next probe honest by default. A
+  lesson that lives in prose must be recalled; a lesson that lives in a type
+  cannot be forgotten.
+- **The class is invisible at the moment of writing.** The failure branch is
+  not where the author's attention is, and the value it returns is the natural
+  thing to return. Writing the defect requires no error and no carelessness.
+- **All eight were written in a two-day burst** — the densest period in the
+  project. They cluster precisely where new surface was being created fastest.
+  The rule was not rejected under pressure; it never came to mind.
+
+Stated precisely, and narrowly:
+
+> **Naming a defect class, documenting it in the code, and defending it with
+> tests was not sufficient to prevent the same author from writing eight fresh
+> instances of it in the same codebase within three weeks.**
+
+If that is the outcome under conditions this favourable — one author, a small
+codebase, the lesson written in the file being edited — it is unlikely to be
+better on a larger team.
+
+### 12.5 The response, and what cannot be claimed
+
+Three things changed, none of them more documentation: a **sweep** that is run
+rather than hoped for; **tests that assert the third value**, not only the
+negative; and **fixtures that can fail**.
+
+**We cannot report whether this worked.** The observation window closes with
+the sweep on 22 September. A codebase swept once is not a codebase that stays
+swept, and on the evidence here the honest expectation is that instances will
+accumulate again — which is precisely what §12.4 found the first time.
+
+## 13. The discipline of deletion
+
+Three working, shipped modules were removed from this system within six weeks
+of being built. That is unusual enough to report, and the reasons are the same
+in all three cases.
+
+| Feature | Built | Removed | Lifetime |
+| --- | --- | --- | --- |
+| Warranty tracking | 9 July (in the initial commit) | 13 July | 4 days |
+| Sales, customers and orders | 12 July | 25 July | 13 days |
+| Repair logging | 12 July | 20 August | 39 days |
+
+None was removed because it was broken. Each worked. Each was removed because
+**it modelled a business that does not exist.**
+
+### 13.1 What each one got wrong
+
+**Warranty tracking** was in the system from the very first commit, because
+an asset system "obviously" tracks warranties. Nobody used it, and the data
+needed to make it useful — per-device warranty terms from each manufacturer —
+was never going to be entered by hand. It was the smallest of the three: fields
+on the asset rather than a module, which is why it could go in a single commit
+that dropped the columns with them. It was replaced with low-stock and out-of-stock alerts on
+consumables, which answer a question the warehouse actually asks: *are we about
+to run out of caddies?*
+
+**The sales module** modelled an order book: customers, orders, line items,
+fulfilment. The business has no order book. Stock goes to trade buyers in bulk,
+and what needs recording is a **status transition** — this left, on this date,
+for this price. Every screen in the module asked for information nobody had.
+
+It was replaced by **Sold as a status rather than a module**. Selling is
+terminal and locks the record; only an administrator can reverse it; and a
+return **reactivates whatever the device came from**, because otherwise a
+device comes back into a container that still says it has gone, and the stock
+counts quietly disagree with each other.
+
+**Repair logging** assumed a repair workshop with per-device work logs. The
+warehouse grades devices and either sells them or breaks them for parts. Six
+weeks of non-use made that unambiguous.
+
+The common failure is not over-engineering in the usual sense. Each module was
+a reasonable implementation of a real concept. The error was earlier: **the
+concept was imported from what inventory systems generally have, rather than
+derived from what this business actually does.**
+
+### 13.2 Removing things safely
+
+The third removal produced a house rule, which the first two were small
+enough not to need:
+
+> **Drop the code first, drop the table second. Two commits, two deploys.**
+
+The code and the schema deploy separately. Dropping a table while code still
+references it is an outage; dropping the code first means the table sits unused
+for one deploy and then goes. This is the mirror image of the migration
+ordering hazard in §3.4 — in both cases the rule is that **code and schema must
+never be in a state where one expects something the other has not got.**
+
+The second rule is about what survives a removal. The repairs module had
+accumulated **grading verdicts that were genuinely in use**, and those were
+preserved rather than going with the table. A module being wrong does not make
+everything in it wrong, and the work of separating the two is what makes
+deletion safe enough to do at all.
+
+A related correction was made on the same principle: costing and invoicing had
+been attached to pallets, **because that is where they were first needed, not
+because they belong there**, and were unhooked. Misplaced attachment is a
+quieter version of the same mistake — the feature is right, the model is
+borrowed.
+
+### 13.3 The argument
+
+Adding a feature needs one person to think it is a good idea. Removing one
+needs somebody to say, out loud, that work already paid for should be thrown
+away — and to be right about it.
+
+We think the deletions are why the system stayed buildable. The audit station,
+the erasure remediation and the inspection layer are all substantial pieces of
+work that arrived in August and September, into a codebase that had shed three
+modules it did not need. A codebase carrying warranty tracking, an order book
+and a repair workshop would have had three more sets of screens, migrations,
+permissions and tests to drag through every subsequent redesign — and each of
+them would have had to be kept working while the parts that mattered were
+being rebuilt.
+
+**The useful measure of a system under active development is not how much it
+contains. It is how much of what it contains is load-bearing.**
+
+### 13.4 The honest residue
+
+The deletions were not total, and the paper should say so. The schema still
+carries customer, sales-order, order-line and invoice entities, and the API
+still has the corresponding modules. The user-facing sales workflow is gone and
+the Sold status replaced it, but the underlying tables were not all dropped.
+
+This is left as it is rather than presented as finished. A reader inspecting
+the repository will find them, and a paper that claimed three clean removals
+while the residue sits in `apps/api/src` would be making exactly the kind of
+tidy, unsupported claim this project spent three months learning not to make.
