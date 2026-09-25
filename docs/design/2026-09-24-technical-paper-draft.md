@@ -2,6 +2,12 @@
 
 ## Status
 
+**Superseded on 25 September 2026** by
+`2026-09-25-whole-system-paper.md`. The paper this record describes covered one
+finding; the owner asked for one covering the whole project, and it was rebuilt.
+This record stands as written — the draft it describes is intact in
+`paper/archive/` and is now the full treatment of §12.
+
 **Draft complete end to end. Not submitted, and no venue chosen.**
 24 September 2026.
 

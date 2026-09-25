@@ -4,7 +4,7 @@ One dated document per piece of work, kept in this repository. The purpose is a
 paper trail an engineer — or a technical paper — can be written from later,
 without having to reconstruct the reasoning from commit messages and memory.
 
-**Coverage: 9 July – 24 September 2026, 534 commits, 40 records.**
+**Coverage: 9 July – 25 September 2026, 541 commits, 41 records.**
 
 ## The convention
 
@@ -49,6 +49,7 @@ Newest first.
 
 | Date | Record | What it covers |
 | --- | --- | --- |
+| 09-25 | [whole-system-paper](2026-09-25-whole-system-paper.md) | The paper rebuilt to cover every layer; supersedes the single-finding draft |
 | 09-24 | [technical-paper-draft](2026-09-24-technical-paper-draft.md) | The complete paper draft, its dataset, and the three figures that were wrong when checked |
 | 09-23 | [technical-paper-plan](2026-09-23-technical-paper-plan.md) | Which of the three threads carries a paper, and what evidence each one has |
 | 09-23 | [autopilot-oobe-check](2026-09-23-autopilot-oobe-check.md) | The first-boot OOBE check: the only Autopilot answer that is not inference |
