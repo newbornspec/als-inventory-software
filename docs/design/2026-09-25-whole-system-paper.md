@@ -121,3 +121,45 @@ separately, so no word count is ever asserted in prose.
 6. Several drafting notes name a specific pre-submission cross-check that has
    not been run — notably verifying §15.3's evidence table against each design
    record's "How it was proved" heading.
+
+---
+
+## Addendum, 25 September: PDF output
+
+The owner could not read the `.md` files comfortably and asked for PDFs.
+
+**What was built:** `tools/md-to-pdf.py`, typesetting the repo's Markdown with
+reportlab — already a dependency for the operator guides, so no LaTeX, no
+pandoc, no headless browser. Handles headings, pipe tables, fenced code,
+blockquotes, lists and task lists, with a clickable contents page for anything
+with six or more sections. Output in `paper/pdf/`: the paper at **37 pages**,
+plus the README and outline.
+
+**What was also built, and mattered:** `tools/verify-pdf.py`, which checks the
+PDF against its source — every heading present and in order, every table cell
+and code line present, and no text past the margin.
+
+It was written because a converter that silently drops a table is the defect
+class this project keeps finding: the build succeeds, the output looks
+finished, and something is missing. **It found a real defect on first use.**
+Inline code was rendered at a fixed 8.6pt; inside a 15pt heading that put the
+fragment on its own baseline and split the line in two. Nothing in the build
+complained. Code now inherits the surrounding size.
+
+**Two of my own bugs on the way**, both recorded because they are the same
+shape as the ones in the paper:
+
+1. Regex substitution for emphasis produced *overlapping* tags on
+   `**bold with *italic* ending***`, which reportlab rejects outright. Emphasis
+   is now tokenised with a stack that cannot emit unbalanced markup, and the
+   tokeniser was unit-checked against six cases before use.
+2. The first two versions of the verifier reported false alarms — wrapped table
+   cells read as missing, and the running footer's repeated title read as a
+   heading out of order. Both were fixed in the *checker*, not waved away, and
+   only then did the one genuine defect stand out.
+
+The second is worth keeping in view: a verification tool with a high false-alarm
+rate is a tool whose real findings get ignored.
+
+**Verified:** all three documents report `VERDICT: clean`. The architecture
+diagram renders at 8pt with its widest point at 447pt against a 544pt margin.
